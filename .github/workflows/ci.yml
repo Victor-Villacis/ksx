@@ -1,0 +1,146 @@
+name: CI
+
+# Every branch, not just main. The dev box's CPU corrupts compute under
+# sustained load (see the release-binary job below), so a local gate is slower
+# AND less trustworthy than this one: a rustc crash costs a full retry, and a
+# clean local run on a different toolchain once meant something different from
+# a clean run here. Pushing a feature branch is now how you gate it.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  # `release.yml` calls this whole file on a version tag, so a release runs the
+  # exact gate every branch runs — same tests, same feature matrix, same build
+  # — and then publishes what it built. A release path that skipped this, or
+  # that rebuilt the binary its own way, would be shipping something CI never
+  # saw.
+  workflow_call:
+    inputs:
+      release_tag:
+        description: >
+          Set by release.yml to the tag being released, e.g. `v0.2.0`. Empty
+          for ordinary CI. Threaded down to build-installer.yml, whose version
+          guard refuses to build when the tag and the tree disagree.
+        type: string
+        default: ''
+    outputs:
+      setup_name:
+        description: The installer's filename, e.g. `ksx-0.2.0-setup.exe`.
+        value: ${{ jobs.release-binary.outputs.setup_name }}
+      setup_sha256:
+        description: SHA-256 of the installer, as built.
+        value: ${{ jobs.release-binary.outputs.setup_sha256 }}
+      portable_name:
+        description: The portable ZIP filename.
+        value: ${{ jobs.release-binary.outputs.portable_name }}
+      portable_sha256:
+        description: SHA-256 of the portable ZIP, as built.
+        value: ${{ jobs.release-binary.outputs.portable_sha256 }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      # rust-toolchain.toml pins the exact compiler; `rustup show` installs it.
+      # NOT dtolnay/rust-toolchain: that action exports RUSTUP_TOOLCHAIN, which
+      # overrides the pin — and an overridden pin is how local 1.96 and CI 1.97
+      # both said "clippy clean" about different diagnostics on 2026-08-07.
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: actions/setup-node@v4
+        with:
+          # @getforma/core 2.0.0 declares this minimum. Pinning the floor proves
+          # the authoring project does not accidentally rely on a newer Node.
+          node-version: '20.19.0'
+          cache: npm
+          cache-dependency-path: studio-ui/package-lock.json
+      - name: Studio assets reproduce from registry dependencies
+        working-directory: studio-ui
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Studio registry install failed' }
+          node build.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Studio asset build failed' }
+          git -C .. diff --exit-code -- crates/ksx-studio/assets
+          if ($LASTEXITCODE -ne 0) {
+            throw 'committed Studio assets differ from a clean Forma build'
+          }
+          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets
+          if ($untracked) {
+            throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+          }
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        # vendored vigem-client keeps upstream formatting; check only our crates.
+        # Naming crates individually is how ksx-api, ksx-hidmaestro, ksx-studio,
+        # ksx-cabinet and ksx-fuzz went unchecked from the day each was created,
+        # so the list is derived instead: every workspace member but the vendor.
+        shell: pwsh
+        run: |
+          $members = cargo metadata --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object name -ne 'vigem-client' |
+            ForEach-Object { '-p', $_.name }
+          Write-Host "fmt: $($members -join ' ')"
+          cargo fmt --check @members
+      - name: Clippy
+        run: cargo clippy --workspace --exclude vigem-client --all-targets -- -D warnings
+      - name: Test
+        # Driver-touching tests are behind the `cab-tests` feature and never run here.
+        # The vendored vigem-client's integration tests need the ViGEmBus driver: compile-check only.
+        run: cargo test --workspace --exclude vigem-client
+      # `studio` and `cabinet` are independent opt-ins, so the default build
+      # compiles neither and CI never saw the code behind them. Three separate
+      # breakages reached main that way (87701cd, 4200214, 4135a7b's dead
+      # LearnService::refusing), each caught by a local gate CI did not run.
+      # Compile every combination the release build can ship.
+      #
+      # BOTH crates, and that second one is not symmetry for its own sake.
+      # `ksx-app` forwards these features to `ksx-backend`, so `-p ksx-app`
+      # does enable the backend's gated code — but `--all-targets` only builds
+      # ksx-app's OWN test targets, and the unit tests that sit behind those
+      # gates now live in ksx-backend beside the code they test. Gating only
+      # the CLI would reopen exactly the gap this step exists to close, one
+      # crate lower down.
+      - name: Feature matrix (clippy, both crates, all four combinations)
+        shell: pwsh
+        run: |
+          foreach ($p in @('ksx-app', 'ksx-backend')) {
+            foreach ($f in @('', 'studio', 'cabinet', 'studio,cabinet')) {
+              $label = if ($f) { $f } else { '<default>' }
+              Write-Host "::group::$p features: $label"
+              if ($f) {
+                cargo clippy -p $p --all-targets --features $f -- -D warnings
+              } else {
+                cargo clippy -p $p --all-targets -- -D warnings
+              }
+              if ($LASTEXITCODE -ne 0) { throw "$p feature combination '$label' failed" }
+              Write-Host '::endgroup::'
+            }
+          }
+      - name: Check vendored vigem-client compiles
+        run: cargo check -p vigem-client --all-features
+
+  # The shippable binary and the installer. The steps live in
+  # `build-installer.yml` because `release.yml` needs the SAME build — the file
+  # a customer downloads must be the file this gate proved, not a second build
+  # that happens to use the same command line. That file also carries the long
+  # explanation of why a release binary is never compiled on the dev box.
+  #
+  # Until a tag is pushed this produces CI artifacts, which are perfectly good
+  # for us and useless to a customer: reaching one needs a GitHub login and a
+  # walk through the Actions tab. `release.yml` is what turns the same two files
+  # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
+  release-binary:
+    needs: test
+    uses: ./.github/workflows/build-installer.yml
+    with:
+      # Empty on every ordinary push; the tag when release.yml is the caller.
+      release_tag: ${{ inputs.release_tag || '' }}

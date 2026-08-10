@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "build_hash": "12b50a194308e47cf429b336e38b52801d45e178648f027e39cc3737cf2dc4bd",
+  "assets": {
+    "check.ir": "check.d94030d6.ir",
+    "check.js": "check.83278503.js",
+    "devices.ir": "devices.6f3ec2f5.ir",
+    "devices.js": "devices.000c34a6.js",
+    "map.ir": "map.cb34dbc6.ir",
+    "map.js": "map.cfd4c77f.js",
+    "pads.ir": "pads.bc0593fd.ir",
+    "pads.js": "pads.07037a19.js",
+    "profiles.ir": "profiles.c8ba662c.ir",
+    "profiles.js": "profiles.1918396e.js",
+    "setup.ir": "setup.8394a720.ir",
+    "setup.js": "setup.68ccb14d.js",
+    "start.ir": "start.014c9f88.ir",
+    "start.js": "start.eca25ed7.js",
+    "status.ir": "status.0a37de68.ir",
+    "status.js": "status.8170c885.js",
+    "studio.css": "studio.58f84d11.css"
+  },
+  "routes": {
+    "/start": {
+      "js": [
+        "start.eca25ed7.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 40858,
+      "budget_warn_threshold": 200000,
+      "ir": "start.014c9f88.ir"
+    },
+    "/": {
+      "js": [
+        "status.8170c885.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 39312,
+      "budget_warn_threshold": 200000,
+      "ir": "status.0a37de68.ir"
+    },
+    "/map": {
+      "js": [
+        "map.cfd4c77f.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 64749,
+      "budget_warn_threshold": 200000,
+      "ir": "map.cb34dbc6.ir"
+    },
+    "/check": {
+      "js": [
+        "check.83278503.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 39358,
+      "budget_warn_threshold": 200000,
+      "ir": "check.d94030d6.ir"
+    },
+    "/pads": {
+      "js": [
+        "pads.07037a19.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 39504,
+      "budget_warn_threshold": 200000,
+      "ir": "pads.bc0593fd.ir"
+    },
+    "/devices": {
+      "js": [
+        "devices.000c34a6.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 40324,
+      "budget_warn_threshold": 200000,
+      "ir": "devices.6f3ec2f5.ir"
+    },
+    "/profiles": {
+      "js": [
+        "profiles.1918396e.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 40132,
+      "budget_warn_threshold": 200000,
+      "ir": "profiles.c8ba662c.ir"
+    },
+    "/setup": {
+      "js": [
+        "setup.68ccb14d.js"
+      ],
+      "css": [
+        "studio.58f84d11.css"
+      ],
+      "fonts": [],
+      "total_size_br": 40096,
+      "budget_warn_threshold": 200000,
+      "ir": "setup.8394a720.ir"
+    }
+  }
+}

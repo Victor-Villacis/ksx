@@ -1,0 +1,266 @@
+# Mapper UX specification — synthesized from the field study (2026-08-05)
+
+Sources: `docs/research/` field studies of the commercial tier (reWASD, Steam
+Input, Xbox Accessories, 8BitDo, DS4Windows/JoyToKey/AntiMicroX/x360ce,
+Synapse/G HUB) and the emulation/arcade lineage (EmulationStation/RetroBat —
+read from this cabinet's own install — RetroArch, MAME, BYOAC folklore,
+operator TEST menus, fighting-game button check). The product brief: "the most
+complex tool with the simplest interface."
+
+## The commandments (each one evidence-backed, none negotiable)
+
+1. **The physical press is the pointer.** Selecting a control by pressing it
+   (reWASD hook, JoyToKey row-highlight, x360ce Record, ES "HOLD A BUTTON ON
+   YOUR DEVICE") is the universal grammar of every loved mapper; naming
+   controls from lists is the universal marker of hated ones. On a panel of
+   30 identical buttons this is existential, not cosmetic.
+2. **Every mapping screen is also a button-check screen.** Live echo on the
+   mapping surface itself (x360ce's lit-up pad, MAME's Input Devices, Naomi
+   INPUT TEST, Tekken-7-at-character-select). RetroArch had to retrofit one
+   by community bounty. Requires the live socket — **which SHIPPED
+   2026-08-08**: `\\.\pipe\ksx-live` out of the daemon, Server-Sent Events
+   out of Studio, and `/check` is its first consumer. The mapper's own
+   in-place echo is the remaining half.
+3. **Two flows, one gesture each.** ES proves the sequential wizard (press,
+   press, press — auto-advance, hold-to-skip, completeness audit, nothing
+   saved until OK) is perfect for FIRST CONTACT and miserable for
+   corrections (~40 s of hold-to-skip to fix one bind). MAME proves
+   press-in-place single rebind is the correction flow. Ship both. Fixing
+   one binding must never cost more than three actions.
+4. **Render as summary, legend as table.** The controller drawing decorated
+   with binding state (Razer's modified-vs-stock highlight) for glancing;
+   the legend grid (JoyToKey's one enduring virtue) for scanning. Both are
+   the same data, both are click targets.
+5. **Minimal nouns, guaranteed road home.** reWASD's profile→config→slot→
+   apply pyramid is its own forum's top complaint; the Xbox app's immutable
+   default + one-click restore is the quiet masterstroke. ksx exposes
+   exactly two nouns (profile, preset), single rebinds commit immediately
+   (MAME-style), the wizard commits transactionally (ES-style), and every
+   preset keeps a session-start backup + the built-in defaults as the
+   always-there floor.
+6. **Speak positions and presses, never labels.** Prompt "SOUTH", not "A"
+   (ES's Nintendo-proof vocabulary); persona-aware display (✕ on a
+   PlayStation slot); conflicts flashed inline the moment they happen
+   ("ALREADY TAKEN — G is P2's A"), not after.
+7. **Duplicates are information, not errors.** Steam proves overlap is a
+   feature; Synapse-4's silent wipe of binding A when saving B is the
+   cardinal sin. In ksx this is doubly true: keyboard fan-out (one key
+   driving several slots) is THE product. The v5 conflict dialog softens
+   accordingly: same-preset duplicate = **not a conflict at all** — it is a
+   multi-bind, written with no dialog and then SHOWN ("also A · B");
+   CROSS-SLOT duplicate = informational badge ("also P2's A — this is
+   fan-out"), never a blocking dialog. No save ever touches a binding other
+   than the one being edited without showing it first — and since 2026-08-06
+   the WRITER cannot either: the only path that unbinds a control the caller
+   did not name is `--move-from`/`"move_from"`, which names it in the request
+   and again in the response (`moved_from`).
+
+   **MACROS ARE THE ONE EXCEPTION, and it is not a softening of this
+   commandment — it is the same reasoning applied to a different kind of
+   thing.** Since 2026-08-06 a key that already starts one macro will not
+   quietly start a second *in the same preset*: the write is refused, both
+   macros and the key are named, and `--force` is the way through. Duplicates
+   are information because a binding is declarative STATE — two keys setting
+   one bit compose, and the result has no opinion about order or timing. A
+   macro is an imperative TIMELINE, and two timelines started together do not
+   compose: they interleave, and the game reads a superposition that neither
+   step list contains. Fan-out is the product for state and a bug for time.
+   Cross-slot and cross-preset sharing are untouched — that is fan-out again.
+   The mapper offers no "start both anyway" button, on purpose: a one-click
+   override beside a warning is how people click past warnings, and this
+   particular warning cost an evening.
+
+   Its cheap companion, on the same card: **switch a macro OFF instead of
+   deleting it** (`enabled = false`) — the steps and the trigger row stay
+   exactly where they are and nothing runs. You do it to TEST (isolate one
+   macro, get the others back unchanged) and to COMPETE (a tournament wants
+   macros off, not lost). For a whole panel there is the slot's `macros =
+   "off"`, which overrides every macro's own switch; the mapper *states* that
+   one above the grid — naming the file and the line — rather than offering a
+   control it has no config writer for.
+8. **Player identity is static; the chain is visible.** I-PAC bakes P1–P4
+   into scancodes and MAME never asks again; RetroArch's dynamic ports are
+   a decade of cabinet forum grief. ksx slots are static by config, and one
+   screen must show the whole chain: physical key → slot/persona → control —
+   RetroArch's binds-vs-remaps saga proves invisible layers cost a decade
+   of confusion even when the model is right.
+9. **The best mapping session is none.** I-PAC ships MAME-ready; RetroBat
+   compiles one mapping into 130 emulators per launch, with the competing
+   mapper disabled. KSX's guided first run stages a standard two-player
+   controller layout, keeping the out-of-box experience close to zero mapping.
+   The mapper exists for the exceptions.
+
+## The three builds (in order)
+
+**Build A status (v7, 2026-08-05).** Landed on the mapper page: every zone
+now carries its own IDENTITY on the art (persona-aware, canonical colours —
+the vendored drawing has no letters, so "I can see G is mapped to A but I
+can't see the A xbox button" was a real gap in commandment 4's "render as
+summary"); MULTI-SELECT (Ctrl/Shift-click on desktop, a "Select multiple"
+toggle for touch, a floating bar with "Map all to one key") which exposes the
+engine's native multi-bind (docs/INPUT-TRANSFORMS.md §1a) with one captured
+key written to N controls; and commandment 7 finished for the same-preset
+case — a key already used by another control in the SAME preset is no longer
+offered a "Replace" dialog, it is written and then SHOWN as a group ("also
+A · B" badges on every co-bound legend row, cool-toned key tags on the art).
+Cross-slot duplicates keep their existing informational dialog.
+
+**Engine side: CLOSED (2026-08-06).** `ksx map` no longer moves a key between
+controls. A same-preset duplicate is written as a multi-bind, every other
+control keeps the key, and the response reports the co-bindings
+(`also_drives`) — so the multi-select arm's N sequential writes all stick and
+the page's honest report ("P now drives A · B · RT") is the one it prints.
+The old move survives as an explicit, singular `--move-from FUNCTION` /
+`"move_from"`, which names exactly what it unbound; `--force` now only means
+"bind here anyway despite ANOTHER SLOT's preset" and removes nothing. The
+legend still derives sharing from disk, never from what the UI assumed.
+
+**Diagonals: SHIPPED (v16, 2026-08-06).** The macro grid's direction groups
+are eight columns each — `↑ ↖ ← ↙ ↓ ↘ → ↗`, in ring order, 25 zones → 37
+columns — so a diagonal is a thing you point at instead of a thing you have
+to know how to build. Ticking `↘` stores `dpad.down + dpad.right` on the
+mechanism whose column you hit; a step that already holds a pair (hand-written,
+imported, or from a motion helper) DISPLAYS as `↘`, including when it is
+spelled at a partial deflection (`ly.-16384 + lx.max`, shown dashed) and when
+a button rides along with it. The stored model is untouched — this is a
+presentation layer over `ksx_core::diagonal::fold`, and every row spells out
+the pair it wrote beside its name so the file is never a mystery.
+
+**All four, because of the full circle.** `↘` alone would miss the point: a
+half-circle needs `↙` as well, a dragon punch needs `↘` specifically, and a
+360 (the spinning piledriver) walks all eight positions of the gate — four of
+its eight steps are diagonals. So every diagonal is recognized on read-back
+and expanded on write on all three mechanisms, and the motion helpers now
+offer the full family: quarter-circle and half-circle both facings, dragon
+punch both facings, and **360 both facings** (`→ ↘ ↓ ↙ ← ↖ ↑ ↗` and its
+mirror). Each inserted step displaying as its own diagonal is the proof that
+recognition and expansion agree. ⚠ *The sign*: "up" on a stick is `ly.max`,
+not `ly.min` — a mirrored sign gives an `↖` that reads back perfectly in every
+reader on the page and does nothing in the game, so all twelve
+(mechanism × diagonal) pairs are asserted name by name in ksx-core, in
+`render_map.rs`, and in the browser suite against the TOML the file will
+carry.
+
+*Why nobody else has it, and why the ordering is what it is.* Steam Input's
+D-pad is "4 binding slots in the cardinal directions"; 8-Way (Overlap) only
+widens the wedge. reWASD's own support answer to "map a diagonal" is *build a
+Shortcut out of two zones*. MAME's input map is four cardinals. GP2040-CE
+treats diagonals purely as cardinal pairs and spends its whole SOCD feature on
+what happens when the pair is illegal. Steam Deck's eight-direction D-pad
+binding is still an open feature request. So ksx's storage model is the model
+the entire field uses — the gap was the lens, not the data. Ring order
+(numpad 8 7 4 1 2 3 6 9) rather than numpad-ascending because a piano roll is
+read as a picture: a quarter-circle becomes a staircase, a half-circle a
+straight 45° line, a dragon punch a hook. Notation follows the field split —
+**arrows on screen** (SF6's input history, every Capcom move list), **words
+for the name** (compass, not `d/f`: player 2 is not an edge case), **numpad in
+the tooltip** as the lookup key for anyone who read it on Dustloop or typed it
+into MAME's `joystick_map`. Direction glyphs are unified on arrows everywhere,
+including the art's zone labels: a diagonal that did not look like the same
+family as its two parents would defeat the lens.
+
+**Build A — core shipped.** The visual controller, legend, multi-key editing,
+conflict handling, recovery actions, macros, and persona-aware vocabulary are
+in Studio. Remaining polish is passive press-to-select and live echo directly
+on the mapping surface; `/check` is the shipped reference consumer for echo.
+
+**Build B — product first run shipped.** `/start` holds a complete setup in the
+idle daemon, and `/map?target=stage&slot=N` points this same mapper at it.
+Bindings, multiple keys, auto-fire, and macros remain in memory; refusals do
+not mutate the draft. Setup then asks split-or-freeze and keeps Save separate
+from Play. The older sequential `ksx setup` prompt remains a developer CLI
+surface, not the installed customer's wizard.
+
+**Build C — button check: SHIPPED (2026-08-08), and so is the socket under
+it.** `/check`, one click from the mapper on every screen's nav: press panel
+keys → the virtual controls light across ALL slots simultaneously (the fan-out
+made visible — four pads glowing from one keystroke is also the product demo).
+Doubles as wiring diagnostics (the operator TEST heritage).
+
+*The socket.* The daemon's fan-out (`crate::feed::LiveSink`, which the cabinet
+window has subscribed to in-process since M9) now leaves the process on a
+channel of its own — `\\.\pipe\ksx-live`, outbound-only, one thread per
+viewer — and Studio re-emits it as Server-Sent Events at `/api/live`. It is
+NOT a verb on the control pipe, and the reason is on `ksx_api::LiveSource`:
+that pipe serves connections sequentially on one thread, so a stream held open
+would take the daemon's whole control surface down with the tab. SSE rather
+than a WebSocket because the stream is one-directional, inherits `guard.rs`
+and the CSP unchanged, and reconnects itself. **One stream, three consumers**
+holds: the E8 light bus and the 3D viewer subscribe to the same
+`LiveSubscription`, in-process or over the same pipe.
+
+*The rendering.* Chips, not four controller drawings — the mapper's 25
+absolutely-positioned hit zones per persona, four times over at quarter size
+on a phone, would be four sets of geometry to keep aligned and a fight with
+the responsive pass. So Build C is the other half of commandment 4 ("legend as
+TABLE"): one auto-fill grid of touch-floor chips carrying slot, canonical
+control name and the key that drives it. The roster is the BACKEND's —
+`MapperSlot::bindings`' key set, unbound controls included, because that is
+exactly the control somebody is standing at the cabinet trying to test.
+
+*What is left of commandment 2.* The echo ON the mapping surface itself. The
+feed it needs now exists and `/check` is the reference consumer.
+
+## Explicitly deferred (recorded so they're chosen, not forgotten)
+
+- ~~MAME-style OR-chaining (multiple physical keys per control)~~ — **fully
+  shipped.** Readers show the whole key list; add/remove/replace/clear and Undo
+  send one complete `keys` vector. Staged writes perform selection, duplicate
+  checking, and application under the daemon's one stage lock, so concurrent
+  edits cannot silently lose a key or create an unforced cross-player duplicate.
+- Steam-style activators (hold/double-press) — engine feature first, UI
+  after; belongs with shift-layers vocabulary from the PadForge audit.
+- Community preset sharing (Steam's playtime-ranked configs) — M7+.
+- WinUSB-claimed panels can't be learned via RawInput (injected typethrough
+  is invisible) — the learn path needs a capture-side tap when M6 migration
+  becomes real; recorded in CONTROL-SURFACE.
+
+## The 2026-native layer (what no tool in the field study could do)
+
+The study's tools span 1997–2026, but even the newest think like desktop
+apps. ksx Studio is a web surface backed by an AI-drivable CLI — these are
+the capabilities that stack only for us, ranked by leverage:
+
+1. **Close the loop in the browser: the Gamepad API sees our virtual pads.**
+   Our X360/DS4 targets are real controllers, so `navigator.getGamepads()`
+   in the very page doing the mapping can read them — no socket, no new
+   backend. Press a panel button → ksx translates → the virtual pad changes
+   → the mapper's render lights up. That is END-TO-END verification of the
+   entire product pipeline, drawn on the mapping surface (commandment 2),
+   and it makes Build C's core value buildable TODAY: the physical-side
+   echo still wants the live socket, but the virtual-side echo — the half
+   users actually need to trust the chain — is free. (Caveats: page must be
+   visible, first read needs a user gesture, mapping-order quirks per
+   browser — feature-detect and degrade to socket echo later.)
+2. **AI-assisted mapping (E5 grown up).** Every mapper in the study makes
+   humans do the layout. ksx's CLI verbs + MCP mean an assistant can be a
+   first-class mapping surface: "set P3 and P4 up like P1 but mirrored",
+   "this preset for street fighter — what's wrong?", "map this new panel"
+   → the assistant drives `ksx map`/the wizard and the page shows the
+   result live. The mapper UI and the AI share one control surface by
+   construction — no other tool in the field can say that.
+3. **QR-code handoff.** The status page (cab screen) shows a QR; the phone
+   scans it and lands in the mapper. When LAN mode ships (pairing token,
+   E7), the QR carries the pairing — the 2026 answer to "type this IP on
+   your phone". Zero cost to print the QR now for localhost-forwarded
+   setups; full value at LAN time.
+4. **PWA install.** Manifest + the service worker we already ship → "Add to
+   Home Screen" and the phone-at-cab surface becomes an app with an icon,
+   full-screen, no browser chrome. Cheap; do it in Build A polish.
+5. **Command palette (Ctrl+K).** Every CONTROL-SURFACE verb searchable in
+   one keystroke — start the Example Launcher profile, open P2 mapper, restore defaults.
+   The 2026 power-user pattern, and for us it's a thin view over verbs that
+   already exist.
+6. **Multi-surface sync.** Cab TV shows the big render, phone drives the
+   mapping, both fed by the same poller/socket state — presenter mode falls
+   out of the architecture (islands + shared API) rather than being built.
+7. **Platform polish as table stakes**: View Transitions for screen moves,
+   `prefers-reduced-motion` honored, container queries for the phone/TV
+   split, full keyboard-and-pad navigability of the mapper itself (Steam
+   proved config UIs should be drivable from the thing being configured —
+   on a cabinet, that's the panel).
+
+Current placement: Build B's product first run and Build C's live check are
+shipped. Direct mapper echo, QR/LAN pairing, PWA presentation, the command
+palette, and multi-surface sync remain future work; none is part of the current
+fresh-install acceptance claim.

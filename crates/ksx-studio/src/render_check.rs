@@ -1,0 +1,985 @@
+//! The /check render seam: embedded FMIR + one [`CheckPayload`] → HTML.
+//!
+//! **The button check** (docs/MAPPER-UX.md Build C): press a panel key, and
+//! every virtual control it drives lights on every slot at once. Same four-part
+//! slot seam as [`crate::render`] — scalars, lists, shows, and the layout test
+//! that pins all three — so read `render.rs`'s module docs for the protocol.
+//! What is worth writing down here is what is different about this page.
+//!
+//! # This page has two data channels, and only one of them is here
+//!
+//! Everything this seam renders is STRUCTURE, read from disk: which slots
+//! exist, which controls each preset names, which keys drive them. The
+//! lighting-up arrives on `GET /api/live` — Server-Sent Events over the
+//! daemon's own feed pipe (`crate::live`) — at display rate, and never touches
+//! a slot value.
+//!
+//! That split is the page. An echo carried in this payload would be as fast as
+//! an HTTP poll, and a button check that answers "did that press arrive?"
+//! two seconds later is not a button check. It also means the SSR paint is
+//! genuinely useful with no daemon at all: the binding table is correct
+//! whatever the pipe is doing, so the page still answers *what this key should
+//! do* while honestly saying it cannot answer *whether it did*.
+//!
+//! # The seam decides nothing about controls
+//!
+//! The chip roster is `MapperSlot::bindings`' key set — every function the
+//! saved layout names, unbound ones included. Its canonical spelling stays in
+//! `data-control` for the live lookup; the visible chip uses the controller's
+//! customer-facing identity. The roster itself is never hardcoded, because a
+//! stock-only list would quietly omit exactly the extension control somebody
+//! added and is now standing at the cabinet trying to test.
+
+use forma_ir::parser::IrModule;
+use forma_ir::slot::{SlotData, SlotValue};
+use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
+
+use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
+use crate::snapshot::CheckPayload;
+
+/// List array slot names, BINDING-derived (compiler 0.2.0+), in slot-table
+/// (== document) order. Rename a list signal in CheckIsland.ts and the layout
+/// test fails until these match again.
+const LIST_SLOT_KEYS: &str = "list:keyRows:array";
+const LIST_SLOT_CHIPS: &str = "list:chips:array";
+const LIST_SLOT_EMPTY_PLAYERS: &str = "list:emptyPlayers:array";
+
+/// The island table this page compiles to: exactly one island — the whole
+/// screen. Its name is the `activateIslands` registry key in
+/// `studio-ui/src/check.ts`.
+#[cfg(test)]
+const ISLAND_COMPONENT: &str = "CheckIsland";
+
+/// How many `createShow` pairs this page has; the layout test pins both the
+/// count and every name.
+const SHOW_COUNT: usize = 7;
+
+/// Bare-named slots this page renders and the seam deliberately never fills.
+/// EMPTY, and that is the claim.
+#[cfg(test)]
+const CLIENT_ONLY_SLOTS: [&str; 0] = [];
+
+/// Anonymous (`attr:`/`text:`) slots this page compiles to. EMPTY — every
+/// attribute value and every text child is either a named signal binding, a
+/// list item's member read, or static markup.
+#[cfg(test)]
+const ANONYMOUS_SLOTS: [&str; 0] = [];
+
+/// What a control with no key bound to it says on its chip.
+///
+/// One word, here, once — the island reads it off the payload rather than
+/// spelling its own. An unbound control still gets a chip on purpose: it is the
+/// answer to "I pressed the button and nothing happened", and a roster that
+/// hid its unbound half would make that question unanswerable on the one
+/// screen built to answer it.
+const UNBOUND: &str = "unbound";
+
+/// The sentence under the feed line: what this screen is watching.
+///
+/// Composed here rather than in TypeScript for the reason every other page's
+/// prose is (docs/SURFACES.md §1) — and this one names the CLI equivalent,
+/// because a cabinet with no browser still has a terminal.
+fn feed_hint() -> String {
+    "Press a key and its controller actions light immediately. Nothing is changed here.".to_owned()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CheckEmptyState {
+    heading: &'static str,
+    line: &'static str,
+    href: &'static str,
+    action: &'static str,
+}
+
+/// Keep the three kinds of empty paint apart. `MapperSnapshot::unavailable`
+/// deliberately carries a sentinel instead of pretending a failed read found
+/// no controllers, while a present slot with no binding keys is a third,
+/// fixable Controls state.
+fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
+    if mapper.generated_at == "(unavailable)" || mapper.config_root == "(unavailable)" {
+        return Some(CheckEmptyState {
+            heading: "Controls could not be checked",
+            line: "Reopen ksx, then use Setup to confirm a controller and Controls to check its \
+                   buttons. Nothing was changed.",
+            href: "/start",
+            action: "Open Setup",
+        });
+    }
+    if mapper.slots.is_empty() {
+        return Some(CheckEmptyState {
+            heading: "No controller is ready to test",
+            line: "Add a controller in Setup, then come back to test its buttons.",
+            href: "/start",
+            action: "Open Setup",
+        });
+    }
+    if mapper.slots.iter().all(|slot| slot.bindings.is_empty()) {
+        return Some(CheckEmptyState {
+            heading: "No controls are ready to test",
+            line: "Open Controls and choose a ready-made layout or add button keys, then come \
+                   back here.",
+            href: "/map",
+            action: "Open Controls",
+        });
+    }
+    None
+}
+
+/// The live feed addresses canonical function names, but the chip's visible
+/// label should read like the controller in somebody's hands. This mirrors the
+/// controller identities in `CheckIsland.ts`; extension names are humanized so
+/// a dotted implementation token never becomes primary copy.
+fn control_label(persona: &str, control: &str) -> String {
+    let playstation = crate::render::art_for(persona) == crate::render::ART_DS4;
+    let known = match control {
+        "A" => Some(if playstation { "✕" } else { "A" }),
+        "B" => Some(if playstation { "○" } else { "B" }),
+        "X" => Some(if playstation { "□" } else { "X" }),
+        "Y" => Some(if playstation { "△" } else { "Y" }),
+        "lt" => Some(if playstation { "L2" } else { "LT" }),
+        "lb" => Some(if playstation { "L1" } else { "LB" }),
+        "rb" => Some(if playstation { "R1" } else { "RB" }),
+        "rt" => Some(if playstation { "R2" } else { "RT" }),
+        "guide" => Some(if playstation { "PS" } else { "Guide" }),
+        "back" => Some(if playstation { "Share" } else { "View" }),
+        "start" => Some(if playstation { "Options" } else { "Menu" }),
+        "lthumb" => Some("L3"),
+        "rthumb" => Some("R3"),
+        "ly.max" => Some("Left stick ↑"),
+        "ly.min" => Some("Left stick ↓"),
+        "lx.min" => Some("Left stick ←"),
+        "lx.max" => Some("Left stick →"),
+        "dpad.up" => Some("D-pad ↑"),
+        "dpad.down" => Some("D-pad ↓"),
+        "dpad.left" => Some("D-pad ←"),
+        "dpad.right" => Some("D-pad →"),
+        "ry.max" => Some("Right stick ↑"),
+        "ry.min" => Some("Right stick ↓"),
+        "rx.min" => Some("Right stick ←"),
+        "rx.max" => Some("Right stick →"),
+        _ => None,
+    };
+    if let Some(label) = known {
+        return label.to_owned();
+    }
+    if let Some(name) = control.strip_prefix("macro.") {
+        return format!("Button sequence “{name}”");
+    }
+    let words = control
+        .split(['.', '_', '-'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if words.is_empty() {
+        return "Other control".to_owned();
+    }
+    let mut chars = words.chars();
+    let first = chars.next().expect("non-empty control label");
+    format!("{}{}", first.to_uppercase(), chars.as_str())
+}
+
+/// The [`CheckPayload`] for one mapper read and one session view.
+///
+/// A constructor rather than a struct literal at the call site, so the hint
+/// cannot be composed a second way by a second caller.
+pub(crate) fn payload(
+    mapper: ksx_api::MapperSnapshot,
+    session: crate::control::SessionView,
+) -> CheckPayload {
+    CheckPayload {
+        mapper,
+        session,
+        feed_hint: feed_hint(),
+    }
+}
+
+/// Scalar slot values, keyed by the signal names in CheckIsland.ts.
+fn scalar_slots(payload: &CheckPayload) -> serde_json::Value {
+    let empty = empty_state(&payload.mapper);
+    serde_json::json!({
+        "generatedAt": payload.mapper.generated_at,
+        "sourceLine": "Press a keyboard or panel key and watch every controller action it drives.",
+        "emptyHeading": empty.map_or("", |state| state.heading),
+        "emptyLine": empty.map_or("", |state| state.line),
+        "emptyHref": empty.map_or("/start", |state| state.href),
+        "emptyAction": empty.map_or("Open Setup", |state| state.action),
+        "feedHint": payload.feed_hint,
+        "sessionLine": if payload.session.running {
+            "Play is active."
+        } else if payload.session.reachable {
+            "Ready to test."
+        } else {
+            "Live testing needs ksx to be reopened."
+        },
+        // The FEED's own state is the client's to word — it is the only thing
+        // on this page the server cannot know, because the stream is opened by
+        // the browser. The SSR value says so rather than claiming a state:
+        // "live" painted server-side would be a lie for however long the
+        // EventSource takes to connect, and on a machine with no daemon it
+        // would never stop being one.
+        "feedLine": "connecting to live input…",
+        // Loss counters are per-frame and arrive with the frames. Nothing to
+        // say before the first one.
+        "lossLine": "",
+        "offPanelLine": "",
+    })
+}
+
+/// One chip per control per slot, slot order then the preset's own control
+/// order (`bindings` is a `BTreeMap`, so that order is stable and is the same
+/// one the mapper's legend walks).
+///
+/// `slot` is the NUMBER as a string because it is rendered as a DOM attribute
+/// and read back as one by `check.ts`'s `chipFor`. The pair (`data-slot`,
+/// `data-control`) is the entire contract between the server-rendered
+/// structure and the client's live echo — raw values on both sides, never a
+/// composed id, so there is no string spelled in two languages to drift.
+fn chip_values(payload: &CheckPayload) -> SlotValue {
+    let mut chips = Vec::new();
+    for slot in &payload.mapper.slots {
+        for (control, keys) in &slot.bindings {
+            let label = if keys.is_empty() {
+                UNBOUND.to_owned()
+            } else {
+                keys.join(" · ")
+            };
+            chips.push(SlotValue::object(vec![
+                ("slot".to_owned(), SlotValue::Text(slot.number.to_string())),
+                (
+                    "player".to_owned(),
+                    SlotValue::Text(format!("P{}", slot.number)),
+                ),
+                ("control".to_owned(), SlotValue::Text(control.clone())),
+                (
+                    "label".to_owned(),
+                    SlotValue::Text(control_label(&slot.persona, control)),
+                ),
+                ("keys".to_owned(), SlotValue::Text(label)),
+            ]));
+        }
+    }
+    SlotValue::array(chips)
+}
+
+/// A mixed roster must not make a real player disappear merely because that
+/// player's layout names no controls. These rows share the populated card with
+/// the working players' chips and point at the exact Controls destination.
+fn empty_player_values(payload: &CheckPayload) -> SlotValue {
+    SlotValue::array(
+        payload
+            .mapper
+            .slots
+            .iter()
+            .filter(|slot| slot.bindings.is_empty())
+            .map(|slot| {
+                SlotValue::object(vec![
+                    (
+                        "player".to_owned(),
+                        SlotValue::Text(format!("Player {} has no controls yet", slot.number)),
+                    ),
+                    (
+                        "line".to_owned(),
+                        SlotValue::Text(
+                            "Open Controls and choose a ready-made layout or add button keys for \
+                             this player."
+                                .to_owned(),
+                        ),
+                    ),
+                    (
+                        "href".to_owned(),
+                        SlotValue::Text(format!("/map?slot={}", slot.number)),
+                    ),
+                    (
+                        "action".to_owned(),
+                        SlotValue::Text("Open Controls".to_owned()),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+
+/// The list array payloads, keyed by their (unique) slot names.
+///
+/// The key strip is ALWAYS empty server-side, and that is a claim rather than
+/// an omission: a key hit is something that happened at a moment, and the
+/// server rendering this page has no moment to report. Painting a remembered
+/// keystroke into an SSR document would put a press on screen that is not
+/// happening.
+fn list_values(payload: &CheckPayload) -> [(&'static str, SlotValue); 3] {
+    [
+        (LIST_SLOT_KEYS, SlotValue::array(Vec::new())),
+        (LIST_SLOT_EMPTY_PLAYERS, empty_player_values(payload)),
+        (LIST_SLOT_CHIPS, chip_values(payload)),
+    ]
+}
+
+/// Every show slot on this page, BY NAME, with the boolean the server wants.
+///
+/// The shows are all SIBLINGS — none is nested inside another's branch — so
+/// every combined condition is computed once, here and in `check.ts`, instead
+/// of relying on a parent branch having rendered.
+fn show_values(payload: &CheckPayload) -> [(&'static str, bool); SHOW_COUNT] {
+    let has_slots = empty_state(&payload.mapper).is_none();
+    [
+        ("show:hasSlots", has_slots),
+        ("show:noSlots", !has_slots),
+        // The feed is DOWN in every server paint, because the server has not
+        // opened it — the browser does. Claiming "live" here would be a lie
+        // for as long as the connection took, and forever on a machine with
+        // no daemon.
+        ("show:live", false),
+        ("show:feedDown", true),
+        // Nothing has arrived, so the strip says so rather than sitting blank.
+        ("show:quiet", true),
+        // Both counters are per-frame; there are no frames yet.
+        ("show:hasLoss", false),
+        ("show:hasOffPanel", false),
+    ]
+}
+
+/// Slot ids of every slot named `name`, in slot-table (== document) order.
+fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
+    module
+        .slots
+        .entries()
+        .iter()
+        .filter(|e| module.strings.get(e.name_str_idx).is_ok_and(|n| n == name))
+        .map(|e| e.slot_id)
+        .collect()
+}
+
+/// Populate every server-injected slot.
+fn build_slots(module: &IrModule, payload: &CheckPayload) -> SlotData {
+    let scalars = scalar_slots(payload).to_string();
+    let mut slots = SlotData::from_json(&scalars, module)
+        .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
+    for (name, value) in list_values(payload) {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(id, value);
+        }
+    }
+    for (name, value) in show_values(payload) {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(id, SlotValue::Bool(value));
+        }
+    }
+    slots
+}
+
+/// Render /check for one payload: SSR slots for first paint, the same data as
+/// island props for hydration.
+///
+/// The no-JS refresh is kept (unlike `/pads`'s armed state): with scripting off
+/// there is no stream, so a periodic reload is the only way the binding table
+/// picks up a preset edit made from another surface. The page says in a
+/// `<noscript>` block that the echo itself needs JavaScript — a refresh cannot
+/// substitute for a live feed, and pretending otherwise would be the dead grid
+/// this page exists not to be.
+pub(crate) fn render_check(page: &EmbeddedPage, payload: &CheckPayload) -> PageOutput {
+    let slots = build_slots(&page.module, payload);
+    let prefix = body_prefix(payload, "/check");
+    with_icon_links(render_page(&PageConfig {
+        title: "ksx Studio — button check",
+        route_pattern: "/check",
+        manifest: &page.manifest,
+        config_script: None,
+        config_json: None,
+        body_class: None,
+        personality_css: Some(PERSONALITY_CSS),
+        body_prefix: Some(&prefix),
+        render_mode: RenderMode::Phase2SsrReconcile,
+        ir_module: Some(&page.module),
+        slots: Some(&slots),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::SessionView;
+    use crate::render::assert_complete_head;
+    use std::collections::BTreeMap;
+
+    /// The island source, compiled IN so the cross-language guards below cannot
+    /// silently stop reading anything: move or rename the file and this crate
+    /// fails to build.
+    const CHECK_ISLAND_TS: &str = include_str!("../../../studio-ui/src/CheckIsland.ts");
+    const CHECK_TS: &str = include_str!("../../../studio-ui/src/check.ts");
+
+    /// The rendered document with the `__ksx-payload` data block removed.
+    ///
+    /// Every field of the payload is embedded verbatim as JSON for the client
+    /// to hydrate from, so a naive `html.contains(sentence)` passes for any
+    /// sentence in the PAYLOAD whether or not the page renders it. Assertions
+    /// about what a reader sees go through this.
+    fn rendered(html: &str) -> String {
+        let Some(start) = html.find("<script id=\"__ksx-payload\"") else {
+            return html.to_owned();
+        };
+        let end = html[start..]
+            .find("</script>")
+            .map_or(html.len(), |at| start + at + "</script>".len());
+        format!("{}{}", &html[..start], &html[end..])
+    }
+
+    fn slot(number: u8, bindings: &[(&str, &[&str])]) -> ksx_api::MapperSlot {
+        ksx_api::MapperSlot {
+            number,
+            persona: "xbox360".into(),
+            persona_label: "Xbox 360".into(),
+            preset: format!("IPAC P{number}"),
+            keyboard: "IPAC".into(),
+            bindings: bindings
+                .iter()
+                .map(|(f, keys)| {
+                    (
+                        (*f).to_owned(),
+                        keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            backup: None,
+            session_backup: false,
+            turbo: BTreeMap::new(),
+            macros_off: false,
+        }
+    }
+
+    fn cabinet() -> CheckPayload {
+        payload(
+            ksx_api::MapperSnapshot {
+                generated_at: "2026-08-08 12:00:00 UTC".into(),
+                source: r#"slots of profile "Example Launcher" (games.toml)"#.into(),
+                config_root: r"C:\Users\TestUser\.ksx".into(),
+                slots: vec![
+                    slot(1, &[("A", &["G"]), ("dpad.up", &["Up"]), ("B", &[])]),
+                    slot(2, &[("A", &["G"]), ("dpad.up", &["W"])]),
+                ],
+                profile: Some("Example Launcher".into()),
+            },
+            SessionView {
+                reachable: true,
+                running: true,
+                line: "running (2 slots)".into(),
+                profile: Some("Example Launcher".into()),
+            },
+        )
+    }
+
+    #[test]
+    fn embedded_page_loads_and_ir_is_fmir_v2() {
+        let page = EmbeddedPage::load("/check").expect("the /check route is embedded");
+        assert_eq!(page.module.header.version, 2);
+    }
+
+    #[test]
+    fn the_check_head_is_complete() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        assert_complete_head("/check", &render_check(&page, &cabinet()).html);
+    }
+
+    /// **The fan-out, server-side.** One key on two slots is TWO chips, each
+    /// naming its own slot — which is what makes "four pads glowing from one
+    /// keystroke" possible at all, because the client lights chips by
+    /// (`data-slot`, `data-control`) and cannot light a slot that has no chip.
+    ///
+    /// Catches a seam that emitted one chip per CONTROL NAME rather than per
+    /// (slot, control): the page would have looked correct on a one-slot
+    /// cabinet and shown P1 lighting alone on a four-slot one — the exact
+    /// demo, silently broken.
+    #[test]
+    fn one_key_on_two_slots_renders_two_chips_each_naming_its_slot() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = rendered(&render_check(&page, &cabinet()).html);
+        for slot in ["1", "2"] {
+            assert!(
+                html.contains(&format!(r#"data-slot="{slot}""#)),
+                "slot {slot} has no chip: {html}"
+            );
+        }
+        assert_eq!(
+            html.matches(r#"data-control="A""#).count(),
+            2,
+            "A is on both slots, so it is two chips: {html}"
+        );
+        assert!(html.contains("P1"), "{html}");
+        assert!(html.contains("P2"), "{html}");
+    }
+
+    /// **The roster is the BACKEND's, unbound controls included.**
+    ///
+    /// A control with no key is exactly the control somebody is standing at the
+    /// cabinet trying to test, so it gets a chip and says `unbound` rather than
+    /// being filtered out. Catches the version that rendered only bound
+    /// controls: the one question the page exists to answer — "I pressed it and
+    /// nothing happened" — became unanswerable, because the control was not on
+    /// screen to be looked for.
+    #[test]
+    fn an_unbound_control_still_gets_a_chip_and_says_so() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = rendered(&render_check(&page, &cabinet()).html);
+        assert!(
+            html.contains(r#"data-control="B""#),
+            "the unbound control is missing: {html}"
+        );
+        assert!(html.contains(UNBOUND), "{html}");
+        // ...and a bound one shows the key that drives it, which is the
+        // wiring-diagnostic half: press G, watch the chip that says G.
+        assert!(html.contains(">G<"), "{html}");
+    }
+
+    /// **The server never claims the feed is live.**
+    ///
+    /// The stream is opened by the BROWSER, so at render time the server knows
+    /// nothing about it. A paint that said "live" would be wrong for as long as
+    /// the connection took and permanently wrong on a machine with no daemon —
+    /// and this page's whole worth is that a dark grid means something.
+    #[test]
+    fn the_server_paint_never_asserts_a_live_feed() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = rendered(&render_check(&page, &cabinet()).html);
+        assert!(html.contains("connecting to live input"), "{html}");
+        for (name, value) in show_values(&cabinet()) {
+            if name == "show:live" {
+                assert!(!value, "the server cannot know the feed is up");
+            }
+        }
+    }
+
+    /// An unavailable mapper read, a successful empty roster, and a controller
+    /// whose layout names no controls are three different customer states.
+    /// None may borrow the old "No controllers" claim.
+    #[test]
+    fn unavailable_empty_and_zero_control_rosters_have_distinct_remedies() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let mut unavailable = cabinet();
+        unavailable.mapper = ksx_api::MapperSnapshot::unavailable(
+            "no slots are configured — `ksx slot assign` creates one",
+        );
+        let unavailable_html = rendered(&render_check(&page, &unavailable).html);
+        assert!(
+            unavailable_html.contains("Controls could not be checked"),
+            "{unavailable_html}"
+        );
+        assert!(
+            unavailable_html.contains(r#"href="/start""#)
+                && unavailable_html.contains("Open Setup"),
+            "{unavailable_html}"
+        );
+        assert!(
+            !unavailable_html.contains("ksx slot assign"),
+            "the customer-facing failure exposed a CLI remedy: {unavailable_html}"
+        );
+
+        let mut empty = cabinet();
+        empty.mapper.slots.clear();
+        let empty_html = rendered(&render_check(&page, &empty).html);
+        assert!(
+            empty_html.contains("No controller is ready to test"),
+            "{empty_html}"
+        );
+        assert!(
+            empty_html.contains("Add a controller in Setup"),
+            "{empty_html}"
+        );
+
+        let mut zero_controls = cabinet();
+        zero_controls.mapper.slots = vec![slot(1, &[])];
+        let zero_html = rendered(&render_check(&page, &zero_controls).html);
+        assert!(
+            zero_html.contains("No controls are ready to test"),
+            "{zero_html}"
+        );
+        assert!(
+            zero_html.contains(r#"href="/map""#) && zero_html.contains("Open Controls"),
+            "{zero_html}"
+        );
+
+        for html in [&unavailable_html, &empty_html, &zero_html] {
+            assert!(!html.contains("No controllers to check"), "{html}");
+            assert!(!html.contains("data-control="), "no chips expected: {html}");
+        }
+        assert_ne!(unavailable_html, empty_html);
+        assert_ne!(empty_html, zero_html);
+    }
+
+    #[test]
+    fn chips_show_controller_labels_while_live_lookup_keeps_canonical_names() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = rendered(&render_check(&page, &cabinet()).html);
+        assert!(html.contains(r#"data-control="dpad.up""#), "{html}");
+        assert!(html.contains("D-pad ↑"), "{html}");
+        assert!(
+            !html.contains(">dpad.up<"),
+            "the implementation token became a visible chip label: {html}"
+        );
+
+        for (persona, control, expected) in [
+            ("xbox360", "start", "Menu"),
+            ("playstation", "A", "✕"),
+            ("xbox360", "rx.min", "Right stick ←"),
+            ("xbox360", "macro.dash", "Button sequence “dash”"),
+            ("xbox360", "extra.button", "Extra button"),
+        ] {
+            assert_eq!(control_label(persona, control), expected);
+        }
+        for client_literal in ["Menu", "✕", "Right stick ←", "Button sequence"] {
+            assert!(
+                CHECK_ISLAND_TS.contains(client_literal),
+                "the client labeler drifted from Rust: {client_literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mixed_roster_keeps_the_player_with_no_controls_visible_and_fixable() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let mut mixed = cabinet();
+        mixed.mapper.slots = vec![slot(1, &[("A", &["G"])]), slot(2, &[])];
+        let html = rendered(&render_check(&page, &mixed).html);
+        assert!(html.contains(r#"data-slot="1""#), "{html}");
+        assert!(html.contains("Player 2 has no controls yet"), "{html}");
+        assert!(
+            html.contains(r#"href="/map?slot=2""#) && html.contains("Open Controls"),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"data-slot="2""#),
+            "an empty player should have a remedy row, not a fake live chip: {html}"
+        );
+    }
+
+    #[test]
+    fn live_refusals_are_sanitized_before_they_reach_the_status_line() {
+        let sanitizer = CHECK_TS
+            .split("export function customerFeedReason(")
+            .nth(1)
+            .expect("customerFeedReason exists")
+            .split("\n}")
+            .next()
+            .expect("customerFeedReason ends");
+        assert!(
+            sanitizer.contains("temporarily unavailable") && sanitizer.contains("Reopen ksx"),
+            "the unknown-refusal branch has no safe remedy: {sanitizer}"
+        );
+        assert!(
+            !sanitizer.contains("return reason"),
+            "an unknown provider refusal can still render raw: {sanitizer}"
+        );
+        assert!(
+            CHECK_TS.contains(r#"|| "unavailable""#),
+            "an empty unavailable event must not paint itself as live"
+        );
+    }
+
+    #[test]
+    fn client_and_server_empty_state_copy_stays_in_lockstep() {
+        let mut empty = cabinet().mapper;
+        empty.slots.clear();
+        let zero = ksx_api::MapperSnapshot {
+            slots: vec![slot(1, &[])],
+            ..empty.clone()
+        };
+        for mapper in [
+            ksx_api::MapperSnapshot::unavailable("raw provider failure"),
+            empty,
+            zero,
+        ] {
+            let state = empty_state(&mapper).expect("an empty presentation state");
+            for literal in [state.heading, state.line, state.href, state.action] {
+                assert!(
+                    CHECK_ISLAND_TS.contains(literal),
+                    "CheckIsland.ts drifted from Rust's {literal:?}"
+                );
+            }
+        }
+        for mixed_literal in [
+            "has no controls yet",
+            "add button keys for this player",
+            "Open Controls",
+        ] {
+            assert!(
+                CHECK_ISLAND_TS.contains(mixed_literal),
+                "mixed-player remedy drifted: {mixed_literal}"
+            );
+        }
+    }
+
+    /// **With scripting off the page says the echo cannot work.**
+    ///
+    /// This is the page's single most important honest sentence: with no
+    /// JavaScript there is no EventSource, so no chip can ever light, and a
+    /// grid of dark chips is exactly what a WORKING check looks like while
+    /// nobody is pressing anything. Catches the version that shipped the grid
+    /// with no `<noscript>` at all — indistinguishable, on screen, from a
+    /// cabinet whose panel is dead.
+    #[test]
+    fn with_no_javascript_the_page_says_the_echo_cannot_work() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = render_check(&page, &cabinet()).html;
+        // Every <noscript> on the page, because `body_prefix` emits one of its
+        // own (the meta refresh) before this one.
+        let blocks: Vec<&str> = html
+            .split("<noscript")
+            .skip(1)
+            .filter_map(|rest| rest.split("</noscript>").next())
+            .collect();
+        assert!(!blocks.is_empty(), "no noscript block at all: {html}");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| (b.contains("JavaScript") || b.contains("scripting"))
+                    && b.to_lowercase().contains("light")),
+            "one noscript block must name what is missing AND what will not              happen because of it: {blocks:?}"
+        );
+    }
+
+    /// The customer rail is the three-stage Setup → Controls → Test flow, and
+    /// marks this final stage as current.
+    #[test]
+    fn the_nav_reaches_every_sibling_page() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = render_check(&page, &cabinet()).html;
+        assert!(
+            html.contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="navlink on" href="/check" aria-current="page">Test</a>"#),
+            "{html}"
+        );
+    }
+
+    /// **The two-attribute contract, both sides.**
+    ///
+    /// `data-slot` and `data-control` are the whole seam between the
+    /// server-rendered chips and the client's live echo. They are raw payload
+    /// values on purpose — a composed `chip-1-dpad-up` would be a string
+    /// spelled in Rust and again in TypeScript. This asserts both halves still
+    /// speak the same two names, which is the one thing a Rust test can check
+    /// about the other language.
+    #[test]
+    fn the_client_looks_chips_up_by_the_two_attributes_the_seam_renders() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = rendered(&render_check(&page, &cabinet()).html);
+        for attr in ["data-slot", "data-control"] {
+            assert!(html.contains(attr), "the seam stopped rendering {attr}");
+            assert!(
+                CHECK_ISLAND_TS.contains(&format!("\"{attr}\"")),
+                "CheckIsland.ts stopped rendering {attr}"
+            );
+            assert!(
+                CHECK_TS.contains(attr),
+                "check.ts stopped looking chips up by {attr}"
+            );
+        }
+    }
+
+    /// **The echo does not go through the list signal.**
+    ///
+    /// Rewriting a ~100-item list sixty times a second would rebuild ~100 DOM
+    /// nodes sixty times a second on the phone this page is for. `paint`
+    /// toggles classes instead, and this pins that: the frame handler must not
+    /// call the roster applier.
+    #[test]
+    fn the_live_echo_never_rewrites_the_roster() {
+        let frame_handler = CHECK_TS
+            .split("function paint(")
+            .nth(1)
+            .expect("paint() exists")
+            .split("\nfunction ")
+            .next()
+            .expect("...and ends");
+        assert!(
+            !frame_handler.contains("applyCheck"),
+            "the per-frame path must not rewrite the roster list: {frame_handler}"
+        );
+        assert!(
+            frame_handler.contains("classList"),
+            "the echo is a class toggle: {frame_handler}"
+        );
+    }
+
+    /// **A frame carries a slot only when that slot MOVED.**
+    ///
+    /// `LiveSubscription::poll` folds transitions, so a slot that is absent
+    /// from a frame means "nothing changed here" — never "nothing is pressed".
+    /// A painter that cleared every held chip on the grid each frame and
+    /// re-applied from `frame.slots` would therefore drop P1's held button the
+    /// instant P2 pressed anything, and drop it permanently on a panel where
+    /// nothing else moved.
+    ///
+    /// That was the first version of `paint`, and it is the exact failure this
+    /// screen exists to make impossible: a control that IS held, shown as not
+    /// held. Pinned as a source guard because the repo has no browser harness —
+    /// the same shape as `the_live_echo_never_rewrites_the_roster` above.
+    #[test]
+    fn the_echo_clears_held_chips_per_slot_not_across_the_whole_grid() {
+        let paint = CHECK_TS
+            .split("function paint(")
+            .nth(1)
+            .expect("paint() exists")
+            .split("\nfunction ")
+            .next()
+            .expect("...and ends");
+        assert!(
+            paint.contains("clearHolds(grid, slot.slot)"),
+            "the per-slot clear is gone: {paint}"
+        );
+        assert!(
+            !paint.contains(r#"querySelectorAll(".chip.down")"#),
+            "a grid-wide clear inside the per-frame path drops other slots'              holds: {paint}"
+        );
+        // ...and a session that ended holds nothing at all.
+        assert!(
+            paint.contains("!envelope.frame.running"),
+            "a stopped session must not leave chips lit: {paint}"
+        );
+    }
+
+    /// A flash is turned off by its OWN timer, not swept on the next frame.
+    ///
+    /// Frames arrive only when something happens, plus a 2 s keepalive — so a
+    /// deadline swept per frame would leave a single tap lit for up to two
+    /// seconds on an otherwise idle panel, which reads as a stuck button on the
+    /// screen built to find stuck buttons.
+    #[test]
+    fn a_flash_expires_on_a_timer_rather_than_on_the_next_frame() {
+        assert!(
+            CHECK_TS.contains("setTimeout") && CHECK_TS.contains("clearTimeout"),
+            "the flash must own its clock, and restart it when a chip re-fires"
+        );
+    }
+
+    /// Loss is REPORTED. Both counters have a place on the page and a distinct
+    /// sentence — "the panel is dead" and "you are pressing the wrong
+    /// keyboard" are different findings, and a page that showed one number for
+    /// both would merge them.
+    #[test]
+    fn both_loss_counters_have_their_own_sentence_on_the_page() {
+        assert!(
+            CHECK_ISLAND_TS.contains("lossLine"),
+            "no dropped-frame line"
+        );
+        assert!(
+            CHECK_ISLAND_TS.contains("offPanelLine"),
+            "no off-panel line"
+        );
+        assert!(
+            CHECK_TS.contains("frame.dropped") && CHECK_TS.contains("frame.off_panel"),
+            "the client must read BOTH counters off the frame"
+        );
+        assert!(
+            CHECK_TS.contains("wrong keyboard") || CHECK_TS.contains("pressing the panel"),
+            "the off-panel sentence must say what it means"
+        );
+    }
+
+    /// The slot-table contract this seam depends on, both directions: every
+    /// name the seam injects is one the island RENDERS, and every scalar the
+    /// island renders is one the seam injects. Read
+    /// [`crate::render::assert_island_slot_contract`] before touching this —
+    /// "the slot exists" is not the check.
+    #[test]
+    fn embedded_ir_slot_layout_matches_the_seam() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let module = page.module();
+        let names: Vec<&str> = module
+            .slots
+            .entries()
+            .iter()
+            .filter_map(|e| module.strings.get(e.name_str_idx).ok())
+            .collect();
+
+        let scalars = scalar_slots(&CheckPayload::default());
+        for key in scalars.as_object().unwrap().keys() {
+            assert!(
+                names.contains(&key.as_str()),
+                "scalar slot '{key}' missing from the embedded IR; slots: {names:?}"
+            );
+        }
+        let array_slots: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| n.starts_with("list:") && n.ends_with(":array"))
+            .collect();
+        assert_eq!(
+            array_slots,
+            [LIST_SLOT_KEYS, LIST_SLOT_EMPTY_PLAYERS, LIST_SLOT_CHIPS],
+            "list slot names drifted between the compiler/CheckIsland.ts and the              LIST_SLOT_* constants; slots: {names:?}"
+        );
+        let ir_shows: std::collections::BTreeSet<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| n.starts_with("show:"))
+            .collect();
+        let seam_shows: std::collections::BTreeSet<&str> = show_values(&CheckPayload::default())
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            ir_shows, seam_shows,
+            "show slots drifted between CheckIsland.ts and show_values()"
+        );
+        assert_eq!(
+            ir_shows.len(),
+            SHOW_COUNT,
+            "SHOW_COUNT is stale; slots: {names:?}"
+        );
+        let islands = module.islands.entries();
+        assert_eq!(islands.len(), 1, "expected exactly one island");
+        assert_eq!(
+            module.strings.get(islands[0].name_str_idx).unwrap(),
+            ISLAND_COMPONENT
+        );
+        assert!(
+            !islands[0].slot_ids.is_empty(),
+            "island slot_ids are empty — native data-forma-props will not be emitted"
+        );
+
+        let injected: Vec<&str> = scalars
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .chain(
+                list_values(&CheckPayload::default())
+                    .iter()
+                    .map(|(n, _)| *n),
+            )
+            .chain(seam_shows.iter().copied())
+            .collect();
+        crate::render::assert_island_slot_contract(
+            module,
+            &injected,
+            &CLIENT_ONLY_SLOTS,
+            &ANONYMOUS_SLOTS,
+        );
+    }
+
+    /// The payload the page embeds is the payload `/api/check` serves — one
+    /// struct, one serializer, so the poller cannot disagree with the paint.
+    #[test]
+    fn the_payload_block_matches_the_api_payload_shape() {
+        let page = EmbeddedPage::load("/check").unwrap();
+        let html = render_check(&page, &cabinet()).html;
+        let start = html
+            .find("<script id=\"__ksx-payload\"")
+            .expect("the payload block");
+        let body = html[start..]
+            .split_once('>')
+            .expect("an open tag")
+            .1
+            .split("</script>")
+            .next()
+            .expect("a close tag");
+        let parsed: CheckPayload =
+            serde_json::from_str(body).expect("the embedded block IS a CheckPayload");
+        assert_eq!(parsed, cabinet());
+    }
+}

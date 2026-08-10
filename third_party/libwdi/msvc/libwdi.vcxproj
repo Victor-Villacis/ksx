@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B9E48FB3-D33D-44E6-A238-D01D9248F5AD}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectName>libwdi-ksx-prepare</ProjectName>
+    <RootNamespace>libwdi</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset Condition="'$(PlatformToolset)'==''">v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName>libwdi</TargetName>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NDEBUG;_WIN32;_WIN64;_WINDLL;_CRT_SECURE_NO_WARNINGS;LIBWDI_DLL_EXPORT;KSX_PREPARE_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>MinSpace</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level3</WarningLevel>
+      <CompileAs>CompileAsC</CompileAs>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <AdditionalDependencies>setupapi.lib;newdev.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)..\src\libwdi.def</ModuleDefinitionFile>
+      <SubSystem>Windows</SubSystem>
+      <OptimizeReferences>true</OptimizeReferences>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\libwdi.c" />
+    <ClCompile Include="..\src\libwdi_dlg.c" />
+    <ClCompile Include="..\src\logging.c" />
+    <ClCompile Include="..\src\pki.c" />
+    <ClCompile Include="..\src\tokenizer.c" />
+    <ClCompile Include="..\src\vid_data.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="config.h" />
+    <ClInclude Include="..\src\embedded.h" />
+    <ClInclude Include="..\src\installer.h" />
+    <ClInclude Include="..\src\libwdi.h" />
+    <ClInclude Include="..\src\libwdi_i.h" />
+    <ClInclude Include="..\src\logging.h" />
+    <ClInclude Include="..\src\msapi_utf8.h" />
+    <ClInclude Include="..\src\mssign32.h" />
+    <ClInclude Include="..\src\resource.h" />
+    <ClInclude Include="..\src\stdfn.h" />
+    <ClInclude Include="..\src\tokenizer.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\src\libwdi.def" />
+    <None Include="..\src\winusb.cat.in" />
+    <None Include="..\src\winusb.inf.in" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\src\libwdi.rc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

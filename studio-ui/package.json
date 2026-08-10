@@ -1,0 +1,15 @@
+{
+  "name": "ksx-studio-ui",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Forma authoring project for KSX Studio. Node is needed only to regenerate crates/ksx-studio/assets/ — never to build or run KSX.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@getforma/build": "^0.2.0",
+    "@getforma/compiler": "^0.3.1",
+    "@getforma/core": "^2.0.0"
+  }
+}

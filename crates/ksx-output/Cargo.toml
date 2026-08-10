@@ -1,0 +1,36 @@
+[package]
+name = "ksx-output"
+description = "VirtualPadBackend trait + ViGEmBus implementation over the vendored vigem-client."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ksx-core.workspace = true
+ksx-hidmaestro.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+vigem-client.workspace = true
+# Slot identity is resolved by active correlation through XInput read-back
+# (docs/research/m2-xinput-findings.md) — a runtime dep, not just tests.
+rusty-xinput.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# `ds4_report_probe` only: enumerate the HID interface of a virtual DS4 and hold
+# a read open on it, so submitted reports can be verified on the wire instead of
+# inferred from joy.cpl. Read-only — nothing is claimed, bound, or installed.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
+
+[features]
+# XInput loopback + driver-touching tests; only ever run on the cabinet, never CI.
+cab-tests = []

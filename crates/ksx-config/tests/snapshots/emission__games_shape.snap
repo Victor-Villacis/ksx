@@ -1,0 +1,16 @@
+---
+source: crates/ksx-config/tests/emission.rs
+expression: "toml::to_string(&games).unwrap()"
+---
+[[game]]
+title = "Example Launcher"
+notes = "Example Launcher"
+path = 'C:\Examples\example-launcher.exe'
+block_keyboards = true
+block_mice = false
+
+[[game.slot]]
+number = 1
+user_index = 1
+keyboard = 'HID\VID_D209&PID_0430&REV_0001&MI_00'
+preset = "Panel P1"

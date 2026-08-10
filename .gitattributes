@@ -1,0 +1,16 @@
+# Normalize authored text in the repository.
+* text=auto
+
+# Binary brand and application resources must never be line-ending translated.
+*.ico binary
+*.png binary
+*.rgba binary
+
+# Generated Forma output is content-addressed and must remain byte-for-byte.
+crates/ksx-studio/assets/** -text
+
+# Forma asset names hash these authored bytes. Keep the source stream identical
+# across Windows and Linux; build.mjs also normalizes CSS as defense in depth.
+studio-ui/build.mjs text eol=lf
+studio-ui/package*.json text eol=lf
+studio-ui/src/** text eol=lf

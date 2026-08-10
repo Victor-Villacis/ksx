@@ -1,0 +1,68 @@
+[package]
+name = "ksx-app"
+description = "ksx — split keyboards (I-PAC arcade encoders) into virtual Xbox 360 controllers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ksx"
+path = "src/main.rs"
+
+# The Win32 resource stamp — icon group + VERSIONINFO. See build.rs for what
+# it does and why a failure there is a warning rather than an error.
+[target.'cfg(windows)'.build-dependencies]
+# Named directly rather than through [workspace.dependencies]: it is a
+# BUILD-time dependency of exactly one crate, it never appears in any ksx
+# binary, and hoisting it would put a resource compiler in the same list as
+# the engine's runtime deps. `winresource` is the maintained fork of the
+# unmaintained `winres`.
+winresource = "0.1"
+
+[dependencies]
+# The backend — every verb's typed spec, pure plan and I/O. This crate is the
+# CLI and nothing else: `main.rs` parses arguments and dispatches into
+# ksx-backend, which is what makes docs/SURFACES.md §1 ("the backend owns
+# state; every surface is a view") a crate boundary rather than an honour
+# system. The `studio` and `cabinet` features below forward to it.
+#
+# THIS LIST IS SHORT ON PURPOSE. It was fourteen crates deep — capture, output,
+# platform, games, api, the two UIs, tokio-adjacent everything — because the
+# verbs lived here. They do not any more, and a dependency added back here is
+# the first sign that logic is leaking into the argument parser. What is left
+# is what a clap definition genuinely needs.
+ksx-backend.workspace = true
+# `MAX_SLOTS` and `MAX_XINPUT_SLOTS`, for the slot flags' ranges and their help
+# text, and `Persona` for `--persona`'s value parser. A clap range frozen at a
+# literal IS the effective ceiling no matter what the constant says — that is
+# the bug `slot_arg` exists for.
+ksx-core.workspace = true
+# `Backend` and `JsonStyle` for two value parsers, and `ConfigRoot::discover`
+# for the log sink's root.
+ksx-config.workspace = true
+# `autostart::TaskMode`, the target of `--mode`'s `From` impl.
+ksx-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[features]
+# `ksx studio` — the optional localhost web status page (docs/ENHANCEMENTS.md E7).
+# A pure forward: the verb body is `ksx-backend`'s and this crate names neither
+# ksx-studio nor axum. One opt-in, spelled at the layer that ships it — which is
+# also why CI runs its four-combination matrix against BOTH crates.
+studio = ["ksx-backend/studio"]
+# `ksx cabinet` + the daemon's in-process window (docs/M9-DECISION.md, the
+# cabinet/Studio split). Independent of `studio`: a cabinet with no browser
+# builds this and not that.
+cabinet = ["ksx-backend/cabinet"]
+
+[dev-dependencies]
+# The five integration tests are about the BINARY, not about a verb, so their
+# dependencies are the ones needed to inspect it: `installer.rs` reads the
+# packaged version through ksx-platform, `no_interception_dll.rs` parses the
+# built exe's import table, `parity.rs` walks its clap tree, and `replay.rs`
+# drives ksx-core from a synthetic native event script.
+ksx-capture.workspace = true
+

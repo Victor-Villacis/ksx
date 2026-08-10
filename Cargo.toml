@@ -1,0 +1,97 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# vigem-client is vendored; its integration tests require the ViGEmBus driver,
+# so it is excluded from default build/test target selection (CI never runs it).
+default-members = [
+    "crates/ksx-core",
+    "crates/ksx-config",
+    "crates/ksx-api",
+    "crates/ksx-capture",
+    "crates/ksx-output",
+    "crates/ksx-hidmaestro",
+    "crates/ksx-platform",
+    "crates/ksx-games",
+    "crates/ksx-backend",
+    "crates/ksx-app",
+    "crates/ksx-launcher",
+    "crates/ksx-winusb-helper",
+    "crates/ksx-studio",
+    "crates/ksx-cabinet",
+    "crates/ksx-fuzz",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Victor-Villacis/ksx"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# internal
+ksx-core = { path = "crates/ksx-core" }
+ksx-config = { path = "crates/ksx-config" }
+ksx-api = { path = "crates/ksx-api" }
+ksx-capture = { path = "crates/ksx-capture" }
+ksx-output = { path = "crates/ksx-output" }
+ksx-hidmaestro = { path = "crates/ksx-hidmaestro" }
+ksx-platform = { path = "crates/ksx-platform" }
+ksx-games = { path = "crates/ksx-games" }
+ksx-backend = { path = "crates/ksx-backend" }
+ksx-studio = { path = "crates/ksx-studio" }
+ksx-cabinet = { path = "crates/ksx-cabinet" }
+vigem-client = { path = "crates/vigem-client", features = ["unstable_xtarget_notification", "unstable_ds4"] }
+# shared
+bitflags = "2"
+thiserror = "2"
+anyhow = "1"
+smallvec = "1"
+serde = { version = "1", features = ["derive"] }
+serde_ignored = "0.1"
+serde_json = "1"
+toml = "0.8"
+directories = "6"
+crossbeam-channel = "0.5"
+arc-swap = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+notify = "8"
+# capture / output / platform (Windows)
+kanata-interception = "0.3"
+nusb = "0.2"
+windows = "0.62"
+windows-sys = "0.60"
+# studio (E7 web supplement) — reaches ksx-app ONLY through the optional
+# `studio` feature; the default build must link none of these (provable with
+# `cargo tree -p ksx-app`).
+axum = "0.8"
+forma-ir = "0.2.0"
+forma-server = "0.2.0"
+rust-embed = "8"
+# `sync` is NOT incidental: the live feed's SSE bridge is a `spawn_blocking`
+# thread handing frames to an async stream over a bounded `mpsc`, and that
+# channel is the one place the browser's backpressure meets the daemon's.
+# Naming the feature here rather than relying on another crate enabling it is
+# the difference between "it compiles today" and "it compiles".
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
+# The bare `Stream` trait, for that bridge's response body. axum already pulls
+# it in; ksx-studio names it so it can implement it.
+futures-core = "0.3"
+# cabinet (the 10-foot OPERATE surface) — reaches ksx-app ONLY through the
+# optional `cabinet` feature, exactly like `studio`. The default build must link
+# NEITHER ui (provable with `cargo tree -p ksx-app`).
+eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+egui = "0.32"
+# dev / diagnostics
+proptest = "1"
+insta = "1"
+rusty-xinput = "1"
+# No serialization/sync features: ksx only needs the in-process recorder.
+hdrhistogram = { version = "7", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

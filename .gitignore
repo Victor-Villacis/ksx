@@ -1,0 +1,30 @@
+# Rust build output
+/target
+/tools/icongen/target
+**/*.rs.bk
+
+# Forma authoring dependencies
+/studio-ui/node_modules
+
+# Inno Setup output
+/packaging/out
+
+# Native compiler and diagnostic output
+*.ilk
+*.pdb
+*.exp
+*.log
+*.tmp
+
+# Editor and operating-system state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*~
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

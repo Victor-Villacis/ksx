@@ -1,0 +1,41 @@
+; #INF_FILENAME#
+; Copyright (c) 2010-2023 Pete Batard <pete@akeo.ie> (GNU LGPL)
+[Strings]
+DeviceName = "#DEVICE_DESCRIPTION#"
+VendorName = "#DEVICE_MANUFACTURER#"
+SourceName = "#DEVICE_DESCRIPTION# Install Disk"
+DeviceID   = "#DEVICE_HARDWARE_ID#"
+DeviceGUID = "#DEVICE_INTERFACE_GUID#"
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "USBDevice"
+ClassGuid   = {88bae032-5a81-49f0-bc3d-a4ff138216d6}
+Provider    = "KSX"
+CatalogFile = #CAT_FILENAME#
+DriverVer   = #DRIVER_DATE#, #DRIVER_VERSION#
+PnpLockdown = 1
+
+[Manufacturer]
+%VendorName% = ksxDevice,NTamd64.10.0
+
+[ksxDevice.NTamd64.10.0]
+%DeviceName% = USB_Install, USB\%DeviceID%
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.HW]
+AddReg = #USE_DEVICE_INTERFACE_GUID#
+
+[NoDeviceInterfaceGUID]
+; Avoids adding a DeviceInterfaceGUID for generic driver
+
+[AddDeviceInterfaceGUID]
+HKR,,DeviceInterfaceGUIDs,0x10000,%DeviceGUID%
+

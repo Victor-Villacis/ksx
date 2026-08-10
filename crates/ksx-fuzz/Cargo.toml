@@ -1,0 +1,17 @@
+[package]
+name = "ksx-fuzz"
+description = "Fuzz-style robustness harness: proptest byte-fuzzing of every parser that eats untrusted TOML or HID reports."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+proptest.workspace = true
+
+[dev-dependencies]
+ksx-config.workspace = true
+ksx-capture.workspace = true
+toml.workspace = true

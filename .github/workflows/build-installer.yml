@@ -460,7 +460,7 @@ jobs:
               throw "installer created content through the hostile junction: $($unexpected.Name -join ', ')"
             }
             if (Test-Path -LiteralPath (Join-Path $install 'ksx.exe')) {
-              throw 'installer copied product files after the pre-install safety refusal'
+              throw 'installer left product files behind after the recovery-store refusal rolled the install back'
             }
           }
           finally {

@@ -634,36 +634,37 @@ fn installer_and_ci_package_the_prepare_provider_only_in_the_installed_product()
                 == Some("{#RepoRoot}\\target\\release\\{#WinUsbHelper}")
         })
         .collect();
+    // ONE copy, installed. There used to be a second `dontcopy` entry extracted
+    // into {tmp} and run before the install began, and the comment justifying
+    // it called {tmp} "Inno's protected temporary directory". It is not
+    // protected: Inno creates it inside the invoking user's TEMP, so it is
+    // owned and writable by that user. The helper proves its own directory is
+    // owned by SYSTEM/Administrators/TrustedInstaller and writable by nobody
+    // else before it does anything, so from there it refused itself — exit code
+    // 3, on every machine, before a single file was copied. The store is
+    // initialized from {app} now, where that proof can actually hold.
     assert_eq!(
         helper_entries.len(),
-        2,
-        "the helper needs one installer-only embedded copy and one installed recovery copy"
+        1,
+        "the helper is installed once, to {{app}}; a pre-install copy cannot satisfy its own \
+         location check and makes setup refuse itself"
     );
-    assert!(helper_entries.iter().any(|entry| {
-        field(entry, "DestDir").as_deref() == Some("{app}")
-            && field(entry, "Flags")
-                .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "ignoreversion"))
-    }));
-    let bootstrap = helper_entries
-        .iter()
-        .find(|entry| {
-            field(entry, "Flags")
-                .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "dontcopy"))
-        })
-        .expect("the fixed helper must be extractable before installation begins");
-    let bootstrap_flags = field(bootstrap, "Flags").unwrap_or_default();
-    for required in ["dontcopy", "noencryption"] {
-        assert!(
-            bootstrap_flags
-                .split_whitespace()
-                .any(|flag| flag == required),
-            "installer bootstrap helper needs `{required}`: {bootstrap}"
-        );
-    }
+    let installed = helper_entries[0];
     assert_eq!(
-        field(bootstrap, "DestDir"),
-        None,
-        "the bootstrap copy must exist only in Inno's protected temporary directory"
+        field(installed, "DestDir").as_deref(),
+        Some("{app}"),
+        "the helper must be installed where its admin-only location proof is true: {installed}"
+    );
+    assert!(
+        field(installed, "Flags")
+            .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "ignoreversion")),
+        "the installed helper needs `ignoreversion`: {installed}"
+    );
+    assert!(
+        !files.iter().any(|line| field(line, "Flags")
+            .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "dontcopy"))),
+        "no [Files] entry may use `dontcopy`: running an extracted copy from {{tmp}} before the \
+         install is what made every install fail"
     );
     let source_entry = files
         .iter()
@@ -871,21 +872,27 @@ fn vendored_libwdi_is_prepare_only_deterministic_and_fail_closed() {
 }
 
 /// Store creation and cleanup are transaction gates, not path-based installer
-/// mutations or best-effort hooks.  The pre-install helper owns the exact
-/// handle/ACL protocol; the installed helper/provider remain present on every
-/// nonzero cleanup so recovery can be retried.  The uninstall half runs in
+/// mutations or best-effort hooks.  The INSTALLED helper owns the exact
+/// handle/ACL protocol — it proves its own directory is admin-only, which is
+/// true in `{app}` and can never be true in `{tmp}`; the installed
+/// helper/provider remain present on every nonzero cleanup so recovery can be
+/// retried.  The uninstall half runs in
 /// `usUninstall` — after the user has confirmed, before Inno removes a file — so
 /// that answering No to the confirmation costs nothing.
 #[test]
-fn installer_initializes_state_before_copy_and_uninstall_is_cleanup_gated() {
+fn installer_initializes_state_from_the_installed_helper_and_uninstall_is_cleanup_gated() {
     let iss = script();
     for contract in [
-        "function PrepareToInstall(var NeedsRestart: Boolean): string;",
-        "ExtractTemporaryFile('{#WinUsbHelper}')",
-        "HelperPath := ExpandConstant('{tmp}\\{#WinUsbHelper}')",
+        // The store is initialized from the INSTALLED helper, never from a copy
+        // extracted into {tmp}. Inno creates {tmp} inside the invoking user's
+        // TEMP, so it is user-owned and user-writable, and the helper's first
+        // act is to prove its own directory is neither. Running it there made
+        // setup refuse itself with exit code 3 on every machine, every time.
+        "function RecoveryStoreProblem: string;",
+        "HelperPath := ExpandConstant('{app}\\{#WinUsbHelper}')",
         "'initialize-store'",
         "if ResultCode <> 0 then",
-        "No KSX files were installed",
+        "InitializeRecoveryStore;",
         "function InitializeUninstall(): Boolean;",
         "Result := False;",
         "procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);",
@@ -1289,13 +1296,28 @@ fn a_failed_driver_install_reports_and_continues() {
     // The install path is all of [Code] EXCEPT that uninstall-only gate. Prose
     // is not code either, so the `//` lines that explain why the gate aborts
     // are dropped too — what is scanned is what ISCC will actually run.
+    // `InitializeRecoveryStore` is exempt for the opposite reason to the
+    // uninstall gate: it is the ONE routine on the install path that is
+    // supposed to roll the install back. A machine with no ViGEmBus still
+    // wants ksx; a machine whose fixed recovery store could not be proved safe
+    // must not keep an elevated helper that mutates a driver store on its word.
     let mut install_code = String::new();
     let mut inside_uninstall_gate = false;
     let mut gate_seen = false;
+    let mut inside_store_gate = false;
+    let mut store_gate_seen = false;
     for line in section(&text, "[Code]") {
         if line.starts_with("procedure CurUninstallStepChanged(") {
             inside_uninstall_gate = true;
             gate_seen = true;
+        }
+        if line.starts_with("procedure InitializeRecoveryStore") {
+            inside_store_gate = true;
+            store_gate_seen = true;
+        }
+        if inside_store_gate {
+            inside_store_gate = line != "end;";
+            continue;
         }
         if inside_uninstall_gate {
             inside_uninstall_gate = line != "end;";
@@ -1311,6 +1333,11 @@ fn a_failed_driver_install_reports_and_continues() {
         gate_seen && !inside_uninstall_gate,
         "the uninstall gate must exist and close with an unindented `end;`, or this scan \
          is silently exempting the rest of [Code] instead of just the gate"
+    );
+    assert!(
+        store_gate_seen && !inside_store_gate,
+        "the recovery-store gate must exist and close with an unindented `end;`, or this \
+         scan is silently exempting the rest of [Code] instead of just the gate"
     );
     let code = install_code;
 

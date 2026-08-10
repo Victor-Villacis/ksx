@@ -153,13 +153,17 @@ Name: "vigembus"; Description: "Install the ViGEmBus controller driver (required
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; A second copy of the fixed helper is embedded for PrepareToInstall only.
-; Inno extracts it into its setup-created protected {tmp} directory; `dontcopy`
-; keeps this entry out of Program Files and, more importantly, lets the helper
-; initialize the fixed ProgramData store before [Files] or any product path is
-; touched. `noencryption` is required for a pre-install extraction even if a
-; future release enables installer encryption.
-Source: "{#RepoRoot}\target\release\{#WinUsbHelper}"; Flags: dontcopy noencryption
+; There is deliberately no `dontcopy` second copy of the helper here, and no
+; pre-copy extraction of it into {tmp}.
+;
+; That is what this installer used to do, and it could not work on any machine.
+; The helper's first act is to prove it is running from a directory only
+; SYSTEM/Administrators/TrustedInstaller own and only they can write. Inno's
+; {tmp} is created inside the invoking user's own TEMP: owned by that user,
+; writable by that user, by construction. So the very first thing setup did was
+; refuse itself, exit code 3, "no KSX files were installed" - every time, for
+; everyone. The store is now initialized from {app} after the copy, where that
+; proof is true rather than impossible. See CurStepChanged.
 Source: "{#RepoRoot}\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; GUI-subsystem hand-off used by every customer entry point. ksx.exe stays
 ; installed beside it for internal/dev verbs and for this launcher's `open`.
@@ -260,44 +264,80 @@ Type: dirifempty; Name: "{commonappdata}\KSX"
 var
   DriverNote: string;
 
-function PrepareToInstall(var NeedsRestart: Boolean): string;
+// ---------------------------------------------------------------------------
+// The fixed ProgramData WinUSB recovery store
+// ---------------------------------------------------------------------------
+//
+// The helper opens each real directory level as a non-reparse handle, holds the
+// parent against replacement while descending, installs and verifies the exact
+// protected DACL, and refuses every unexpected object before mutation. That is
+// why no [Dirs], ForceDirectories or icacls line may touch ProgramData: a
+// path-based check can be raced, a handle-based one cannot.
+//
+// WHY IT RUNS FROM {app} AND NOT FROM {tmp}. It used to run in
+// PrepareToInstall, from a copy extracted into Inno's temporary directory,
+// which meant it could never run at all. Before doing anything else the helper
+// proves it is executing from a directory owned by SYSTEM, Administrators or
+// TrustedInstaller and writable by nobody else. Inno creates {tmp} inside the
+// invoking user's own TEMP — owned by that user, writable by that user, always.
+// The proof was therefore false by construction, and every install on every
+// machine died with exit code 3 before a single file was copied. Program Files
+// satisfies it honestly, so the check finally does the job it was written for.
+//
+// WHAT THAT COSTS. A failure here is no longer "no KSX files were installed";
+// it is a rolled-back install, because raising out of CurStepChanged is what
+// makes Inno undo the copy. The user-visible promise is the same — nothing of
+// KSX is left behind — but it is delivered by rollback rather than by never
+// starting.
+function RecoveryStoreProblem: string;
 var
   HelperPath: string;
   ResultCode: Integer;
 begin
   Result := '';
   try
-    // Do not let [Dirs], ForceDirectories, icacls, or any path-based check
-    // touch ProgramData first. The fixed no-argument helper opens each real
-    // directory level as a non-reparse handle, holds the parent against
-    // replacement while descending, installs and verifies the exact protected
-    // DACL, and refuses every unexpected object before mutation.
-    ExtractTemporaryFile('{#WinUsbHelper}');
-    HelperPath := ExpandConstant('{tmp}\{#WinUsbHelper}');
+    HelperPath := ExpandConstant('{app}\{#WinUsbHelper}');
     if not FileExists(HelperPath) then
     begin
-      Result := 'Setup could not extract its protected WinUSB recovery initializer.';
+      Result := 'The KSX WinUSB recovery initializer is missing from the installation.';
       exit;
     end;
 
-    if not Exec(HelperPath, 'initialize-store', ExpandConstant('{tmp}'),
+    if not Exec(HelperPath, 'initialize-store', ExpandConstant('{app}'),
                 SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     begin
-      Result :=
-        'Setup could not start its protected WinUSB recovery initializer.' + #13#10 +
-        'No KSX files were installed.';
+      Result := 'Setup could not start its protected WinUSB recovery initializer.';
       exit;
     end;
     if ResultCode <> 0 then
       Result :=
         'Setup refused an unsafe or unavailable KSX WinUSB recovery directory (initializer exit code ' +
         IntToStr(ResultCode) + ').' + #13#10 +
-        'No KSX files were installed. Remove unexpected ProgramData links or objects and retry.';
+        'Remove unexpected ProgramData links or objects and retry.';
   except
     Result :=
       'Setup could not verify the protected KSX WinUSB recovery directory: ' +
-      GetExceptionMessage + #13#10 + 'No KSX files were installed.';
+      GetExceptionMessage;
   end;
+end;
+
+// The one place in the install path that is ALLOWED to roll the install back,
+// and the only one. A machine with no ViGEmBus still wants ksx; a machine whose
+// fixed recovery store could not be proved safe must not be left carrying an
+// elevated helper that will later mutate a driver store on its word.
+//
+// `RaiseException` is deliberately outside every `try`. Pascal Script's
+// `except` catches it like any other exception, so raising inside
+// RecoveryStoreProblem's handler would be swallowed by that handler and the
+// install would continue over an unverified store — the same shape of mistake
+// as the uninstall gate below.
+procedure InitializeRecoveryStore;
+var
+  Problem: string;
+begin
+  Problem := RecoveryStoreProblem;
+  if Problem <> '' then
+    RaiseException(Problem);
 end;
 
 // ---------------------------------------------------------------------------
@@ -571,6 +611,11 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
     exit;
+
+  // FIRST, and before the driver: the helper is installed now, so it can prove
+  // its own location and normalize the fixed store. This is the step that may
+  // roll the install back; everything after it may not.
+  InitializeRecoveryStore;
 
   if WizardIsTaskSelected('vigembus') then
   begin

@@ -425,6 +425,17 @@ jobs:
             New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop | Out-Null
             $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
             if (-not $setup) { throw 'installer smoke found no setup.exe' }
+            # The helper, on its own, against the same hostile junction, before
+            # Inno is involved at all. This one number separates "the helper
+            # accepts a junction" from "the helper refuses and the installer
+            # fails to act on it" -- which are opposite defects, and the reason
+            # the previous run could not be acted on.
+            $directHelper = Start-Process -FilePath 'target\release\ksx-winusb-helper.exe' `
+              -ArgumentList 'initialize-store' -Wait -PassThru -WindowStyle Hidden
+            Write-Host "DIAG: helper initialize-store exit, junction present = $($directHelper.ExitCode)"
+            Write-Host ("DIAG: junction target child count after direct helper = " +
+              @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue).Count)
+
             # Inno's own log, because this step's assertions can only say THAT
             # the installer did the wrong thing, never which line did it. The
             # store initializer runs in CurStepChanged and its exit code is
@@ -455,10 +466,12 @@ jobs:
             Write-Host ("DIAG: junction target child count = " +
               @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue).Count)
             if (Test-Path -LiteralPath $setupLog) {
-              Write-Host '--- setup log, lines mentioning the recovery store ---'
-              Select-String -LiteralPath $setupLog -Pattern 'initialize-store|winusb-helper|Exception|RaiseException|Rollback|recovery' |
-                ForEach-Object { Write-Host $_.Line.Trim() }
-              Write-Host '--- end setup log excerpt ---'
+              # Unfiltered tail. The filtered version came back empty, which was
+              # itself a fact, but an absence cannot say whether the initializer
+              # ran and said nothing or never ran at all.
+              Write-Host '--- setup log, last 40 lines ---'
+              Get-Content -LiteralPath $setupLog -Tail 40 | ForEach-Object { Write-Host $_ }
+              Write-Host '--- end setup log ---'
             } else {
               Write-Host "DIAG: no setup log at $setupLog"
             }

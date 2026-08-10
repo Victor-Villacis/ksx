@@ -425,18 +425,44 @@ jobs:
             New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop | Out-Null
             $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
             if (-not $setup) { throw 'installer smoke found no setup.exe' }
+            # Inno's own log, because this step's assertions can only say THAT
+            # the installer did the wrong thing, never which line did it. The
+            # store initializer runs in CurStepChanged and its exit code is
+            # recorded here and nowhere else.
+            $setupLog = Join-Path $env:RUNNER_TEMP 'ksx-junction-setup.log'
             $arguments = @(
               '/VERYSILENT'
               '/SUPPRESSMSGBOXES'
               '/NORESTART'
               '/MERGETASKS=!vigembus,!desktopicon'
               "/DIR=$install"
+              "/LOG=$setupLog"
             )
             $process = Start-Process -FilePath $setup.FullName -ArgumentList $arguments -PassThru
             if (-not $process.WaitForExit(120000)) {
               throw 'installer did not reject the hostile junction within two minutes; process was left running'
             }
             $setupFinished = $true
+
+            # Everything known, before anything is asserted. A bare "it accepted
+            # the junction" sent the last investigation looking in the wrong
+            # place; the state and the log say which.
+            Write-Host "DIAG: setup exit code = $($process.ExitCode)"
+            Write-Host "DIAG: ksx.exe installed = $(Test-Path -LiteralPath (Join-Path $install 'ksx.exe'))"
+            $linkNow = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+            Write-Host ("DIAG: C:\ProgramData\KSX still a reparse point = " +
+              [bool]($linkNow -and ($linkNow.Attributes -band [IO.FileAttributes]::ReparsePoint)))
+            Write-Host ("DIAG: junction target child count = " +
+              @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue).Count)
+            if (Test-Path -LiteralPath $setupLog) {
+              Write-Host '--- setup log, lines mentioning the recovery store ---'
+              Select-String -LiteralPath $setupLog -Pattern 'initialize-store|winusb-helper|Exception|RaiseException|Rollback|recovery' |
+                ForEach-Object { Write-Host $_.Line.Trim() }
+              Write-Host '--- end setup log excerpt ---'
+            } else {
+              Write-Host "DIAG: no setup log at $setupLog"
+            }
+
             if ($process.ExitCode -eq 0) {
               throw 'installer accepted a hostile C:\ProgramData\KSX junction'
             }

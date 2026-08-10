@@ -1,0 +1,294 @@
+//! Native games file schema: `%APPDATA%\ksx\games.toml` (title, path, args,
+//! block flags, per-slot device-by-id + preset-by-name).
+
+use ksx_core::{Blocking, DeviceId, MacroSwitch, Persona, SlotSpec, Socd};
+use serde::{Deserialize, Serialize};
+
+use crate::error::ConfigError;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GamesFile {
+    #[serde(default, rename = "game", skip_serializing_if = "Vec::is_empty")]
+    pub games: Vec<GameEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameEntry {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
+    /// Image name (`mame.exe`) to track once the launched process is gone.
+    ///
+    /// Required in practice for `steam://`
+    /// and other protocol profiles, where the shell returns immediately and
+    /// there is no process handle to wait on; optional for a plain `.exe`,
+    /// where it only matters if that exe is a shim that exits early.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
+    /// How long a launched program may live and still count as a *launcher*
+    /// rather than the game (milliseconds).
+    ///
+    /// A fixed 3 s grace proved too short for launchers such as `steam.exe`.
+    /// The default is 10 s (`ksx_games::DEFAULT_LAUNCHER_GRACE_MS`); this key
+    /// exists because the right number is a property of the launcher, not of
+    /// ksx.
+    ///
+    /// The trade runs both ways and neither end is free:
+    /// - **too low** — a slow launcher's exit is mistaken for the game's, and
+    ///   emulation stops while the game is still starting (the observed bug);
+    /// - **too high** — a genuinely short session (start a game, quit after
+    ///   8 seconds) is mistaken for a hand-off, so ksx spends the hand-off grace
+    ///   hunting for a process that has already gone before it notices.
+    ///
+    /// The second failure is the milder one — it delays a stop, it never stops
+    /// a live session — which is why the default errs high.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_grace_ms: Option<u64>,
+    /// See [`crate::config::Settings::block_keyboards`]. Per-game, because the
+    /// right answer is a property of the TITLE: a fighting game on the cabinet
+    /// takes the panel whole, and a game with a chat box played on a desk
+    /// keyboard cannot afford to.
+    ///
+    /// The default is [`Blocking::Whole`] (`true`), preserving the stable
+    /// boolean spelling already used by native profiles.
+    #[serde(default, with = "crate::blocking_serde")]
+    pub block_keyboards: Blocking,
+    /// Whether to block mice as well (default false).
+    #[serde(default)]
+    pub block_mice: bool,
+    #[serde(default, rename = "slot", skip_serializing_if = "Vec::is_empty")]
+    pub slots: Vec<GameSlotEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameSlotEntry {
+    pub number: u8,
+    /// Preferred gamepad user index (1..=4). Advisory only: the actual XInput
+    /// user index comes from ViGEm's notification callback at runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_index: Option<u8>,
+    /// Device instance path — games persist ids directly, not aliases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse: Option<String>,
+    pub preset: String,
+    /// See [`crate::config::SlotEntry::persona`]. A per-game override: the same
+    /// panel can be four Xbox pads for a Steam title and four PlayStation pads
+    /// for a PS2 emulator without touching the presets.
+    #[serde(
+        default,
+        with = "crate::persona_serde",
+        skip_serializing_if = "crate::persona_serde::is_default"
+    )]
+    pub persona: Persona,
+    /// See [`crate::config::SlotEntry::socd`]. Per-game, because SOCD is a
+    /// property of the game's rules (a fighter wants up-priority; a twin-stick
+    /// shooter wants nothing at all), not of the panel.
+    #[serde(
+        default,
+        with = "crate::socd_serde",
+        skip_serializing_if = "crate::socd_serde::is_default"
+    )]
+    pub socd: Socd,
+    /// See [`crate::config::SlotEntry::macros`] — the macro master switch, per
+    /// game. Per-game because "macros off" is a property of the OCCASION (a
+    /// tournament build of the same cabinet, a title whose rules forbid them),
+    /// which is exactly what a games.toml profile is for.
+    #[serde(
+        default,
+        with = "crate::macro_serde::switch",
+        skip_serializing_if = "crate::macro_serde::switch::is_default"
+    )]
+    pub macros: MacroSwitch,
+}
+
+impl GameSlotEntry {
+    pub fn to_spec(&self) -> Result<SlotSpec, ConfigError> {
+        SlotSpec::new(
+            self.number,
+            self.keyboard.as_deref().map(DeviceId::new),
+            self.mouse.as_deref().map(DeviceId::new),
+            self.preset.clone(),
+        )
+        .map(|spec| {
+            spec.with_persona(self.persona)
+                .with_socd(self.socd)
+                .with_macros(self.macros)
+        })
+        .map_err(Into::into)
+    }
+
+    /// `user_index` is runtime-discovered and comes back as `None`.
+    pub fn from_spec(spec: &SlotSpec) -> Self {
+        Self {
+            number: spec.number,
+            user_index: None,
+            persona: spec.persona,
+            socd: spec.socd,
+            macros: spec.macros,
+            keyboard: spec.keyboard.as_ref().map(|d| d.as_str().to_owned()),
+            mouse: spec.mouse.as_ref().map(|d| d.as_str().to_owned()),
+            preset: spec.preset.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Deterministic native profile with two synthetic slots.
+    const EXAMPLE: &str = r#"
+[[game]]
+title = "Example Launcher"
+notes = "Synthetic launcher profile"
+path = 'C:\Examples\example-launcher.exe'
+block_keyboards = true
+block_mice = false
+
+[[game.slot]]
+number = 1
+user_index = 1
+keyboard = 'HID\VID_D209&PID_0430&REV_0001&MI_00'
+preset = "Panel P1"
+
+[[game.slot]]
+number = 2
+user_index = 2
+keyboard = 'HID\VID_D209&PID_0430&REV_0001&MI_00'
+preset = "Panel P2"
+"#;
+
+    #[test]
+    fn example_parses() {
+        let games: GamesFile = toml::from_str(EXAMPLE).unwrap();
+        assert_eq!(games.games.len(), 1);
+        let game = &games.games[0];
+        assert_eq!(game.title, "Example Launcher");
+        assert_eq!(game.path, r"C:\Examples\example-launcher.exe");
+        assert_eq!(game.arguments, "");
+        assert_eq!(game.block_keyboards, Blocking::Whole);
+        assert!(!game.block_mice);
+        assert_eq!(game.slots.len(), 2);
+        assert_eq!(game.slots[1].number, 2);
+        assert_eq!(game.slots[1].user_index, Some(2));
+        assert_eq!(game.slots[1].preset, "Panel P2");
+    }
+
+    #[test]
+    fn native_defaults_are_stable() {
+        let game: GameEntry = toml::from_str("title = \"t\"\npath = \"C:\\\\g.exe\"\n").unwrap();
+        assert_eq!(game.block_keyboards, Blocking::Whole);
+        assert!(!game.block_mice);
+        assert!(game.slots.is_empty());
+        assert_eq!(game.notes, "");
+        assert_eq!(game.arguments, "");
+        assert_eq!(game.process_name, None);
+        assert_eq!(game.launcher_grace_ms, None);
+    }
+
+    /// A profile can ask for desk-keyboard mode while the two boolean states
+    /// keep their stable on-disk spellings.
+    #[test]
+    fn a_profile_can_take_bound_keys_only_without_disturbing_the_bool_spellings() {
+        let games: GamesFile = toml::from_str(EXAMPLE).unwrap();
+        assert!(toml::to_string(&games)
+            .unwrap()
+            .contains("block_keyboards = true"));
+
+        let partial: GameEntry = toml::from_str(
+            "title = \"t\"\npath = \"C:\\\\g.exe\"\nblock_keyboards = \"bound-keys\"\n",
+        )
+        .unwrap();
+        assert_eq!(partial.block_keyboards, Blocking::BoundKeys);
+        let text = toml::to_string(&partial).unwrap();
+        assert!(text.contains("block_keyboards = \"bound-keys\""), "{text}");
+        assert_eq!(toml::from_str::<GameEntry>(&text).unwrap(), partial);
+    }
+
+    /// The per-profile launcher grace is optional and never emitted when unset.
+    #[test]
+    fn launcher_grace_is_optional_and_round_trips() {
+        let game: GameEntry = toml::from_str(
+            "title = \"t\"\npath = \"C:\\\\steam.exe\"\nlauncher_grace_ms = 20000\n",
+        )
+        .unwrap();
+        assert_eq!(game.launcher_grace_ms, Some(20_000));
+        let back: GameEntry = toml::from_str(&toml::to_string(&game).unwrap()).unwrap();
+        assert_eq!(back, game);
+
+        let plain: GameEntry = toml::from_str("title = \"t\"\npath = \"C:\\\\g.exe\"\n").unwrap();
+        assert!(!toml::to_string(&plain)
+            .unwrap()
+            .contains("launcher_grace_ms"));
+    }
+
+    /// The launcher-handoff hint is optional, so it must never be required to parse.
+    #[test]
+    fn process_name_is_optional_and_round_trips() {
+        let game: GameEntry = toml::from_str(
+            "title = \"t\"\npath = \"steam://rungameid/620\"\nprocess_name = \"portal2.exe\"\n",
+        )
+        .unwrap();
+        assert_eq!(game.process_name.as_deref(), Some("portal2.exe"));
+        let back: GameEntry = toml::from_str(&toml::to_string(&game).unwrap()).unwrap();
+        assert_eq!(back, game);
+        // ...and it is not emitted when unset, so existing files stay clean.
+        let plain: GameEntry = toml::from_str("title = \"t\"\npath = \"C:\\\\g.exe\"\n").unwrap();
+        assert!(!toml::to_string(&plain).unwrap().contains("process_name"));
+    }
+
+    #[test]
+    fn round_trips_through_toml() {
+        let games: GamesFile = toml::from_str(EXAMPLE).unwrap();
+        let serialized = toml::to_string(&games).unwrap();
+        let reparsed: GamesFile = toml::from_str(&serialized).unwrap();
+        assert_eq!(games, reparsed);
+    }
+
+    #[test]
+    fn slot_converts_to_and_from_core() {
+        let games: GamesFile = toml::from_str(EXAMPLE).unwrap();
+        let entry = &games.games[0].slots[0];
+        let spec = entry.to_spec().unwrap();
+        assert_eq!(spec.number, 1);
+        assert_eq!(
+            spec.keyboard,
+            Some(ksx_core::DeviceId::new(
+                r"HID\VID_D209&PID_0430&REV_0001&MI_00"
+            ))
+        );
+        assert_eq!(spec.mouse, None);
+        assert_eq!(spec.preset, "Panel P1");
+
+        let back = GameSlotEntry::from_spec(&spec);
+        assert_eq!(back.number, entry.number);
+        assert_eq!(back.keyboard, entry.keyboard);
+        assert_eq!(back.mouse, entry.mouse);
+        assert_eq!(back.preset, entry.preset);
+        // user_index is runtime-discovered; it does not survive.
+        assert_eq!(back.user_index, None);
+    }
+
+    #[test]
+    fn bad_slot_number_is_an_error() {
+        let entry = GameSlotEntry {
+            number: 0,
+            user_index: None,
+            keyboard: None,
+            mouse: None,
+            preset: "p".into(),
+            persona: Persona::default(),
+            socd: Socd::default(),
+            macros: Default::default(),
+        };
+        assert!(matches!(
+            entry.to_spec(),
+            Err(ConfigError::InvalidSlotNumber(_))
+        ));
+    }
+}

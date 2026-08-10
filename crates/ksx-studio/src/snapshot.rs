@@ -1,0 +1,2788 @@
+//! The status contract — **now `ksx-api`'s** — plus the two PAGE payloads,
+//! which stay here because they are this page's shape and nobody else's.
+//!
+//! `StatusSource` and its snapshots moved to `ksx-api` for the reason
+//! docs/M9-DECISION.md §6 gives: the read side must be satisfiable with NO
+//! daemon running (ksx-backend's collectors read the config store and the platform
+//! directly), and it is consumed by surfaces that do not link this crate. What
+//! remains below is the part that genuinely belongs to a web page: the
+//! envelope the islands protocol serializes into the document and the poller
+//! reads back.
+
+pub use ksx_api::status::*;
+
+use serde::{Deserialize, Serialize};
+
+/// The one live-data shape: what `GET /api/status` serves AND what the page
+/// embeds (render.rs serializes it into the `__ksx-payload` script block).
+/// One struct, one serializer — the client seeds its signals from the block
+/// and then overwrites the SAME signals from `/api/status` every 2 s, so the
+/// two must never drift. `render.rs` has the parity test;
+/// `studio-ui/src/StatusIsland.ts` mirrors the field names.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusPayload {
+    pub snapshot: StatusSnapshot,
+    pub session: crate::control::SessionView,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/status` — a poll is not an action — and `Some` only in the
+    /// page-render props, where the client shows it once and clears it.
+    pub flash: Option<String>,
+}
+
+/// What `GET /api/map` serves AND what the mapper island's props carry — the
+/// same one-struct-one-serializer rule as [`StatusPayload`], parity pinned in
+/// `render_map.rs`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MapPayload {
+    pub mapper: MapperSnapshot,
+    pub session: crate::control::SessionView,
+    /// Where the daemon's learner stands (also tells the page whether
+    /// learning is possible at all).
+    pub learn: crate::control::LearnView,
+    /// Slot number selected for the SSR paint (`/map?slot=N`, defaulting to
+    /// the first slot). The client keeps its own selection afterwards.
+    pub selected: u8,
+    /// The selected slot's macros, read per request like everything else.
+    #[serde(default)]
+    pub macros: MacroSnapshot,
+    /// Macro name selected for the SSR paint (`/map?macro=NAME`), empty for
+    /// "the first one". Same contract as [`selected`](Self::selected): it
+    /// drives the server paint, the client keeps its own choice afterwards —
+    /// and because the macro tabs are anchors, a page with no JavaScript can
+    /// still walk through every macro the preset defines.
+    #[serde(default)]
+    pub macro_selected: String,
+    /// `stage` means the existing mapper is aimed at the in-memory first-run
+    /// setup. Empty/`saved` means its traditional on-disk target. Defaulted so
+    /// older fixtures and clients retain the saved-layout behavior.
+    #[serde(default)]
+    pub target: String,
+}
+
+/// What `GET /api/check` serves AND what the button-check island's props carry
+/// — the same one-struct-one-serializer rule as [`StatusPayload`], parity
+/// pinned in `render_check.rs`.
+///
+/// **There is no live data in here, and that is the shape of the page.** This
+/// payload is the STRUCTURE — which slots exist, which controls each one's
+/// preset names, which keys drive them — read from disk on the server and
+/// re-read every few seconds. The lighting-up arrives on a different channel
+/// entirely (`GET /api/live`, `crate::live`), at display rate, and touches no
+/// signal on the page. Putting a frame in here would mean a button check whose
+/// echo was as fast as an HTTP poll, which is not a button check.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckPayload {
+    /// The slot roster with every preset's whole binding table — the SAME
+    /// `StatusSource::mapper()` read the mapper page uses.
+    ///
+    /// The control list per slot is `MapperSlot::bindings`' key set, which is
+    /// every function the preset names, unbound ones included. That is where
+    /// the roster has to come from: a list of "the controls an Xbox pad has"
+    /// written into the page would be a second answer to a question the
+    /// backend already answers, and docs/SURFACES.md §1 names that failure.
+    pub mapper: MapperSnapshot,
+    /// The daemon's session state — the page prints it, because "nothing is
+    /// lighting up" and "nothing is running" are the same picture and
+    /// different problems.
+    pub session: crate::control::SessionView,
+    /// One sentence saying what this screen watches and where the frames come
+    /// from. Composed in Rust so the island words nothing.
+    pub feed_hint: String,
+}
+
+/// What `GET /api/pads` serves AND what the pads island's props carry — the
+/// same one-struct-one-serializer rule as [`StatusPayload`], parity pinned in
+/// `render_pads.rs`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadsPayload {
+    /// The bus, its children, and both verbs' preconditions — one
+    /// `MachineSource::pads_view` call, never re-derived here.
+    pub pads: ksx_api::PadsView,
+    /// Whether the daemon answers at all. Not a precondition for this page:
+    /// the pad list and the prune plan are collector reads, and the session is
+    /// shown because a running one is what REFUSES both verbs.
+    pub session: crate::control::SessionView,
+    /// Is the destructive panel armed (`/pads?confirm=1`)?
+    ///
+    /// Always `false` from `/api/pads` — a poll is not a user saying yes, and
+    /// a poll that could re-arm a prune would make the confirm panel reappear
+    /// after someone had deliberately navigated away from it.
+    #[serde(default)]
+    pub confirm: bool,
+    /// Why the machine read failed, if it did. Rendered as a banner instead of
+    /// an empty pad list, which would read as "your bus is clean".
+    #[serde(default)]
+    pub unavailable: Option<String>,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/pads`, `Some` only in the page-render props.
+    pub flash: Option<String>,
+}
+
+/// What `GET /api/devices` serves AND what the `/devices` island's props
+/// carry — the same one-struct-one-serializer rule as [`StatusPayload`],
+/// parity pinned in `render_devices.rs`.
+///
+/// The scan and the reason it is missing are SEPARATE fields on purpose. An
+/// empty `DeviceScanView` is a real answer on a machine with nothing plugged
+/// in; it is also what a refusal would degrade to if the two were collapsed,
+/// and "no boards found" on a machine with four boards is the worst possible
+/// lie for this page to tell. [`Self::unavailable`] non-empty means the view
+/// below is not a reading of anything.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevicesPayload {
+    pub scan: ksx_api::DeviceScanView,
+    /// Session state, for the header pill and for the one caution this page
+    /// owes a running cabinet: a `[[device]]` edit lands in `config.toml`, and
+    /// the session already running keeps the devices it opened until it is
+    /// restarted.
+    pub session: crate::control::SessionView,
+    /// Empty when the scan answered. Otherwise the refusal, verbatim.
+    #[serde(default)]
+    pub unavailable: String,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/devices` — a poll is not an action.
+    pub flash: Option<String>,
+}
+
+/// What `GET /api/profiles` serves AND what the Profiles island's props carry
+/// — the same one-struct-one-serializer rule as [`StatusPayload`], parity
+/// pinned in `render_profiles.rs`.
+///
+/// Two machine views side by side rather than one flattened shape, because
+/// they are two backend reads with two failure modes: games.toml can be
+/// unreadable while the presets folder is fine, and the page has to be able to
+/// say which. [`notes`](Self::notes) is where either read's complaint lands —
+/// a refusal renders as a note beside an empty list, never as an empty list on
+/// its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilesPayload {
+    pub profiles: ksx_api::ProfilesView,
+    pub presets: ksx_api::PresetsView,
+    pub session: crate::control::SessionView,
+    /// The refusal that stopped the games.toml read, if it stopped.
+    ///
+    /// This field is the difference between two sentences that a count cannot
+    /// tell apart: **"you have no profiles"** and **"I could not read your
+    /// profiles."** Before it existed the handler substituted a
+    /// `ProfilesView::default()` on `Err`, so an unreadable games.toml printed
+    /// "no profiles in games.toml" at the top of the page with the real reason
+    /// four cards further down. That is this project's signature failure —
+    /// a surface reporting success over a read that did not happen — and it is
+    /// the exact thing the rest of this page was written to stop.
+    ///
+    /// `Some` means the list below is empty BECAUSE THE READ FAILED, and every
+    /// derived line ([`ProfilesDerived`]) says so instead of counting.
+    #[serde(default)]
+    pub profiles_error: Option<String>,
+    /// The same, for the presets folder. Kept separate because the two reads
+    /// fail independently and the page has to be able to say which.
+    #[serde(default)]
+    pub presets_error: Option<String>,
+    /// Anything either read had to say out loud, including a whole read that
+    /// refused. Rendered; never swallowed.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/profiles` — a poll is not an action.
+    pub flash: Option<String>,
+    /// Every displayed string and every branch this page needs, computed ONCE
+    /// — see [`ProfilesDerived`]. Recomputed from the fields above by
+    /// [`Self::derived`]; never assembled by hand.
+    #[serde(default)]
+    pub view: ProfilesDerived,
+}
+
+impl ProfilesPayload {
+    /// Fill [`Self::view`] from the raw provider data.
+    ///
+    /// Every producer of a payload calls this — the page render and
+    /// `GET /api/profiles` — so the server paint and the 2 s poll are the same
+    /// bytes by construction rather than by two implementations agreeing.
+    #[must_use]
+    pub fn derived(mut self) -> Self {
+        self.view = ProfilesDerived::of(&self);
+        self
+    }
+}
+
+/// Everything the Profiles page DISPLAYS that is not verbatim provider data:
+/// the summary lines, the row lines, the pill classes, the option lists, the
+/// slot ceiling, and every `show:` branch.
+///
+/// # Why it is a serialized struct and not two functions
+///
+/// It was two functions, and that was the review finding. Every line below
+/// existed twice — once in `render_profiles.rs` for the server paint, once in
+/// `ProfilesIsland.ts` for the 2 s poll — which docs/SURFACES.md §1 forbids
+/// for exactly the reason it went wrong here: the TypeScript half carried a
+/// hardcoded `"16"` slot ceiling that no poll could correct, so the first
+/// `ksx_core::MAX_SLOTS` raise would have had the server render `max="32"` and
+/// hydration write `16` straight back over it. Two copies of a SENTENCE drift
+/// silently; two copies of a NUMBER drift silently and then refuse a legal
+/// input. `main.rs`'s `slot_arg` module exists to commemorate the same bug.
+///
+/// So the derivation happens here, once, in the backend, and both the SSR slot
+/// injection and the browser read the result. The island computes nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilesDerived {
+    /// The line above the profile list. Says "could not be read" — NOT
+    /// "no profiles" — when [`ProfilesPayload::profiles_error`] is set.
+    pub profiles_summary: String,
+    pub broken_summary: String,
+    pub presets_summary: String,
+    pub templates_summary: String,
+    /// The sentence above the template list, roster included. It was static
+    /// copy in `ProfilesIsland.ts` naming four templates while the registry
+    /// ships six — the copy-is-logic drift docs/SURFACES.md §1a is about,
+    /// already stale on the day it was reviewed. Composed here from the same
+    /// list the rows and the `<select>` options are built from.
+    pub templates_intro: String,
+    /// Customer-facing session state for the Games screen. The raw control
+    /// transport line remains in the payload for diagnostics but is never
+    /// painted as product copy.
+    pub play_status: String,
+    /// The exact `ksx daemon …` line for this cabinet.
+    pub daemon_cmd: String,
+    /// `ksx_core::MAX_SLOTS`, as the slot-count input's `max`. The ONE place
+    /// this number may come from; a client-side literal was the finding.
+    pub max_slots: u8,
+    /// The widest player block any offered template carries — the preset
+    /// form's `max`, which used to be the literal `"4"` whether or not the
+    /// selected template had four blocks.
+    pub max_player: u8,
+    pub profile_rows: Vec<ProfileRowView>,
+    pub broken_rows: Vec<BrokenRowView>,
+    pub preset_rows: Vec<PresetRowView>,
+    /// The in-box templates as a LIST, carrying `detail` — the panel note
+    /// ksx-api documents as the thing that makes a template identifiable.
+    /// Served since the beginning and rendered nowhere until now.
+    pub template_rows: Vec<TemplateRowView>,
+    pub preset_options: Vec<OptionView>,
+    pub template_options: Vec<OptionView>,
+    pub note_rows: Vec<NoteView>,
+
+    // ── The `show:` branches. Booleans, because a page that decides in two
+    //    languages decides differently in one of them.
+    pub pill_running: bool,
+    pub pill_idle: bool,
+    pub pill_down: bool,
+    pub no_daemon: bool,
+    /// A running game can be stopped without leaving this screen.
+    pub can_stop: bool,
+    pub any_broken: bool,
+    /// Offer the Switch button (a start could actually be accepted).
+    pub rows_live: bool,
+    pub rows_plain: bool,
+    /// The games.toml read REFUSED. Distinct from "no profiles" on purpose.
+    pub profiles_unreadable: bool,
+    /// The create-profile form is usable: presets were read, and there is one.
+    pub can_make_profile: bool,
+    /// Presets were read and there are none — a real, fixable empty state
+    /// whose copy points at the template form below, which will work.
+    pub no_presets_yet: bool,
+    /// The presets read REFUSED. NOT [`Self::no_presets_yet`]: that sentence
+    /// sends the user to a template form whose `<select>` is also empty, so
+    /// the only path it offers cannot succeed — a closed loop with a wrong
+    /// sentence on it.
+    pub presets_unreadable: bool,
+    /// The template form is usable at all (the presets read, which carries the
+    /// template list, succeeded).
+    pub can_make_preset: bool,
+    pub any_notes: bool,
+}
+
+/// One `[[game]]` profile as a row.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileRowView {
+    /// Opaque backend revision returned unchanged by update/delete forms.
+    pub revision: String,
+    pub title: String,
+    pub path: String,
+    pub arguments: String,
+    /// Form-ready player count. Kept as text because Forma list-item
+    /// attributes bind directly to row members.
+    pub slots: String,
+    pub max_slots: String,
+    /// The current primary layout. Saving an edit deliberately applies the
+    /// selected layout to every resulting player.
+    pub preset: String,
+    /// Valid controller layouts with the row's current one first. A select
+    /// uses this instead of accepting an arbitrary internal name.
+    pub layout_options: Vec<OptionView>,
+    pub detail: String,
+    pub verdict: String,
+    /// The pill class. Derived from `ProfileDetail::state` HERE so the pill a
+    /// poll paints is the pill the server painted.
+    pub statecls: String,
+    pub statelabel: String,
+    /// False for a missing local program. The row stays editable, but Play is
+    /// disabled until the program is corrected.
+    pub play_disabled: bool,
+}
+
+/// One broken profile in the alarm card.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokenRowView {
+    pub title: String,
+    /// The path that does not resolve — the whole reason the card exists.
+    pub path: String,
+    pub verdict: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresetRowView {
+    pub name: String,
+    pub detail: String,
+    pub statecls: String,
+    pub statelabel: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateRowView {
+    pub id: String,
+    pub label: String,
+    /// The panel note that travels with the template.
+    pub detail: String,
+    /// "player 1" / "players 1–2" — the block range this template can
+    /// instantiate, so the number the form asks for is visible next to it.
+    pub players: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptionView {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteView {
+    pub line: String,
+}
+
+impl ProfilesDerived {
+    /// Derive the whole display layer from one payload.
+    fn of(p: &ProfilesPayload) -> Self {
+        let profiles_failed = p.profiles_error.is_some();
+        let presets_failed = p.presets_error.is_some();
+        let has_presets = p.presets.presets.iter().any(|layout| layout.usable);
+        let can_start = p.session.reachable && !p.session.running;
+
+        // The provider's word, never a re-derivation: deciding what counts as
+        // broken outside the provider is what docs/SURFACES.md §1 forbids.
+        let broken: Vec<&ksx_api::ProfileDetail> = p
+            .profiles
+            .profiles
+            .iter()
+            .filter(|g| g.state == "broken")
+            .collect();
+
+        Self {
+            profiles_summary: profiles_summary(p.profiles.profiles.len(), profiles_failed),
+            broken_summary: broken_summary(broken.len()),
+            presets_summary: presets_summary(p.presets.presets.len(), presets_failed),
+            templates_summary: templates_summary(p.presets.templates.len(), presets_failed),
+            templates_intro: templates_intro(&p.presets.templates, presets_failed),
+            play_status: play_status(&p.session),
+            daemon_cmd: crate::render::daemon_command(&p.session),
+            max_slots: ksx_api::MAX_SLOTS,
+            max_player: p
+                .presets
+                .templates
+                .iter()
+                .filter_map(|t| t.players.iter().copied().max())
+                .max()
+                .unwrap_or(1),
+            profile_rows: p
+                .profiles
+                .profiles
+                .iter()
+                .map(|g| ProfileRowView {
+                    revision: g.revision.clone(),
+                    title: g.title.clone(),
+                    path: g.path.clone(),
+                    arguments: g.arguments.clone(),
+                    slots: g.slots.to_string(),
+                    max_slots: ksx_api::MAX_SLOTS.to_string(),
+                    preset: g.presets.first().cloned().unwrap_or_default(),
+                    layout_options: profile_layout_options(
+                        &p.presets.presets,
+                        g.presets.first().map(String::as_str),
+                    ),
+                    detail: profile_detail_line(g),
+                    verdict: profile_verdict(g),
+                    statecls: state_class(&g.state).to_owned(),
+                    statelabel: match g.state.as_str() {
+                        "broken" => "needs attention".to_owned(),
+                        "launcher" => "game link".to_owned(),
+                        _ => "ready".to_owned(),
+                    },
+                    play_disabled: g.state == "broken",
+                })
+                .collect(),
+            broken_rows: broken
+                .iter()
+                .map(|g| BrokenRowView {
+                    title: g.title.clone(),
+                    // `broken_path` is the provider's answer to "which string
+                    // is wrong"; falling back to `path` keeps the row honest
+                    // for the empty-path case, where there IS no bad path.
+                    path: g.broken_path.clone().unwrap_or_else(|| g.path.clone()),
+                    verdict: profile_verdict(g),
+                })
+                .collect(),
+            preset_rows: p
+                .presets
+                .presets
+                .iter()
+                .map(|r| PresetRowView {
+                    name: r.name.clone(),
+                    detail: r.problem.clone().unwrap_or_else(|| preset_detail_line(r)),
+                    statecls: if !r.usable {
+                        "pill pill-warn".to_owned()
+                    } else if r.protected {
+                        "pill pill-idle".to_owned()
+                    } else {
+                        "pill pill-ok".to_owned()
+                    },
+                    statelabel: if !r.usable {
+                        "needs attention".to_owned()
+                    } else if r.protected {
+                        "built-in".to_owned()
+                    } else {
+                        "yours".to_owned()
+                    },
+                })
+                .collect(),
+            template_rows: p
+                .presets
+                .templates
+                .iter()
+                .map(|t| TemplateRowView {
+                    id: t.id.clone(),
+                    label: t.label.clone(),
+                    detail: t.detail.clone(),
+                    players: player_range(&t.players),
+                })
+                .collect(),
+            preset_options: p
+                .presets
+                .presets
+                .iter()
+                .filter(|r| r.usable)
+                .map(|r| OptionView {
+                    value: r.name.clone(),
+                    label: r.name.clone(),
+                })
+                .collect(),
+            template_options: p
+                .presets
+                .templates
+                .iter()
+                .map(|t| OptionView {
+                    value: t.id.clone(),
+                    // The player range is IN the option, because the form's
+                    // player field is one ceiling for every template and the
+                    // user is the only one who can see which they picked.
+                    label: format!("{} ({})", t.label, player_range(&t.players)),
+                })
+                .collect(),
+            note_rows: p
+                .notes
+                .iter()
+                .map(|line| NoteView { line: line.clone() })
+                .collect(),
+
+            pill_running: p.session.reachable && p.session.running,
+            pill_idle: can_start,
+            pill_down: !p.session.reachable,
+            no_daemon: !p.session.reachable,
+            can_stop: p.session.reachable && p.session.running,
+            any_broken: !broken.is_empty(),
+            rows_live: can_start && !profiles_failed,
+            rows_plain: !can_start && !profiles_failed,
+            profiles_unreadable: profiles_failed,
+            can_make_profile: has_presets && !presets_failed && !profiles_failed,
+            no_presets_yet: !has_presets && !presets_failed,
+            presets_unreadable: presets_failed,
+            can_make_preset: !presets_failed,
+            any_notes: !p.notes.is_empty(),
+        }
+    }
+}
+
+/// The setup page's read: `ksx_api::MachineSource::setup_state`, plus the one
+/// fact a bare `Result` cannot carry into a template — WHY there is nothing.
+///
+/// The same shape, and the same reason, as [`MapperSnapshot::unavailable`]: a
+/// provider that refuses must produce a page that SAYS so, not an empty
+/// checklist that looks like a machine with nothing configured. Those two
+/// states are opposite advice ("import a config" vs "this build has no machine
+/// provider") and a blank page gives the wrong one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupSnapshot {
+    /// The machine provider answered.
+    pub available: bool,
+    /// Where the facts came from, or — with `available` false — why there are
+    /// none. Rendered either way.
+    pub source: String,
+    pub view: ksx_api::SetupView,
+}
+
+impl SetupSnapshot {
+    pub fn ready(view: ksx_api::SetupView) -> Self {
+        Self {
+            available: true,
+            source: "read from this machine's config root".to_owned(),
+            view,
+        }
+    }
+
+    /// No setup facts; `reason` renders where the checklist would be.
+    pub fn unavailable(reason: &str) -> Self {
+        Self {
+            available: false,
+            source: reason.to_owned(),
+            view: ksx_api::SetupView::default(),
+        }
+    }
+}
+
+/// The line above the profile list.
+///
+/// The `failed` arm is the point of this function. "no profiles in games.toml"
+/// is a statement about the file's CONTENTS; when the read refused, nothing is
+/// known about the contents, and printing the count sentence asserts an
+/// absence nobody checked.
+fn profiles_summary(count: usize, failed: bool) -> String {
+    if failed {
+        return "Saved games could not be read. The reason is below.".to_owned();
+    }
+    match count {
+        0 => "No saved games yet.".to_owned(),
+        1 => "1 saved game".to_owned(),
+        n => format!("{n} saved games"),
+    }
+}
+
+fn broken_summary(count: usize) -> String {
+    match count {
+        1 => "1 saved game points at a program that is not there:".to_owned(),
+        n => format!("{n} saved games point at a program that is not there:"),
+    }
+}
+
+fn presets_summary(count: usize, failed: bool) -> String {
+    if failed {
+        return "Controller layouts could not be read. The reason is below.".to_owned();
+    }
+    match count {
+        0 => "No controller layouts yet.".to_owned(),
+        1 => "1 controller layout".to_owned(),
+        n => format!("{n} controller layouts"),
+    }
+}
+
+/// The templates ship inside the binary, so an empty list here means the read
+/// that carries them refused — never "this build has no templates".
+fn templates_summary(count: usize, failed: bool) -> String {
+    if failed {
+        return "Starter layouts could not be listed.".to_owned();
+    }
+    match count {
+        0 => "No starter layouts are available.".to_owned(),
+        1 => "1 starter layout available".to_owned(),
+        n => format!("{n} starter layouts available"),
+    }
+}
+
+/// The short introduction above the starter-layout select.
+///
+/// The full served roster still renders from `template_rows`, now inside the
+/// optional comparison disclosure. Keeping its names out of this paragraph
+/// prevents the first action from being buried under a six-layout catalogue.
+fn templates_intro(templates: &[ksx_api::TemplateRow], failed: bool) -> String {
+    if failed || templates.is_empty() {
+        return "Starter layouts could not be listed. Reopen ksx and try again.".to_owned();
+    }
+    "Choose a starter layout that resembles your controls. It makes an editable controller \
+     layout of your own, and every button can be changed later in Controls."
+        .to_owned()
+}
+
+fn play_status(session: &crate::control::SessionView) -> String {
+    if !session.reachable {
+        return "Play is unavailable. Reopen ksx and try again.".to_owned();
+    }
+    if session.running {
+        return session
+            .profile
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map_or_else(
+                || "A game is playing.".to_owned(),
+                |name| format!("Playing “{name}”."),
+            );
+    }
+    "Ready to play.".to_owned()
+}
+
+/// Valid choices for one edit form, with its current valid layout first so a
+/// native `<select>` preserves the row without client-side selection logic.
+fn profile_layout_options(
+    layouts: &[ksx_api::PresetRow],
+    current: Option<&str>,
+) -> Vec<OptionView> {
+    let mut options = layouts
+        .iter()
+        .filter(|layout| layout.usable)
+        .map(|layout| OptionView {
+            value: layout.name.clone(),
+            label: layout.name.clone(),
+        })
+        .collect::<Vec<_>>();
+    if let Some(index) = current.and_then(|current| {
+        options
+            .iter()
+            .position(|option| option.value.eq_ignore_ascii_case(current))
+    }) {
+        options.rotate_left(index);
+    }
+    options
+}
+
+/// A profile's state as the pill class that carries it.
+///
+/// `launcher` gets the NEUTRAL pill, not the OK one, and that is not a style
+/// choice: `ksx_games::preflight` cannot resolve a `steam://` URL — only the
+/// shell knows whether `rungameid/9999` names a real game — so a green badge
+/// would be ksx claiming a check it did not make.
+fn state_class(state: &str) -> &'static str {
+    match state {
+        "broken" => "pill pill-warn",
+        "launcher" => "pill pill-idle",
+        _ => "pill pill-ok",
+    }
+}
+
+fn profile_detail_line(p: &ksx_api::ProfileDetail) -> String {
+    let slots = match p.slots {
+        1 => "1 player".to_owned(),
+        n => format!("{n} players"),
+    };
+    if p.presets.is_empty() {
+        format!("{slots} — no controller layout selected")
+    } else {
+        format!("{slots} — {}", p.presets.join(", "))
+    }
+}
+
+fn profile_verdict(p: &ksx_api::ProfileDetail) -> String {
+    match p.state.as_str() {
+        "broken" => {
+            "The program could not be found. Open Edit or delete and correct the game link."
+                .to_owned()
+        }
+        "launcher" => "This game link will be opened when Play starts it.".to_owned(),
+        _ => "Ready to launch.".to_owned(),
+    }
+}
+
+fn preset_detail_line(p: &ksx_api::PresetRow) -> String {
+    let controls = match p.bound {
+        1 => "1 control".to_owned(),
+        n => format!("{n} controls"),
+    };
+    let macros = match p.macros {
+        0 => String::new(),
+        n => format!(", {n} macro(s)"),
+    };
+    format!("{controls}{macros}")
+}
+
+/// "player 1" / "players 1–3" — the blocks a template can instantiate.
+fn player_range(players: &[u8]) -> String {
+    match (players.iter().min(), players.iter().max()) {
+        (Some(lo), Some(hi)) if lo == hi => format!("player {lo}"),
+        (Some(lo), Some(hi)) => format!("players {lo}–{hi}"),
+        _ => "no player blocks".to_owned(),
+    }
+}
+
+/// The sentence a refused read produces, everywhere it appears. A page that
+/// could not read a machine says THIS; it never says the machine is empty.
+const UNREADABLE: &str = "The configuration could not be read.";
+
+/// **Every sentence `/setup` states as a fact, composed once, in Rust.**
+///
+/// docs/SURFACES.md §1, applied to the render seam: the SSR paint and the
+/// island's two-second poll show the same words because there is only one
+/// implementation of them, not two that a reviewer has to diff. `SetupIsland.ts`
+/// reads these fields and renders them; it derives nothing. Six of these lines
+/// were hand-mirrored in TypeScript until an adversarial review pointed out
+/// that the test claiming to pin the two sides together only ever read the Rust
+/// one.
+///
+/// The other half of the job is [`SetupSnapshot::available`]. A provider that
+/// REFUSED knows nothing about this machine, so not one line below may assert
+/// absence — "I could not read this" and "there is nothing here" are different
+/// sentences and a user acts on them differently.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupLines {
+    /// The loudest line on the page: the whole configuration in one sentence.
+    pub config: String,
+    /// The inventory's board heading.
+    pub boards: String,
+    /// The inventory's slot heading.
+    pub slots: String,
+    /// What is on disk, in one line.
+    pub library: String,
+    /// What the Export button would hand back.
+    pub export: String,
+    /// Where the daemon's learner stands, as step 3 reads it.
+    pub prove: String,
+    /// WHY the wire-a-slot control is disabled, or empty when it is not.
+    ///
+    /// One reason, never a disjunction: `wireable` is two facts ANDed, and a
+    /// single sentence covering both told a user with a running daemon to start
+    /// the daemon, and a user with presets on disk to go and make a preset.
+    pub wire_blocked: String,
+    /// WHY the learner control is disabled, or empty when it is not. Same rule:
+    /// "no daemon" and "a daemon whose listener is unavailable" are different
+    /// states and the page knows which one it is in.
+    pub prove_blocked: String,
+    /// What wiring a slot will do to the pads, for the session there actually
+    /// is. The unconditional "REPLUGS the pads" was false against an idle
+    /// daemon — which the form is offered on, because `wireable` turns on
+    /// `reachable`, not on `running`.
+    pub wire_warning: String,
+}
+
+impl SetupLines {
+    /// Compose every line for one read. The only implementation.
+    pub fn of(
+        setup: &SetupSnapshot,
+        session: &crate::control::SessionView,
+        learn: &crate::control::LearnView,
+    ) -> Self {
+        let view = &setup.view;
+        if !setup.available {
+            // NOT "there is nothing configured" — that sentence is advice
+            // ("import one"), and it would be the wrong advice. Every line here
+            // says the same thing the guard on the card says.
+            return Self {
+                config: UNREADABLE.to_owned(),
+                boards: "the boards on this machine could not be read".to_owned(),
+                slots: "the slots on this machine could not be read".to_owned(),
+                library: "What is on disk could not be read — which is not the same as \
+                          nothing being there."
+                    .to_owned(),
+                export: "Export hands back what this machine holds; ksx could not read it \
+                         to say what that is."
+                    .to_owned(),
+                prove: learn_line(learn),
+                wire_blocked: "disabled — this machine's configuration could not be read, \
+                               so ksx cannot offer the presets a slot would point at."
+                    .to_owned(),
+                prove_blocked: prove_blocked_line(session, learn),
+                wire_warning: wire_warning_line(session),
+            };
+        }
+
+        Self {
+            config: if view.config_exists {
+                format!(
+                    "Configured — {} board(s), {} slot(s), {} preset(s).",
+                    view.devices.len(),
+                    view.slots.len(),
+                    view.presets.len()
+                )
+            } else {
+                "There is no configuration on this machine yet.".to_owned()
+            },
+            boards: match view.devices.len() {
+                0 => "no boards named yet".to_owned(),
+                1 => "1 board named:".to_owned(),
+                n => format!("{n} boards named:"),
+            },
+            slots: match view.slots.len() {
+                0 => "no slots wired yet".to_owned(),
+                1 => "1 slot wired:".to_owned(),
+                n => format!("{n} slots wired:"),
+            },
+            library: format!(
+                "{} preset(s) and {} game profile(s) on disk.",
+                view.presets.len(),
+                view.profiles.len()
+            ),
+            export: format!(
+                "One JSON file: settings, boards, slots, {} game profile(s) and {} preset(s).",
+                view.profiles.len(),
+                view.presets.len()
+            ),
+            prove: learn_line(learn),
+            wire_blocked: wire_blocked_line(session, view),
+            prove_blocked: prove_blocked_line(session, learn),
+            wire_warning: wire_warning_line(session),
+        }
+    }
+}
+
+/// The learner, as the sentence step 3 reads.
+fn learn_line(learn: &crate::control::LearnView) -> String {
+    match learn.state.as_str() {
+        "listening" => "Listening — press any button on the panel now.".to_owned(),
+        "hit" => match learn.device.as_deref() {
+            Some(device) => format!("Seen, on {device}."),
+            None => "Seen.".to_owned(),
+        },
+        "unavailable" => learn
+            .error
+            .clone()
+            .unwrap_or_else(|| "the daemon's listener is not available".to_owned()),
+        _ if !learn.ok => learn
+            .error
+            .clone()
+            .unwrap_or_else(|| "the daemon's listener is not available".to_owned()),
+        _ => {
+            "Nothing is listening. Start the listener, then press a button on the panel.".to_owned()
+        }
+    }
+}
+
+/// One reason the wire form is not offered — the one that is actually true.
+fn wire_blocked_line(session: &crate::control::SessionView, view: &ksx_api::SetupView) -> String {
+    match (session.reachable, view.presets.is_empty()) {
+        (true, false) => String::new(),
+        (false, true) => "disabled — no daemon is running to take the write, and there is no \
+                          preset on disk for a slot to point at. Start the daemon, and import \
+                          or create a preset."
+            .to_owned(),
+        (false, false) => "disabled — wiring a slot is a daemon write, and no daemon is \
+                           running. Start it and this control comes back."
+            .to_owned(),
+        (true, true) => "disabled — a slot points at a preset, and there is not one on disk \
+                         yet. Import a configuration below, or run `ksx preset new`."
+            .to_owned(),
+    }
+}
+
+/// One reason the learner is not offered.
+fn prove_blocked_line(
+    session: &crate::control::SessionView,
+    learn: &crate::control::LearnView,
+) -> String {
+    if !session.reachable {
+        return "disabled — the listener lives in the daemon, and no daemon is running. \
+                `ksx monitor` does the same job in a shell."
+            .to_owned();
+    }
+    if learn.state == "unavailable" {
+        let reason = learn
+            .error
+            .clone()
+            .unwrap_or_else(|| "no reason given".to_owned());
+        return format!(
+            "disabled — the daemon is running, but its listener is not: {reason}. \
+             `ksx monitor` does the same job in a shell."
+        );
+    }
+    String::new()
+}
+
+/// What a slot write will do to the pads on THIS session.
+fn wire_warning_line(session: &crate::control::SessionView) -> String {
+    if session.running {
+        "Wiring a slot REPLUGS the pads: every controller vanishes and comes back, and \
+         anything mid-game sees it. Bindings do not — those swap in place."
+            .to_owned()
+    } else {
+        "Nothing is running, so nothing replugs — the next start reads the new wiring. Wire \
+         a slot while a session IS running and every controller vanishes and comes back."
+            .to_owned()
+    }
+}
+
+/// **Every `createShow` boolean on `/setup`, decided once, in Rust.**
+///
+/// Same rule and same reason as [`SetupLines`]: the seam injects these into the
+/// SSR paint and `SetupIsland.ts` assigns them straight into its signals, so
+/// the learner partition and the "is this readable" gate cannot be true on one
+/// side of the seam and false on the other.
+///
+/// The two flash booleans are deliberately NOT here: a flash is one-shot action
+/// feedback the client owns (it clears itself on a timer), so it is not a fact
+/// about the machine and a poll must never rewrite it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupFlags {
+    pub pill_running: bool,
+    pub pill_idle: bool,
+    pub pill_down: bool,
+    pub no_daemon: bool,
+    /// The machine provider REFUSED. Everything that would state a fact about
+    /// this machine is gated off by it.
+    pub setup_down: bool,
+    /// The machine provider answered — the gate every inventory row, every
+    /// checklist row and every "nothing here yet" sentence sits behind.
+    pub setup_known: bool,
+    pub first_run: bool,
+    pub configured: bool,
+    pub can_wire: bool,
+    pub cannot_wire: bool,
+    pub prove_down: bool,
+    pub prove_listening: bool,
+    pub prove_hit: bool,
+    pub prove_idle: bool,
+    pub has_boards: bool,
+    pub no_boards: bool,
+    pub has_slots: bool,
+    pub no_slots: bool,
+    pub has_notes: bool,
+}
+
+impl SetupFlags {
+    pub fn of(
+        setup: &SetupSnapshot,
+        session: &crate::control::SessionView,
+        learn: &crate::control::LearnView,
+    ) -> Self {
+        let view = &setup.view;
+        let available = setup.available;
+
+        // "Can this page write a slot?" is three facts now: a config we could
+        // READ, a daemon to take the write, and a preset for the slot to point
+        // at. A menu with no options and a live button is the shape that makes
+        // a user think they did something.
+        let wireable = available && session.reachable && !view.presets.is_empty();
+
+        let listener_down = !session.reachable || learn.state == "unavailable";
+        let listening = !listener_down && learn.state == "listening";
+        let hit = !listener_down && learn.state == "hit";
+
+        Self {
+            pill_running: session.reachable && session.running,
+            pill_idle: session.reachable && !session.running,
+            pill_down: !session.reachable,
+            no_daemon: !session.reachable,
+            setup_down: !available,
+            setup_known: available,
+            first_run: available && !view.config_exists,
+            configured: available && view.config_exists,
+            can_wire: wireable,
+            cannot_wire: !wireable,
+            prove_down: listener_down,
+            prove_listening: listening,
+            prove_hit: hit,
+            prove_idle: !listener_down && !listening && !hit,
+            // EVERY one of these is `available &&`. Without it a refused read
+            // renders "No board has a name yet" — a claim about a machine
+            // nothing was read from.
+            has_boards: available && !view.devices.is_empty(),
+            no_boards: available && view.devices.is_empty(),
+            has_slots: available && !view.slots.is_empty(),
+            no_slots: available && view.slots.is_empty(),
+            has_notes: available && !view.notes.is_empty(),
+        }
+    }
+}
+
+/// One checklist step as the row the page draws.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupStepRowView {
+    /// "1", "2", "3" — the position, as the badge text.
+    pub badge: String,
+    pub title: String,
+    pub detail: String,
+    /// `step done` | `step now` | `step later` — presentation of the BACKEND's
+    /// state word, composed here so neither language re-derives it.
+    pub cls: String,
+}
+
+/// A title-over-detail row (the inventory's boards and slots).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupPairRowView {
+    pub title: String,
+    pub detail: String,
+}
+
+/// One `<option>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupOptionRowView {
+    pub value: String,
+    pub label: String,
+}
+
+/// One plain-text row (presets, profiles, notes).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupTextRowView {
+    pub text: String,
+}
+
+/// **Every list row `/setup` draws, composed once, in Rust** — the same
+/// docs/SURFACES.md §1 rule [`SetupLines`] and [`SetupFlags`] already follow,
+/// applied to the row and label formatters.
+///
+/// These used to live twice: `render_setup.rs::list_values` composed
+/// "Slot 3 — Panel P1" for the SSR paint and `SetupIsland.ts` composed it
+/// again for the two-second poll. Two copies of a SENTENCE drift silently
+/// (the Profiles page's `ProfilesDerived` header tells the longer version of
+/// this story); now both seams read these rows verbatim and format nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupRows {
+    pub steps: Vec<SetupStepRowView>,
+    pub devices: Vec<SetupPairRowView>,
+    pub slots: Vec<SetupPairRowView>,
+    /// `1..=SetupView::max_slots` — the ceiling the backend serves, never a
+    /// literal in either language.
+    pub slot_options: Vec<SetupOptionRowView>,
+    pub preset_options: Vec<SetupTextRowView>,
+    pub profile_options: Vec<SetupTextRowView>,
+    pub notes: Vec<SetupTextRowView>,
+}
+
+impl SetupRows {
+    /// Compose every row for one read. The only implementation.
+    pub fn of(setup: &SetupSnapshot) -> Self {
+        let view = &setup.view;
+        Self {
+            steps: view
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(i, step)| SetupStepRowView {
+                    badge: (i + 1).to_string(),
+                    title: step.title.clone(),
+                    detail: step.detail.clone(),
+                    cls: format!("step {}", step.state),
+                })
+                .collect(),
+            devices: view
+                .devices
+                .iter()
+                .map(|device| SetupPairRowView {
+                    title: device.alias.clone(),
+                    detail: format!("{} · {}", device.backend, device.id),
+                })
+                .collect(),
+            slots: view
+                .slots
+                .iter()
+                .map(|slot| SetupPairRowView {
+                    title: format!("Slot {} — {}", slot.number, slot.preset),
+                    detail: format!("{} · {} · {}", slot.device, slot.persona, slot.source),
+                })
+                .collect(),
+            slot_options: (1..=view.max_slots)
+                .map(|n| SetupOptionRowView {
+                    value: n.to_string(),
+                    label: format!("Slot {n}"),
+                })
+                .collect(),
+            preset_options: view
+                .presets
+                .iter()
+                .map(|name| SetupTextRowView { text: name.clone() })
+                .collect(),
+            profile_options: view
+                .profiles
+                .iter()
+                .map(|title| SetupTextRowView {
+                    text: title.clone(),
+                })
+                .collect(),
+            notes: view
+                .notes
+                .iter()
+                .map(|note| SetupTextRowView { text: note.clone() })
+                .collect(),
+        }
+    }
+}
+
+/// What `GET /api/setup` serves AND what the setup island's props carry — the
+/// same one-struct-one-serializer rule as [`StatusPayload`], parity pinned in
+/// `render_setup.rs`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupPayload {
+    pub setup: SetupSnapshot,
+    pub session: crate::control::SessionView,
+    /// Where the daemon's learner stands. This is step 3 — "press a button and
+    /// watch it land" — and it is read on every page render, so the no-JS
+    /// `<noscript>` refresh shows the press without any client code at all.
+    pub learn: crate::control::LearnView,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/setup` — a poll is not an action.
+    pub flash: Option<String>,
+    /// The page's sentences, composed from the three above. Derived, never
+    /// authored: [`SetupPayload::composed`] is what fills it.
+    #[serde(default)]
+    pub lines: SetupLines,
+    /// The page's `createShow` booleans, decided from the three above. Same
+    /// rule.
+    #[serde(default)]
+    pub flags: SetupFlags,
+    /// The page's list rows, composed from [`Self::setup`]. Same rule again —
+    /// see [`SetupRows`].
+    #[serde(default)]
+    pub rows: SetupRows,
+}
+
+impl SetupPayload {
+    /// Recompose [`lines`](Self::lines), [`flags`](Self::flags) and
+    /// [`rows`](Self::rows) from this payload's own facts.
+    ///
+    /// Called on the way OUT — by the render seam and by `/api/setup` — rather
+    /// than at construction, so a payload assembled field by field (every test
+    /// does, and so does the collector) can never serve sentences that
+    /// contradict the facts sitting beside them.
+    #[must_use]
+    pub fn composed(mut self) -> Self {
+        self.lines = SetupLines::of(&self.setup, &self.session, &self.learn);
+        self.flags = SetupFlags::of(&self.setup, &self.session, &self.learn);
+        self.rows = SetupRows::of(&self.setup);
+        self
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// /start — the first run, moments 4 to 7 (docs/FIRST-RUN.md)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// What `GET /api/start` serves AND what the `/start` island's props carry —
+/// the same one-struct-one-serializer rule as [`StatusPayload`], parity pinned
+/// in `render_start.rs`.
+///
+/// **Five reads, five failure modes, five fields.** They are kept apart for the
+/// reason `docs/SURFACES.md` §1b gives: a daemon that is down and a machine
+/// with no boards are opposite advice, and collapsing either into an empty
+/// value is how a page ends up saying "you have staged nothing" when the truth
+/// is "nothing answered". [`Self::staged`] carries its own `reachable` +
+/// `error`; [`Self::pad_bus`] carries its own `readable`; the other two carry
+/// theirs beside them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartPayload {
+    /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
+    /// not a file. Its own `reachable`/`error` fields say when there is none.
+    pub staged: ksx_api::StagedSetupView,
+    /// The device enumeration, from `MachineSource::device_scan` — the same
+    /// read `/devices` renders.
+    pub scan: ksx_api::DeviceScanView,
+    pub session: crate::control::SessionView,
+    /// **Whether a pad can be plugged at all**, from `MachineSource::pad_bus`.
+    ///
+    /// The one machine fact this page cannot get from the daemon or from the
+    /// device list, and the one that decides whether moment 7 can happen: with
+    /// no ViGEmBus every step above works perfectly and Play plugs nothing.
+    /// Read-only — `docs/SURFACES.md` §3 marks driver installation `never` for
+    /// the browser, and this is how a page obeys that rule and still tells the
+    /// truth before the button.
+    ///
+    /// It carries its own `readable`, so a refused read becomes
+    /// `PadBusView::unreadable(...)` rather than a default that would render
+    /// as a healthy bus.
+    #[serde(default)]
+    pub pad_bus: ksx_api::PadBusView,
+    /// Empty when the scan answered. Otherwise the refusal, verbatim.
+    #[serde(default)]
+    pub unavailable: String,
+    /// The presets ON DISK, from `MachineSource::presets`. Not what the stage
+    /// holds — what a save would land next to, which is the only way this page
+    /// can say "a preset of that name is already there" before the click.
+    #[serde(default)]
+    pub presets: Vec<ksx_api::PresetRow>,
+    /// Empty when the preset read answered; otherwise the refusal. Separate
+    /// from an empty list, because "no presets yet" is a first run and "I could
+    /// not read the presets folder" is a broken install.
+    #[serde(default)]
+    pub presets_error: String,
+    /// The selected keyboard's capture preparation, composed from the staged
+    /// selector and the current machine inventory.  The two identifiers are
+    /// form values, not presentation copy: the card never prints either one,
+    /// and the server revalidates both before it asks the machine provider to
+    /// do anything privileged.
+    #[serde(default)]
+    pub capture: StartCaptureView,
+    /// One-shot action feedback (the `?flash=` query). Always `None` from
+    /// `/api/start` — a poll is not an action.
+    pub flash: Option<String>,
+    /// The page's sentences, composed from the four above. Derived, never
+    /// authored — [`StartPayload::composed`] fills it.
+    #[serde(default)]
+    pub lines: StartLines,
+    /// The page's `createShow` booleans, decided from the same four.
+    #[serde(default)]
+    pub flags: StartFlags,
+    /// The page's list rows, same rule again.
+    #[serde(default)]
+    pub rows: StartRows,
+}
+
+impl StartPayload {
+    /// Recompose [`lines`](Self::lines), [`flags`](Self::flags) and
+    /// [`rows`](Self::rows) from this payload's own facts. Called on the way
+    /// OUT, like [`SetupPayload::composed`], so a payload assembled field by
+    /// field can never serve sentences that contradict the facts beside them.
+    #[must_use]
+    pub fn composed(mut self) -> Self {
+        self.capture = StartCaptureView::of(&self);
+        self.lines = StartLines::of(&self);
+        self.flags = StartFlags::of(&self);
+        self.rows = StartRows::of(&self);
+        self
+    }
+
+    /// Is the device enumeration a reading of this machine at all?
+    fn scan_read(&self) -> bool {
+        self.unavailable.trim().is_empty()
+    }
+}
+
+/// The scalar-only capture-preparation seam for `/start`.
+///
+/// This deliberately is not a device row and does not carry a backend field.
+/// The browser can confirm the exact selection it was shown, but only the
+/// server decides which backend follows an authoritative prepare/release
+/// result. `mode` is server-only; the three rendered branches travel through
+/// [`StartFlags`] so Forma gets three scalar shows and no new list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartCaptureView {
+    pub expected_selector: String,
+    pub instance_id: String,
+    #[serde(skip)]
+    mode: StartCaptureMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum StartCaptureMode {
+    #[default]
+    None,
+    Ready,
+    Prepare,
+    PrepareOptional,
+    Release,
+    Blocked,
+}
+
+impl StartCaptureView {
+    fn of(payload: &StartPayload) -> Self {
+        let Some(device) = payload.staged.device.as_ref() else {
+            return Self::default();
+        };
+        if !payload.staged.reachable {
+            return Self::default();
+        }
+        if !payload.scan_read() {
+            return Self::blocked(device.selector.clone());
+        }
+
+        // A selector chosen from the served inventory should name one board.
+        // Re-check that invariant instead of taking the first match: a stale
+        // or malformed inventory must remove the action, never retarget it.
+        let mut matches = payload
+            .scan
+            .boards
+            .iter()
+            .filter(|board| board.selector.as_deref() == Some(device.selector.as_str()));
+        let Some(board) = matches.next() else {
+            return Self::blocked(device.selector.clone());
+        };
+        if matches.next().is_some() {
+            return Self::blocked(device.selector.clone());
+        }
+        let Some(instance_id) = board.keyboard.as_ref() else {
+            return Self::blocked(device.selector.clone());
+        };
+        if payload
+            .scan
+            .boards
+            .iter()
+            .flat_map(|candidate| candidate.interfaces.iter())
+            .filter(|row| row.instance_id.eq_ignore_ascii_case(instance_id))
+            .count()
+            != 1
+        {
+            return Self::blocked(device.selector.clone());
+        }
+
+        // These are the two canonical wire spellings accepted by StageEdit.
+        // They are server-owned constants; no browser field selects either.
+        let backend = device.backend.as_str();
+        let interception = "interception";
+        let winusb = "winusb";
+        let interception_ready = backend == interception
+            && payload.scan.interception_available
+            && board.interception_eligible
+            && board.can_type
+            && !board.claimed;
+        let mode = if interception_ready && board.winusb_eligible {
+            // The optional built-in path must remain reachable even when a
+            // shared Interception install happens to make this machine work.
+            // It is an option, not a readiness blocker.
+            StartCaptureMode::PrepareOptional
+        } else if interception_ready {
+            StartCaptureMode::Ready
+        } else if backend == winusb && board.winusb_eligible && board.claimed {
+            StartCaptureMode::Release
+        } else if (backend == interception || backend == winusb) && board.winusb_eligible {
+            StartCaptureMode::Prepare
+        } else {
+            StartCaptureMode::Blocked
+        };
+        Self {
+            expected_selector: device.selector.clone(),
+            instance_id: instance_id.clone(),
+            mode,
+        }
+    }
+
+    fn blocked(expected_selector: String) -> Self {
+        Self {
+            expected_selector,
+            mode: StartCaptureMode::Blocked,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn ready(&self) -> bool {
+        matches!(
+            self.mode,
+            StartCaptureMode::Ready | StartCaptureMode::PrepareOptional | StartCaptureMode::Release
+        )
+    }
+
+    fn prepare(&self) -> bool {
+        matches!(
+            self.mode,
+            StartCaptureMode::Prepare | StartCaptureMode::PrepareOptional
+        )
+    }
+
+    fn release(&self) -> bool {
+        self.mode == StartCaptureMode::Release
+    }
+
+    fn blocked_state(&self) -> bool {
+        self.mode == StartCaptureMode::Blocked
+    }
+}
+
+/// **Every sentence `/start` states as a fact, composed once, in Rust.**
+///
+/// Same rule and same reason as [`SetupLines`]: the SSR paint and the island's
+/// poll show identical words because there is one implementation of them. The
+/// island assigns these to signals and composes nothing.
+///
+/// What is deliberately NOT here: the split-or-freeze wording, the escape hatch
+/// and the per-session scope. Those are `ksx_api::BlockingOption::roster()`,
+/// `ESCAPE_HATCH_LINE` and `BLOCKING_SCOPE_LINE` — `docs/FIRST-RUN.md` §3 is a
+/// question about what the CAPTURE THREAD does, so its words belong beside the
+/// type that answers it and not on the one screen that currently asks.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartLines {
+    /// The keyboard step's heading line — chosen, or what to do about it.
+    pub device_line: String,
+    /// The chosen board's id, as SMALL PRINT. `FIRST-RUN.md` §5: the path
+    /// belongs in small print for support, never as the identifier on screen.
+    pub device_detail: String,
+    /// `scan.boards_summary`, verbatim — the one line that distinguishes "no
+    /// keyboard-capable board" from "nothing could be read".
+    pub boards_line: String,
+    /// Customer copy for the scalar capture-preparation card. Exact instance
+    /// ids and provider/helper messages never enter these fields.
+    pub capture_heading: String,
+    pub capture_line: String,
+    pub capture_detail: String,
+    pub capture_prepare_cls: String,
+    pub capture_button_cls: String,
+    pub capture_button: String,
+    /// The controller step's line: how many are staged and what that costs.
+    pub controller_line: String,
+    /// The XInput occupancy, from the SERVED numbers.
+    pub xinput_line: String,
+    /// Where the one question stands: the answer, or that it has not been
+    /// asked. Never a pre-selected default — §3.
+    pub blocking_line: String,
+    /// What the mapper edits and where the staged preset stands relative to
+    /// the presets on disk.
+    pub preset_line: String,
+    /// **What the mapper is, beside the link to it.** The one sentence that
+    /// keeps "I mapped it in the mapper" from meaning "Play here will use
+    /// that" — see [`MAPPER_LINE`].
+    pub mapper_line: String,
+    /// Ready to save or play, or a customer-facing next step selected from the
+    /// staged facts. Raw domain refusals remain support data.
+    pub ready_line: String,
+    /// The driver banner's heading. What the SENTENCES say is
+    /// `ksx_api::PadBusView`'s and arrives composed; what this page decides is
+    /// how to introduce it — "cannot" and "could not be checked" are two
+    /// different headings and a page that used one for both would be asserting
+    /// the machine's state from a read that failed.
+    pub bus_heading: String,
+    /// The banner's class: red for a bus that is known not to work, amber for
+    /// one nothing could be learned about. Served rather than derived in
+    /// TypeScript for the reason every other `_cls` on this page is
+    /// (`StartBoardRow::caveat_cls`): the severity is a judgement, and
+    /// judgements are the backend's.
+    pub bus_cls: String,
+    /// What pressing Play actually does — moment 7's first sentence.
+    pub play_line: String,
+    /// Moment 7's one fact about the pad itself.
+    pub guide_line: String,
+    /// The always-available way to stop Play, in customer language.
+    #[serde(default)]
+    pub escape_line: String,
+    /// Which keyboards and how long the split/freeze answer affects.
+    #[serde(default)]
+    pub scope_line: String,
+    /// The daemon refusal that makes staging impossible, if any.
+    pub stage_error: String,
+    /// The scan refusal, if any.
+    pub scan_error: String,
+    /// The preset-read refusal, if any.
+    pub presets_error: String,
+}
+
+impl StartLines {
+    /// Compose every line for one payload. The only implementation.
+    pub fn of(p: &StartPayload) -> Self {
+        let staged = &p.staged;
+        Self {
+            device_line: match (&staged.device, staged.reachable) {
+                (Some(device), _) => format!(
+                    "Using {} for this setup. You can change it before Save or Play.",
+                    device.label
+                ),
+                (None, true) => {
+                    "Pick the keyboard you want to play with. Nothing happens when you pick it: \
+                     it is remembered for this visit and written only if you save."
+                        .to_owned()
+                }
+                // No daemon: the list below is still a real reading of the
+                // machine, so the sentence is about the button, not the boards.
+                (None, false) => "The background helper is not ready, so Setup cannot remember a \
+                                  keyboard yet. Close and reopen ksx; your devices have not been \
+                                  changed."
+                    .to_owned(),
+            },
+            device_detail: match &staged.device {
+                Some(device) if device.survives_replug => format!(
+                    "{} is selected for this setup. You can unplug it, move it to another USB \
+                     socket, or pick a different device before Save or Play.",
+                    device.label
+                ),
+                Some(device) => format!(
+                    "{} is selected for this setup. Keep it in this USB socket, or pick it again \
+                     after moving it. You can change your mind before Save or Play.",
+                    device.label
+                ),
+                None => String::new(),
+            },
+            boards_line: p.scan.boards_summary.clone(),
+            capture_heading: capture_heading(&p.capture).to_owned(),
+            capture_line: capture_line(&p.capture).to_owned(),
+            capture_detail: capture_detail(&p.capture).to_owned(),
+            capture_prepare_cls: capture_prepare_cls(&p.capture).to_owned(),
+            capture_button_cls: capture_button_cls(&p.capture).to_owned(),
+            capture_button: capture_button(&p.capture).to_owned(),
+            controller_line: controller_line(staged),
+            xinput_line: format!(
+                "{} of {} available Xbox-style controller places would be used. Additional \
+                 players use PlayStation-style controllers, which supported games can read.",
+                staged.xinput_used, staged.max_xinput_slots
+            ),
+            blocking_line: match &staged.blocking {
+                Some(name) => match staged.blocking_options.iter().find(|o| &o.name == name) {
+                    Some(chosen) => format!("Answered: {}.", chosen.title),
+                    // Do not reflect an unknown wire value into primary copy.
+                    // The served choices below are the safe way to repair it.
+                    None => "This keyboard choice could not be checked. Pick Freeze, Split, or \
+                             Take nothing again before saving or playing."
+                        .to_owned(),
+                },
+                None => "Not asked yet. There is no default here on purpose: a screen showing one \
+                         option pre-selected has answered the question for you."
+                    .to_owned(),
+            },
+            preset_line: preset_line(p),
+            mapper_line: MAPPER_LINE.to_owned(),
+            bus_heading: bus_heading(&p.pad_bus).to_owned(),
+            bus_cls: bus_cls(&p.pad_bus).to_owned(),
+            ready_line: ready_line(p),
+            play_line: PLAY_LINE.to_owned(),
+            guide_line: GUIDE_LINE.to_owned(),
+            escape_line: ESCAPE_LINE.to_owned(),
+            scope_line: SCOPE_LINE.to_owned(),
+            stage_error: if staged.error.is_some() {
+                "The background helper did not answer. Close and reopen ksx; if this keeps \
+                 happening, contact support and include the Technical details shown here. \
+                 Nothing has been changed."
+                    .to_owned()
+            } else {
+                String::new()
+            },
+            scan_error: p.unavailable.trim().to_owned(),
+            presets_error: p.presets_error.trim().to_owned(),
+        }
+    }
+}
+
+fn ready_line(payload: &StartPayload) -> String {
+    let staged = &payload.staged;
+    if !staged.reachable {
+        return "Setup is temporarily unavailable. Close and reopen ksx; nothing has been \
+                changed."
+            .to_owned();
+    }
+    if staged.device.is_none() {
+        return "Choose a keyboard before saving or playing.".to_owned();
+    }
+    if !payload.capture.ready() {
+        return if payload.capture.prepare() {
+            "Prepare the selected keyboard before saving or playing.".to_owned()
+        } else {
+            "The selected keyboard is not ready for capture. Follow the highlighted keyboard \
+             guidance before saving or playing."
+                .to_owned()
+        };
+    }
+    if staged.slots.is_empty() {
+        return "Add at least one controller before saving or playing.".to_owned();
+    }
+    if let Some(slot) = staged.slots.iter().find(|slot| slot.bindings == 0) {
+        return format!(
+            "Player {} has no controls yet. Choose a ready-made layout or open Controls before \
+             saving or playing.",
+            slot.number
+        );
+    }
+    if staged.blocking.is_none() {
+        return "Choose whether this keyboard should freeze or keep typing before saving or \
+                playing."
+            .to_owned();
+    }
+    if !staged.ready {
+        return "Finish the highlighted Setup choices before saving or playing.".to_owned();
+    }
+    "Ready. Save keeps this setup for later; Play starts it without saving.".to_owned()
+}
+
+fn capture_heading(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare => "Prepare this keyboard for play",
+        StartCaptureMode::PrepareOptional => "Use KSX’s built-in Windows USB mode",
+        StartCaptureMode::Release => "This keyboard is prepared for ksx",
+        StartCaptureMode::Blocked => "This keyboard is not ready for capture",
+        StartCaptureMode::None | StartCaptureMode::Ready => "",
+    }
+}
+
+fn capture_line(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare => {
+            "Windows needs to prepare only the keyboard you selected before ksx can use it. \
+             This takes it out of normal typing until you release it here."
+        }
+        StartCaptureMode::PrepareOptional => {
+            "This keyboard is ready through a shared optional capture driver. You can keep that \
+             mode, or prepare this exact USB keyboard for KSX’s built-in Windows USB mode."
+        }
+        StartCaptureMode::Release => {
+            "Windows has prepared this selected keyboard for ksx, and capture is ready. It will \
+             not type as a normal keyboard while it stays prepared."
+        }
+        StartCaptureMode::Blocked => {
+            "ksx could not verify one exact, supported keyboard interface for the current \
+             selection. Nothing was prepared and the setup was not changed."
+        }
+        StartCaptureMode::None | StartCaptureMode::Ready => "",
+    }
+}
+
+fn capture_detail(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare | StartCaptureMode::PrepareOptional => {
+            "Keep a different keyboard connected and test that it can type. Continuing opens a \
+             Windows permission prompt and installs a machine-local certificate used only to \
+             sign this computer's generated device package. Windows matches that package by \
+             keyboard model, so release it here before connecting another identical keyboard."
+        }
+        StartCaptureMode::Release => {
+            "If another identical keyboard was connected later, unplug it first so this exact \
+             selection stays unambiguous. Release removes the shared Windows package and returns \
+             this keyboard to ordinary typing; the twin returns when reconnected. Your unsaved \
+             controller choices stay on this screen. ksx then rechecks capture before Play."
+        }
+        StartCaptureMode::Blocked => {
+            "Built-in preparation supports one exact USB keyboard. Reconnect or choose a \
+             supported USB keyboard, then Rescan. Bluetooth keyboard capture is not available \
+             on a clean install."
+        }
+        StartCaptureMode::None | StartCaptureMode::Ready => "",
+    }
+}
+
+fn capture_prepare_cls(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare => "card wide capture-card warnbox",
+        StartCaptureMode::PrepareOptional => "card wide capture-card",
+        _ => "",
+    }
+}
+
+fn capture_button_cls(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare => "btn btn-primary",
+        StartCaptureMode::PrepareOptional => "btn",
+        _ => "",
+    }
+}
+
+fn capture_button(capture: &StartCaptureView) -> &'static str {
+    match capture.mode {
+        StartCaptureMode::Prepare => "Prepare selected keyboard",
+        StartCaptureMode::PrepareOptional => "Use built-in USB mode",
+        _ => "",
+    }
+}
+
+/// **What the mapper is, said beside the link to it.**
+///
+const MAPPER_LINE: &str =
+    "Controls lets you choose each controller button and the keyboard key that activates it. \
+     Changes return here immediately. The keyboard and this setup stay untouched until you \
+     choose Play or Save.";
+
+/// **What Play does**, stated before the button rather than after it.
+///
+/// The two halves are the ones a first-run user has no way to predict: a pad
+/// appears on the ViGEm bus (so a game finds a controller that was not there a
+/// second ago) and their keyboard changes behaviour (which, under Freeze, means
+/// it stops typing). Both are reversible and the sentence says how — Stop, or
+/// the escape latch, which is the same one §3's card carries.
+const PLAY_LINE: &str =
+    "Play makes one game controller for each controller above and uses the keyboard you picked \
+     to operate them. Stop removes those game controllers and returns the keyboard to normal — \
+     Left Ctrl five times temporarily frees or recaptures the keyboard without removing the game \
+     controllers.";
+
+const ESCAPE_LINE: &str =
+    "Press Left Ctrl five times at any time to toggle keyboard capture off or on. Turning it off \
+     returns every keyboard to normal without ending Play, even if the app window is closed; use \
+     Stop or Ctrl+Alt+Del to end Play.";
+
+const SCOPE_LINE: &str =
+    "This choice applies only to the keyboard you picked and only while Play is active. Other \
+     keyboards on this PC are not affected.";
+
+/// Moment 7's Windows-owned prerequisite.
+///
+/// `ksx_core::pad::XButton::Guide` already exists and every persona publishes
+/// it; whether Windows answers it is a per-user Game Bar setting, not something
+/// ksx controls. Composed here rather than in `ksx-api` because it is a sentence
+/// about this SCREEN's last step, and no other surface has that step yet. The
+/// day the cabinet grows one, it moves — the same way §3's wording already lives
+/// in `ksx-api`.
+const GUIDE_LINE: &str =
+    "GUIDE can ask Windows to open Xbox Game Bar only when Game Bar is available and “Allow your \
+     controller to open Game Bar” is turned on in Windows Settings > Gaming > Game Bar. ksx does \
+     not change that Windows setting.";
+
+/// The driver banner's heading, and the only place this page words the
+/// difference between the two reasons it appears.
+///
+/// A `blocked` bus is a statement about the machine and reads like one. An
+/// `unknown` one is a statement about this page's own read — `SURFACES.md` §1b
+/// — and must never borrow the first heading, because "ksx cannot plug a
+/// controller" is a claim nothing here is entitled to make.
+///
+/// A healthy bus gets the EMPTY string, not the nearest of the two. The banner
+/// is hidden either way (`StartFlags::bus_warn`), but the payload block is
+/// served verbatim to the island and to `/api/start`, so a heading left lying
+/// in it would be a sentence about a machine that is fine, saying it is not.
+fn bus_heading(bus: &ksx_api::PadBusView) -> &'static str {
+    match (bus.blocked, bus.unknown) {
+        (true, _) => "Play cannot plug a controller on this machine yet",
+        (_, true) => "The controller driver could not be checked",
+        _ => "",
+    }
+}
+
+/// Red for a bus that is known not to work, amber for one nothing is known
+/// about, and nothing at all for a healthy one — same rule as
+/// [`bus_heading`]. Both banners are `.card.alarm`; `.alarm.warn` is the amber
+/// variant (`studio.css` §4.9).
+fn bus_cls(bus: &ksx_api::PadBusView) -> &'static str {
+    match (bus.blocked, bus.unknown) {
+        (true, _) => "card alarm",
+        (_, true) => "card alarm warn",
+        _ => "",
+    }
+}
+
+fn controller_line(staged: &ksx_api::StagedSetupView) -> String {
+    match staged.slots.len() {
+        0 => format!(
+            "Pick what the keyboard should become. Nothing is plugged and nothing is written — \
+             changing your mind costs a click. Up to {} controllers.",
+            staged.max_slots
+        ),
+        1 => "1 controller is ready to customize. It is still only on this screen, and Remove \
+              leaves no trace."
+            .to_owned(),
+        n => format!(
+            "{n} controllers are ready to customize. They are still only on this screen, and \
+             Remove leaves no trace."
+        ),
+    }
+}
+
+/// What the mapper step can honestly say, which depends on whether the presets
+/// were readable at all.
+///
+/// The failed-read arm is the point: a preset name that "is not on disk" is a
+/// claim about the presets folder, and when the read refused nothing is known
+/// about it. Saying "this will create it" there is `SURFACES.md` §1b's bug.
+fn preset_line(p: &StartPayload) -> String {
+    const LEAD: &str = "Start from a ready-made layout, then open Controls to change individual \
+                        buttons, add alternate keys, set auto-fire, or build macros. Every edit \
+                        stays in this setup until you choose Save; Play uses it immediately \
+                        without saving.";
+    if !p.presets_error.trim().is_empty() {
+        return format!(
+            "{LEAD} Existing saved setups could not be checked, so ksx cannot yet say whether \
+             Save would replace one with the same name."
+        );
+    }
+    let clashes: Vec<&str> = p
+        .staged
+        .slots
+        .iter()
+        .filter(|slot| {
+            p.presets
+                .iter()
+                .any(|row| row.name.eq_ignore_ascii_case(&slot.preset))
+        })
+        .map(|slot| slot.preset.as_str())
+        .collect();
+    if clashes.is_empty() {
+        return format!("{LEAD} These controller names are new, so Save will create them.");
+    }
+    format!(
+        "{LEAD} {} already has a saved version. Save will replace it while keeping a recovery \
+         copy.",
+        clashes.join(", ")
+    )
+}
+
+/// **Every `createShow` boolean on `/start`, decided once, in Rust.**
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartFlags {
+    pub pill_running: bool,
+    pub pill_idle: bool,
+    pub pill_down: bool,
+    /// The staged setup could not be reached — every verb on the page is inert
+    /// and the banner says why.
+    pub stage_down: bool,
+    /// The device scan refused. NOT the same as an empty machine.
+    pub scan_down: bool,
+    /// The preset read refused.
+    pub presets_down: bool,
+    /// **The pad bus needs saying before the Play button.** True when ksx is
+    /// known to be unable to plug a pad, and true when that could not be
+    /// determined — the two look different (`bus_cls`, `bus_heading`) but both
+    /// are things a user is entitled to read before pressing a button that
+    /// depends on them. False only for a bus `ksx doctor` has nothing to say
+    /// about.
+    pub bus_warn: bool,
+    /// A keyboard is staged.
+    pub has_device: bool,
+    /// The three mutually exclusive scalar branches of the capture card.
+    pub capture_prepare: bool,
+    pub capture_release: bool,
+    pub capture_blocked: bool,
+    /// Keyboard-shaped boards that can be picked on the ordinary path.
+    pub has_boards: bool,
+    /// Pickable HID devices that do not identify themselves as keyboards.
+    /// These stay available as an explicit playground, never mixed into the
+    /// ordinary keyboard list.
+    pub has_experimental: bool,
+    /// **The enumeration ANSWERED and found no keyboard-capable board.** The
+    /// only flag that licenses the "there is nothing here" paragraph; false
+    /// whenever the list is empty because nothing could be read.
+    pub no_boards: bool,
+    /// Boards with no keyboard interface, listed so "why is my device not
+    /// here" has an answer.
+    pub has_other: bool,
+    pub has_notes: bool,
+    /// Controllers are staged.
+    pub has_slots: bool,
+    /// A controller can still be added (a free slot AND a persona to put in
+    /// it AND a keyboard to drive it).
+    pub can_add: bool,
+    /// Every slot is taken — the ceiling, said before the button vanishes.
+    pub slots_full: bool,
+    /// Personas this build cannot plug, listed with the reason.
+    pub has_gaps: bool,
+    /// A staged controller can be dressed in a layout — there is one to dress
+    /// and a daemon to hold the result.
+    pub can_layout: bool,
+    /// §3 has been answered.
+    pub blocking_answered: bool,
+    /// The setup is complete enough to save or play.
+    pub ready: bool,
+    pub not_ready: bool,
+    /// Anything at all is staged, so "Start over" means something.
+    pub can_discard: bool,
+    /// A game is already using the current setup, so the page says before the
+    /// click that Play replaces it as one serialized action.
+    pub session_live: bool,
+    pub flash_ok: bool,
+    pub flash_error: bool,
+}
+
+impl StartFlags {
+    /// Decide every branch for one payload. The only implementation.
+    pub fn of(p: &StartPayload) -> Self {
+        let staged = &p.staged;
+        let session = &p.session;
+        let scan_read = p.scan_read();
+        let flash = p.flash.as_deref().unwrap_or_default().trim();
+        let flash_error = flash.starts_with("error");
+        Self {
+            pill_running: session.reachable && session.running,
+            pill_idle: session.reachable && !session.running,
+            pill_down: !session.reachable,
+            stage_down: !staged.reachable,
+            scan_down: !scan_read,
+            presets_down: !p.presets_error.trim().is_empty(),
+            // `!silent()`, not `blocked`. A read that failed is the case this
+            // page has historically got wrong in the other direction — and
+            // "unknown" is the one state where saying nothing is indefensible,
+            // because the page would be resolving the doubt in the machine's
+            // favour on the user's behalf.
+            bus_warn: !p.pad_bus.silent(),
+            has_device: staged.device.is_some(),
+            capture_prepare: p.capture.prepare(),
+            capture_release: p.capture.release(),
+            capture_blocked: p.capture.blocked_state(),
+            has_boards: scan_read
+                && p.scan
+                    .boards
+                    .iter()
+                    .any(|board| board.pickable && board.looks_like_a_keyboard),
+            // `no_pickable_board_found` and nothing else. `boards.is_empty()`
+            // is the version that tells a cabinet with four boards plugged in
+            // that it has none, on the one read where that is most wrong.
+            no_boards: scan_read
+                && !p
+                    .scan
+                    .boards
+                    .iter()
+                    .any(|board| board.pickable && board.looks_like_a_keyboard),
+            has_experimental: scan_read
+                && p.scan
+                    .boards
+                    .iter()
+                    .any(|board| board.pickable && !board.looks_like_a_keyboard),
+            has_other: scan_read && p.scan.other_boards > 0,
+            has_notes: !p.scan.notes.is_empty(),
+            has_slots: !staged.slots.is_empty(),
+            can_add: staged.reachable
+                && staged.device.is_some()
+                && staged.next_slot.is_some()
+                && staged.personas.iter().any(|p| p.can_plug),
+            slots_full: staged.reachable && staged.device.is_some() && staged.next_slot.is_none(),
+            has_gaps: staged.personas.iter().any(|p| !p.can_plug),
+            can_layout: staged.reachable && !staged.slots.is_empty() && !staged.layouts.is_empty(),
+            blocking_answered: staged.blocking.is_some(),
+            ready: staged.reachable && staged.ready && p.capture.ready(),
+            not_ready: !staged.reachable || !staged.ready || !p.capture.ready(),
+            can_discard: staged.reachable && !staged.empty,
+            session_live: session.reachable && session.running,
+            flash_ok: !flash.is_empty() && !flash_error,
+            flash_error,
+        }
+    }
+}
+
+/// One board a first-run user could pick.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartBoardRow {
+    /// **The identifier on screen** — the vendor table's name (`FIRST-RUN.md`
+    /// §5).
+    pub name: String,
+    /// `USB` | `Bluetooth`, as a human reads it.
+    pub transport: String,
+    /// What can reach it, served by `DeviceScanView::read` — the sentence that
+    /// says a Bluetooth keyboard can be split but never WinUSB-claimed.
+    pub backends: String,
+    /// Its keyboard interface's verdict.
+    pub verdict: String,
+    /// The honest caveat when nothing on it DECLARES itself a keyboard, else
+    /// empty. Rendered on every row and hidden when empty — a `createShow`
+    /// inside a `createList` is not a shape this compiler emits.
+    pub caveat: String,
+    pub caveat_cls: String,
+    /// "it is present and cannot type right now", when that applies.
+    pub cannot_type: String,
+    pub cannot_type_cls: String,
+    /// SMALL PRINT: the Windows instance path, for a support conversation.
+    /// Never the identifier — §5.
+    pub path: String,
+    /// What the form posts: the SERVED `DeviceSelector`, and the alias a pick
+    /// would write. Neither is derived here and neither is ever typed.
+    pub selector: String,
+    pub alias: String,
+    /// Is this the board already staged?
+    pub chosen_cls: String,
+    pub button: String,
+}
+
+/// One board that cannot be picked at all, and why.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartOtherRow {
+    pub name: String,
+    pub transport: String,
+    pub reason: String,
+    pub backends: String,
+}
+
+/// One staged controller.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartSlotRow {
+    /// The form value.
+    pub number: String,
+    pub title: String,
+    /// **Both halves of moment 5 in one line.** `FIRST-RUN.md` §1 says the
+    /// controller "appears **ready**", and §2 says nothing has been plugged,
+    /// claimed or written — and a row that said only the second reads as a
+    /// half-finished thing rather than a decision that has been made.
+    pub state: String,
+    pub persona: String,
+    /// Whether it occupies one of Windows' four XInput slots, as a sentence.
+    pub xinput: String,
+    /// The preset it binds, and how many controls that is — including zero,
+    /// which is a real answer a page should say before a game does.
+    pub preset: String,
+    pub bindings: String,
+    /// Existing mapper, pointed at this in-memory slot rather than a saved
+    /// preset. Served so the island never invents routing semantics.
+    pub map_href: String,
+}
+
+/// One `<option>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartOptionRow {
+    pub value: String,
+    pub label: String,
+}
+
+/// One in-box layout, as a row somebody reads before choosing it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartLayoutRow {
+    pub label: String,
+    /// `TemplateRow::detail` — the panel this is for, verbatim from
+    /// `ksx_core::templates`. Never paraphrased here.
+    pub panel: String,
+    /// Which players it dresses, and — for the one that binds nothing — what
+    /// choosing it costs. Both in one line, because a `createShow` inside a
+    /// `createList` is not a shape this compiler emits.
+    pub players: String,
+}
+
+/// One persona this build cannot plug, with `PadBackend::gap()`'s own sentence.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartGapRow {
+    pub label: String,
+    pub gap: String,
+    pub instead: String,
+}
+
+/// One answer to §3's question.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartBlockingRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    /// Marks the answer that was actually given. Empty otherwise — no option
+    /// is ever pre-marked, which is the whole point of `blocking` being
+    /// optional.
+    pub chosen_cls: String,
+    pub button: String,
+}
+
+/// One plain-text row.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartTextRow {
+    pub text: String,
+}
+
+/// **Every list row `/start` draws, composed once, in Rust.**
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartRows {
+    pub boards: Vec<StartBoardRow>,
+    /// Pickable arbitrary HID interfaces. Kept separate from [`Self::boards`]
+    /// so mice, lighting controllers and unusual composite devices remain a
+    /// useful opt-in playground without masquerading as ordinary keyboards.
+    pub experimental: Vec<StartBoardRow>,
+    pub other: Vec<StartOtherRow>,
+    pub notes: Vec<StartTextRow>,
+    pub slots: Vec<StartSlotRow>,
+    /// The personas this build CAN plug, in `Persona::ALL` order. Nothing here
+    /// is spelled in TypeScript: `docs/SURFACES.md` §10 already settled that
+    /// the roster is served with a `can_plug` flag per entry.
+    pub personas: Vec<StartOptionRow>,
+    /// The ones it cannot, listed rather than hidden — a menu that silently
+    /// drops three of eight choices teaches a user the product has five.
+    pub gaps: Vec<StartGapRow>,
+    pub blocking: Vec<StartBlockingRow>,
+    /// The in-box layouts as `<option>`s, **the served default first** — a
+    /// `<select>` shows its first option, so this is how "Add a controller"
+    /// means "with the arcade chart" without anybody choosing.
+    pub layouts: Vec<StartOptionRow>,
+    /// The same layouts as readable rows: what panel each one is for, which
+    /// sets of player keys it carries, and whether it binds anything at all. A
+    /// layout nobody can identify from a list is a layout nobody picks.
+    pub layout_details: Vec<StartLayoutRow>,
+    /// The staged slot numbers, as the options of "give slot N this layout".
+    ///
+    /// A second `<select>` rather than a form per row: a `createList` inside a
+    /// `createList` is not a shape this compiler emits, and the per-row
+    /// alternative would be a layout menu drawn once per staged controller.
+    pub slot_numbers: Vec<StartOptionRow>,
+}
+
+impl StartRows {
+    /// Compose every row for one payload. The only implementation.
+    pub fn of(p: &StartPayload) -> Self {
+        let staged = &p.staged;
+        let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
+        let board_row = |b: &ksx_api::BoardRow| {
+            let selector = b.selector.clone().unwrap_or_default();
+            let is_chosen = !selector.is_empty() && chosen == Some(selector.as_str());
+            StartBoardRow {
+                name: b.name.clone(),
+                transport: b.transport_label.clone(),
+                backends: b.backends.clone(),
+                verdict: if b.cannot_type_line.trim().is_empty() {
+                    "Ready to use".to_owned()
+                } else {
+                    "Detected — review the note below".to_owned()
+                },
+                caveat: b.caveat.clone(),
+                caveat_cls: hidden_when_empty(&b.caveat, "dv-warn"),
+                cannot_type: b.cannot_type_line.clone(),
+                cannot_type_cls: hidden_when_empty(&b.cannot_type_line, "dv-warn"),
+                path: b.keyboard.clone().unwrap_or_default(),
+                selector,
+                alias: b.alias_hint.clone(),
+                chosen_cls: if is_chosen {
+                    "pill pill-ok".to_owned()
+                } else {
+                    "pill pill-none".to_owned()
+                },
+                button: if is_chosen {
+                    "Chosen — pick it again".to_owned()
+                } else {
+                    "Use this device".to_owned()
+                },
+            }
+        };
+        Self {
+            boards: p
+                .scan
+                .boards
+                .iter()
+                .filter(|b| b.pickable && b.looks_like_a_keyboard)
+                .map(&board_row)
+                .collect(),
+            experimental: p
+                .scan
+                .boards
+                .iter()
+                .filter(|b| b.pickable && !b.looks_like_a_keyboard)
+                .map(board_row)
+                .collect(),
+            other: p
+                .scan
+                .boards
+                .iter()
+                .filter(|b| !b.pickable)
+                .map(|b| StartOtherRow {
+                    name: b.name.clone(),
+                    transport: b.transport_label.clone(),
+                    reason: b.keyboard_verdict.clone(),
+                    backends: b.backends.clone(),
+                })
+                .collect(),
+            notes: p
+                .scan
+                .notes
+                .iter()
+                .map(|note| StartTextRow { text: note.clone() })
+                .collect(),
+            slots: staged
+                .slots
+                .iter()
+                .map(|slot| StartSlotRow {
+                    number: slot.number.to_string(),
+                    title: format!("Player {}", slot.number),
+                    // The state a row claims follows its BINDINGS. A row that
+                    // said "ready" over a pad on which nothing works is
+                    // `FIRST-RUN.md` §6's "a screen reports success while
+                    // nothing works", one line long.
+                    state: if slot.bindings == 0 {
+                        "not ready — no controls are mapped".to_owned()
+                    } else {
+                        "ready — it will exist the moment you press Play".to_owned()
+                    },
+                    persona: slot.persona_label.clone(),
+                    xinput: if slot.is_xinput {
+                        "uses an Xbox-style controller place".to_owned()
+                    } else {
+                        "uses a PlayStation-style controller place".to_owned()
+                    },
+                    preset: slot.preset.clone(),
+                    bindings: match slot.bindings {
+                        0 => "nothing mapped yet — Play would create a controller that does \
+                              nothing, so choose a layout or map a control first."
+                            .to_owned(),
+                        1 => "1 control bound".to_owned(),
+                        n => format!("{n} controls bound"),
+                    },
+                    map_href: format!("/map?target=stage&slot={}", slot.number),
+                })
+                .collect(),
+            personas: staged
+                .personas
+                .iter()
+                .filter(|p| p.can_plug)
+                .map(|p| StartOptionRow {
+                    value: p.name.clone(),
+                    label: p.label.clone(),
+                })
+                .collect(),
+            gaps: staged
+                .personas
+                .iter()
+                .filter(|p| !p.can_plug)
+                .map(|p| StartGapRow {
+                    label: p.label.clone(),
+                    // `PadBackend::gap()`'s own sentence. A surface that
+                    // paraphrased it into "install HIDMaestro" would be
+                    // promising a fix that does not exist for two of the three.
+                    gap: p.gap.clone().unwrap_or_default(),
+                    instead: format!("Use {} instead.", p.instead),
+                })
+                .collect(),
+            blocking: staged
+                .blocking_options
+                .iter()
+                .map(|option| {
+                    let is_chosen = staged.blocking.as_deref() == Some(option.name.as_str());
+                    StartBlockingRow {
+                        name: option.name.clone(),
+                        title: option.title.clone(),
+                        detail: option.detail.clone(),
+                        chosen_cls: if is_chosen {
+                            "pill pill-ok".to_owned()
+                        } else {
+                            "pill pill-none".to_owned()
+                        },
+                        button: if is_chosen {
+                            "This is the answer".to_owned()
+                        } else {
+                            option.title.clone()
+                        },
+                    }
+                })
+                .collect(),
+            // The SERVED default first, because a `<select>` shows its first
+            // option: "Add this controller" then means "with the layout ksx
+            // recommends" for anybody who does not touch the menu.
+            layouts: layout_options(staged),
+            layout_details: staged
+                .layouts
+                .iter()
+                .map(|layout| StartLayoutRow {
+                    label: layout.label.clone(),
+                    panel: layout.detail.clone(),
+                    players: layout_players_line(layout),
+                })
+                .collect(),
+            slot_numbers: staged
+                .slots
+                .iter()
+                .map(|slot| StartOptionRow {
+                    value: slot.number.to_string(),
+                    label: format!("Player {}", slot.number),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The layout `<option>`s, served default first.
+///
+/// Sorted rather than trusted to arrive in a helpful order: the roster is
+/// `ksx_core::templates::TEMPLATES`, whose order exists for
+/// `ksx preset list --templates`, and "the first option is the recommended
+/// one" is a claim this page makes and must therefore make true.
+fn layout_options(staged: &ksx_api::StagedSetupView) -> Vec<StartOptionRow> {
+    let mut rows: Vec<&ksx_api::TemplateRow> = staged.layouts.iter().collect();
+    rows.sort_by_key(|layout| layout.id != staged.default_layout);
+    rows.into_iter()
+        .map(|layout| StartOptionRow {
+            value: layout.id.clone(),
+            label: layout.label.clone(),
+        })
+        .collect()
+}
+
+/// Which players a layout dresses — and, for the one that binds nothing, what
+/// picking it costs, in the same line.
+///
+/// The blank one is `TemplateRow::blank`, served, never matched on an id here:
+/// "does this bind anything" is a fact about the rows, and a second blank
+/// template must not be offered as if it were a working layout.
+fn layout_players_line(layout: &ksx_api::TemplateRow) -> String {
+    if layout.blank {
+        return "No keys are assigned. Pick this only if you mean to set every button yourself; \
+                until you do, the controller would do nothing and Play will ask you to finish \
+                its controls."
+            .to_owned();
+    }
+    match layout.players.len() {
+        0 | 1 => "One set of player keys: every controller using it gets the same keys, so it \
+                  suits one keyboard per player rather than a shared panel."
+            .to_owned(),
+        n => format!(
+            "{n} sets of player keys — player 1's keys go to the first controller, player 2's \
+             to the second, and so on, so two people on one panel never share a key."
+        ),
+    }
+}
+
+/// A line that is rendered on every row and HIDDEN when it has nothing to say
+/// — `render_devices.rs`'s `optional_line`, and the same constraint: a
+/// `createShow` inside a `createList` is not a shape this compiler emits.
+///
+/// The `dv-*` classes are `/devices`'s and are reused deliberately: this page
+/// draws the same KIND of thing — a list of boards, each a stack of facts with
+/// optional warnings — and a second set of class names for it would be a second
+/// place to keep the amber plate and the hide rule in step.
+fn hidden_when_empty(text: &str, class: &str) -> String {
+    if text.trim().is_empty() {
+        format!("{class} dv-hide")
+    } else {
+        class.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_games_derivation_preserves_revisions_and_offers_only_valid_layouts() {
+        let payload = ProfilesPayload {
+            profiles: ksx_api::ProfilesView {
+                profiles: vec![ksx_api::ProfileDetail {
+                    revision: "g1-row".to_owned(),
+                    title: "Example Game".to_owned(),
+                    path: "steam://rungameid/620".to_owned(),
+                    slots: 2,
+                    presets: vec!["Arcade".to_owned()],
+                    state: "launcher".to_owned(),
+                    ..ksx_api::ProfileDetail::default()
+                }],
+                ..ksx_api::ProfilesView::default()
+            },
+            presets: ksx_api::PresetsView {
+                presets: vec![
+                    ksx_api::PresetRow {
+                        name: "Broken".to_owned(),
+                        usable: false,
+                        problem: Some("This controller layout needs attention.".to_owned()),
+                        ..ksx_api::PresetRow::default()
+                    },
+                    ksx_api::PresetRow {
+                        name: "Keyboard".to_owned(),
+                        usable: true,
+                        ..ksx_api::PresetRow::default()
+                    },
+                    ksx_api::PresetRow {
+                        name: "Arcade".to_owned(),
+                        usable: true,
+                        ..ksx_api::PresetRow::default()
+                    },
+                ],
+                ..ksx_api::PresetsView::default()
+            },
+            session: crate::control::SessionView {
+                reachable: true,
+                running: false,
+                line: "idle — daemon pipe reachable".to_owned(),
+                profile: None,
+            },
+            ..ProfilesPayload::default()
+        };
+        let derived = ProfilesDerived::of(&payload);
+        assert_eq!(derived.profile_rows[0].revision, "g1-row");
+        assert_eq!(
+            derived.profile_rows[0]
+                .layout_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Arcade", "Keyboard"],
+            "the current valid layout is first and invalid layouts are absent"
+        );
+        assert_eq!(
+            derived
+                .preset_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Keyboard", "Arcade"]
+        );
+        assert_eq!(derived.preset_rows[0].statelabel, "needs attention");
+        assert_eq!(derived.play_status, "Ready to play.");
+        assert!(!derived.play_status.to_ascii_lowercase().contains("daemon"));
+    }
+
+    #[test]
+    fn failed_saved_games_read_disables_add_edit_and_play_rows() {
+        let payload = ProfilesPayload {
+            profiles_error: Some("an internal parser detail".to_owned()),
+            presets: ksx_api::PresetsView {
+                presets: vec![ksx_api::PresetRow {
+                    name: "Arcade".to_owned(),
+                    usable: true,
+                    ..ksx_api::PresetRow::default()
+                }],
+                ..ksx_api::PresetsView::default()
+            },
+            session: crate::control::SessionView {
+                reachable: true,
+                running: false,
+                ..crate::control::SessionView::default()
+            },
+            ..ProfilesPayload::default()
+        };
+        let derived = ProfilesDerived::of(&payload);
+        assert!(derived.profiles_unreadable);
+        assert!(!derived.can_make_profile);
+        assert!(!derived.rows_live);
+        assert!(!derived.rows_plain);
+    }
+
+    /// Internal starter-layout ids are form values, never customer copy. The
+    /// full served roster still drives the options and comparison rows, while
+    /// a failed read promises none of it.
+    #[test]
+    fn the_template_intro_never_exposes_internal_ids() {
+        let row = |id: &str| ksx_api::TemplateRow {
+            id: id.to_owned(),
+            label: String::new(),
+            detail: String::new(),
+            players: vec![1],
+            blank: false,
+        };
+        let templates = [row("arcade-6button"), row("keyboard-2p"), row("empty")];
+
+        let intro = templates_intro(&templates, false);
+        for t in &templates {
+            assert!(!intro.contains(&t.id), "internal id leaked: {intro}");
+        }
+        assert!(intro.contains("Choose a starter layout"), "{intro}");
+
+        let refused = templates_intro(&templates, true);
+        for t in &templates {
+            assert!(
+                !refused.contains(&t.id),
+                "a failed read must not enumerate templates: {refused}"
+            );
+        }
+    }
+
+    /// The payload's field names are client contract (StatusIsland.ts reads
+    /// them); pin the envelope on top of the snapshot's own pinned names
+    /// (`ksx-api`'s `status` module keeps those).
+    #[test]
+    fn payload_serializes_to_stable_envelope_field_names() {
+        let payload = StatusPayload {
+            snapshot: StatusSnapshot {
+                generated_at: "2026-08-04 12:00:00 UTC".into(),
+                ..StatusSnapshot::default()
+            },
+            session: crate::control::SessionView {
+                reachable: true,
+                running: false,
+                line: "idle — daemon reachable".into(),
+                profile: None,
+            },
+            flash: None,
+        };
+        let v = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            v.pointer("/snapshot/generated_at"),
+            Some(&serde_json::json!("2026-08-04 12:00:00 UTC"))
+        );
+        assert_eq!(
+            v.pointer("/session/reachable"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            v.pointer("/session/running"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            v.pointer("/session/line"),
+            Some(&serde_json::json!("idle — daemon reachable"))
+        );
+        // `flash` is always present (null when absent) — the client types it
+        // `string | null`, not optional.
+        assert_eq!(v.pointer("/flash"), Some(&serde_json::json!(null)));
+    }
+
+    /// The same rule for the setup envelope: `SetupIsland.ts` reads these
+    /// names, and the poller overwrites the signals the SSR paint seeded, so a
+    /// rename on either side has to be a test failure rather than a page that
+    /// flickers back to its defaults every two seconds.
+    #[test]
+    fn the_setup_payload_envelope_names_are_stable() {
+        let payload = SetupPayload {
+            setup: SetupSnapshot::ready(ksx_api::SetupView {
+                config_root: "C:\\cfg\\ksx".into(),
+                config_exists: true,
+                ..ksx_api::SetupView::default()
+            }),
+            session: crate::control::SessionView::default(),
+            learn: crate::control::LearnView::unavailable("no daemon"),
+            flash: None,
+            ..SetupPayload::default()
+        }
+        .composed();
+        let v = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            v.pointer("/setup/available"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            v.pointer("/setup/view/config_root"),
+            Some(&serde_json::json!("C:\\cfg\\ksx"))
+        );
+        assert_eq!(
+            v.pointer("/setup/view/config_exists"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            v.pointer("/setup/view/steps"),
+            Some(&serde_json::json!([])),
+            "steps must always be an array — the page renders a list, not a maybe"
+        );
+        assert_eq!(
+            v.pointer("/learn/state"),
+            Some(&serde_json::json!("unavailable"))
+        );
+        assert_eq!(v.pointer("/flash"), Some(&serde_json::json!(null)));
+        // The two DERIVED halves are part of the envelope too: `SetupIsland.ts`
+        // reads `lines.*` and `flags.*` by these exact names and renders them
+        // without deriving anything, so a rename here is a page that shows its
+        // compile-time placeholders for ever.
+        assert_eq!(
+            v.pointer("/lines/config"),
+            Some(&serde_json::json!(
+                "Configured — 0 board(s), 0 slot(s), 0 preset(s)."
+            ))
+        );
+        assert_eq!(
+            v.pointer("/lines/wire_blocked"),
+            Some(&serde_json::json!(
+                "disabled — no daemon is running to take the write, and there is no preset \
+                 on disk for a slot to point at. Start the daemon, and import or create a \
+                 preset."
+            ))
+        );
+        assert_eq!(
+            v.pointer("/flags/setup_known"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            v.pointer("/flags/no_boards"),
+            Some(&serde_json::json!(true))
+        );
+
+        // A refused provider still produces the whole envelope, with the reason
+        // in it: the page must be able to SAY why it has nothing.
+        let down = SetupPayload {
+            setup: SetupSnapshot::unavailable("no machine provider on this surface"),
+            ..SetupPayload::default()
+        };
+        let v = serde_json::to_value(&down).unwrap();
+        assert_eq!(
+            v.pointer("/setup/available"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            v.pointer("/setup/source"),
+            Some(&serde_json::json!("no machine provider on this surface"))
+        );
+    }
+
+    fn live_session() -> crate::control::SessionView {
+        crate::control::SessionView {
+            reachable: true,
+            running: true,
+            line: "running — 4 pad(s)".into(),
+            profile: None,
+        }
+    }
+
+    fn idle_learner() -> crate::control::LearnView {
+        crate::control::LearnView {
+            ok: true,
+            state: "idle".into(),
+            remaining_ms: None,
+            device: None,
+            key: None,
+            error: None,
+        }
+    }
+
+    /// **"I could not read this" and "there is nothing here" are different
+    /// sentences.**
+    ///
+    /// The signature bug of this project, in the config seam: a session once
+    /// reported success while the arcade panel was dead, because a WinUSB board
+    /// had fallen back to Interception. A page that renders a refused read as
+    /// an empty machine makes the same trade — it converts "unknown" into a
+    /// confident "nothing", and the user acts on it (they import, or they go
+    /// looking for the board they were told is not named).
+    ///
+    /// This fails against the shipped version, where only `config` carried the
+    /// `available` guard: there, every other line below was byte-identical to
+    /// the empty-but-successfully-read machine's, and `no_boards` / `no_slots`
+    /// were both true with nothing read.
+    #[test]
+    fn a_refused_read_is_never_rendered_as_an_empty_machine() {
+        let session = live_session();
+        let learn = idle_learner();
+
+        let refused = SetupSnapshot::unavailable("no machine provider on this surface");
+        let refused_lines = SetupLines::of(&refused, &session, &learn);
+        let refused_flags = SetupFlags::of(&refused, &session, &learn);
+
+        // A machine that WAS read and really holds nothing. Every sentence
+        // below is the honest version of "there is nothing here".
+        let empty = SetupSnapshot::ready(ksx_api::SetupView::default());
+        let empty_lines = SetupLines::of(&empty, &session, &learn);
+        let empty_flags = SetupFlags::of(&empty, &session, &learn);
+
+        for (what, refused_line, empty_line) in [
+            ("config", &refused_lines.config, &empty_lines.config),
+            ("boards", &refused_lines.boards, &empty_lines.boards),
+            ("slots", &refused_lines.slots, &empty_lines.slots),
+            ("library", &refused_lines.library, &empty_lines.library),
+            ("export", &refused_lines.export, &empty_lines.export),
+            (
+                "wire_blocked",
+                &refused_lines.wire_blocked,
+                &empty_lines.wire_blocked,
+            ),
+        ] {
+            assert_ne!(
+                refused_line, empty_line,
+                "the {what} line says the same thing whether the read failed or the \
+                 machine is empty: {refused_line:?}"
+            );
+        }
+
+        // …and not one flag that would render an "it is empty" sentence.
+        assert!(refused_flags.setup_down && !refused_flags.setup_known);
+        for (what, on) in [
+            ("no_boards", refused_flags.no_boards),
+            ("no_slots", refused_flags.no_slots),
+            ("has_boards", refused_flags.has_boards),
+            ("has_slots", refused_flags.has_slots),
+            ("has_notes", refused_flags.has_notes),
+            ("first_run", refused_flags.first_run),
+            ("configured", refused_flags.configured),
+            // A daemon is reachable here: only the unreadable config stops it.
+            ("can_wire", refused_flags.can_wire),
+        ] {
+            assert!(
+                !on,
+                "a refused read lit {what}, which renders a claim about a machine \
+                 nothing was read from"
+            );
+        }
+        // The empty-but-read machine still says all of those, loudly — the
+        // guard must not have flattened both states into silence.
+        assert!(empty_flags.setup_known && empty_flags.no_boards && empty_flags.no_slots);
+        assert!(empty_lines
+            .config
+            .contains("no configuration on this machine"));
+    }
+
+    /// A disabled control names the reason that is TRUE, not the union of every
+    /// reason it could have been.
+    ///
+    /// Fails against the shipped version, which rendered one static sentence
+    /// ("Start the daemon, and import or create a preset first") for both
+    /// single-cause states — telling a user with a live daemon to start it.
+    #[test]
+    fn a_disabled_control_names_the_cause_that_actually_fired() {
+        let learn = idle_learner();
+        let with_presets = SetupSnapshot::ready(ksx_api::SetupView {
+            presets: vec!["Panel P1".into()],
+            ..ksx_api::SetupView::default()
+        });
+        let no_presets = SetupSnapshot::ready(ksx_api::SetupView::default());
+        let up = live_session();
+        let down = crate::control::SessionView::unreachable("no daemon");
+
+        // Daemon UP, no preset: it must not tell them to start the daemon.
+        let a = SetupLines::of(&no_presets, &up, &learn).wire_blocked;
+        assert!(a.contains("preset"), "{a}");
+        assert!(
+            !a.to_lowercase().contains("start the daemon"),
+            "told a user with a running daemon to start it: {a}"
+        );
+
+        // Daemon DOWN, presets on disk: it must not tell them to make a preset.
+        let b = SetupLines::of(&with_presets, &down, &learn).wire_blocked;
+        assert!(b.contains("daemon"), "{b}");
+        assert!(
+            !b.contains("preset new") && !b.contains("not one on disk"),
+            "told a user with presets on disk to go and create one: {b}"
+        );
+        assert_ne!(a, b, "the two causes must not share one sentence");
+
+        // Both wrong: one sentence, both facts.
+        let both = SetupLines::of(&no_presets, &down, &learn).wire_blocked;
+        assert!(both.contains("daemon") && both.contains("preset"), "{both}");
+
+        // The learner's two down-states are likewise distinct — a reachable
+        // daemon with a dead listener must not be told there is no daemon.
+        let listener_dead = crate::control::LearnView::unavailable("no listener in this build");
+        let dead_listener_line = SetupLines::of(&with_presets, &up, &listener_dead).prove_blocked;
+        assert!(
+            dead_listener_line.contains("the daemon is running"),
+            "a live daemon with a dead listener was told there is no daemon: \
+             {dead_listener_line}"
+        );
+        let no_daemon_line = SetupLines::of(&with_presets, &down, &listener_dead).prove_blocked;
+        assert_ne!(dead_listener_line, no_daemon_line);
+        // …and a working listener says nothing at all.
+        assert_eq!(SetupLines::of(&with_presets, &up, &learn).prove_blocked, "");
+    }
+
+    /// The pad-bounce warning is about the session there IS.
+    ///
+    /// Fails against the shipped version, whose warning was unconditional: the
+    /// wire form is offered whenever the daemon is REACHABLE, so an idle daemon
+    /// got "every controller vanishes and comes back" for a write that would
+    /// replug nothing.
+    #[test]
+    fn the_pad_bounce_warning_follows_the_running_session() {
+        let learn = idle_learner();
+        let view = SetupSnapshot::ready(ksx_api::SetupView::default());
+        let idle = crate::control::SessionView {
+            running: false,
+            ..live_session()
+        };
+
+        let running_line = SetupLines::of(&view, &live_session(), &learn).wire_warning;
+        assert!(running_line.contains("REPLUGS the pads"), "{running_line}");
+
+        let idle_line = SetupLines::of(&view, &idle, &learn).wire_warning;
+        assert!(
+            !idle_line.contains("REPLUGS the pads"),
+            "an idle daemon was told its controllers would vanish: {idle_line}"
+        );
+        assert!(idle_line.contains("Nothing is running"), "{idle_line}");
+    }
+
+    /// The composed halves are DERIVED: mutate a fact and the sentence beside
+    /// it changes with it. A payload that cached its lines at construction
+    /// would serve the old ones here.
+    #[test]
+    fn composing_a_payload_re_derives_its_lines_from_its_facts() {
+        let payload = SetupPayload {
+            setup: SetupSnapshot::ready(ksx_api::SetupView::default()),
+            session: live_session(),
+            learn: idle_learner(),
+            flash: None,
+            ..SetupPayload::default()
+        }
+        .composed();
+        assert!(payload.lines.config.contains("no configuration"));
+        assert!(payload.flags.setup_known);
+
+        let mut refused = payload.clone();
+        refused.setup = SetupSnapshot::unavailable("no machine provider");
+        let refused = refused.composed();
+        assert_eq!(refused.lines.config, UNREADABLE);
+        assert!(refused.flags.setup_down && !refused.flags.no_boards);
+
+        // Every field of both derived halves really moved.
+        assert_ne!(payload.lines, refused.lines);
+        assert_ne!(payload.flags, refused.flags);
+    }
+
+    /// The ROW sentences are composed here and nowhere else. This pins the
+    /// exact strings both seams (render_setup.rs's SSR injection and
+    /// SetupIsland.ts's poll) now read verbatim — the formatters they used to
+    /// each own are gone, so this is the only place a row wording can change.
+    #[test]
+    fn the_setup_rows_are_composed_once_from_the_view() {
+        let view = ksx_api::SetupView {
+            devices: vec![ksx_api::SetupDeviceRow {
+                alias: "P1 board".to_owned(),
+                id: "usb:d209:0430:00".to_owned(),
+                backend: "interception".to_owned(),
+            }],
+            slots: vec![ksx_api::SetupSlotRow {
+                number: 3,
+                device: "P1 board".to_owned(),
+                preset: "Panel P1".to_owned(),
+                persona: "Xbox 360 pad".to_owned(),
+                source: "config.toml".to_owned(),
+            }],
+            presets: vec!["Panel P1".to_owned()],
+            profiles: vec!["Example Game".to_owned()],
+            steps: vec![ksx_api::SetupStep {
+                id: ksx_api::setup_steps::SLOT.to_owned(),
+                title: "Wire a slot".to_owned(),
+                detail: "One slot is wired.".to_owned(),
+                state: ksx_api::setup_states::NOW.to_owned(),
+            }],
+            notes: vec!["a note".to_owned()],
+            ..ksx_api::SetupView::default()
+        };
+        let rows = SetupRows::of(&SetupSnapshot::ready(view));
+
+        assert_eq!(rows.steps[0].badge, "1");
+        assert_eq!(rows.steps[0].cls, "step now");
+        assert_eq!(rows.devices[0].title, "P1 board");
+        assert_eq!(rows.devices[0].detail, "interception · usb:d209:0430:00");
+        assert_eq!(rows.slots[0].title, "Slot 3 — Panel P1");
+        assert_eq!(
+            rows.slots[0].detail,
+            "P1 board · Xbox 360 pad · config.toml"
+        );
+        assert_eq!(rows.preset_options[0].text, "Panel P1");
+        assert_eq!(rows.profile_options[0].text, "Example Game");
+        assert_eq!(rows.notes[0].text, "a note");
+
+        // The menu is 1..=the ceiling the BACKEND serves — never a literal in
+        // a view layer (the shipped page held `SLOT_CHOICES = 8` in two
+        // languages while `ksx_core::MAX_SLOTS` was 16).
+        assert_eq!(rows.slot_options.len(), usize::from(ksx_core::MAX_SLOTS));
+        assert_eq!(rows.slot_options[0].value, "1");
+        assert_eq!(rows.slot_options[0].label, "Slot 1");
+        let last = rows.slot_options.last().unwrap();
+        assert_eq!(last.value, ksx_core::MAX_SLOTS.to_string());
+    }
+}

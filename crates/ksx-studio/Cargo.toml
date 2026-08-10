@@ -1,0 +1,50 @@
+[package]
+name = "ksx-studio"
+description = "ksx Studio — the optional Forma-powered web status page (localhost-only skeleton)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The typed control API (docs/M9-DECISION.md §6). This crate RENDERS and
+# ROUTES; every fact it shows and every verb it performs arrives through
+# ksx-api's traits, which link no axum, no forma and no tokio. It is the only
+# ksx crate this one depends on, and that is the boundary: nothing here can
+# reach capture, output, or a live session.
+ksx-api.workspace = true
+axum.workspace = true
+# The `Stream` trait alone, for the live feed's SSE body (`live.rs`). Already
+# in the tree — axum's own response types are built on it — so this adds a name
+# to link against, not a crate to compile. Deliberately NOT `futures-util`:
+# nothing here needs combinators, and the smaller surface is the point.
+futures-core.workspace = true
+forma-ir.workspace = true
+forma-server.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The HTTP integration tests parse /api/* bodies.
+serde_json.workspace = true
+# TEST-ONLY, deliberately: this crate renders and routes and knows nothing
+# about the key vocabulary at runtime (the ControlSource trait is the whole
+# boundary). But v9's no-JS <select> has to OFFER every bindable key, and the
+# option list lives in the TypeScript twin — so the pinning test reads the one
+# true vocabulary, `Key::ALL`, and checks the rendered page against it. A
+# key added to ksx-core and not to the page is a test failure, not a control
+# nobody can bind without a shell.
+ksx-core.workspace = true
+# TEST-ONLY, same rule and the same reason: v11's macro editor is READ-ONLY
+# against disk and its whole output is a `[macros.<name>]` block the user
+# pastes into a preset. A block that does not parse would be worse than no
+# block at all, so the test feeds it to the real loader
+# (`ksx_config::PresetFile`) and checks that the macro it round-trips to is the
+# one the grid drew. Nothing here is linked at runtime.
+ksx-config.workspace = true
+toml.workspace = true

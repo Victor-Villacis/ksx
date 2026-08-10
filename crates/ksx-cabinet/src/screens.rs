@@ -1,0 +1,1536 @@
+//! The five screens, and the chrome around them.
+//!
+//! Every screen is a **list of things that already exist**, and every confirm
+//! is one `ksx-api` verb. There is no mapper here, no macro editor and no
+//! preset file management, and there never will be: the cabinet OPERATES —
+//! choose among things that exist — and Studio AUTHORS. The test each screen
+//! had to pass is the same one: *joystick, two buttons, no text entry, ten
+//! seconds, standing at the cab with a game about to start.*
+//!
+//! Nothing in this file decides anything a CLI verb does not already decide.
+//! It places rows and colours them.
+
+use std::ops::Range;
+use std::time::Instant;
+
+use egui::{Align, Color32, Layout, RichText, Sense, Stroke, Vec2};
+
+use crate::app::{flash_alive, App, Ask, Lit, Slow, Tone};
+use crate::list;
+use crate::nav::{Confirm, Screen};
+use crate::theme::{ctl, fs, radius, role, sp, FOCUS_OFFSET, FOCUS_STROKE};
+
+/// The top dock: who we are, where we are, and the state of the machine.
+pub fn head(ui: &mut egui::Ui, app: &App, slow: &Slow) {
+    header(ui, app, slow);
+    ui.add_space(sp::S2);
+    tabs(ui, app.focus.screen);
+}
+
+/// The bottom dock: the answer to the last press, and the legend.
+pub fn foot(ui: &mut egui::Ui, app: &App, slow: &Slow, now: Instant) {
+    if let Some(flash) = &slow.flash {
+        if flash_alive(flash, now) {
+            flash_line(ui, flash);
+            ui.add_space(sp::S2);
+        }
+    }
+    footer(ui, app, slow);
+}
+
+/// The screen itself, in whatever is left.
+///
+/// **The scroll area is not how a long list is read here** — see
+/// [`crate::list`]. It is a backstop for a panel shorter than anything this
+/// surface was designed for, and it is what gives the screens inside a finite
+/// [`egui::Ui::available_height`] to page against; a cabinet has no wheel to
+/// turn it with. Anything that is a LIST goes through [`walk`], which never
+/// draws a row the panel cannot show.
+pub fn body(ui: &mut egui::Ui, app: &mut App, slow: &Slow, now: Instant) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| match app.focus.screen {
+            Screen::ButtonCheck => button_check(ui, app, slow, now),
+            Screen::Status => status(ui, app, slow),
+            Screen::Session => session(ui, app, slow),
+            Screen::Profiles => profiles(ui, app, slow),
+            Screen::Presets => presets(ui, app, slow),
+        });
+}
+
+fn header(ui: &mut egui::Ui, app: &App, slow: &Slow) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("ksx")
+                .size(fs::LG)
+                .color(role::ACCENT)
+                .strong(),
+        );
+        ui.add_space(sp::S2);
+        ui.label(
+            RichText::new(app.focus.screen.label())
+                .size(fs::LG)
+                .color(role::TEXT),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (text, tone) = if !slow.session.reachable {
+                ("NO DAEMON", Tone::Bad)
+            } else if slow.session.running {
+                ("RUNNING", Tone::Ok)
+            } else {
+                ("STOPPED", Tone::Warn)
+            };
+            pill(ui, text, tone);
+            if slow.busy {
+                ui.add_space(sp::S2);
+                pill(ui, "WORKING", Tone::Warn);
+            }
+        });
+    });
+    ui.label(
+        RichText::new(app.focus.screen.subtitle())
+            .size(fs::SM)
+            .color(role::TEXT_3),
+    );
+}
+
+/// The screen strip. The current screen is a filled plate; the others are
+/// borders. It is NOT the accent — the accent means the cursor, and only the
+/// cursor (theme::role::ACCENT).
+fn tabs(ui: &mut egui::Ui, current: Screen) {
+    ui.horizontal(|ui| {
+        for screen in Screen::ALL {
+            let here = screen == current;
+            let (fill, text) = if here {
+                (role::INSET, role::TEXT)
+            } else {
+                (Color32::TRANSPARENT, role::TEXT_3)
+            };
+            let label = RichText::new(screen.label()).size(fs::MD).color(text);
+            let galley = ui.painter().layout_no_wrap(
+                screen.label().to_owned(),
+                egui::FontId::proportional(fs::MD),
+                text,
+            );
+            let size = Vec2::new(galley.size().x + sp::S4, ctl::ROW * 0.7);
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            ui.painter()
+                .rect_filled(rect, crate::theme::plate(radius::ROW), fill);
+            if here {
+                ui.painter().rect_stroke(
+                    rect,
+                    crate::theme::plate(radius::ROW),
+                    Stroke::new(2.0_f32, role::BORDER_STRONG),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label.text(),
+                egui::FontId::proportional(fs::MD),
+                text,
+            );
+        }
+    });
+}
+
+/// The always-visible legend. On a surface with no mouse this is not help
+/// text, it is the control panel — and it never scrolls away.
+///
+/// **ASCII only, on purpose.** egui's bundled fonts cover a specific set and
+/// nothing warns you when they do not: a first pass used `▲ ▼ Ⓐ Ⓑ` and every
+/// one of them drew as a tofu box on this machine, which on a cabinet is a
+/// legend that says nothing at all. `< > ^ v A B` is guaranteed by every font
+/// that exists, reads at six feet, and is what an arcade panel is labelled
+/// with anyway.
+fn footer(ui: &mut egui::Ui, app: &App, slow: &Slow) {
+    let hint = if app.focus.confirming.is_some() {
+        "<  >   choose            A   answer            B   no"
+    } else if app.picking.is_some() {
+        "^  v   preset            A   use it            B   back"
+    } else {
+        "<  >   screen            ^  v   move            A   choose            B   back"
+    };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(hint).size(fs::SM).color(role::TEXT_2));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (pads, ever) = app.pad_nav_state();
+            // **The one case that has to be loud.** With a session running the
+            // panel is captured below win32k, so it produces no keystrokes at
+            // all — the ONLY way it can move this cursor is as an XInput pad
+            // (`crate::pad`). If nothing answers XInput (every slot on a
+            // PlayStation persona, a HIDMaestro persona, or the pads not up
+            // yet) then the panel cannot drive this window and there is no
+            // keyboard either. "keyboard only" would be exactly backwards.
+            let (text, colour) = if pads > 0 {
+                (format!("panel: {pads} pad(s)"), role::TEXT_3)
+            } else if slow.session.running {
+                (
+                    "panel: NO XInput pad — the panel cannot move this cursor while emulation \
+                     runs (use a keyboard, or stop emulation)"
+                        .to_owned(),
+                    role::WARN,
+                )
+            } else if ever {
+                ("panel: no pads right now".to_owned(), role::TEXT_3)
+            } else {
+                ("panel: keyboard only".to_owned(), role::TEXT_3)
+            };
+            ui.label(RichText::new(text).size(fs::XS).color(colour));
+        });
+    });
+}
+
+fn flash_line(ui: &mut egui::Ui, flash: &crate::app::Flash) {
+    let colour = tone_colour(flash.tone);
+    // `->`, not `→`. Every glyph this surface DRAWS is ASCII, for the reason
+    // `footer` records: egui's bundled fonts cover a specific set, nothing
+    // warns you when a codepoint is outside it, and a tofu box on a cabinet
+    // screen is a legend that says nothing. U+2192 was never screenshotted
+    // (a flash needs an action, and `--demo` refuses every one), so it was
+    // never verified — and "probably in the font" is not a standard this
+    // surface gets to use.
+    let text = match &flash.remedy {
+        Some(remedy) => format!("{}   ->  {remedy}", flash.text),
+        None => flash.text.clone(),
+    };
+    let height = ctl::ROW;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        crate::theme::plate(radius::ROW),
+        role::tint(colour, 38),
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(rect.min, Vec2::new(6.0, rect.height())),
+        crate::theme::plate(radius::CHIP),
+        colour,
+    );
+    ui.painter().text(
+        rect.left_center() + Vec2::new(sp::S3, 0.0),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(fs::SM),
+        colour,
+    );
+}
+
+fn tone_colour(tone: Tone) -> Color32 {
+    match tone {
+        Tone::Ok => role::OK,
+        Tone::Warn => role::WARN,
+        Tone::Bad => role::DANGER,
+    }
+}
+
+fn pill(ui: &mut egui::Ui, text: &str, tone: Tone) {
+    let colour = tone_colour(tone);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(fs::MICRO),
+        colour,
+    );
+    let size = Vec2::new(galley.size().x + sp::S4, ctl::ROW * 0.55);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        crate::theme::plate(radius::ROW),
+        role::tint(colour, 40),
+    );
+    ui.painter()
+        .circle_filled(rect.left_center() + Vec2::new(sp::S2, 0.0), 6.0, colour);
+    ui.painter().text(
+        rect.left_center() + Vec2::new(sp::S2 + 14.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(fs::MICRO),
+        colour,
+    );
+}
+
+/// One selectable row: the plate, the focus ring, the caret, the label.
+///
+/// **This is the cursor.** Three redundant signals, because on a cabinet panel
+/// any one of them can be defeated — a washed-out screen kills the fill, a
+/// photograph kills the colour, colour vision kills the hue. See
+/// `theme`'s module docs.
+fn row(ui: &mut egui::Ui, focused: bool, height: f32, draw: impl FnOnce(&mut egui::Ui, Color32)) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let fill = if focused { role::ACCENT } else { role::INSET };
+    let text = if focused { role::ACCENT_ON } else { role::TEXT };
+    ui.painter()
+        .rect_filled(rect, crate::theme::plate(radius::ROW), fill);
+    if focused {
+        ui.painter().rect_stroke(
+            rect.expand(FOCUS_OFFSET),
+            crate::theme::plate(radius::ROW),
+            Stroke::new(FOCUS_STROKE, role::ACCENT),
+            egui::StrokeKind::Outside,
+        );
+        // The third focus signal, and the one that survives a monochrome
+        // panel, a photograph and a font with no arrows in it (see `footer`).
+        ui.painter().text(
+            rect.left_center() + Vec2::new(sp::S2, 0.0),
+            egui::Align2::LEFT_CENTER,
+            ">",
+            egui::FontId::monospace(fs::BASE),
+            text,
+        );
+    }
+    let inner = rect.shrink2(Vec2::new(sp::S6, sp::S1));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    draw(&mut child, text);
+}
+
+/// The height one "N more" line costs, reserved whether it is drawn or not.
+///
+/// One `fs::SM` line plus its spacing, rounded up rather than measured: over-
+/// reserving by a few pixels loses nothing (it is far less than a row's pitch),
+/// and under-reserving would shave the bottom row's focus ring, which is the
+/// one pixel this surface cannot afford to lose (`theme`'s module docs).
+const HINT: f32 = fs::SM + sp::S4;
+
+/// The vertical distance from one row's top to the next.
+///
+/// Three terms, and the third is the one that is easy to forget: `row_h` is the
+/// plate, `gap` is the [`egui::Ui::add_space`] the caller puts between rows,
+/// and `item_spacing.y` is what egui inserts between two allocated widgets
+/// whether anybody asked for it or not (`Ui::add_space`'s own docs: "this will
+/// be in addition to the `item_spacing` that is always added"). Leave it out
+/// and every page claims one row more than fits.
+fn pitch(ui: &egui::Ui, row_h: f32, gap: f32) -> f32 {
+    row_h + gap + ui.spacing().item_spacing.y
+}
+
+/// **Draw a list that may be taller than the panel, one page at a time.**
+///
+/// Every list on this surface goes through here, because every list on this
+/// surface is walked by a joystick and by nothing else (docs/SURFACES.md §4).
+/// [`crate::list`] decides *which* rows; this places them, and says in words
+/// how many are above and below — a 12 px scroll bar is a rumour at six feet,
+/// and it is a rumour about a wheel that does not exist.
+///
+/// The space for both hint lines is held whether or not there is anything to
+/// say in it, so that stepping off the first page does not shove every row
+/// down by a line. A cabinet list that twitches as the cursor crosses a page
+/// boundary is harder to read than one that is simply long.
+///
+/// Returns the slice it drew, which is what the tests assert on.
+fn walk(
+    ui: &mut egui::Ui,
+    focus: usize,
+    count: usize,
+    row_h: f32,
+    gap: f32,
+    mut draw: impl FnMut(&mut egui::Ui, usize),
+) -> Range<usize> {
+    let pitch = pitch(ui, row_h, gap);
+    let available = ui.available_height();
+    // Measured twice on purpose. The hints are only worth their height when
+    // there is something off screen to point at, so the question "does the
+    // whole list fit?" is asked WITHOUT them — otherwise a list of exactly the
+    // page size would page itself to make room for a "0 more below".
+    let window = if list::per_page(available, pitch) >= count {
+        0..count
+    } else {
+        list::window(count, focus, list::per_page(available - 2.0 * HINT, pitch))
+    };
+    let paged = window.len() < count;
+
+    if paged {
+        more(ui, window.start, true);
+    }
+    for index in window.clone() {
+        draw(ui, index);
+        ui.add_space(gap);
+    }
+    if paged {
+        more(ui, count.saturating_sub(window.end), false);
+    }
+    window
+}
+
+/// "`^   4 more above`" / "`v   9 more below`" — and the room for it either
+/// way.
+///
+/// The glyphs are the legend's own (`footer`): ASCII, because egui's bundled
+/// fonts cover a specific set and nothing warns you when a codepoint is outside
+/// it, and because `^` and `v` are what an arcade panel is labelled with.
+fn more(ui: &mut egui::Ui, rows: usize, above: bool) {
+    if rows == 0 {
+        ui.add_space(HINT);
+        return;
+    }
+    let (arrow, side) = if above {
+        ("^", "above")
+    } else {
+        ("v", "below")
+    };
+    ui.label(
+        RichText::new(format!("{arrow}   {rows} more {side}"))
+            .size(fs::SM)
+            .color(role::TEXT_2),
+    );
+    ui.add_space(sp::S1);
+}
+
+/// One line of key-value text, for the facts that are read rather than
+/// pressed.
+fn fact(ui: &mut egui::Ui, name: &str, value: &str, colour: Color32) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(name).size(fs::SM).color(role::TEXT_3));
+        ui.add_space(sp::S2);
+        ui.label(RichText::new(value).size(fs::SM).color(colour));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// a. Button check — the spine
+// ---------------------------------------------------------------------------
+
+/// Press a panel button, see it light, big.
+///
+/// Two columns, and the two columns are the point (docs/MAPPER-UX.md Build C,
+/// and the TAS lesson behind it): **what the panel sent** and **what the pad
+/// published** are different facts, and which of them moved tells you which
+/// half is broken.
+///
+/// - neither moves → the key is not reaching ksx at all: wiring, or the board
+///   is not the one this slot is bound to;
+/// - left moves, right does not → the key arrives and is bound to nothing;
+/// - right moves with no left → a macro or a chord, or another player's key.
+fn button_check(ui: &mut egui::Ui, app: &mut App, slow: &Slow, now: Instant) {
+    if let Some(why) = app.feed_unavailable() {
+        app.focus.set_rows(0);
+        stopped_notice(ui, &why, slow);
+        return;
+    }
+
+    // The slot column is STABLE: it comes from the configuration, not from
+    // whatever happened to be published in the last 16 ms. A row that appears
+    // and vanishes as somebody presses things is unreadable, and "P3 is not
+    // there at all" is itself a finding the operator needs to be able to see.
+    let numbers: Vec<u8> = if slow.mapper.slots.is_empty() {
+        app.frame.slots.iter().map(|slot| slot.slot).collect()
+    } else {
+        slow.mapper.slots.iter().map(|slot| slot.number).collect()
+    };
+    app.focus.set_rows(numbers.len());
+
+    // `columns`, not two hand-sized children. A hand-sized child has to be
+    // told a HEIGHT, and the honest height inside a scroll area is "as much as
+    // the content needs" — give it the viewport's instead and a short window
+    // clips both columns to nothing, silently. That is the failure this
+    // surface can least afford: a button check that draws an empty panel is
+    // indistinguishable from a panel that is not wired.
+    ui.columns(2, |columns| {
+        panel_column(&mut columns[0], app, now);
+        pad_column(&mut columns[1], app, &numbers, now);
+    });
+}
+
+/// The physical half: keys, newest first, with the board they came from.
+fn panel_column(ui: &mut egui::Ui, app: &App, now: Instant) {
+    eyebrow(ui, "THE PANEL SENT");
+    ui.add_space(sp::S2);
+    if app.keys.is_empty() {
+        ui.label(
+            RichText::new("press a button on the panel")
+                .size(fs::MD)
+                .color(role::TEXT_3),
+        );
+        return;
+    }
+    for (hit, at) in &app.keys {
+        let fresh = now.saturating_duration_since(*at) < std::time::Duration::from_millis(450);
+        let (fill, colour) = if fresh {
+            (role::tint(role::COOL, 70), role::TEXT)
+        } else {
+            (role::INSET, role::TEXT_2)
+        };
+        let (rect, _) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), ctl::ROW * 0.8),
+            Sense::hover(),
+        );
+        ui.painter()
+            .rect_filled(rect, crate::theme::plate(radius::ROW), fill);
+        ui.painter().text(
+            rect.left_center() + Vec2::new(sp::S3, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &hit.key,
+            egui::FontId::monospace(fs::LIGHT),
+            colour,
+        );
+        // WHICH BOARD. Two panels sending the same key are two facts, and on a
+        // four-player cabinet that distinction is the whole diagnosis.
+        let source = if hit.alias.is_empty() {
+            short_device(&hit.device)
+        } else {
+            hit.alias.clone()
+        };
+        ui.painter().text(
+            rect.right_center() - Vec2::new(sp::S3, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            source,
+            egui::FontId::proportional(fs::XS),
+            role::COOL,
+        );
+    }
+}
+
+/// The virtual half: one row per slot, with whatever that pad is doing.
+fn pad_column(ui: &mut egui::Ui, app: &App, numbers: &[u8], now: Instant) {
+    eyebrow(ui, "THE PAD PUBLISHED");
+    ui.add_space(sp::S2);
+    if numbers.is_empty() {
+        ui.label(
+            RichText::new("no slots are configured")
+                .size(fs::MD)
+                .color(role::TEXT_3),
+        );
+        return;
+    }
+    // Lights INSIDE the row, not under it. Under it was clearer per slot and
+    // wrong for the screen: four slots plus their chips ran past the bottom of
+    // the panel, so P3 and P4 — the two a cabinet operator is most often
+    // checking, because P1 obviously works — were below the fold with nothing
+    // saying they existed.
+    //
+    // That bought four. Sixteen needs the page (`walk`): on a sixteen-slot
+    // cabinet this column is the button check, and a button check that cannot
+    // show P12 is a button check P12 cannot use.
+    let focus = &app.focus;
+    walk(
+        ui,
+        focus.row(),
+        numbers.len(),
+        ctl::ROW,
+        0.0,
+        |ui, index| {
+            let number = numbers[index];
+            let focused = focus.is_on(index);
+            let lit = app.lit_controls(number, now);
+            row(ui, focused, ctl::ROW, |ui, text| {
+                ui.label(
+                    RichText::new(format!("P{number}"))
+                        .size(fs::LG)
+                        .color(if focused { text } else { role::COOL })
+                        .strong(),
+                );
+                ui.add_space(sp::S3);
+                if lit.is_empty() {
+                    // An honest "nothing", not an empty row: a blank plate reads
+                    // as a rendering bug, a dash reads as a fact.
+                    ui.label(RichText::new("--").size(fs::BASE).color(if focused {
+                        text
+                    } else {
+                        role::TEXT_3
+                    }));
+                }
+                for (control, how) in &lit {
+                    light(ui, control, *how, focused);
+                }
+            });
+        },
+    );
+    if app.dropped > 0 {
+        ui.add_space(sp::S2);
+        fact(
+            ui,
+            "events dropped while this window was busy",
+            &app.dropped.to_string(),
+            role::WARN,
+        );
+    }
+    // The desk keyboard, said out loud. The feed filters to the devices bound
+    // to a slot in the running session, so a board that is not on this cabinet
+    // lights nothing here — which is the whole point, and would be indis-
+    // tinguishable from a dead panel if the count were not on screen.
+    if app.off_panel > 0 {
+        ui.add_space(sp::S2);
+        fact(
+            ui,
+            "key(s) from a keyboard bound to NO slot (not shown above)",
+            &app.off_panel.to_string(),
+            role::TEXT_3,
+        );
+    }
+}
+
+/// One lit control. Full = happening; fading = just happened.
+///
+/// Monospace, and in the preset's own vocabulary (`A`, `dpad.up`, `lt`), so
+/// that the word lighting up here is character-for-character the word a legend
+/// row or a `ksx map --function` would use. A friendlier label would be a
+/// second name for one thing.
+///
+/// `on_accent` inverts the plate. Green-on-teal was the first pass and it was
+/// backwards in the worst possible place: the FOCUSED slot — the one somebody
+/// is deliberately inspecting — had the least readable lights on the screen.
+/// On the accent plate the chip goes dark with light text, which is the same
+/// contrast in the other direction.
+fn light(ui: &mut egui::Ui, control: &str, how: Lit, on_accent: bool) {
+    let (fill, text) = match (how, on_accent) {
+        (Lit::Full, false) => (role::OK, role::ACCENT_ON),
+        (Lit::Fading, false) => (role::tint(role::OK, 70), role::OK),
+        (Lit::Full, true) => (role::SURFACE, role::OK),
+        (Lit::Fading, true) => (role::tint(role::SURFACE, 150), role::TEXT_2),
+    };
+    let galley =
+        ui.painter()
+            .layout_no_wrap(control.to_owned(), egui::FontId::monospace(fs::BASE), text);
+    let size = Vec2::new(galley.size().x + sp::S3, ctl::ROW * 0.62);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter()
+        .rect_filled(rect, crate::theme::plate(radius::ROW), fill);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        control,
+        egui::FontId::monospace(fs::BASE),
+        text,
+    );
+}
+
+/// The button check with nothing running. A surface that cannot act must SAY
+/// so — this is that, at the size the rest of the screen is.
+fn stopped_notice(ui: &mut egui::Ui, why: &str, slow: &Slow) {
+    ui.add_space(sp::S4);
+    ui.label(
+        RichText::new("Nothing to watch yet")
+            .size(fs::XL)
+            .color(role::TEXT),
+    );
+    ui.add_space(sp::S2);
+    ui.label(RichText::new(why).size(fs::MD).color(role::TEXT_2));
+    ui.add_space(sp::S3);
+    if slow.session.reachable {
+        // ASCII, like the legend and for the same reason: `◀ ▶ Ⓐ` all drew as
+        // tofu boxes here (see `footer`). This line survived the first sweep
+        // because `demo::DemoFeed` never reports `unavailable`, so no
+        // screenshot could reach it — and it is the FIRST thing a real cabinet
+        // shows when emulation is stopped, which is when a legend matters most.
+        ui.label(
+            RichText::new("Go to Start / Stop  ( < > )  and press A.")
+                .size(fs::MD)
+                .color(role::ACCENT),
+        );
+    } else {
+        ui.label(
+            RichText::new(&slow.session.line)
+                .size(fs::MD)
+                .color(role::DANGER),
+        );
+    }
+}
+
+fn eyebrow(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).size(fs::MICRO).color(role::TEXT_3));
+}
+
+/// `HID\VID_D209&PID_0430&MI_00\8&2A…` → `VID_D209&PID_0430`. A cabinet
+/// screen has no room for an instance path, and the vendor/product pair is the
+/// half that identifies the board.
+fn short_device(device: &str) -> String {
+    device
+        .split('\\')
+        .nth(1)
+        .map(|middle| middle.split("&MI_").next().unwrap_or(middle).to_owned())
+        .unwrap_or_else(|| device.to_owned())
+}
+
+// ---------------------------------------------------------------------------
+// b. Am I working
+// ---------------------------------------------------------------------------
+
+fn status(ui: &mut egui::Ui, app: &mut App, slow: &Slow) {
+    app.focus.set_rows(0);
+    ui.label(
+        RichText::new(&slow.session.line)
+            .size(fs::HERO)
+            .color(if slow.session.running {
+                role::OK
+            } else if slow.session.reachable {
+                role::WARN
+            } else {
+                role::DANGER
+            })
+            .strong(),
+    );
+    ui.add_space(sp::S3);
+
+    let pads = slow.snapshot.pads.len();
+    ui.horizontal(|ui| {
+        pill(
+            ui,
+            &format!("{pads} PAD(S) ON THE BUS"),
+            if pads > 0 { Tone::Ok } else { Tone::Warn },
+        );
+        let (connected, _) = app.pad_nav_state();
+        pill(
+            ui,
+            &format!("{connected} DRIVING THIS PANEL"),
+            if connected > 0 { Tone::Ok } else { Tone::Warn },
+        );
+    });
+    ui.add_space(sp::S2);
+
+    // Tighter than the default row rhythm on purpose: these six are a REFERENCE
+    // block, read one at a time by somebody already looking for one of them,
+    // and at the page's normal spacing the last two fell off the bottom of the
+    // panel — which on a status screen means they may as well not exist.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = sp::S1;
+        fact(ui, "ViGEmBus", &slow.snapshot.vigem, role::TEXT);
+        fact(ui, "Interception", &slow.snapshot.interception, role::TEXT);
+        fact(ui, "Autostart", &slow.snapshot.autostart, role::TEXT_2);
+        fact(ui, "Daemon", &slow.snapshot.daemon_detail, role::TEXT_2);
+        // Where and when, on one line. Two lines of provenance is one line more
+        // than a cabinet screen can spare, and neither half means much without
+        // the other.
+        fact(
+            ui,
+            "Config",
+            &format!(
+                "{}   (read {})",
+                slow.snapshot.config_root, slow.snapshot.generated_at
+            ),
+            role::TEXT_3,
+        );
+    });
+
+    ui.add_space(sp::S3);
+    eyebrow(ui, "FROM YOUR PHONE");
+    // NO QR. `serve` refuses anything but loopback, so a code could only ever
+    // carry 127.0.0.1 — which is this machine, not the phone holding the
+    // camera. A dead end that looks like a feature is worse than the sentence.
+    ui.label(
+        RichText::new(
+            "Not available yet. ksx Studio serves 127.0.0.1 only — there is no LAN mode \
+             and no pairing token, so a phone on this network cannot reach it.",
+        )
+        .size(fs::SM)
+        .color(role::TEXT_2),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// c. Start / stop, pick a game profile, pick a slot's preset
+// ---------------------------------------------------------------------------
+
+/// How many rows the Session screen draws.
+///
+/// Named because two places need to agree on it: [`session`], which draws them
+/// and sets the focus bounds, and [`session_verb`], which says what each one
+/// does. A literal in both is a literal that drifts.
+const SESSION_ROWS: usize = 3;
+
+/// What Ⓐ means on row `row` of the Session screen.
+///
+/// Separated from [`activate`] so it can be tested without an `egui::Ui`: the
+/// mapping from a row the joystick can reach to a verb ksx will run is the part
+/// worth pinning, and it is pure.
+fn session_verb(row: usize, running: bool, profile: Option<String>) -> Ask {
+    match row {
+        0 if running => Ask::Stop,
+        0 => Ask::Start(profile),
+        1 => Ask::Reload,
+        _ => Ask::OpenStudio,
+    }
+}
+
+fn session(ui: &mut egui::Ui, app: &mut App, slow: &Slow) {
+    app.focus.set_rows(SESSION_ROWS);
+    let running = slow.session.running;
+    let primary = if running {
+        "Stop emulation"
+    } else {
+        "Start emulation"
+    };
+    let detail = if running {
+        "the panel goes back to being a keyboard".to_owned()
+    } else {
+        match &slow.session.profile {
+            Some(profile) => format!("profile: {profile}"),
+            None => "the slots in config.toml".to_owned(),
+        }
+    };
+    row(ui, app.focus.is_on(0), ctl::ROW_LG, |ui, text| {
+        ui.label(RichText::new(primary).size(fs::XL).color(text).strong());
+        ui.add_space(sp::S3);
+        ui.label(RichText::new(detail).size(fs::SM).color(text));
+    });
+    ui.add_space(sp::S2);
+    row(ui, app.focus.is_on(1), ctl::ROW, |ui, text| {
+        ui.label(RichText::new("Reload config").size(fs::LG).color(text));
+        ui.add_space(sp::S3);
+        ui.label(
+            RichText::new("stop, re-read the files, start again")
+                .size(fs::SM)
+                .color(text),
+        );
+    });
+    ui.add_space(sp::S2);
+    // The cabinet reports and operates; Studio is where mapping is authored
+    // (docs/M9-DECISION.md). This row is the bridge between them — and the
+    // address matters as much as the button, because a phone is a far better
+    // client for a mapping surface than a joystick and two buttons.
+    row(ui, app.focus.is_on(2), ctl::ROW, |ui, text| {
+        ui.label(RichText::new("Open ksx Studio").size(fs::LG).color(text));
+        ui.add_space(sp::S3);
+        ui.label(
+            RichText::new("mapping and macros, in a browser — or on your phone")
+                .size(fs::SM)
+                .color(text),
+        );
+    });
+
+    if !slow.session.reachable {
+        ui.add_space(sp::S3);
+        ui.label(
+            RichText::new(&slow.session.line)
+                .size(fs::MD)
+                .color(role::DANGER),
+        );
+    }
+}
+
+fn profiles(ui: &mut egui::Ui, app: &mut App, slow: &Slow) {
+    let rows = &slow.snapshot.profiles;
+    app.focus.set_rows(rows.len());
+    if rows.is_empty() {
+        ui.label(
+            RichText::new("No game profiles in games.toml.")
+                .size(fs::LG)
+                .color(role::TEXT_2),
+        );
+        ui.add_space(sp::S2);
+        ui.label(
+            RichText::new(
+                "This cabinet starts from the [[slot]] entries in config.toml. Profiles are \
+                 authored in ksx Studio or by editing games.toml.",
+            )
+            .size(fs::SM)
+            .color(role::TEXT_3),
+        );
+        return;
+    }
+    // games.toml holds as many profiles as somebody cares to write, so this
+    // list is long on any cabinet with a shelf of emulators.
+    let focus = &app.focus;
+    walk(
+        ui,
+        focus.row(),
+        rows.len(),
+        ctl::ROW,
+        sp::S2,
+        |ui, index| {
+            let profile = &rows[index];
+            let current = slow.session.profile.as_deref() == Some(profile.title.as_str());
+            row(ui, focus.is_on(index), ctl::ROW, |ui, text| {
+                ui.label(
+                    RichText::new(&profile.title)
+                        .size(fs::LG)
+                        .color(text)
+                        .strong(),
+                );
+                ui.add_space(sp::S3);
+                ui.label(RichText::new(&profile.detail).size(fs::XS).color(text));
+                if current {
+                    ui.add_space(sp::S3);
+                    ui.label(RichText::new("[ IN USE ]").size(fs::SM).color(text));
+                }
+            });
+        },
+    );
+}
+
+fn presets(ui: &mut egui::Ui, app: &mut App, slow: &Slow) {
+    match app.picking {
+        None => preset_slots(ui, app, slow),
+        Some(slot) => preset_choices(ui, app, slow, slot),
+    }
+}
+
+fn preset_slots(ui: &mut egui::Ui, app: &mut App, slow: &Slow) {
+    let slots = &slow.mapper.slots;
+    app.focus.set_rows(slots.len());
+    if slots.is_empty() {
+        ui.label(
+            RichText::new(&slow.mapper.source)
+                .size(fs::MD)
+                .color(role::TEXT_2),
+        );
+        return;
+    }
+    eyebrow(ui, &slow.mapper.source.to_uppercase());
+    if let Some(warning) = destination_mismatch(slow) {
+        ui.add_space(sp::S1);
+        ui.label(RichText::new(warning).size(fs::XS).color(role::WARN));
+    }
+    ui.add_space(sp::S2);
+    // **The screen this whole page mechanism exists for.** `MAX_SLOTS` is 16
+    // and a 72 px row is 72 px; the list has not fitted on a cabinet panel
+    // since the ceiling moved, and every row past the fold was drawn,
+    // focusable, activatable and invisible.
+    let focus = &app.focus;
+    walk(
+        ui,
+        focus.row(),
+        slots.len(),
+        ctl::ROW,
+        sp::S2,
+        |ui, index| {
+            let slot = &slots[index];
+            row(ui, focus.is_on(index), ctl::ROW, |ui, text| {
+                ui.label(
+                    RichText::new(format!("P{}", slot.number))
+                        .size(fs::LG)
+                        .color(text)
+                        .strong(),
+                );
+                ui.add_space(sp::S3);
+                ui.label(RichText::new(&slot.preset).size(fs::LG).color(text));
+                ui.add_space(sp::S3);
+                ui.label(
+                    RichText::new(format!("{} · {}", slot.persona_label, slot.keyboard))
+                        .size(fs::XS)
+                        .color(text),
+                );
+            });
+        },
+    );
+}
+
+fn preset_choices(ui: &mut egui::Ui, app: &mut App, slow: &Slow, slot: u8) {
+    app.focus.set_rows(slow.presets.len());
+    ui.label(
+        RichText::new(format!("Which preset for P{slot}?"))
+            .size(fs::XL)
+            .color(role::TEXT),
+    );
+    ui.add_space(sp::S2);
+    if let Some(why) = &slow.presets_error {
+        ui.label(RichText::new(why).size(fs::MD).color(role::DANGER));
+        return;
+    }
+    if slow.presets.is_empty() {
+        ui.label(
+            RichText::new("There are no presets on disk to choose from.")
+                .size(fs::MD)
+                .color(role::TEXT_2),
+        );
+        return;
+    }
+    let current = slow
+        .mapper
+        .slots
+        .iter()
+        .find(|s| s.number == slot)
+        .map(|s| s.preset.clone())
+        .unwrap_or_default();
+    // Presets on disk are unbounded — a cabinet with a preset per game has
+    // dozens — so this list has always been able to run off the bottom. It
+    // just was not the one anybody hit first.
+    let focus = &app.focus;
+    walk(
+        ui,
+        focus.row(),
+        slow.presets.len(),
+        ctl::ROW,
+        sp::S1,
+        |ui, index| {
+            let preset = &slow.presets[index];
+            let in_use = *preset == current;
+            row(ui, focus.is_on(index), ctl::ROW, |ui, text| {
+                ui.label(RichText::new(preset).size(fs::LG).color(text));
+                if in_use {
+                    ui.add_space(sp::S3);
+                    ui.label(RichText::new("[ IN USE ]").size(fs::SM).color(text));
+                }
+            });
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Activation — every arm is one ksx-api verb, or one honest refusal
+// ---------------------------------------------------------------------------
+
+/// What Ⓐ means on each screen.
+pub fn activate(app: &mut App, slow: &Slow, row: usize) {
+    match app.focus.screen {
+        // The button check watches; the one thing it can DO is forget what it
+        // saw, which is what somebody re-wiring a panel wants between tests.
+        Screen::ButtonCheck => {
+            app.clear_log();
+            app.say("cleared — press a panel button", Tone::Ok);
+        }
+        Screen::Status => app.say(
+            "This screen only reports. Start / Stop is one screen to the right.",
+            Tone::Warn,
+        ),
+        Screen::Session => app.ask(session_verb(
+            row,
+            slow.session.running,
+            slow.session.profile.clone(),
+        )),
+        Screen::Profiles => {
+            let Some(profile) = slow.snapshot.profiles.get(row) else {
+                return;
+            };
+            if slow.session.running {
+                // Deliberately NOT a compound stop-then-start behind one
+                // press. Switching profiles while a game is up is a bigger
+                // thing than this surface should do quietly, and the daemon
+                // would refuse the start anyway ("already running").
+                app.say(
+                    format!(
+                        "\"{}\" needs emulation stopped first — Start / Stop is two screens left.",
+                        profile.title
+                    ),
+                    Tone::Warn,
+                );
+                return;
+            }
+            app.ask(Ask::Start(Some(profile.title.clone())));
+        }
+        Screen::Presets => match app.picking {
+            None => {
+                let Some(slot) = slow.mapper.slots.get(row) else {
+                    return;
+                };
+                app.picking = Some(slot.number);
+                app.focus.set_rows(slow.presets.len());
+            }
+            Some(slot) => {
+                let Some(preset) = slow.presets.get(row) else {
+                    return;
+                };
+                let profile = assign_destination(slow);
+                // THE ONE MODAL. A slot assignment is the only thing on this
+                // surface that interrupts a running game, and it says so in
+                // the words the verb itself uses (ksx_api::SlotOutcome::
+                // restarted): the pads replug.
+                let consequence = if slow.session.running {
+                    "The session RESTARTS: all four pads unplug and plug back in. \
+                     Anything mid-game will see its controllers vanish."
+                        .to_owned()
+                } else {
+                    "Nothing is running, so nothing restarts — the next start uses it.".to_owned()
+                };
+                app.confirm(
+                    format!("Use \"{preset}\" for P{slot}?"),
+                    consequence,
+                    Ask::Assign {
+                        slot,
+                        preset: preset.clone(),
+                        profile,
+                    },
+                );
+            }
+        },
+    }
+}
+
+/// Which file a slot assignment lands in: **the one the list on screen was
+/// read from**, and nothing else.
+///
+/// This used to read `SessionView::profile` — "the profile the daemon is
+/// pointed at" — on the reasoning that it matches what a start would use. It
+/// is the wrong answer, and wrong in the most damaging direction available to
+/// this verb. The two are genuinely different facts: `StatusSource::mapper`
+/// reads `config.toml`'s `[[slot]]` entries when there are any and falls back
+/// to the first games.toml profile otherwise, while the session's profile is
+/// whatever `--game` said. A daemon started as `ksx daemon --game "Example Launcher"` on
+/// a config that ALSO has `[[slot]]` entries therefore listed config.toml's
+/// slots and wrote games.toml's — repointing a row nobody was looking at, and
+/// CREATING one (default persona, no keyboard) when that profile had no such
+/// slot.
+///
+/// A picker must write to the file it read from. Where the session disagrees,
+/// [`preset_slots`] says so on screen rather than quietly choosing one.
+fn assign_destination(slow: &Slow) -> Option<String> {
+    slow.mapper.profile.clone()
+}
+
+/// The session is running slots from a different file than the one this screen
+/// is showing. Not a refusal — the write is still correct for what is on
+/// screen — but the user has to be told that changing it will not move the
+/// session they are looking at.
+fn destination_mismatch(slow: &Slow) -> Option<String> {
+    if !slow.session.reachable || slow.mapper.slots.is_empty() {
+        return None;
+    }
+    if slow.session.profile == slow.mapper.profile {
+        return None;
+    }
+    let showing = match &slow.mapper.profile {
+        Some(profile) => format!("profile \"{profile}\""),
+        None => "config.toml".to_owned(),
+    };
+    let running = match &slow.session.profile {
+        Some(profile) => format!("profile \"{profile}\""),
+        None => "config.toml".to_owned(),
+    };
+    Some(format!(
+        "These slots are {showing}, but the daemon starts from {running}. A change here \
+         edits {showing} — it will not move the session unless you point the daemon at it."
+    ))
+}
+
+/// The one modal. Full-screen dim, one question, two answers, and **No is
+/// where the cursor starts** (`nav::Focus::ask`).
+pub fn modal(ctx: &egui::Context, confirm: &Confirm) {
+    egui::Area::new("ksx-cabinet-modal".into())
+        .fixed_pos(egui::Pos2::ZERO)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            let screen = ctx.screen_rect();
+            ui.painter()
+                .rect_filled(screen, 0, Color32::from_black_alpha(220));
+            let card = egui::Rect::from_center_size(
+                screen.center(),
+                Vec2::new(
+                    (screen.width() * 0.8).min(1100.0),
+                    (screen.height() * 0.6).min(560.0),
+                ),
+            );
+            ui.painter()
+                .rect_filled(card, crate::theme::plate(radius::CARD), role::RAISED);
+            ui.painter().rect_stroke(
+                card,
+                crate::theme::plate(radius::CARD),
+                Stroke::new(2.0_f32, role::BORDER_STRONG),
+                egui::StrokeKind::Inside,
+            );
+
+            let inner = card.shrink(sp::S6);
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(inner)
+                    .layout(Layout::top_down(Align::LEFT)),
+            );
+            child.label(
+                RichText::new(&confirm.question)
+                    .size(fs::XL)
+                    .color(role::TEXT)
+                    .strong(),
+            );
+            child.add_space(sp::S3);
+            child.label(
+                RichText::new(&confirm.consequence)
+                    .size(fs::MD)
+                    .color(role::WARN),
+            );
+            child.add_space(sp::S6);
+            child.horizontal(|ui| {
+                answer(ui, "No", !confirm.yes);
+                ui.add_space(sp::S4);
+                answer(ui, "Yes — do it", confirm.yes);
+            });
+        });
+}
+
+fn answer(ui: &mut egui::Ui, text: &str, focused: bool) {
+    let size = Vec2::new(340.0, ctl::ROW_LG);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let fill = if focused { role::ACCENT } else { role::INSET };
+    let colour = if focused { role::ACCENT_ON } else { role::TEXT };
+    ui.painter()
+        .rect_filled(rect, crate::theme::plate(radius::ROW), fill);
+    if focused {
+        ui.painter().rect_stroke(
+            rect.expand(FOCUS_OFFSET),
+            crate::theme::plate(radius::ROW),
+            Stroke::new(FOCUS_STROKE, role::ACCENT),
+            egui::StrokeKind::Outside,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(fs::LG),
+        colour,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ksx_api::{MapperSnapshot, SessionView, MAX_SLOTS};
+
+    /// A 1080p cabinet panel, which is what these are.
+    const PANEL: Vec2 = Vec2::new(1920.0, 1080.0);
+
+    /// Run one screen's worth of list against a real (headless) egui frame and
+    /// report where every row landed, and how much room the panel had.
+    ///
+    /// The `ScrollArea` is here because [`body`] puts one there, and it is the
+    /// container whose [`egui::Ui::available_height`] the whole page mechanism
+    /// reads. A harness that measured a bare panel would be testing an
+    /// arithmetic this surface does not perform.
+    ///
+    /// Two frames, because egui settles some layout on the second and a
+    /// cabinet that is only right on frame 1 is not right.
+    fn frame(count: usize, focus: usize, mut on_row: impl FnMut(usize, egui::Rect)) -> egui::Rect {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            ..Default::default()
+        };
+        let mut panel = egui::Rect::ZERO;
+        let mut second = false;
+        for _ in 0..2 {
+            let _ = ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            panel = ui.max_rect();
+                            walk(ui, focus, count, ctl::ROW, sp::S2, |ui, index| {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(ui.available_width(), ctl::ROW),
+                                    Sense::hover(),
+                                );
+                                if second {
+                                    on_row(index, rect);
+                                }
+                            });
+                        });
+                });
+            });
+            second = true;
+        }
+        panel
+    }
+
+    /// [`frame`], collected: the panel, and where every row landed on it.
+    fn drawn(count: usize, focus: usize) -> (egui::Rect, Vec<(usize, egui::Rect)>) {
+        let mut rows = Vec::new();
+        let panel = frame(count, focus, |index, rect| rows.push((index, rect)));
+        (panel, rows)
+    }
+
+    /// **The bug this file shipped with, asserted against a real frame.**
+    ///
+    /// `MAX_SLOTS` went from 8 to 16 and this file kept drawing every row into
+    /// a `ScrollArea` that nothing on a cabinet can turn. The rows past the
+    /// fold were drawn, focusable and activatable — and not on the screen. A
+    /// player whose slot is row 7 could not see their own controls, and the
+    /// surface said nothing about the rows it was hiding.
+    ///
+    /// So: for every one of the sixteen slots, put the cursor on it, draw the
+    /// list the way the Slots screen draws it, and require that the row is
+    /// inside the panel. Against the version this replaces, slots 7 and up
+    /// fail — they are drawn below `panel.bottom()`.
+    #[test]
+    fn every_slot_is_drawn_inside_the_panel_when_the_cursor_is_on_it() {
+        let count = usize::from(MAX_SLOTS);
+        for focus in 0..count {
+            let (panel, rows) = drawn(count, focus);
+            let (_, rect) = rows
+                .iter()
+                .find(|(index, _)| *index == focus)
+                .unwrap_or_else(|| {
+                    panic!("P{} of {count} was never drawn at all", focus + 1);
+                });
+            // Half a pixel of tolerance: this is a layout assertion, not a
+            // float-equality one.
+            let panel = panel.expand(0.5);
+            assert!(
+                panel.contains_rect(*rect),
+                "P{} of {count} is focused and off the panel: the row is {rect:?}, the panel \
+                 is {panel:?}",
+                focus + 1
+            );
+            for (index, rect) in &rows {
+                assert!(
+                    panel.contains_rect(*rect),
+                    "P{} of {count} was drawn off the panel: {rect:?} vs {panel:?}",
+                    index + 1
+                );
+            }
+        }
+    }
+
+    /// ...and the test above is not vacuous.
+    ///
+    /// It would pass trivially on a panel tall enough for sixteen 72 px rows,
+    /// so this pins the premise: on a 1080p cabinet screen they do not fit,
+    /// which is exactly why they have to be paged. If a future theme ever
+    /// shrinks the row until they DO fit, this fails and says so — because
+    /// "make the rows smaller until 16 fit" is the fix this surface is not
+    /// allowed to make.
+    #[test]
+    fn sixteen_rows_do_not_fit_on_a_cabinet_panel() {
+        let count = usize::from(MAX_SLOTS);
+        let (panel, rows) = drawn(count, 0);
+        assert!(
+            rows.len() < count,
+            "all {count} rows of {} px went onto a {} px panel, so the test above proves \
+             nothing. Either `walk` stopped paging, or the row shrank until 16 fit - and \
+             shrinking the row is the fix this surface is not allowed to make.",
+            ctl::ROW,
+            panel.height()
+        );
+        assert!(
+            !rows.is_empty(),
+            "the panel showed no rows at all: {panel:?}"
+        );
+    }
+
+    /// The other half of the requirement: the surface SAYS what it is hiding.
+    ///
+    /// A page that silently drops eight slots is the same failure with fewer
+    /// pixels. A scroll bar is not the answer either — it is 12 px wide, and on
+    /// a cabinet it is a rumour about a wheel that does not exist. So the count
+    /// is drawn in words, at reading size, and this reads it back out of the
+    /// frame's own text shapes.
+    #[test]
+    fn a_paged_list_says_in_words_how_many_rows_are_off_screen() {
+        let count = usize::from(MAX_SLOTS);
+
+        // Top of the list: nothing above, the remainder below.
+        let (shown, words) = paged_text(count, 0);
+        assert!(shown < count, "premise: the list is paged");
+        assert!(
+            words
+                .iter()
+                .any(|line| line == &format!("v   {} more below", count - shown)),
+            "the top of a {count}-row list does not say what is below it: {words:?}"
+        );
+
+        // Bottom of the list: the remainder above, nothing below.
+        let (shown, words) = paged_text(count, count - 1);
+        assert!(
+            words
+                .iter()
+                .any(|line| line == &format!("^   {} more above", count - shown)),
+            "the bottom of a {count}-row list does not say what is above it: {words:?}"
+        );
+        assert!(
+            !words.iter().any(|line| line.contains("more below")),
+            "the last page claims there is more below it: {words:?}"
+        );
+    }
+
+    /// How many rows one page of `count` shows with the cursor on `focus`, and
+    /// every line of text the frame drew.
+    fn paged_text(count: usize, focus: usize) -> (usize, Vec<String>) {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            ..Default::default()
+        };
+        let mut shown = 0;
+        let mut output = None;
+        for _ in 0..2 {
+            shown = 0;
+            output = Some(ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            walk(ui, focus, count, ctl::ROW, sp::S2, |ui, _| {
+                                shown += 1;
+                                ui.allocate_exact_size(
+                                    Vec2::new(ui.available_width(), ctl::ROW),
+                                    Sense::hover(),
+                                );
+                            });
+                        });
+                });
+            }));
+        }
+        let mut words = Vec::new();
+        for clipped in output.expect("two frames were run").shapes {
+            collect_text(&clipped.shape, &mut words);
+        }
+        (shown, words)
+    }
+
+    /// Every string a frame actually put on the screen. `Shape::Vec` nests, so
+    /// this recurses rather than assuming a flat list.
+    fn collect_text(shape: &egui::Shape, into: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => into.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A list that fits is not paged, and grows no hint lines: four slots on a
+    /// cabinet panel must look exactly as they always did.
+    #[test]
+    fn a_list_that_fits_is_drawn_whole() {
+        let (panel, rows) = drawn(4, 3);
+        assert_eq!(rows.len(), 4, "all four, on one page");
+        let indexes: Vec<usize> = rows.iter().map(|(index, _)| *index).collect();
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
+        let panel = panel.expand(0.5);
+        for (index, rect) in &rows {
+            assert!(
+                panel.contains_rect(*rect),
+                "P{} was drawn off the panel: {rect:?}",
+                index + 1
+            );
+        }
+    }
+
+    /// `session` declares how many rows it draws and `session_verb` says what
+    /// each one does. They live in different functions, so adding a row is
+    /// exactly the edit that updates one and not the other — leaving a row the
+    /// joystick can reach and Ⓐ cannot act on, or a verb no row can select.
+    ///
+    /// This drives the real mapping function, not a copy of it, and asserts
+    /// every drawn row lands on a DISTINCT verb.
+    #[test]
+    fn every_drawn_row_on_the_session_screen_has_its_own_verb() {
+        let verbs: Vec<Ask> = (0..SESSION_ROWS)
+            .map(|row| session_verb(row, false, None))
+            .collect();
+        for (a, first) in verbs.iter().enumerate() {
+            for second in verbs.iter().skip(a + 1) {
+                assert_ne!(
+                    std::mem::discriminant(first),
+                    std::mem::discriminant(second),
+                    "two of the {SESSION_ROWS} drawn rows fall through to the same verb: {verbs:?}"
+                );
+            }
+        }
+    }
+
+    /// The primary row is the only one whose meaning depends on state, and
+    /// getting it backwards would stop a running session when the operator
+    /// meant to start one.
+    #[test]
+    fn the_primary_row_follows_whether_a_session_is_running() {
+        assert!(matches!(session_verb(0, true, None), Ask::Stop));
+        assert!(matches!(session_verb(0, false, None), Ask::Start(None)));
+    }
+
+    fn slow(mapper_profile: Option<&str>, session_profile: Option<&str>) -> Slow {
+        Slow {
+            session: SessionView {
+                reachable: true,
+                running: true,
+                line: "running".into(),
+                profile: session_profile.map(str::to_owned),
+            },
+            mapper: MapperSnapshot {
+                generated_at: "t".into(),
+                source: "s".into(),
+                profile: mapper_profile.map(str::to_owned),
+                config_root: "r".into(),
+                slots: vec![ksx_api::MapperSlot {
+                    number: 1,
+                    persona: "xbox360".into(),
+                    persona_label: "Xbox 360".into(),
+                    preset: "Panel P1".into(),
+                    keyboard: "(any)".into(),
+                    bindings: Default::default(),
+                    backup: None,
+                    session_backup: false,
+                    turbo: Default::default(),
+                    macros_off: false,
+                }],
+            },
+            ..Slow::default()
+        }
+    }
+
+    /// **The write goes where the READ came from.** Taking the destination
+    /// from the session instead meant a daemon started `--game "Example Launcher"` on a
+    /// config that also has `[[slot]]` entries listed config.toml's slots and
+    /// wrote games.toml's — repointing a row nobody was looking at, and
+    /// creating one where the profile had no such slot.
+    #[test]
+    fn a_slot_assignment_lands_in_the_file_the_list_was_read_from() {
+        assert_eq!(
+            assign_destination(&slow(None, Some("Example Launcher"))),
+            None
+        );
+        assert_eq!(
+            assign_destination(&slow(Some("MAME"), Some("Example Launcher"))).as_deref(),
+            Some("MAME")
+        );
+    }
+
+    /// ...and when the two disagree the screen SAYS so, because a change that
+    /// will not move the running session is not what "Slots" looks like it
+    /// promises.
+    #[test]
+    fn a_list_from_a_different_file_than_the_session_is_flagged_on_screen() {
+        assert!(
+            destination_mismatch(&slow(Some("Example Launcher"), Some("Example Launcher")))
+                .is_none()
+        );
+        assert!(destination_mismatch(&slow(None, None)).is_none());
+        let warning =
+            destination_mismatch(&slow(None, Some("Example Launcher"))).expect("a mismatch");
+        assert!(warning.contains("config.toml"), "{warning}");
+        assert!(warning.contains("Example Launcher"), "{warning}");
+        // Nothing to warn about when there is nothing on screen to change.
+        let empty = Slow {
+            mapper: MapperSnapshot {
+                slots: Vec::new(),
+                ..slow(None, Some("Example Launcher")).mapper
+            },
+            ..slow(None, Some("Example Launcher"))
+        };
+        assert!(destination_mismatch(&empty).is_none());
+    }
+
+    /// Every string this file DRAWS is ASCII, or one of two codepoints that
+    /// have been SEEN rendering in a screenshot.
+    ///
+    /// egui's bundled fonts cover a specific set, nothing warns you when a
+    /// codepoint is outside it, and the first pass shipped four tofu boxes
+    /// into the one legend a mouseless surface has. A screenshot cannot catch
+    /// the ones on paths `--demo` cannot reach — `stopped_notice` needs
+    /// `LiveFeed::unavailable`, a flash needs an action the demo refuses, and
+    /// the WORKING pill needs a verb in flight — which is exactly where the
+    /// survivors were found. So it is asserted instead of looked at.
+    #[test]
+    fn nothing_this_surface_draws_is_an_unverified_codepoint() {
+        // Verified by eye, in the screenshots named:
+        //   U+2014 EM DASH      — cab-2-status.png, "127.0.0.1 only — there is…"
+        //   U+00B7 MIDDLE DOT   — cab-5-slots.png,  "Xbox 360 · IPAC 2"
+        // Nothing goes in this list that has not been looked at.
+        const SEEN: [char; 2] = ['\u{2014}', '\u{00b7}'];
+        let source = include_str!("screens.rs");
+        for (number, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("/*") || code.starts_with('*') {
+                continue;
+            }
+            // This test's own prose (the table above) is not drawn.
+            if code.starts_with("const SEEN") {
+                continue;
+            }
+            for character in line.chars() {
+                assert!(
+                    character.is_ascii() || SEEN.contains(&character),
+                    "line {} draws U+{:04X} ({character}), which no screenshot has verified: \
+                     {line}",
+                    number + 1,
+                    character as u32
+                );
+            }
+        }
+    }
+}

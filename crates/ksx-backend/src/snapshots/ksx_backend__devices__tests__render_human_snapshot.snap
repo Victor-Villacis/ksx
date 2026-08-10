@@ -1,0 +1,11 @@
+---
+source: crates/ksx-backend/src/devices.rs
+expression: render_human(&report)
+---
+keyboards (interception backend):
+  slot 1  HID\VID_D209&PID_0430&REV_0001&MI_00  "I-PAC Arcade Control Interface"  [Ultimarc I-PAC 4X]
+  slot 2  HID\VID_F00D&PID_BEEF&REV_0002&MI_00  "n/a"
+mice: 1 visible (unused — ksx never sets the mouse filter)
+usb enumeration unavailable
+bluetooth enumeration unavailable — any paired device is MISSING below, and its absence is not evidence that it is unpaired
+health: [OK]   2/10 keyboard slots in use (highest slot 2); no exhaustion detected

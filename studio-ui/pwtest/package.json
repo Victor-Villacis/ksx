@@ -1,0 +1,13 @@
+{
+  "name": "ksx-studio-pwtest",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Browser-level tests for KSX Studio's Forma islands. Separate from studio-ui/ on purpose: the build must never need a browser. Files run serially (--test-concurrency=1): each spawns the same macro_fixture.exe, and Windows cannot relink a running binary.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

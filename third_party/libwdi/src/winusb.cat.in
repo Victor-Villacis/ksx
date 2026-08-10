@@ -1,0 +1,2 @@
+# KSX uses the in-box WinUSB service, so there are no copied binaries.
+# libwdi adds the external INF itself after tokenizing this empty list.

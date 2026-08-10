@@ -1,0 +1,6 @@
+LIBRARY "libwdi.dll"
+EXPORTS
+  wdi_is_driver_supported
+  wdi_prepare_driver
+  wdi_strerror
+

@@ -1,0 +1,5330 @@
+//! Full HTTP round trips against the real server: GET / with the session
+//! panel, and the POST → 303 → flash loop. Raw `TcpStream` HTTP/1.1 on
+//! purpose — no client dependency, and what a browser sends is exactly this.
+
+use std::io::{Read as _, Write as _};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Refusals are typed now (docs/M9-DECISION.md §6): a fake daemon refuses with
+/// the same `Refusal` a real one does, so what the page renders here is what it
+/// renders in the field.
+use ksx_api::Refusal;
+use ksx_studio::{
+    BindConflict, BindOutcome, BindRequest, ControlSource, LearnView, MacroOutcome, MacroSnapshot,
+    MacroStepView, MacroView, MacroWrite, MapperSlot, MapperSnapshot, PadRow, ProfileRow,
+    RestoreMode, SessionView, StatusSnapshot, StatusSource,
+};
+
+/// The "nothing answers the pipe" refusal a real `PipeTransport` produces —
+/// code, sentence and the way out, so the page under test sees exactly what a
+/// cabinet sees.
+fn no_channel(message: &str) -> Refusal {
+    Refusal::with_remedy(ksx_api::codes::NO_CHANNEL, message, "ksx daemon")
+}
+
+struct FixedStatus;
+
+/// The newest timestamped backup this preset has, as `collect_mapper` reads
+/// it off disk — the label the mapper's third restore button wears.
+const BACKUP_LABEL: &str = "2026-08-05 14:32:07 UTC";
+
+/// Remember every address handed to a test server for this process. The tests
+/// run in parallel and a port-0 probe is released before `serve` binds; without
+/// this reservation two probes can briefly choose the same address and make
+/// one test talk to another test's fixture.
+static SERVER_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
+
+impl StatusSource for FixedStatus {
+    fn snapshot(&self) -> StatusSnapshot {
+        StatusSnapshot {
+            generated_at: "test".into(),
+            vigem: "installed".into(),
+            interception: "installed".into(),
+            daemon_running: true,
+            daemon_detail: "test".into(),
+            autostart: "not registered".into(),
+            pads: vec![PadRow {
+                persona: "Xbox 360 pad".into(),
+                instance: "USB\\TEST\\1".into(),
+            }],
+            profiles: vec![ProfileRow {
+                title: "Example Game".into(),
+                detail: "C:\\example-game.exe — 2 slots".into(),
+            }],
+            config_root: "C:\\cfg".into(),
+        }
+    }
+
+    fn mapper(&self) -> MapperSnapshot {
+        let mut bindings = std::collections::BTreeMap::new();
+        bindings.insert("A".to_owned(), vec!["G".to_owned()]);
+        // MANY KEYS → ONE CONTROL, exactly as a preset file can hold it
+        // (docs/INPUT-TRANSFORMS.md §1a) — the multi-bind preset shape
+        // already had, and the one the add/remove-one routes are computed
+        // against.
+        bindings.insert("B".to_owned(), vec!["S".to_owned(), "Enter".to_owned()]);
+        MapperSnapshot {
+            generated_at: "test".into(),
+            source: "slots of profile \"Example Launcher\" (games.toml)".into(),
+            profile: Some("Example Launcher".into()),
+            config_root: "C:\\cfg".into(),
+            slots: vec![MapperSlot {
+                number: 1,
+                persona: "xbox360".into(),
+                persona_label: "Xbox 360".into(),
+                preset: "Panel P1".into(),
+                keyboard: "HID\\TEST".into(),
+                bindings,
+                backup: Some(BACKUP_LABEL.to_owned()),
+                session_backup: true,
+                // One AUTO-FIRING control, so the legend badge is covered by
+                // the ordinary page assertions.
+                turbo: std::collections::BTreeMap::from([("B".to_owned(), 12)]),
+                macros_off: false,
+            }],
+        }
+    }
+
+    /// The preset's `[macros]` tables, in the file's own shape — what
+    /// ksx-backend's collector reads off disk (`ms` and `frames` kept apart, the
+    /// `macro.<name>` rows resolved into `triggers`).
+    fn macros(&self, preset: &str) -> MacroSnapshot {
+        MacroSnapshot::read(
+            preset,
+            vec![MacroView {
+                name: "hadouken".into(),
+                steps: vec![
+                    MacroStepView {
+                        hold: vec!["dpad.down".into()],
+                        ms: Some(50),
+                        frames: None,
+                        allow_short: false,
+                    },
+                    MacroStepView {
+                        hold: vec!["A".into()],
+                        ms: None,
+                        frames: Some(3),
+                        allow_short: false,
+                    },
+                ],
+                on_release: "finish".into(),
+                retrigger: "ignore".into(),
+                interrupt: "none".into(),
+                repeat: "once".into(),
+                turbo_hz: None,
+                gap_ms: None,
+                triggers: vec!["P".into()],
+                disabled: false,
+            }],
+        )
+    }
+}
+
+struct FixedMapperStatus(MapperSnapshot);
+
+impl StatusSource for FixedMapperStatus {
+    fn snapshot(&self) -> StatusSnapshot {
+        StatusSnapshot::default()
+    }
+
+    fn mapper(&self) -> MapperSnapshot {
+        self.0.clone()
+    }
+}
+
+/// Scriptable control: session() flips between idle and running; start()
+/// records the profile it was given and either succeeds or refuses.
+struct ScriptedControl {
+    running: AtomicBool,
+    refuse_start: bool,
+    /// Every ControlSource call fails the way an absent daemon fails.
+    no_daemon: bool,
+    started_with: std::sync::Mutex<Option<Option<String>>>,
+    /// The staged setup, held the way the daemon holds it — a real
+    /// `ksx_core::StagedSetup` driven by real `StageEdit`s. A fake that stored
+    /// the posted strings would let the page pass while the domain refused,
+    /// which is the entire thing these routes are for.
+    staged: Mutex<ksx_core::stage::StagedSetup>,
+    /// Set when `stage_play` actually got as far as starting something. The
+    /// assertion that matters is that it is still `false` after a Play the
+    /// stage refuses.
+    played: AtomicBool,
+    committed: AtomicBool,
+    learning: AtomicBool,
+    bound_with: std::sync::Mutex<Option<BindRequest>>,
+    restored_with: std::sync::Mutex<Option<(String, String)>>,
+    cleared: std::sync::Mutex<Option<String>>,
+    saved_macro: std::sync::Mutex<Option<MacroWrite>>,
+}
+
+impl ScriptedControl {
+    fn new(refuse_start: bool) -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            refuse_start,
+            no_daemon: false,
+            started_with: std::sync::Mutex::new(None),
+            staged: Mutex::new(ksx_core::stage::StagedSetup::new()),
+            played: AtomicBool::new(false),
+            committed: AtomicBool::new(false),
+            learning: AtomicBool::new(false),
+            bound_with: std::sync::Mutex::new(None),
+            restored_with: std::sync::Mutex::new(None),
+            cleared: std::sync::Mutex::new(None),
+            saved_macro: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Nothing answers the pipe — the reported state after quitting the tray
+    /// daemon and then clicked around /map.
+    fn dead() -> Self {
+        Self {
+            no_daemon: true,
+            ..Self::new(true)
+        }
+    }
+}
+
+/// What every verb says when there is no daemon, matching the real
+/// PipeControlSource's `NO_CHANNEL`.
+const NO_CHANNEL: &str = "no daemon control channel — start the daemon (tray, or `ksx daemon`)";
+
+impl ControlSource for ScriptedControl {
+    /// The verb `/setup`'s step 2 performs. `restarted` is TRUE, because the
+    /// real one bounces the pads — the flash has to say so, and a fake that
+    /// quietly said otherwise would let that regression ship.
+    fn assign_slot(&self, request: &ksx_api::SlotAssignRequest) -> ksx_api::SlotOutcome {
+        if self.no_daemon {
+            return ksx_api::SlotOutcome::failed(NO_CHANNEL, "ksx daemon");
+        }
+        // `None` is "keep the preset it has" (the persona-only write), which
+        // this cabinet's slot 1 answers with the one preset it owns. Only a
+        // NAMED preset that is not on disk is a refusal.
+        let preset = request.preset.clone().unwrap_or_else(|| "Panel P1".into());
+        if preset != "Panel P1" {
+            return ksx_api::SlotOutcome {
+                ok: false,
+                error: Some(format!("no preset named \"{preset}\" on disk")),
+                code: Some(ksx_api::codes::UNKNOWN_PRESET.into()),
+                ..ksx_api::SlotOutcome::default()
+            };
+        }
+        // The persona the request asked for, canonicalized the way the real
+        // daemon canonicalizes it — a fake that echoed the alias back would
+        // let a surface that re-sends what it was shown ship a second
+        // spelling.
+        let persona = request
+            .persona
+            .as_deref()
+            .and_then(|name| name.parse::<ksx_core::Persona>().ok())
+            .unwrap_or_default();
+        // Faithful to `bounce_after_slot_write` (ksx-backend/src/daemon/pipe.rs):
+        // the pads replug only when a session was RUNNING, and the daemon's own
+        // sentence says which of the two happened. A fake that reported
+        // `restarted` off the request rather than off the session is exactly
+        // what let "The pads replugged." ship as an unconditional suffix.
+        let running = self.running.load(Ordering::SeqCst);
+        let mut message = format!(
+            "slot {} now uses \"{preset}\" as a {} pad",
+            request.slot,
+            persona.label()
+        );
+        let (restarted, reloaded) = if !running {
+            message.push_str(" — nothing is running, so the next start reads it");
+            (false, true)
+        } else if request.reload {
+            message.push_str(" — the session restarted and the pads replugged");
+            (true, true)
+        } else {
+            message.push_str(" — a session is running on the old wiring; `reload` to restart it");
+            (false, false)
+        };
+        ksx_api::SlotOutcome {
+            ok: true,
+            message: Some(message),
+            slot: Some(request.slot),
+            preset: Some(preset),
+            persona: Some(persona.as_str().to_owned()),
+            profile: request.profile.clone(),
+            restarted,
+            reloaded,
+            ..ksx_api::SlotOutcome::default()
+        }
+    }
+
+    fn session(&self) -> SessionView {
+        if self.no_daemon {
+            // The profile still comes from the config, so the banner can print
+            // a command that actually starts THIS cabinet.
+            return SessionView {
+                profile: Some("Example Launcher".into()),
+                ..SessionView::unreachable(NO_CHANNEL)
+            };
+        }
+        if self.running.load(Ordering::SeqCst) {
+            SessionView {
+                reachable: true,
+                running: true,
+                line: "running — 4 pad(s)".into(),
+                profile: Some("Example Game".into()),
+            }
+        } else {
+            SessionView {
+                reachable: true,
+                running: false,
+                line: "idle".into(),
+                profile: None,
+            }
+        }
+    }
+
+    fn start(&self, profile: Option<&str>) -> Result<String, Refusal> {
+        *self.started_with.lock().unwrap() = Some(profile.map(str::to_owned));
+        if self.refuse_start {
+            Err(no_channel("no ksx daemon control channel at the pipe"))
+        } else {
+            self.running.store(true, Ordering::SeqCst);
+            Ok("running (4 slot(s))".into())
+        }
+    }
+
+    fn stop(&self) -> Result<String, Refusal> {
+        if self.no_daemon {
+            return Err(no_channel(NO_CHANNEL));
+        }
+        self.running.store(false, Ordering::SeqCst);
+        Ok("stopped".into())
+    }
+
+    fn reload(&self) -> Result<String, Refusal> {
+        Ok("running (4 slot(s))".into())
+    }
+
+    fn learn_start(&self) -> LearnView {
+        self.learning.store(true, Ordering::SeqCst);
+        LearnView {
+            ok: true,
+            state: "listening".into(),
+            remaining_ms: Some(10_000),
+            device: None,
+            key: None,
+            error: None,
+        }
+    }
+
+    fn learn_poll(&self) -> LearnView {
+        if self.learning.load(Ordering::SeqCst) {
+            LearnView {
+                ok: true,
+                state: "listening".into(),
+                remaining_ms: Some(9_000),
+                device: None,
+                key: None,
+                error: None,
+            }
+        } else {
+            LearnView {
+                ok: true,
+                state: "idle".into(),
+                remaining_ms: None,
+                device: None,
+                key: None,
+                error: None,
+            }
+        }
+    }
+
+    fn learn_cancel(&self) -> LearnView {
+        self.learning.store(false, Ordering::SeqCst);
+        LearnView {
+            ok: true,
+            state: "cancelled".into(),
+            remaining_ms: None,
+            device: None,
+            key: None,
+            error: None,
+        }
+    }
+
+    // ── The staged setup, the way the daemon holds it ────────────────────
+
+    fn staged(&self) -> ksx_api::StagedSetupView {
+        if self.no_daemon {
+            return ksx_api::StagedSetupView::unreachable(NO_CHANNEL);
+        }
+        ksx_api::StagedSetupView::of(&self.staged.lock().unwrap())
+    }
+
+    fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
+        if self.no_daemon {
+            return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
+        }
+        let mut setup = self.staged.lock().unwrap();
+        match edit.apply(&setup) {
+            Ok(next) => {
+                *setup = next;
+                ksx_api::StageOutcome::ok(&setup, "staged")
+            }
+            Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
+        }
+    }
+
+    /// Save, gated by `commit()` exactly as the daemon gates it — the fake
+    /// must not report a write for a setup ksx-core refuses.
+    fn stage_commit(&self) -> ksx_api::StageOutcome {
+        let setup = self.staged.lock().unwrap();
+        match setup.commit() {
+            Ok(_) => {
+                self.committed.store(true, Ordering::SeqCst);
+                let mut ok = ksx_api::StageOutcome::ok(&setup, "saved to config.toml");
+                ok.saved = Some(r"C:\cfg\config.toml".to_owned());
+                ok
+            }
+            Err(refusal) => ksx_api::StageOutcome::refused(
+                &setup,
+                &Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
+            ),
+        }
+    }
+
+    /// Play, gated the same way — and it RECORDS whether it started anything,
+    /// so a test can assert that a refused Play started nothing rather than
+    /// only that the flash looked unhappy.
+    fn stage_play(&self) -> ksx_api::StageOutcome {
+        let setup = self.staged.lock().unwrap();
+        match setup.commit() {
+            Ok(_) => {
+                self.played.store(true, Ordering::SeqCst);
+                self.running.store(true, Ordering::SeqCst);
+                let mut ok = ksx_api::StageOutcome::ok(&setup, "the staged setup is playing");
+                ok.playing = true;
+                ok
+            }
+            Err(refusal) => ksx_api::StageOutcome::refused(
+                &setup,
+                &Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
+            ),
+        }
+    }
+
+    fn restore(&self, preset: &str, mode: RestoreMode) -> Result<String, Refusal> {
+        *self.restored_with.lock().unwrap() = Some((preset.to_owned(), mode.as_str().to_owned()));
+        if self.no_daemon {
+            return Err(no_channel(NO_CHANNEL));
+        }
+        match mode.as_str() {
+            "session-backup" => Err(Refusal::new(
+                ksx_api::codes::UNKNOWN_PRESET,
+                format!("no session backup for \"{preset}\""),
+            )),
+            "latest-backup" => Ok(format!(
+                "\"{preset}\": bindings restored from the newest timestamped backup"
+            )),
+            _ => Ok(format!(
+                "\"{preset}\": bindings reset to the KSX keyboard layout (WASD + arrows)"
+            )),
+        }
+    }
+
+    fn clear_all(&self, preset: &str) -> Result<String, Refusal> {
+        *self.cleared.lock().unwrap() = Some(preset.to_owned());
+        if self.no_daemon {
+            return Err(no_channel(NO_CHANNEL));
+        }
+        Ok(format!("\"{preset}\": every binding cleared"))
+    }
+
+    fn save_macro(&self, request: &MacroWrite) -> MacroOutcome {
+        *self.saved_macro.lock().unwrap() = Some(request.clone());
+        if self.no_daemon {
+            return MacroOutcome::failed(NO_CHANNEL);
+        }
+        // The one refusal the daemon answers with rows rather than a sentence.
+        if request
+            .steps
+            .iter()
+            .any(|s| s.hold.iter().any(|f| f == "warp"))
+        {
+            return MacroOutcome {
+                code: Some("macro-invalid".into()),
+                problems: vec!["macro 'hadouken' step 1 holds 'warp'".into()],
+                ..MacroOutcome::failed("refusing to write macro \"hadouken\"")
+            };
+        }
+        MacroOutcome {
+            ok: true,
+            message: Some(if request.delete {
+                format!("\"{}\": macro \"{}\" deleted", request.preset, request.name)
+            } else {
+                format!(
+                    "\"{}\": macro \"{}\" = {} step(s)",
+                    request.preset,
+                    request.name,
+                    request.steps.len()
+                )
+            }),
+            warnings: vec!["step 2 asks for 5 ms and was raised to 33 ms".into()],
+            deleted: request.delete,
+            backup: Some(BACKUP_LABEL.to_owned()),
+            reloaded: request.reload,
+            ..MacroOutcome::default()
+        }
+    }
+
+    fn bind(&self, request: &BindRequest) -> BindOutcome {
+        *self.bound_with.lock().unwrap() = Some(request.clone());
+        if request.key.as_deref() == Some("G") && !request.force {
+            BindOutcome {
+                ok: false,
+                message: None,
+                error: Some("refusing to bind G: G is \"Panel P2\"'s A".into()),
+                code: Some("conflict".into()),
+                conflicts: vec![BindConflict {
+                    scope: "profile".into(),
+                    preset: "Panel P2".into(),
+                    function: "A".into(),
+                    file: "games.toml".into(),
+                    profile: Some("Example Launcher".into()),
+                    slot: Some(2),
+                }],
+                also_drives: Vec::new(),
+                turbo_hz: None,
+                turbo_effective_hz: None,
+                reloaded: false,
+            }
+        } else {
+            BindOutcome {
+                ok: true,
+                message: Some(format!(
+                    "\"{}\": {} = {}",
+                    request.preset,
+                    request.function,
+                    request.key.as_deref().unwrap_or("None")
+                )),
+                error: None,
+                code: None,
+                conflicts: Vec::new(),
+                // A same-preset duplicate is a multi-bind, not a refusal: the
+                // write succeeds and names the controls the key also drives.
+                also_drives: match request.key.as_deref() {
+                    Some("P") => vec!["A".into(), "B".into()],
+                    _ => Vec::new(),
+                },
+                turbo_hz: None,
+                turbo_effective_hz: None,
+                reloaded: request.reload,
+            }
+        }
+    }
+}
+
+/// The MACHINE provider, scripted with synthetic devices, and every write
+/// RECORDED rather than performed.
+///
+/// Recorded rather than performed for the reason the cross-site test below
+/// spells out — the assertion that matters about a refused write is not the
+/// status code, it is that the writer never saw it. A fake that wrote to a real
+/// config store could not tell those two apart.
+///
+/// The tree is a synthetic setup as `device_scan` shapes it: one I-PAC
+/// wearing two devnodes with the keyboard on `MI_00`, one example gadget with
+/// no keyboard interface at all, and one configured entry whose id is
+/// PORT-PINNED.
+struct ScriptedMachine {
+    picked: Mutex<Vec<(String, Option<String>)>>,
+    removed: Mutex<Vec<(String, bool)>>,
+    /// Refuse the read — the "this surface cannot enumerate devices" path.
+    refuse: bool,
+    /// The scan ANSWERS but the USB enumeration inside it failed: empty lists
+    /// that are not a reading of the machine. A third state, distinct from
+    /// `refuse` and from an actually-empty cabinet, and the one the page
+    /// shipped without a single test reaching it.
+    blind: bool,
+    /// The last `profile_new` spec this provider was asked for, so a test can
+    /// prove the FORM's values reached the verb rather than a default.
+    created_profile: Mutex<Option<ksx_api::NewProfile>>,
+    updated_profile: Mutex<Option<ksx_api::UpdateProfile>>,
+    deleted_profile: Mutex<Option<ksx_api::DeleteProfile>>,
+    created_preset: Mutex<Option<ksx_api::NewPreset>>,
+    /// Both machine READS behind /profiles refuse — the state a machine with
+    /// a syntax error in games.toml and a permission problem on the presets
+    /// folder is in. Distinct from "the machine is empty", which is what the
+    /// page used to render for it — and distinct from [`Self::refuse`], which
+    /// is the DEVICE scan refusing.
+    reads_refuse: bool,
+    /// Every Saved Games writer refuses with deliberately hostile internal
+    /// vocabulary. Presentation tests prove none of it reaches a redirect.
+    hostile_profile_writes: bool,
+    /// Exact-device UAC mutations are fake only here. Calls and the resulting
+    /// machine state are recorded so HTTP tests can distinguish "a safe flash"
+    /// from "the privileged provider was never/actually called".
+    prepared_with: Mutex<Vec<ksx_api::WinusbPrepareSpec>>,
+    released_with: Mutex<Vec<ksx_api::WinusbReleaseSpec>>,
+    winusb_claimed: AtomicBool,
+    prepare_state: Mutex<Option<String>>,
+    prepare_instance: Mutex<Option<String>>,
+    release_state: Mutex<Option<String>>,
+    release_instance: Mutex<Option<String>>,
+}
+
+impl Default for ScriptedMachine {
+    fn default() -> Self {
+        Self {
+            picked: Mutex::new(Vec::new()),
+            removed: Mutex::new(Vec::new()),
+            refuse: false,
+            blind: false,
+            created_profile: Mutex::new(None),
+            updated_profile: Mutex::new(None),
+            deleted_profile: Mutex::new(None),
+            created_preset: Mutex::new(None),
+            reads_refuse: false,
+            hostile_profile_writes: false,
+            prepared_with: Mutex::new(Vec::new()),
+            released_with: Mutex::new(Vec::new()),
+            // The long-standing fixture starts with the I-PAC already held by
+            // WinUSB. New clean-machine tests explicitly release this flag.
+            winusb_claimed: AtomicBool::new(true),
+            prepare_state: Mutex::new(None),
+            prepare_instance: Mutex::new(None),
+            release_state: Mutex::new(None),
+            release_instance: Mutex::new(None),
+        }
+    }
+}
+
+const IPAC_KB: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
+const IPAC_AUX: &str = r"USB\VID_D209&PID_0430&MI_01\7&1A2B3C4D&0&0001";
+const EXAMPLE_AUX_HID: &str = r"USB\VID_F00D&PID_CAFE&MI_01\7&5A6B7C8&0&0001";
+/// A paired Bluetooth keyboard with a shape-preserving synthetic identity.
+const BT_KEYBOARD: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&0800\7&B1C2D3E4&0&02A1B2C3D4E5_C00000000";
+
+impl ScriptedMachine {
+    fn refusing() -> Self {
+        Self {
+            refuse: true,
+            ..Self::default()
+        }
+    }
+
+    /// The scan answers, and answers "I could not read the USB bus".
+    fn blind() -> Self {
+        Self {
+            blind: true,
+            ..Self::default()
+        }
+    }
+
+    /// Both /profiles reads refuse (games.toml AND the presets folder).
+    fn reads_refusing() -> Self {
+        Self {
+            reads_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn hostile_profile_writes() -> Self {
+        Self {
+            hostile_profile_writes: true,
+            ..Self::default()
+        }
+    }
+
+    fn iface(id: &str, state: &str, boot: bool) -> ksx_api::UsbRow {
+        ksx_api::UsbRow {
+            instance_id: id.to_owned(),
+            description: "USB Input Device".to_owned(),
+            state: state.to_owned(),
+            verdict: if state == "claimed" {
+                "bound to winusb.sys — ksx can capture this"
+            } else {
+                "on the Windows keyboard stack — ksx can capture this"
+            }
+            .to_owned(),
+            alias: None,
+            selected: false,
+            ready: false,
+            vendor: Some("Ultimarc I-PAC 4X".to_owned()),
+            board: Some(r"USB\VID_D209&PID_0430\4".to_owned()),
+            boot_keyboard: boot,
+            // The selector `scan` would write. A constant, not derived from `id`:
+            // UsbRow::selector exists so no surface re-derives what the writer
+            // decided (docs/SURFACES.md section 1), and a fixture that computed it
+            // would be re-deriving it in a third place to test the other two.
+            selector: Some("usb:d209:0430:00".to_owned()),
+            // Backend eligibility from `ksx_core::Reach`, never spelled by
+            // hand — a fixture that wrote its own answer could not disagree
+            // with the page even when the page was wrong.
+            ..Self::reach(
+                ksx_api::Transport::Usb,
+                boot || state == "claimed",
+                state == "claimed",
+            )
+        }
+    }
+
+    fn example_aux_iface() -> ksx_api::UsbRow {
+        ksx_api::UsbRow {
+            instance_id: EXAMPLE_AUX_HID.to_owned(),
+            description: "Example auxiliary HID interface".to_owned(),
+            vendor: Some("Example Devices".to_owned()),
+            board: Some(r"USB\VID_F00D&PID_CAFE\1".to_owned()),
+            selector: Some("usb:f00d:cafe:01".to_owned()),
+            ..Self::iface(EXAMPLE_AUX_HID, "not-a-keyboard", false)
+        }
+    }
+
+    /// A paired Bluetooth keyboard: Interception-eligible, never claimable.
+    fn bt_keyboard() -> ksx_api::UsbRow {
+        ksx_api::UsbRow {
+            instance_id: BT_KEYBOARD.to_owned(),
+            description: "Bluetooth Keyboard".to_owned(),
+            state: "interception-only".to_owned(),
+            verdict: "a Bluetooth keyboard on the Windows input stack — ksx can capture it \
+                      through Interception and split it into virtual pads"
+                .to_owned(),
+            board: Some(r"BTHENUM\02A1B2C3D4E5".to_owned()),
+            boot_keyboard: true,
+            selector: Some(BT_KEYBOARD.to_owned()),
+            ..Self::reach(ksx_api::Transport::Bluetooth, true, false)
+        }
+    }
+
+    fn reach(transport: ksx_api::Transport, keyboard: bool, claimed: bool) -> ksx_api::UsbRow {
+        let reach = ksx_core::Reach {
+            transport,
+            keyboard,
+            claimed,
+            can_type: !claimed,
+        };
+        let eligibility = reach.eligibility();
+        ksx_api::UsbRow {
+            transport: transport.code().to_owned(),
+            interception_eligible: eligibility.interception,
+            winusb_eligible: eligibility.winusb,
+            backends: eligibility.line,
+            can_type: !claimed,
+            ..ksx_api::UsbRow::default()
+        }
+    }
+}
+
+impl ksx_api::MachineSource for ScriptedMachine {
+    fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
+        if self.refuse {
+            return Err(Refusal::not_here("listing devices", "run `ksx devices`"));
+        }
+        if self.blind {
+            // Empty lists with `usb_available: false` — nothing could be read.
+            // Built through `read` like every other path, so the summary lines
+            // and the `no_*` flags are the ones the real backend would send.
+            return Ok(ksx_api::DeviceScanView::read(
+                "test".to_owned(),
+                true,
+                false,
+                false,
+                Vec::new(),
+                Vec::new(),
+                vec!["the USB enumeration returned no interfaces".to_owned()],
+            ));
+        }
+        // Through `DeviceScanView::read`, never a struct literal. A fixture
+        // that wrote the summary lines, the counts and the health verdict as
+        // literals would already contain the answers these tests ask about,
+        // and could not disagree with the page even when the page was wrong.
+        let winusb_claimed = self.winusb_claimed.load(Ordering::SeqCst);
+        let winusb_state = if winusb_claimed {
+            "claimed"
+        } else {
+            "claimable"
+        };
+        Ok(ksx_api::DeviceScanView::read(
+            "test".to_owned(),
+            true,
+            true,
+            true,
+            vec![
+                // A Bluetooth keyboard FIRST, so nothing downstream can be
+                // right by accident about which row it looked at.
+                ksx_api::BoardRow {
+                    name: "Bluetooth Keyboard".to_owned(),
+                    interfaces: vec![Self::bt_keyboard()],
+                    keyboard: Some(BT_KEYBOARD.to_owned()),
+                    keyboard_verdict: "a Bluetooth keyboard on the Windows input stack — ksx \
+                                       can capture it through Interception and split it into \
+                                       virtual pads"
+                        .to_owned(),
+                    looks_like_a_keyboard: true,
+                    claimed: false,
+                    alias: None,
+                    // Never a claim command: on this transport a claim refuses
+                    // every time it is run.
+                    claim_command: None,
+                    release_command: None,
+                    ..ksx_api::BoardRow::default()
+                },
+                ksx_api::BoardRow {
+                    name: "Ultimarc I-PAC 4X".to_owned(),
+                    interfaces: vec![
+                        Self::iface(IPAC_KB, winusb_state, true),
+                        Self::iface(IPAC_AUX, "not-a-keyboard", false),
+                    ],
+                    keyboard: Some(IPAC_KB.to_owned()),
+                    keyboard_verdict: if winusb_claimed {
+                        "bound to winusb.sys — ksx can capture this"
+                    } else {
+                        "on the Windows keyboard stack — ksx can capture this"
+                    }
+                    .to_owned(),
+                    looks_like_a_keyboard: true,
+                    claimed: winusb_claimed,
+                    alias: Some("panel".to_owned()),
+                    claim_command: (!winusb_claimed).then(|| format!("ksx winusb claim {IPAC_KB}")),
+                    release_command: winusb_claimed
+                        .then(|| format!("ksx winusb release {IPAC_KB} --yes")),
+                    ..ksx_api::BoardRow::default()
+                },
+                ksx_api::BoardRow {
+                    name: "Example auxiliary controller".to_owned(),
+                    interfaces: vec![Self::example_aux_iface()],
+                    keyboard: None,
+                    keyboard_verdict: "no keyboard interface — ksx cannot capture this board"
+                        .to_owned(),
+                    looks_like_a_keyboard: false,
+                    claimed: false,
+                    alias: None,
+                    claim_command: None,
+                    release_command: None,
+                    ..ksx_api::BoardRow::default()
+                },
+            ],
+            vec![ksx_api::ConfiguredDevice {
+                alias: "panel".to_owned(),
+                id: "port=7&1A2B3C4D&0&0000".to_owned(),
+                backend: "winusb".to_owned(),
+                rung: "port".to_owned(),
+                survives_replug: false,
+                means: "this exact USB socket".to_owned(),
+                port_pinned_warning: Some(
+                    "PORT-PINNED — nothing weaker than the Windows instance path separates this \
+                     board from its twin, so this entry matches only while Windows keeps \
+                     reporting that exact path. Moving the board to another USB socket is the \
+                     usual way that changes, and the entry then stops matching. It is also \
+                     specific to THIS machine, so do not copy this config to another cabinet — \
+                     run `ksx device pick` there instead."
+                        .to_owned(),
+                ),
+                present: true,
+                board: Some("Ultimarc I-PAC 4X".to_owned()),
+                instance_id: Some(IPAC_KB.to_owned()),
+                claimed: winusb_claimed,
+                claim_command: (!winusb_claimed).then(|| format!("ksx winusb claim {IPAC_KB}")),
+                release_command: winusb_claimed
+                    .then(|| format!("ksx winusb release {IPAC_KB} --yes")),
+                used_by: vec!["slot 1 (keyboard)".to_owned()],
+                ..ksx_api::ConfiguredDevice::default()
+            }],
+            Vec::new(),
+        ))
+    }
+
+    fn device_pick(
+        &self,
+        spec: &ksx_api::DevicePickSpec,
+    ) -> Result<ksx_api::DevicePickView, Refusal> {
+        self.picked
+            .lock()
+            .unwrap()
+            .push((spec.query.clone(), spec.alias.clone()));
+        let alias = spec
+            .alias
+            .clone()
+            .unwrap_or_else(|| "Ultimarc I-PAC 4X".to_owned());
+        Ok(ksx_api::DevicePickView {
+            alias: alias.clone(),
+            id: "model=d209:0430".to_owned(),
+            backend: "winusb".to_owned(),
+            board: "Ultimarc I-PAC 4X".to_owned(),
+            instance_id: IPAC_KB.to_owned(),
+            replaced: None,
+            claimed: true,
+            port_pinned: false,
+            next_step: None,
+            backup: None,
+            summary: format!("wrote [[device]] \"{alias}\" — nothing was claimed"),
+        })
+    }
+
+    fn device_remove(
+        &self,
+        spec: &ksx_api::DeviceRemoveSpec,
+    ) -> Result<ksx_api::DeviceRemoveView, Refusal> {
+        self.removed
+            .lock()
+            .unwrap()
+            .push((spec.alias.clone(), spec.force));
+        Ok(ksx_api::DeviceRemoveView {
+            alias: spec.alias.clone(),
+            id: "port=7&1A2B3C4D&0&0000".to_owned(),
+            still_claimed: Some(IPAC_KB.to_owned()),
+            release_command: Some(format!("ksx winusb release {IPAC_KB} --yes")),
+            breaks: Vec::new(),
+            backup: None,
+            summary: format!(
+                "removed [[device]] \"{}\" — the board is STILL CLAIMED; releasing it is a \
+                 separate step",
+                spec.alias
+            ),
+        })
+    }
+
+    fn winusb_prepare(
+        &self,
+        spec: &ksx_api::WinusbPrepareSpec,
+    ) -> Result<ksx_api::WinusbMutationView, Refusal> {
+        self.prepared_with.lock().unwrap().push(spec.clone());
+        if spec.expected_selector != "usb:d209:0430:00"
+            || !spec.instance_id.eq_ignore_ascii_case(IPAC_KB)
+            || !spec.confirm_spare_keyboard
+            || !spec.confirm_rebind
+            || !spec.confirm_machine_certificate
+        {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                r#"refused helper invocation at C:\secret\generated.inf -- unsafe consent"#,
+            ));
+        }
+        let state = self
+            .prepare_state
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "prepared".to_owned());
+        let instance_id = self
+            .prepare_instance
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| spec.instance_id.clone());
+        if state == "prepared" && instance_id.eq_ignore_ascii_case(&spec.instance_id) {
+            self.winusb_claimed.store(true, Ordering::SeqCst);
+        }
+        Ok(ksx_api::WinusbMutationView {
+            instance_id,
+            hardware_id: r"HID\VID_D209&PID_0430&MI_00".to_owned(),
+            state,
+            message: r#"helper wrote C:\secret\generated.inf"#.to_owned(),
+            warning: Some("private provider warning --repair".to_owned()),
+        })
+    }
+
+    fn winusb_release(
+        &self,
+        spec: &ksx_api::WinusbReleaseSpec,
+    ) -> Result<ksx_api::WinusbMutationView, Refusal> {
+        self.released_with.lock().unwrap().push(spec.clone());
+        if spec.expected_selector != "usb:d209:0430:00"
+            || !spec.instance_id.eq_ignore_ascii_case(IPAC_KB)
+            || !spec.confirm_release
+        {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                r#"refused helper invocation at C:\secret\generated.inf -- unsafe release"#,
+            ));
+        }
+        let state = self
+            .release_state
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "released".to_owned());
+        let instance_id = self
+            .release_instance
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| spec.instance_id.clone());
+        if state == "released" && instance_id.eq_ignore_ascii_case(&spec.instance_id) {
+            self.winusb_claimed.store(false, Ordering::SeqCst);
+        }
+        Ok(ksx_api::WinusbMutationView {
+            instance_id,
+            hardware_id: r"HID\VID_D209&PID_0430&MI_00".to_owned(),
+            state,
+            message: r#"helper restored C:\secret\generated.inf"#.to_owned(),
+            warning: Some("private provider warning --release".to_owned()),
+        })
+    }
+
+    /// Synthetic profiles covering a healthy program and a missing one. The
+    /// provider — not the page — is what decides
+    /// that, which is why the fixture states it as `state: "broken"` with the
+    /// path, exactly as `LocalMachine::profiles` composes it from
+    /// `ksx_games::preflight`.
+    fn profiles(&self) -> Result<ksx_api::ProfilesView, Refusal> {
+        if self.reads_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "games.toml could not be read: expected `=` at line 4",
+                "run `ksx config export --what games`",
+            ));
+        }
+        Ok(ksx_api::ProfilesView {
+            generated_at: "test".into(),
+            config_root: "C:\\cfg".into(),
+            games_path: "C:\\cfg\\games.toml".into(),
+            profiles: vec![
+                ksx_api::ProfileDetail {
+                    revision: "g1-example".into(),
+                    title: "Example Game".into(),
+                    path: "C:\\Examples\\example-game.exe".into(),
+                    arguments: String::new(),
+                    slots: 2,
+                    presets: vec!["Arcade".into()],
+                    state: "ok".into(),
+                    verdict: "the program is there".into(),
+                    broken_path: None,
+                },
+                ksx_api::ProfileDetail {
+                    revision: "g1-missing".into(),
+                    title: "Missing Example Game".into(),
+                    path: "X:\\Examples\\missing-game.exe".into(),
+                    arguments: String::new(),
+                    slots: 4,
+                    presets: vec!["Arcade".into()],
+                    state: "broken".into(),
+                    verdict: "game profile 'Missing Example Game' points at 'X:\\Examples\\missing-game.exe', \
+                              which does not exist"
+                        .into(),
+                    broken_path: Some("X:\\Examples\\missing-game.exe".into()),
+                },
+            ],
+            notes: Vec::new(),
+        })
+    }
+
+    fn presets(&self) -> Result<ksx_api::PresetsView, Refusal> {
+        if self.reads_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "the presets folder could not be read: access is denied",
+                "run `ksx doctor`",
+            ));
+        }
+        Ok(ksx_api::PresetsView {
+            config_root: "C:\\cfg\\presets".into(),
+            presets: vec![ksx_api::PresetRow {
+                name: "Arcade".into(),
+                bound: 25,
+                macros: 0,
+                protected: false,
+                usable: true,
+                problem: None,
+                source: "C:\\cfg\\presets\\Arcade.toml".into(),
+            }],
+            templates: vec![ksx_api::TemplateRow {
+                id: "keyboard-2p".into(),
+                label: "Two players sharing ONE keyboard: WASD vs the arrows".into(),
+                detail: "Two people on one ordinary keyboard, no encoder.".into(),
+                players: vec![1, 2],
+                blank: false,
+            }],
+        })
+    }
+
+    fn profile_new(&self, spec: &ksx_api::NewProfile) -> Result<String, Refusal> {
+        *self.created_profile.lock().unwrap() = Some(spec.clone());
+        if self.hostile_profile_writes {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                r#"profile slot preset failed at C:\secret\games.toml through daemon"#,
+                "run `ksx profile --preset Hidden` in the CLI",
+            ));
+        }
+        if spec.title.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "a saved game needs a game name",
+            ));
+        }
+        Ok(format!(
+            "created saved game \"{}\" — {} player(s) using controller layout \"{}\"",
+            spec.title, spec.slots, spec.preset
+        ))
+    }
+
+    fn profile_update(&self, spec: &ksx_api::UpdateProfile) -> Result<String, Refusal> {
+        *self.updated_profile.lock().unwrap() = Some(spec.clone());
+        if self.hostile_profile_writes {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                r#"profile slot preset failed at C:\secret\games.toml through daemon"#,
+                "run `ksx profile --preset Hidden` in the CLI",
+            ));
+        }
+        if spec.original_title.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "choose the saved game to change",
+            ));
+        }
+        if spec.original_title == "Example Game" && spec.revision != "g1-example" {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "that saved game changed while this form was open; nothing was written",
+                "refresh Saved Games and try again",
+            ));
+        }
+        Ok(format!("updated saved game \"{}\"", spec.title))
+    }
+
+    fn profile_delete(&self, spec: &ksx_api::DeleteProfile) -> Result<String, Refusal> {
+        *self.deleted_profile.lock().unwrap() = Some(spec.clone());
+        if self.hostile_profile_writes {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                r#"profile slot preset failed at C:\secret\games.toml through daemon"#,
+                "run `ksx profile --preset Hidden` in the CLI",
+            ));
+        }
+        if spec.title.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "choose the saved game to delete",
+            ));
+        }
+        if spec.title == "Missing Example Game" && spec.revision != "g1-missing" {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "that saved game changed while this form was open; nothing was written",
+                "refresh Saved Games and try again",
+            ));
+        }
+        Ok(format!("deleted saved game \"{}\"", spec.title))
+    }
+
+    fn preset_new(&self, spec: &ksx_api::NewPreset) -> Result<String, Refusal> {
+        *self.created_preset.lock().unwrap() = Some(spec.clone());
+        if self.hostile_profile_writes {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                r#"profile slot preset failed at C:\secret\games.toml through daemon"#,
+                "run `ksx profile --preset Hidden` in the CLI",
+            ));
+        }
+        // The refusal `LocalMachine` composes from
+        // `preset_edit::PresetError::Exists` + its `advice()`, verbatim in
+        // shape: a message that names the file it protected, and a remedy that
+        // is the ONLY way forward. "Arcade" is the preset `presets()` lists.
+        if spec.name == "Arcade" && !spec.force {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "a controller layout called \"Arcade\" already exists",
+                "choose a different name; Saved Games never overwrites a controller layout",
+            ));
+        }
+        Ok(format!("created controller layout \"{}\"", spec.name))
+    }
+
+    // ── The M10 verbs behind /setup: the config in and out, and the first-run
+    //    state. Synthetic, and deliberately just enough to prove the ROUTES —
+    //    what the real provider does to a config root is `ksx-backend`'s to test
+    //    (`onboard.rs` + `config_io.rs`), and testing it twice would only pin
+    //    the fake.
+
+    fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
+        Ok(ksx_api::SetupView {
+            generated_at: "test".into(),
+            config_root: "C:\\cfg".into(),
+            config_exists: true,
+            devices: vec![ksx_api::SetupDeviceRow {
+                alias: "P1 board".into(),
+                id: "usb:d209:0430:00".into(),
+                backend: "interception".into(),
+            }],
+            slots: vec![ksx_api::SetupSlotRow {
+                number: 1,
+                device: "P1 board".into(),
+                preset: "Panel P1".into(),
+                persona: "Xbox 360 pad".into(),
+                source: "config.toml".into(),
+            }],
+            presets: vec!["Panel P1".into()],
+            profiles: vec!["Example Game".into()],
+            steps: vec![
+                ksx_api::SetupStep {
+                    id: ksx_api::setup_steps::BOARD.into(),
+                    title: "Find your board and name it".into(),
+                    detail: "One board is named.".into(),
+                    state: ksx_api::setup_states::DONE.into(),
+                },
+                ksx_api::SetupStep {
+                    id: ksx_api::setup_steps::SLOT.into(),
+                    title: "Wire a slot".into(),
+                    detail: "One slot is wired.".into(),
+                    state: ksx_api::setup_states::DONE.into(),
+                },
+                ksx_api::SetupStep {
+                    id: ksx_api::setup_steps::PROVE.into(),
+                    title: "Press a button and watch it land".into(),
+                    detail: "Start the listener and press a button.".into(),
+                    state: ksx_api::setup_states::NOW.into(),
+                },
+            ],
+            notes: Vec::new(),
+            // The ceiling comes from the BACKEND (`ksx_core::MAX_SLOTS`); the
+            // default carries it, which is the behaviour a real provider has.
+            ..ksx_api::SetupView::default()
+        })
+    }
+
+    fn config_export(
+        &self,
+        _request: &ksx_api::ExportRequest,
+    ) -> Result<ksx_api::ConfigExport, Refusal> {
+        let document = "{\n  \"ksx_interop\": 1,\n  \"schema_version\": 1\n}\n".to_owned();
+        Ok(ksx_api::ConfigExport {
+            filename: "ksx-config-20260807-120000.json".into(),
+            bytes: document.len(),
+            parts: vec!["config".into(), "games".into(), "presets".into()],
+            presets: 1,
+            warnings: Vec::new(),
+            document,
+        })
+    }
+
+    /// The consent shape, faithfully: no `apply`, no write.
+    ///
+    /// The summaries mirror `ksx-backend::onboard`'s after the review: the backend
+    /// states the FACT and names no control, because the same sentence is read
+    /// by the cabinet egui, which has no checkbox called "write it". Naming
+    /// this page's box is `server.rs::import_flash`'s job and is asserted as
+    /// such below.
+    fn config_import(
+        &self,
+        request: &ksx_api::ImportRequest,
+    ) -> Result<ksx_api::ImportReport, Refusal> {
+        // A bare document with `what` supplied is the assistant-written case
+        // the import card invites: the form's `what` select is how a person
+        // says what it is when the document does not say for itself.
+        if !request.document.contains("ksx_interop") && request.what.is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::BAD_REQUEST,
+                "the pasted document does not say what it is",
+            ));
+        }
+        // A document that would not validate: the faults are STRUCTURED, and
+        // the page is holding them.
+        if request.document.contains("\"faulty\"") {
+            return Ok(ksx_api::ImportReport {
+                ok: false,
+                applied: false,
+                summary: "refused: importing this would leave 3 validation fault(s) in your \
+                          configuration — nothing was written."
+                    .to_owned(),
+                faults: vec![
+                    "slot 2 points at preset \"Nope\", which is not in this document".to_owned(),
+                    "device \"P2 board\" has no id".to_owned(),
+                    "game \"Example Launcher\" names slot 9".to_owned(),
+                ],
+                ..ksx_api::ImportReport::default()
+            });
+        }
+        Ok(ksx_api::ImportReport {
+            ok: true,
+            applied: request.apply,
+            summary: if request.apply {
+                "imported config, games — 2 file(s) written, 2 backed up first".to_owned()
+            } else {
+                "nothing written yet — this would replace your settings. Nothing was written."
+                    .to_owned()
+            },
+            ..ksx_api::ImportReport::default()
+        })
+    }
+
+    // ── The /pads verbs, delegated to `FixedMachine` below ─────────────────
+    //
+    // The /pads tests run through the default `start_server`, which serves
+    // THIS machine; the pad answers are the fixed fixture's, so every pads
+    // assertion reads one fixture regardless of which harness built the
+    // server.
+    fn pads_view(&self, session_running: bool) -> Result<ksx_api::PadsView, Refusal> {
+        FixedMachine.pads_view(session_running)
+    }
+
+    fn pads(&self, spec: &ksx_api::PadsSpawnSpec) -> Result<String, Refusal> {
+        FixedMachine.pads(spec)
+    }
+
+    fn pads_prune(&self, confirm: bool) -> Result<String, Refusal> {
+        FixedMachine.pads_prune(confirm)
+    }
+}
+
+/// The machine, scripted: a restartable bus carrying two pads, and two verbs
+/// that ECHO what they were asked for.
+///
+/// Echoing rather than recording is deliberate. Every /pads assertion below
+/// reads the 303's `?flash=`, so a passing test proves the form values reached
+/// the verb — `confirm=yes` in particular — with no shared mutable state
+/// between a test and the server thread it started.
+struct FixedMachine;
+
+/// One count option over the ceiling, so the page's warning has something real
+/// to render. The label is the PROVIDER's — the whole point of task #16's
+/// warning is that the backend writes that sentence, not the page — and it
+/// NAMES the persona it applies to, because the same click costs nothing on a
+/// HID pad.
+const OVER_CEILING_LABEL: &str = "8 pads — only 3 readable as xbox360, all 8 as playstation";
+
+/// A machine whose read FAILS. Not an empty bus — a bus ksx never managed to
+/// look at, which is a different page and a different sentence.
+struct UnreadableMachine;
+
+impl ksx_api::MachineSource for UnreadableMachine {}
+
+impl ksx_api::MachineSource for FixedMachine {
+    fn pads_view(&self, session_running: bool) -> Result<ksx_api::PadsView, Refusal> {
+        Ok(ksx_api::PadsView {
+            generated_at: "test".into(),
+            summary: "2 virtual pads on the ViGEm bus:".into(),
+            bus_instance_id: Some("ROOT\\SYSTEM\\0002".into()),
+            pads: vec![
+                ksx_api::VirtualPadRow {
+                    instance_id: "USB\\TEST\\PAD1".into(),
+                    hardware_id: "USB\\TEST".into(),
+                    persona: "Xbox 360 pad".into(),
+                    xinput: true,
+                },
+                ksx_api::VirtualPadRow {
+                    instance_id: "USB\\TEST\\PAD2".into(),
+                    hardware_id: "USB\\TEST".into(),
+                    persona: "PlayStation (DS4) pad".into(),
+                    xinput: false,
+                },
+            ],
+            bus_line: "ROOT\\SYSTEM\\0002".into(),
+            owners: vec!["ksx.exe (pid 1)".into()],
+            owners_line: "ksx.exe (pid 1)".into(),
+            // Echoed, so a test can prove ONE session read fed both the header
+            // pill and the spawn panel rather than two round-trips that can
+            // disagree inside a single render.
+            session_running,
+            xinput_ceiling: 4,
+            xinput_in_use: Some(1),
+            xinput_line: "Windows exposes exactly 4 XInput slots and no virtual bus can create \
+                          a fifth."
+                .into(),
+            elevated: Some(false),
+            elevation_line: "ksx is NOT running elevated, and ksx never self-elevates — this \
+                             prune will be refused."
+                .into(),
+            confirm_line: "This removes 2 pad(s) by restarting the ViGEmBus devnode. Every pad \
+                           listed here goes, at once:"
+                .into(),
+            // Empty: this fixture ANSWERS. Only `PadsView::unreadable` fills
+            // the banner heading.
+            unreadable_heading: String::new(),
+            prune: ksx_api::PrunePlanView {
+                kind: "restart".into(),
+                count: 2,
+                command: Some("pnputil /restart-device \"ROOT\\SYSTEM\\0002\"".into()),
+                detail: "DRY RUN — would clear 2 virtual pad(s)".into(),
+            },
+            spawn: ksx_api::SpawnOffer {
+                counts: vec![
+                    ksx_api::SpawnOption {
+                        value: "1".into(),
+                        label: "1 pad".into(),
+                    },
+                    ksx_api::SpawnOption {
+                        value: "8".into(),
+                        label: OVER_CEILING_LABEL.into(),
+                    },
+                ],
+                personas: vec![ksx_api::SpawnOption {
+                    value: "xbox360".into(),
+                    label: "xbox360 — takes one of the 4 XInput slots".into(),
+                }],
+                holds: vec![ksx_api::SpawnOption {
+                    value: "10".into(),
+                    label: "10 seconds".into(),
+                }],
+                note: "A spawn is a TEST".into(),
+                refused: session_running.then(|| "a session is running".to_owned()),
+            },
+        })
+    }
+
+    fn pads(&self, spec: &ksx_api::PadsSpawnSpec) -> Result<String, Refusal> {
+        if spec.count == 0 {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "pad count must be 1..=16, got 0",
+            ));
+        }
+        Ok(format!(
+            "spawned {} {} pad(s) for {}s",
+            spec.count, spec.persona, spec.hold_secs
+        ))
+    }
+
+    fn pads_prune(&self, confirm: bool) -> Result<String, Refusal> {
+        if confirm {
+            Ok("cleared 2 virtual pad(s) — the bus was restarted.".to_owned())
+        } else {
+            Ok("dry run — 2 virtual pad(s) would be cleared. Nothing was changed.".to_owned())
+        }
+    }
+}
+
+/// Bind port 0 to learn a free port, release it, and serve there. The tiny
+/// race is acceptable in a local test.
+fn start_server(control: Arc<ScriptedControl>) -> SocketAddr {
+    start_server_with_machine(control, Arc::new(ScriptedMachine::default()))
+}
+
+fn start_server_with_status(
+    control: Arc<ScriptedControl>,
+    status: Box<dyn StatusSource>,
+) -> SocketAddr {
+    start_server_with_sources(control, status, Arc::new(ScriptedMachine::default()))
+}
+
+/// The same server with a chosen machine provider, boxed — the only axis any
+/// /pads test needs to vary. Sugar over [`start_server_with_machine`], kept
+/// because the pads fixtures are stateless and a `Box::new(UnreadableMachine)`
+/// at the call site reads better than an `Arc` it will never share.
+fn start_server_with(
+    control: Arc<ScriptedControl>,
+    machine: Box<dyn ksx_api::MachineSource>,
+) -> SocketAddr {
+    start_server_with_machine(control, Arc::from(machine))
+}
+
+/// …with a MACHINE provider of the caller's choosing — the seam a refused
+/// read (a device scan, a profiles read, or the first-run state) arrives
+/// through.
+fn start_server_with_machine(
+    control: Arc<ScriptedControl>,
+    machine: Arc<dyn ksx_api::MachineSource>,
+) -> SocketAddr {
+    start_server_with_sources(control, Box::new(FixedStatus), machine)
+}
+
+fn start_server_with_sources(
+    control: Arc<ScriptedControl>,
+    status: Box<dyn StatusSource>,
+    machine: Arc<dyn ksx_api::MachineSource>,
+) -> SocketAddr {
+    let mut addresses = SERVER_ADDRS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let addr = loop {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let candidate = probe.local_addr().unwrap();
+        if addresses.contains(&candidate) {
+            continue;
+        }
+        addresses.push(candidate);
+        break candidate;
+    };
+    drop(addresses);
+    struct SharedControl(Arc<ScriptedControl>);
+    impl ControlSource for SharedControl {
+        fn session(&self) -> SessionView {
+            self.0.session()
+        }
+        fn start(&self, profile: Option<&str>) -> Result<String, Refusal> {
+            self.0.start(profile)
+        }
+        fn stop(&self) -> Result<String, Refusal> {
+            self.0.stop()
+        }
+        fn reload(&self) -> Result<String, Refusal> {
+            self.0.reload()
+        }
+        fn learn_start(&self) -> LearnView {
+            self.0.learn_start()
+        }
+        fn learn_poll(&self) -> LearnView {
+            self.0.learn_poll()
+        }
+        fn learn_cancel(&self) -> LearnView {
+            self.0.learn_cancel()
+        }
+        fn bind(&self, request: &BindRequest) -> BindOutcome {
+            self.0.bind(request)
+        }
+        fn restore(&self, preset: &str, mode: RestoreMode) -> Result<String, Refusal> {
+            self.0.restore(preset, mode)
+        }
+        fn clear_all(&self, preset: &str) -> Result<String, Refusal> {
+            self.0.clear_all(preset)
+        }
+        fn save_macro(&self, request: &MacroWrite) -> MacroOutcome {
+            self.0.save_macro(request)
+        }
+        fn assign_slot(&self, request: &ksx_api::SlotAssignRequest) -> ksx_api::SlotOutcome {
+            self.0.assign_slot(request)
+        }
+        fn staged(&self) -> ksx_api::StagedSetupView {
+            self.0.staged()
+        }
+        fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
+            self.0.stage_edit(edit)
+        }
+        fn stage_commit(&self) -> ksx_api::StageOutcome {
+            self.0.stage_commit()
+        }
+        fn stage_play(&self) -> ksx_api::StageOutcome {
+            self.0.stage_play()
+        }
+    }
+    struct SharedMachine(Arc<dyn ksx_api::MachineSource>);
+    impl ksx_api::MachineSource for SharedMachine {
+        fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
+            self.0.device_scan()
+        }
+        fn device_pick(
+            &self,
+            spec: &ksx_api::DevicePickSpec,
+        ) -> Result<ksx_api::DevicePickView, Refusal> {
+            self.0.device_pick(spec)
+        }
+        fn device_remove(
+            &self,
+            spec: &ksx_api::DeviceRemoveSpec,
+        ) -> Result<ksx_api::DeviceRemoveView, Refusal> {
+            self.0.device_remove(spec)
+        }
+        fn winusb_prepare(
+            &self,
+            spec: &ksx_api::WinusbPrepareSpec,
+        ) -> Result<ksx_api::WinusbMutationView, Refusal> {
+            self.0.winusb_prepare(spec)
+        }
+        fn winusb_release(
+            &self,
+            spec: &ksx_api::WinusbReleaseSpec,
+        ) -> Result<ksx_api::WinusbMutationView, Refusal> {
+            self.0.winusb_release(spec)
+        }
+        fn profiles(&self) -> Result<ksx_api::ProfilesView, Refusal> {
+            self.0.profiles()
+        }
+        fn presets(&self) -> Result<ksx_api::PresetsView, Refusal> {
+            self.0.presets()
+        }
+        fn profile_new(&self, spec: &ksx_api::NewProfile) -> Result<String, Refusal> {
+            self.0.profile_new(spec)
+        }
+        fn profile_update(&self, spec: &ksx_api::UpdateProfile) -> Result<String, Refusal> {
+            self.0.profile_update(spec)
+        }
+        fn profile_delete(&self, spec: &ksx_api::DeleteProfile) -> Result<String, Refusal> {
+            self.0.profile_delete(spec)
+        }
+        fn preset_new(&self, spec: &ksx_api::NewPreset) -> Result<String, Refusal> {
+            self.0.preset_new(spec)
+        }
+        fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
+            self.0.setup_state()
+        }
+        fn config_export(
+            &self,
+            request: &ksx_api::ExportRequest,
+        ) -> Result<ksx_api::ConfigExport, Refusal> {
+            self.0.config_export(request)
+        }
+        fn config_import(
+            &self,
+            request: &ksx_api::ImportRequest,
+        ) -> Result<ksx_api::ImportReport, Refusal> {
+            self.0.config_import(request)
+        }
+        // The /pads verbs. A wrapper that forgot these would hand every pads
+        // test the trait's default refusals — the page would render its
+        // banner and every assertion about the bus would fail against a
+        // fixture that answered perfectly well.
+        fn pads_view(&self, session_running: bool) -> Result<ksx_api::PadsView, Refusal> {
+            self.0.pads_view(session_running)
+        }
+        fn pads(&self, spec: &ksx_api::PadsSpawnSpec) -> Result<String, Refusal> {
+            self.0.pads(spec)
+        }
+        fn pads_prune(&self, confirm: bool) -> Result<String, Refusal> {
+            self.0.pads_prune(confirm)
+        }
+    }
+    std::thread::spawn(move || {
+        let _ = ksx_studio::serve(
+            addr,
+            status,
+            Box::new(SharedControl(control)),
+            Box::new(SharedMachine(machine)),
+            // These tests never open the feed; a source that refuses in words
+            // is the honest stand-in, and `/api/live` under it is a real state
+            // of the endpoint (no daemon) worth being able to assert against.
+            std::sync::Arc::new(
+                ksx_api::NoLiveSource::new("no live feed in this test")
+                    .with_remedy("start the daemon"),
+            ),
+        );
+    });
+    // Wait until it accepts.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if TcpStream::connect(addr).is_ok() {
+            return addr;
+        }
+        assert!(Instant::now() < deadline, "server never came up on {addr}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn http(addr: SocketAddr, request: &str) -> String {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn get(addr: SocketAddr, path: &str) -> String {
+    http(
+        addr,
+        &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+fn post_form(addr: SocketAddr, path: &str, body: &str) -> String {
+    http(
+        addr,
+        &format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Content-Type: application/x-www-form-urlencoded\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+fn post_json(addr: SocketAddr, path: &str, body: &str) -> String {
+    http(
+        addr,
+        &format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+/// The response body (everything after the blank line).
+fn body_of(response: &str) -> &str {
+    response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or("")
+}
+
+/// Visible document markup with the hydration payload removed. Provider text
+/// is allowed to remain data for support and polling; assertions about primary
+/// customer copy must not pass merely because JSON contained the same words.
+fn rendered_body(response: &str) -> String {
+    let body = body_of(response);
+    let Some(start) = body.find("<script id=\"__ksx-payload\"") else {
+        return body.to_owned();
+    };
+    let end = body[start..]
+        .find("</script>")
+        .map_or(body.len(), |at| start + at + "</script>".len());
+    format!("{}{}", &body[..start], &body[end..])
+}
+
+/// [`get`], for responses whose body is not UTF-8 — the brand icons.
+/// Returns `(headers, body)` with the body left as bytes.
+fn get_binary(addr: SocketAddr, path: &str) -> (String, Vec<u8>) {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let split = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or_else(|| panic!("{path}: no header/body separator in the response"));
+    let headers = String::from_utf8_lossy(&response[..split]).into_owned();
+    (headers, response[split + 4..].to_vec())
+}
+
+/// The brand icons are served at the ROOT paths their consumers hard-code —
+/// a browser asks for `/favicon.ico` and iOS probes `/apple-touch-icon.png`
+/// with no prompting from the markup — with content types that make them
+/// icons rather than downloads.
+///
+/// Compared BYTE FOR BYTE against the embedded files. A 404 would be found by
+/// anything; the failure worth a test is a 200 carrying a truncated or
+/// re-encoded image, which renders as a perfectly normal page with a blank
+/// tab and no error anywhere.
+#[test]
+fn the_brand_icons_are_served_at_their_root_paths() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+
+    for (path, mime, expected) in [
+        (
+            "/favicon.ico",
+            "image/x-icon",
+            include_bytes!("../brand/favicon.ico").as_slice(),
+        ),
+        (
+            "/favicon.svg",
+            "image/svg+xml",
+            include_bytes!("../brand/favicon.svg").as_slice(),
+        ),
+        (
+            "/apple-touch-icon.png",
+            "image/png",
+            include_bytes!("../brand/apple-touch-icon.png").as_slice(),
+        ),
+    ] {
+        let (headers, body) = get_binary(addr, path);
+        assert!(headers.starts_with("HTTP/1.1 200"), "{path}: {headers}");
+        assert!(
+            headers.to_ascii_lowercase().contains(mime),
+            "{path}: expected content-type {mime}\n{headers}"
+        );
+        assert_eq!(
+            body.len(),
+            expected.len(),
+            "{path}: served {} bytes, embed has {}",
+            body.len(),
+            expected.len()
+        );
+        assert!(
+            body == expected,
+            "{path}: served bytes differ from the embed"
+        );
+    }
+
+    // And the page points at all three, so the icons are not merely reachable
+    // by luck of the browser's default probing.
+    let page = get(addr, "/");
+    for link in [
+        r#"href="/favicon.svg""#,
+        r#"href="/favicon.ico""#,
+        r#"href="/apple-touch-icon.png""#,
+    ] {
+        assert!(page.contains(link), "status page missing {link}");
+    }
+}
+
+#[test]
+fn the_session_panel_round_trips_start_stop_and_the_flash() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // Idle: the Start form and the profile dropdown render.
+    let page = get(addr, "/");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page.contains(r#"action="/session/start""#), "{page}");
+    assert!(page.contains("Example Game"), "{page}");
+    assert!(page.contains("idle"), "{page}");
+
+    // Start with a profile: 303 back to / with the outcome flashed.
+    let response = post_form(addr, "/session/start", "profile=Example+Game");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("location: /?flash=running"), "{response}");
+    assert_eq!(
+        control.started_with.lock().unwrap().clone(),
+        Some(Some("Example Game".to_owned())),
+        "the form's profile field must reach the control verb"
+    );
+
+    // Following the redirect renders the flash and, now, Stop/Reload.
+    let page = get(addr, "/?flash=running%20%284%20slot%28s%29%29");
+    assert!(page.contains("running (4 slot(s))"), "{page}");
+    assert!(page.contains(r#"action="/session/stop""#), "{page}");
+    assert!(page.contains(r#"action="/config/reload""#), "{page}");
+    assert!(!page.contains(r#"action="/session/start""#), "{page}");
+
+    // The empty sentinel option means "no profile override".
+    let response = post_form(addr, "/session/stop", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    let response = post_form(addr, "/session/start", "profile=");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert_eq!(control.started_with.lock().unwrap().clone(), Some(None));
+}
+
+/// The whole mapper loop over real HTTP: the page renders zones with real
+/// bindings, the learn flow answers listening → cancel, and /api/bind
+/// round-trips the conflict → Replace(force) decision.
+#[test]
+fn the_mapper_page_learn_flow_and_bind_round_trip() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // The page: slot context, art, a zone with its binding tag, credit line.
+    let page = get(addr, "/map");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page.contains("P1 · Xbox 360 · Panel P1"), "{page}");
+    assert!(page.contains("/_assets/pad-xbox.svg"), "{page}");
+    assert!(page.contains(r#"data-fn="A""#), "{page}");
+    assert!(page.contains(">G<"), "{page}");
+    assert!(
+        page.contains("Gamepad-Asset-Pack (MIT) by AL2009man"),
+        "{page}"
+    );
+    // Ledger #13(a): the CSP header must allow inline STYLE attributes (the
+    // zone geometry rides them) while scripts stay nonce-locked.
+    //
+    // It used to assert `style-src 'self' 'unsafe-inline'` — the policy ksx's
+    // own `relax_style_src` produced. forma-server 0.2.0 fixed the underlying
+    // problem, that workaround is deleted, and the header now carries
+    // upstream's answer: a separate `style-src-attr` permits the attributes,
+    // so `style-src` keeps its nonce for `<style>` blocks and stylesheets.
+    // Asserting the old string here would have quietly demanded a weaker
+    // policy than the server ships.
+    let headers = page.split("\r\n\r\n").next().unwrap_or("");
+    assert!(
+        headers.contains("style-src-attr 'unsafe-inline'"),
+        "the mapper's zone geometry rides inline style attributes: {headers}"
+    );
+    assert!(
+        headers.contains("style-src 'nonce-"),
+        "style-src must stay nonce-locked now that attributes have their own \
+         directive: {headers}"
+    );
+    assert!(headers.contains("script-src 'nonce-"), "{headers}");
+
+    // The art itself is served with the right type, recolored for the theme
+    // (the palette sheet build.mjs injects) — never the source's black blob.
+    let art = get(addr, "/_assets/pad-xbox.svg");
+    assert!(art.starts_with("HTTP/1.1 200"), "{art}");
+    assert!(art.contains("image/svg+xml"), "{art}");
+    assert!(art.contains("<svg"), "{art}");
+    assert!(art.contains("pad-body"), "recolor classes missing: {art}");
+    assert!(!art.contains("fill:#000000"), "source black leaked: {art}");
+
+    // /api/map serves the payload the page embeds.
+    let api = get(addr, "/api/map");
+    let payload: serde_json::Value = serde_json::from_str(body_of(&api)).expect("json");
+    assert_eq!(payload["mapper"]["slots"][0]["preset"], "Panel P1");
+    assert_eq!(payload["mapper"]["slots"][0]["bindings"]["A"][0], "G");
+    assert_eq!(payload["mapper"]["slots"][0]["session_backup"], true);
+    assert_eq!(payload["selected"], 1);
+    assert_eq!(payload["learn"]["state"], "idle");
+
+    // Learn: start → listening with the countdown, poll agrees, cancel ends.
+    let started = post_json(addr, "/api/learn/start", "");
+    let learn: serde_json::Value = serde_json::from_str(body_of(&started)).expect("json");
+    assert_eq!(learn["state"], "listening");
+    assert_eq!(learn["remaining_ms"], 10_000);
+    let polled = get(addr, "/api/learn");
+    let learn: serde_json::Value = serde_json::from_str(body_of(&polled)).expect("json");
+    assert_eq!(learn["state"], "listening");
+    let cancelled = post_json(addr, "/api/learn/cancel", "");
+    let learn: serde_json::Value = serde_json::from_str(body_of(&cancelled)).expect("json");
+    assert_eq!(learn["state"], "cancelled");
+
+    // Bind: the scripted conflict comes back structured; Replace (force)
+    // succeeds and reports the reload.
+    let refused = post_json(
+        addr,
+        "/api/bind",
+        r#"{"preset":"Panel P1","function":"B","key":"G","force":false,"reload":true}"#,
+    );
+    let outcome: serde_json::Value = serde_json::from_str(body_of(&refused)).expect("json");
+    assert_eq!(outcome["ok"], false);
+    assert_eq!(outcome["code"], "conflict");
+    assert_eq!(outcome["conflicts"][0]["preset"], "Panel P2");
+    assert_eq!(outcome["conflicts"][0]["slot"], 2);
+
+    let forced = post_json(
+        addr,
+        "/api/bind",
+        r#"{"preset":"Panel P1","function":"B","key":"G","force":true,"reload":true}"#,
+    );
+    let outcome: serde_json::Value = serde_json::from_str(body_of(&forced)).expect("json");
+    assert_eq!(outcome["ok"], true, "{outcome}");
+    assert_eq!(outcome["reloaded"], true);
+    let bound = control
+        .bound_with
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("bind reached control");
+    assert_eq!(bound.preset, "Panel P1");
+    assert_eq!(bound.function, "B");
+    assert!(bound.force);
+    assert!(bound.reload);
+
+    // Restore: defaults succeeds, a missing session recovery copy surfaces an
+    // honest refusal, and a junk mode never reaches the control source. The
+    // customer response stays independent of storage/provider wording.
+    let restored = post_json(
+        addr,
+        "/api/preset/restore",
+        r#"{"preset":"Panel P1","mode":"defaults"}"#,
+    );
+    let outcome: serde_json::Value = serde_json::from_str(body_of(&restored)).expect("json");
+    assert_eq!(outcome["ok"], true, "{outcome}");
+    assert_eq!(
+        outcome["message"], "Your controller layout was restored.",
+        "{outcome}"
+    );
+    assert_eq!(
+        control.restored_with.lock().unwrap().clone(),
+        Some(("Panel P1".to_owned(), "defaults".to_owned()))
+    );
+
+    let refused = post_json(
+        addr,
+        "/api/preset/restore",
+        r#"{"preset":"Panel P1","mode":"session-backup"}"#,
+    );
+    let outcome: serde_json::Value = serde_json::from_str(body_of(&refused)).expect("json");
+    assert_eq!(outcome["ok"], false);
+    assert_eq!(
+        outcome["error"], "That recovery copy could not be applied. Nothing changed.",
+        "{outcome}"
+    );
+
+    let junk = post_json(
+        addr,
+        "/api/preset/restore",
+        r#"{"preset":"Panel P1","mode":"yolo"}"#,
+    );
+    let outcome: serde_json::Value = serde_json::from_str(body_of(&junk)).expect("json");
+    assert_eq!(outcome["ok"], false);
+    assert_eq!(
+        outcome["error"], "Choose one of the recovery options shown on the page.",
+        "{outcome}"
+    );
+    assert_eq!(
+        control.restored_with.lock().unwrap().clone(),
+        Some(("Panel P1".to_owned(), "session-backup".to_owned())),
+        "the junk mode must have been rejected before the control source"
+    );
+}
+
+/// FIX 1, over real HTTP: the reported failure. Quit the daemon, load
+/// either page, and the FIRST thing on it must be a plain-language banner.
+/// The technical recovery command still travels with the page for support,
+/// while the visible Map workflow uses the consumer remedy and never exposes
+/// a command-line mapping fallback.
+#[test]
+fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
+    let addr = start_server(Arc::new(ScriptedControl::dead()));
+
+    for (path, headline, remedy) in [
+        (
+            "/",
+            "No daemon — ksx Studio can see your config but cannot change anything.",
+            "tray icon",
+        ),
+        (
+            "/map",
+            "Controls need the background helper",
+            "Close and reopen ksx",
+        ),
+    ] {
+        let page = get(addr, path);
+        assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
+        let body = body_of(&page);
+        assert!(body.contains(headline), "{path} has no banner: {body}");
+        assert!(body.contains(remedy), "{path}: {body}");
+        assert!(
+            body.contains("ksx daemon --game &quot;Example Launcher&quot;")
+                || body.contains(r#"ksx daemon --game "Example Launcher""#),
+            "{path} must carry the command that actually starts THIS cabinet: {body}"
+        );
+        // Unmissable = above everything it is about. On both pages the banner
+        // must precede the <main> content it warns you off touching.
+        let banner = body.find(headline).expect("banner");
+        let footer = body.find("<footer").expect("footer");
+        assert!(banner < footer, "{path}: banner is below the fold: {body}");
+        let first_other_card = body[banner..]
+            .find(r#"class="card"#)
+            .map(|i| banner + i)
+            .expect("another card follows the banner");
+        assert!(
+            banner < first_other_card,
+            "{path}: the banner is not first inside <main>: {body}"
+        );
+    }
+
+    // The mapper additionally renders every control visibly inert…
+    let map = body_of(&get(addr, "/map")).to_owned();
+    assert!(map.contains("z-dead"), "{map}");
+    assert!(map.contains("l-dead"), "{map}");
+    assert!(map.contains("card pactions off"), "{map}");
+    // The mapping controls remain present and visibly inert, but there is no
+    // customer-facing shell fallback competing with the reopen remedy.
+    assert!(!map.contains("ksx map --preset"), "{map}");
+}
+
+/// FIX 0 over HTTP: the mapper's own session controls are the same
+/// ControlSource verbs the status page's forms use — one pipe verb each.
+#[test]
+fn the_mapper_can_pause_and_resume_emulation_over_json() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // Start something, then pause it from the mapper.
+    let started = post_json(addr, "/api/session/start", r#"{"profile":"Example Game"}"#);
+    let out: serde_json::Value = serde_json::from_str(body_of(&started)).expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+
+    let map = body_of(&get(addr, "/map")).to_owned();
+    assert!(map.contains("Play is active"), "{map}");
+    assert!(map.contains(r#"data-act="pause-map""#), "{map}");
+    // v9: and it is a real form, so the pause is not a dead button on a page
+    // without JavaScript — same `stop` verb, 303'd back to /map.
+    assert!(map.contains(r#"action="/map/session/stop""#), "{map}");
+    let response = post_form(addr, "/map/session/stop", "slot=1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /map?slot=1&flash=stopped"),
+        "{response}"
+    );
+    assert!(
+        !control.session().running,
+        "the form POST really stopped it"
+    );
+    let started = post_json(addr, "/api/session/start", r#"{"profile":"Example Game"}"#);
+    let out: serde_json::Value = serde_json::from_str(body_of(&started)).expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+
+    let paused = post_json(addr, "/api/session/stop", "");
+    let out: serde_json::Value = serde_json::from_str(body_of(&paused)).expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["message"], "Play is paused. You can edit controls now.");
+
+    // Resume names the profile the page remembered.
+    let resumed = post_json(addr, "/api/session/start", r#"{"profile":"Example Game"}"#);
+    let out: serde_json::Value = serde_json::from_str(body_of(&resumed)).expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(
+        control.started_with.lock().unwrap().clone(),
+        Some(Some("Example Game".to_owned())),
+        "Resume must restart the SAME profile that was paused"
+    );
+}
+
+/// FIX 2 over HTTP: three destinations, and the label the third one wears.
+#[test]
+fn the_three_restore_destinations_and_clear_all_round_trip() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let map = body_of(&get(addr, "/map")).to_owned();
+    assert!(
+        map.contains(&format!("Restore backup from {BACKUP_LABEL}")),
+        "the newest backup's timestamp belongs in the label: {map}"
+    );
+    assert!(
+        map.contains("Reset to KSX keyboard layout (WASD + arrows)"),
+        "{map}"
+    );
+    assert!(!map.contains("Restore built-in defaults"), "{map}");
+
+    let out: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/preset/restore",
+        r#"{"preset":"Panel P1","mode":"latest-backup"}"#,
+    )))
+    .expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(
+        control.restored_with.lock().unwrap().clone(),
+        Some(("Panel P1".to_owned(), "latest-backup".to_owned()))
+    );
+
+    let out: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/preset/clear-all",
+        r#"{"preset":"Panel P1"}"#,
+    )))
+    .expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(
+        control.cleared.lock().unwrap().clone(),
+        Some("Panel P1".to_owned())
+    );
+}
+
+/// v11 over HTTP: the macro editor READS a real preset and SAVES the whole
+/// table back through the one control verb.
+///
+/// The read half proves the card is no longer a blank draft — the file's own
+/// numbers reach the page, in the unit they were authored in — and the write
+/// half proves the save is `ControlSource::save_macro` (= the daemon's
+/// `map-macro`), carrying the toast, the advisories a successful write still
+/// has to say, and the backup label that IS the undo.
+#[test]
+fn the_macro_editor_reads_a_preset_and_saves_the_whole_table() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // READ: the payload the island polls carries the file's shape.
+    let map: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?slot=1"))).expect("json");
+    assert_eq!(map["macros"]["available"], true, "{map}");
+    assert_eq!(map["macros"]["preset"], "Panel P1");
+    assert_eq!(map["macros"]["macros"][0]["name"], "hadouken");
+    assert_eq!(map["macros"]["macros"][0]["triggers"][0], "P");
+    assert_eq!(map["macros"]["macros"][0]["steps"][0]["ms"], 50);
+    // A duration authored in frames stays frames all the way to the client.
+    assert_eq!(map["macros"]["macros"][0]["steps"][1]["frames"], 3);
+    assert_eq!(
+        map["macros"]["macros"][0]["steps"][1]["ms"],
+        serde_json::Value::Null
+    );
+    // ...and the SSR paint says the same thing without any JavaScript.
+    let page = body_of(&get(addr, "/map?slot=1")).to_owned();
+    assert!(page.contains("hadouken"), "{page}");
+    assert!(page.contains("started by P"), "{page}");
+
+    // WRITE: one POST, one whole table.
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","on_release":"abort",
+            "steps":[{"hold":["dpad.down"],"ms":50},{"hold":["A"],"frames":3}]}"#,
+    )))
+    .expect("json");
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(saved["backup"], BACKUP_LABEL, "the undo, named: {saved}");
+    assert_eq!(
+        saved["warnings"][0], "One very short step may be missed by the game.",
+        "the customer-safe advisory is never swallowed: {saved}"
+    );
+    let write = control.saved_macro.lock().unwrap().clone().expect("saved");
+    assert_eq!(write.preset, "Panel P1");
+    assert_eq!(write.name, "hadouken");
+    assert_eq!(write.on_release, "abort");
+    assert_eq!(write.steps.len(), 2);
+    assert_eq!(write.steps[1].frames, Some(3));
+    assert!(!write.delete);
+    assert!(
+        write.reload,
+        "a macro body is a binding change: the running session takes it in place"
+    );
+
+    // A refusal comes back as rows a page can list, not a sentence to parse.
+    let refused: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","steps":[{"hold":["warp"],"ms":50}]}"#,
+    )))
+    .expect("json");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "macro-invalid", "{refused}");
+    assert_eq!(
+        refused["problems"][0], "One step or setting is not valid.",
+        "{refused}"
+    );
+
+    // DELETE is the same route with the explicit word.
+    let deleted: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","delete":true}"#,
+    )))
+    .expect("json");
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    assert_eq!(deleted["deleted"], true, "{deleted}");
+    assert!(control.saved_macro.lock().unwrap().as_ref().unwrap().delete);
+}
+
+/// END TO END over HTTP for the field that broke: `repeat`, and the turbo
+/// rate that hangs off it.
+///
+/// The user set `repeat = while-held` in the card, clicked Save, was told
+/// "saved", and watched the control snap back to `once` — because the value
+/// was dropped between the wire and the preset file. Nothing about that was
+/// visible from the outside: the POST returned `ok`. So this test asserts what
+/// the POST actually DELIVERS, not just that it succeeded — the `MacroWrite`
+/// that reached `ControlSource::save_macro` must carry the policy the request
+/// asked for, in every spelling the card can produce.
+#[test]
+fn the_repeat_policy_and_its_rate_reach_the_control_source_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // The read half serves the field at all — an absent `repeat` on the wire
+    // would leave the card with nothing to show.
+    let map: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?slot=1"))).expect("json");
+    assert_eq!(map["macros"]["macros"][0]["repeat"], "once", "{map}");
+
+    // while-held: the exact edit that was reported lost.
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","repeat":"while-held",
+            "steps":[{"hold":["A"],"ms":50}]}"#,
+    )))
+    .expect("json");
+    assert_eq!(saved["ok"], true, "{saved}");
+    let write = control.saved_macro.lock().unwrap().clone().expect("saved");
+    assert_eq!(
+        write.repeat, "while-held",
+        "the repeat policy must reach the writer, or Save is a lie: {saved}"
+    );
+
+    // turbo authored in hertz: the rate travels in the unit it was written in.
+    let _ = post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","repeat":"turbo","turbo_hz":12,
+            "steps":[{"hold":["A"],"ms":50}]}"#,
+    );
+    let write = control.saved_macro.lock().unwrap().clone().expect("saved");
+    assert_eq!(write.repeat, "turbo");
+    assert_eq!(write.turbo_hz, Some(12));
+    assert_eq!(write.gap_ms, None, "the other spelling is not invented");
+
+    // ...and the same rate said the other way.
+    let _ = post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","repeat":"turbo","gap_ms":50,
+            "steps":[{"hold":["A"],"frames":2,"allow_short":true}]}"#,
+    );
+    let write = control.saved_macro.lock().unwrap().clone().expect("saved");
+    assert_eq!(write.gap_ms, Some(50));
+    assert_eq!(write.turbo_hz, None);
+    // The step's own fields ride along untouched, in the author's unit.
+    assert_eq!(write.steps[0].frames, Some(2));
+    assert_eq!(write.steps[0].ms, None);
+    assert!(write.steps[0].allow_short);
+
+    // An omitted `repeat` is the file's own default, not an empty string the
+    // daemon would refuse.
+    let _ = post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"preset":"Panel P1","name":"hadouken","steps":[{"hold":["A"],"ms":50}]}"#,
+    );
+    let write = control.saved_macro.lock().unwrap().clone().expect("saved");
+    assert!(
+        write.repeat.is_empty(),
+        "blank = the file's omitted-field rule"
+    );
+}
+
+/// Clearing ONE binding is the plain `map` verb with a null key — no second
+/// writer, no GUI-only path.
+#[test]
+fn clearing_one_binding_goes_through_the_bind_verb_with_a_null_key() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+    let out: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/bind",
+        r#"{"preset":"Panel P1","function":"A","key":null,"force":false,"reload":true}"#,
+    )))
+    .expect("json");
+    assert_eq!(out["ok"], true, "{out}");
+    let bound = control.bound_with.lock().unwrap().clone().expect("bind");
+    assert_eq!(bound.function, "A");
+    assert_eq!(bound.key, None, "a null key is a CLEAR");
+}
+
+/// v9, over real HTTP and with no JavaScript anywhere in sight: the mapper
+/// page ships forms, and posting one form-encoded body writes a binding and
+/// 303s back to /map with the outcome flashed. This is the whole no-JS
+/// contract — if it holds here, a browser with scripting off can map a
+/// cabinet.
+#[test]
+fn the_mapper_is_fully_operable_with_form_posts_only() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // The page a scripting-off browser gets: real forms, real action URLs,
+    // real key options, and slot switching as links.
+    let page = body_of(&get(addr, "/map")).to_owned();
+    assert!(page.contains(r#"action="/map/bind""#), "{page}");
+    assert!(page.contains(r#"formaction="/map/clear""#), "{page}");
+    assert!(page.contains(r#"action="/map/preset/restore""#), "{page}");
+    assert!(page.contains(r#"action="/map/preset/clear-all""#), "{page}");
+    assert!(
+        page.contains(r#"<select class="keysel" name="key""#),
+        "{page}"
+    );
+    assert!(page.contains("<option>NumpadEnter</option>"), "{page}");
+    assert!(page.contains(r#"href="/map?slot=1""#), "{page}");
+
+    // Bind: form-encoded in, 303 back to the slot we were on, outcome flashed.
+    let response = post_form(addr, "/map/bind", "slot=1&function=B&key=H");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /map?slot=1&flash=B%20is%20now%20H."),
+        "{response}"
+    );
+    let bound = control.bound_with.lock().unwrap().clone().expect("bind");
+    assert_eq!(bound.preset, "Panel P1", "the slot resolved to its preset");
+    assert_eq!(bound.function, "B");
+    assert_eq!(bound.key.as_deref(), Some("H"));
+    assert!(
+        bound.reload,
+        "a binding edit is hot-swapped, pads stay plugged"
+    );
+    assert!(!bound.force, "the row form never forces on its own");
+
+    // Clear: the same `map` verb with a null key — no second unbind path.
+    let response = post_form(addr, "/map/clear", "slot=1&function=A");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /map?slot=1&flash=A%20is%20now%20unbound."),
+        "{response}"
+    );
+    assert_eq!(
+        control.bound_with.lock().unwrap().clone().unwrap().key,
+        None,
+        "a null key is a CLEAR"
+    );
+
+    // The empty placeholder is refused in words, never read as a clear.
+    let response = post_form(addr, "/map/bind", "slot=1&function=B&key=");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("flash=error%3A%20no%20key%20picked"),
+        "{response}"
+    );
+
+    // Cross-player refusal: the flash names the other player AND the checkbox
+    // that says yes to it — a form's version of the Replace dialog.
+    let response = post_form(addr, "/map/bind", "slot=1&function=B&key=G");
+    assert!(
+        response.contains("location: /map?slot=1&flash=error"),
+        "{response}"
+    );
+    assert!(response.contains("Player%202"), "{response}");
+    assert!(!response.contains("IPAC"), "{response}");
+    let response = post_form(addr, "/map/bind", "slot=1&function=B&key=G&force=1");
+    assert!(response.contains("flash=B%20is%20now%20G."), "{response}");
+    assert!(control.bound_with.lock().unwrap().clone().unwrap().force);
+
+    // The preset writes and the pause, same shape.
+    let response = post_form(addr, "/map/preset/clear-all", "slot=1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert_eq!(
+        control.cleared.lock().unwrap().clone(),
+        Some("Panel P1".to_owned())
+    );
+    let response = post_form(addr, "/map/preset/restore", "slot=1&mode=latest-backup");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert_eq!(
+        control.restored_with.lock().unwrap().clone(),
+        Some(("Panel P1".to_owned(), "latest-backup".to_owned()))
+    );
+    // A junk mode is refused before the daemon is ever asked.
+    let response = post_form(addr, "/map/preset/restore", "slot=1&mode=yolo");
+    assert!(
+        response.contains(
+            "flash=error%3A%20Choose%20one%20of%20the%20recovery%20options%20shown%20on%20the%20page."
+        ),
+        "{response}"
+    );
+    assert_eq!(
+        control.restored_with.lock().unwrap().clone(),
+        Some(("Panel P1".to_owned(), "latest-backup".to_owned())),
+        "the junk mode must not have reached the control source"
+    );
+
+    // Following the redirect renders the outcome — the no-JS feedback loop
+    // closed, exactly like the status page's.
+    let page = body_of(&get(addr, "/map?slot=1&flash=B%20is%20now%20H.")).to_owned();
+    assert!(page.contains("The change was completed."), "{page}");
+    assert!(page.contains("flash flash-ok"), "{page}");
+    let page = body_of(&get(addr, "/map?slot=1&flash=error%3A%20nope")).to_owned();
+    assert!(page.contains("flash flash-err"), "{page}");
+
+    // Query strings are untrusted diagnostic input, not customer copy. A
+    // hardware address, local path, parser detail, registry key or JSON blob
+    // must all collapse to the authored Map fallback before SSR; hydration is
+    // pinned independently against the same rule in map_target_source.rs.
+    for (encoded, leaked) in [
+        ("C%3A%5CUsers%5CTestUser%5Csecret", "TestUser"),
+        ("HID%5CVID_D209%26PID_0430", "VID_D209"),
+        ("HKLM%5CSYSTEM%5CCurrentControlSet", "CurrentControlSet"),
+        (
+            "expected%20a%20sequence%20at%20line%204%20column%209",
+            "line 4",
+        ),
+        ("%7B%22verb%22%3A%22map%22%2C%22key%22%3A%22A%22%7D", "verb"),
+    ] {
+        let page = body_of(&get(
+            addr,
+            &format!("/map?slot=1&flash=error%3A%20{encoded}"),
+        ))
+        .to_owned();
+        assert!(
+            page.contains("That change could not be completed. Nothing changed."),
+            "{page}"
+        );
+        assert!(!page.contains(leaked), "{leaked} leaked into Map: {page}");
+    }
+}
+
+/// v10, MANY KEYS → ONE CONTROL over real HTTP and with no JavaScript: the
+/// same row form that binds can also ADD the picked key to what a control
+/// already holds, and REMOVE just one of the keys it holds. Both are
+/// read-modify-write on the key list the page already read, so a form body
+/// never carries a key list it made up.
+#[test]
+fn the_no_js_forms_add_and_remove_one_key_at_a_time() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let page = body_of(&get(addr, "/map")).to_owned();
+    assert!(page.contains(r#"formaction="/map/add""#), "{page}");
+    assert!(page.contains(r#"formaction="/map/key/remove""#), "{page}");
+    // The fixture's B holds two keys: both are on the page, each with its own
+    // remove payload, and neither reader spells them as a chord.
+    assert!(page.contains(r#"data-rmkey="B|S""#), "{page}");
+    assert!(page.contains(r#"data-rmkey="B|Enter""#), "{page}");
+    assert!(!page.contains("S+Enter"), "{page}");
+
+    // REMOVE ONE: B keeps S, loses Enter — and because one key is left, this
+    // daemon's single-key `map` verb can express it exactly.
+    let response = post_form(addr, "/map/key/remove", "slot=1&function=B&key=Enter");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("flash=Enter%20removed.%20B%20is%20now%20S."),
+        "{response}"
+    );
+    assert_eq!(
+        control
+            .bound_with
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .key
+            .as_deref(),
+        Some("S"),
+        "the survivor is what gets written"
+    );
+
+    // A key the control does not have is a refusal that names what it DOES
+    // have — never a silent no-op, and never a write.
+    let response = post_form(addr, "/map/key/remove", "slot=1&function=B&key=J");
+    assert!(response.contains("flash=error%3A"), "{response}");
+    assert!(
+        response.contains("it%20has%20S%20%C2%B7%20Enter"),
+        "{response}"
+    );
+
+    // ADD onto an UNBOUND control is an ordinary bind: nothing to keep.
+    let response = post_form(addr, "/map/add", "slot=1&function=X&key=J");
+    assert!(response.contains("flash=X%20is%20now%20J."), "{response}");
+
+    // ADD onto a control that already has keys is the OR-chain the engine
+    // executes — and the honest limit of today's wire: the map verb writes one
+    // key per control and would drop the rest, so the write is REFUSED in
+    // words rather than made silently lossy. (The day the verb takes a key
+    // list, `ControlSource::bind_keys` writes it and this flash becomes the
+    // success sentence, with nothing else on the page changing.)
+    let before = control.bound_with.lock().unwrap().clone();
+    let response = post_form(addr, "/map/add", "slot=1&function=B&key=J");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("flash=error%3A"), "{response}");
+    assert!(
+        response.contains(
+            "B%20was%20not%20changed%3A%20That%20control%20could%20not%20be%20changed.%20Nothing%20changed."
+        ),
+        "{response}"
+    );
+    assert_eq!(
+        control.bound_with.lock().unwrap().clone().map(|b| b.key),
+        before.map(|b| b.key),
+        "a refused multi-key write must not have written anything"
+    );
+
+    // Adding a key the control already has changes nothing and says so.
+    let response = post_form(addr, "/map/add", "slot=1&function=A&key=G");
+    assert!(response.contains("already%20has%20G"), "{response}");
+
+    // No key picked: the same honest refusal the Bind button gives.
+    let response = post_form(addr, "/map/add", "slot=1&function=B&key=");
+    assert!(
+        response.contains("flash=error%3A%20no%20key%20picked"),
+        "{response}"
+    );
+}
+
+/// The JSON twin: the island computes the SET it wants and posts it whole, so
+/// add, remove-one and undo all land through one writer.
+#[test]
+fn the_key_list_route_writes_a_whole_set() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // One key: an ordinary bind.
+    let response = post_json(
+        addr,
+        "/api/bind/keys",
+        r#"{"preset":"Panel P1","function":"B","keys":["H"],"force":false,"reload":true}"#,
+    );
+    assert!(body_of(&response).contains(r#""ok":true"#), "{response}");
+    let bound = control.bound_with.lock().unwrap().clone().unwrap();
+    assert_eq!(bound.key.as_deref(), Some("H"));
+    assert!(bound.reload);
+
+    // No keys: a clear, through the same `map` verb.
+    let response = post_json(
+        addr,
+        "/api/bind/keys",
+        r#"{"preset":"Panel P1","function":"B","keys":[],"reload":true}"#,
+    );
+    assert!(body_of(&response).contains(r#""ok":true"#), "{response}");
+    assert_eq!(
+        control.bound_with.lock().unwrap().clone().unwrap().key,
+        None
+    );
+
+    // Two keys: refused in customer language, without exposing the wire
+    // limitation — and nothing was written.
+    let response = post_json(
+        addr,
+        "/api/bind/keys",
+        r#"{"preset":"Panel P1","function":"B","keys":["S","Enter"],"reload":true}"#,
+    );
+    let body = body_of(&response);
+    assert!(body.contains(r#""ok":false"#), "{response}");
+    assert!(
+        body.contains("That control could not be changed. Nothing changed."),
+        "{response}"
+    );
+    assert_eq!(
+        control.bound_with.lock().unwrap().clone().unwrap().key,
+        None,
+        "the refusal must not have written the first key"
+    );
+}
+
+/// No daemon: the forms are still there (dimmed by CSS, never removed) and a
+/// post still answers with the reason — the no-JS half of FIX 1's "never a
+/// silent no-op".
+#[test]
+fn a_no_js_post_without_a_daemon_flashes_the_reason() {
+    let addr = start_server(Arc::new(ScriptedControl::dead()));
+    let page = body_of(&get(addr, "/map")).to_owned();
+    assert!(page.contains(r#"class="lbind nojs off""#), "{page}");
+    assert!(page.contains(r#"action="/map/bind""#), "{page}");
+
+    let response = post_form(addr, "/map/preset/clear-all", "slot=1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("flash=error%3A"), "{response}");
+    assert!(
+        response.contains(
+            "The%20controller%20layout%20could%20not%20be%20cleared.%20Nothing%20changed."
+        ),
+        "{response}"
+    );
+    assert!(!response.contains("daemon"), "{response}");
+}
+
+#[test]
+fn a_refused_action_comes_back_as_an_error_flash_never_silence() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let response = post_form(addr, "/session/start", "profile=");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /?flash=error%3A%20no%20ksx%20daemon"),
+        "{response}"
+    );
+
+    // And the redirect target renders it.
+    let page = get(
+        addr,
+        "/?flash=error%3A%20no%20ksx%20daemon%20control%20channel",
+    );
+    assert!(
+        page.contains("error: no ksx daemon control channel"),
+        "{page}"
+    );
+}
+
+/// The attack this guard exists to stop, executed over a real socket.
+///
+/// A page on another site cannot read ksx's responses — but it never needed to.
+/// A cross-origin `<form method="post">` is a CORS *simple request*: no
+/// preflight, no permission, and the side effect lands before anyone could
+/// object. `/map/preset/clear-all` wipes a preset; `/map/session/stop` ends a
+/// game. The port is 4460 and is not a secret.
+///
+/// So this posts exactly what `evil.example` would post, byte for byte, and
+/// requires that the scripted control never sees it.
+#[test]
+fn a_cross_site_form_post_is_refused_before_it_reaches_the_control() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control.clone());
+
+    for path in [
+        "/map/preset/clear-all",
+        "/map/session/stop",
+        "/session/stop",
+        "/map/clear",
+    ] {
+        let body = "preset=Panel+P1&slot=1";
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                 Origin: https://evil.example\r\nConnection: close\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{path} must refuse a cross-site write, got: {response}"
+        );
+        assert!(
+            response.contains("refused a request from another site"),
+            "the refusal must say what happened: {response}"
+        );
+    }
+
+    // Not "it returned 403" — that the write never happened. A refusal that
+    // still performed the write would pass a status-code assertion and fail
+    // the user, so assert on what the control surface actually recorded.
+    assert!(
+        control.cleared.lock().unwrap().is_none(),
+        "clear-all must not have run"
+    );
+    assert!(
+        control.bound_with.lock().unwrap().is_none(),
+        "no cross-site request may reach the control surface"
+    );
+}
+
+/// The same routes, from ksx Studio's own page, still work.
+///
+/// A guard that also blocks the real UI is not a fix, and this is the assertion
+/// that would fail if the origin comparison were tightened past correctness.
+#[test]
+fn the_pages_own_origin_still_writes() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control.clone());
+
+    let body = "slot=1&function=A";
+    let response = http(
+        addr,
+        &format!(
+            "POST /map/clear HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n\
+             Content-Type: application/x-www-form-urlencoded\r\n\
+             Content-Length: {len}\r\n\r\n{body}",
+            port = addr.port(),
+            len = body.len(),
+        ),
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 303"),
+        "Studio's own form must still post: {response}"
+    );
+    assert!(
+        control.bound_with.lock().unwrap().is_some(),
+        "the write must actually have reached the control surface"
+    );
+}
+
+/// DNS rebinding: the packet really does arrive on 127.0.0.1, so the bind
+/// cannot tell. Only the name the browser asked for can, and a rebound request
+/// carries the attacker's.
+#[test]
+fn a_rebound_host_cannot_even_read() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let response = http(
+        addr,
+        "GET /api/map HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 421"),
+        "a rebound read must be refused, got: {response}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// /devices — the picker, end to end
+// ---------------------------------------------------------------------------
+
+/// The read. One PHYSICAL board per row (an I-PAC is one device to a human and
+/// two devnodes here), the configured entry beside it, and the PORT-PINNED
+/// paragraph in full — including the machine-specific half, which is the half
+/// people miss and the reason a shared config silently stops matching.
+#[test]
+fn the_devices_page_lists_boards_not_devnodes_and_keeps_the_port_pinned_warning() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let page = get(addr, "/devices");
+    let body = body_of(&page);
+
+    assert!(body.contains("Ultimarc I-PAC 4X"), "{body}");
+    assert!(body.contains("2 keyboard-capable boards"), "{body}");
+    assert!(body.contains("1 [[device]] entry in config.toml"), "{body}");
+    // The board with no keyboard interface is LISTED, not hidden: "ksx cannot
+    // see my board" is a real support question.
+    assert!(body.contains("Example auxiliary controller"), "{body}");
+    assert!(body.contains("PORT-PINNED"), "{body}");
+    assert!(
+        body.contains("do not copy this config to another cabinet"),
+        "the machine-specific half of the warning must reach the page: {body}"
+    );
+    // The two words that decide whether the entry can capture anything. The
+    // page carried `backend` in its row object and rendered it nowhere, so it
+    // never said `winusb` or `interception` — the field the health pill above
+    // is reasoning about — and `rung` was not carried at all.
+    assert!(body.contains(">backend</span>"), "{body}");
+    assert!(body.contains(">rung</span>"), "{body}");
+    assert!(body.contains(">winusb<"), "{body}");
+    assert!(body.contains(">port<"), "{body}");
+    // Claiming needs elevation, so the command is TEXT and there is no form.
+    assert!(body.contains("ksx winusb release"), "{body}");
+    assert!(body.contains("ELEVATED shell"), "{body}");
+    assert!(
+        !body.contains(r#"action="/devices/claim""#),
+        "a claim form on a surface that cannot elevate: {body}"
+    );
+}
+
+/// A refused scan renders as a refusal, never as an empty machine. The two are
+/// indistinguishable in the data and completely different to a person standing
+/// at a cabinet with four boards plugged in.
+#[test]
+fn a_refused_scan_renders_the_refusal_rather_than_an_empty_list() {
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(true)),
+        Arc::new(ScriptedMachine::refusing()),
+    );
+    let page = get(addr, "/devices");
+    let body = body_of(&page);
+    assert!(body.contains("could not be read"), "{body}");
+    assert!(body.contains("run `ksx devices`"), "{body}");
+    for claim in [
+        ksx_api::NO_BOARDS_LINE,
+        "no board it found exposes a",
+        "No board is configured yet",
+        "no [[device]] entries in config.toml",
+    ] {
+        assert!(
+            !body.contains(claim),
+            "a refused read printed an assertion of absence ({claim:?}): {body}"
+        );
+    }
+}
+
+/// **A scan that ANSWERS "I could not read the USB bus" is not an empty
+/// cabinet either** — and this is the state nothing tested.
+///
+/// FAILS against the shipped page. `ScriptedMachine` only ever returned
+/// `usb_available: true`, so no HTTP test could reach the path where the
+/// enumeration itself failed; the page printed the banner "nothing could be
+/// READ" and, directly beneath it, "No board here exposes a keyboard
+/// interface". This is the shape of the failure that started the whole
+/// project: a session reporting success while the arcade panel was dead
+/// because a WinUSB board had fallen back to Interception. "I could not read
+/// this" and "there is nothing here" are different sentences, and the user
+/// acts on them differently.
+#[test]
+fn a_failed_enumeration_never_renders_as_an_empty_cabinet() {
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(true)),
+        Arc::new(ScriptedMachine::blind()),
+    );
+    let body = body_of(&get(addr, "/devices")).to_owned();
+
+    assert!(
+        body.contains("nothing could be READ"),
+        "the page must say the list is empty because nothing was read: {body}"
+    );
+    for claim in [ksx_api::NO_BOARDS_LINE, "no board it found exposes a"] {
+        assert!(
+            !body.contains(claim),
+            "a failed enumeration printed the empty-machine sentence ({claim:?}): {body}"
+        );
+    }
+
+    // The poller gets the same answer, in the field the island actually reads.
+    // A page that got this right while `/api/devices` sent
+    // `no_pickable_board_found: true` would go wrong two seconds later.
+    let json: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/devices"))).unwrap();
+    assert_eq!(
+        json.pointer("/scan/no_pickable_board_found"),
+        Some(&serde_json::json!(false)),
+        "the poll licensed the island to draw an empty machine: {json}"
+    );
+    assert_eq!(
+        json.pointer("/scan/usb_available"),
+        Some(&serde_json::json!(false))
+    );
+
+    // And the ordinary cabinet is unaffected — it still has boards and says so.
+    let ok = start_server(Arc::new(ScriptedControl::new(true)));
+    assert!(body_of(&get(ok, "/devices")).contains("2 keyboard-capable boards"));
+}
+
+/// **The rule this page has to teach, rendered.** A Bluetooth keyboard is in
+/// the SAME list as the USB boards, its row says Interception yes / WinUSB
+/// never, and the "never" names the transport fact.
+///
+/// FAILS against the shipped page in three separate ways: the payload had no
+/// transport at all, the row had no backend line, and the enumeration behind it
+/// walked USB only so the device was not on the page to begin with.
+#[test]
+fn the_devices_page_states_which_backends_each_transport_can_use() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let body = body_of(&get(addr, "/devices")).to_owned();
+
+    assert!(body.contains("Bluetooth Keyboard"), "{body}");
+    // The transport column, on BOTH rows — a label that only appears on the
+    // surprising one reads as a special case rather than as the rule.
+    assert!(body.contains(">Bluetooth<"), "{body}");
+    assert!(body.contains(">USB<"), "{body}");
+    // The backend line, and the reason.
+    assert!(
+        body.contains("winusb: never"),
+        "the Bluetooth row must say WinUSB never applies: {body}"
+    );
+    assert!(
+        body.contains("no USB interface to bind"),
+        "and name the transport fact rather than refusing vaguely: {body}"
+    );
+    assert!(
+        body.contains("not a missing feature"),
+        "'not supported' invites waiting for a release that cannot come: {body}"
+    );
+    assert!(
+        body.contains("interception: yes, now"),
+        "and the backend that DOES capture it today: {body}"
+    );
+    // Never an elevated claim command on that row: a claim on this device
+    // refuses every time it is run, and a page that printed one would be
+    // handing out a command that cannot work. Asserted on the row the page
+    // renders FROM, because the raw HTML also carries the hydration payload
+    // and a substring search cannot tell the two apart.
+    let json: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/devices"))).unwrap();
+    let bt = json.pointer("/scan/boards/0").expect("the Bluetooth board");
+    assert_eq!(
+        bt.pointer("/name"),
+        Some(&serde_json::json!("Bluetooth Keyboard"))
+    );
+    assert_eq!(bt.pointer("/claim_command"), Some(&serde_json::json!(null)));
+    assert_eq!(bt.pointer("/command"), Some(&serde_json::json!("")));
+    assert_eq!(bt.pointer("/command_lead"), Some(&serde_json::json!("")));
+    // …but it IS pickable, which is the whole point.
+    assert_eq!(bt.pointer("/pickable"), Some(&serde_json::json!(true)));
+    assert!(
+        body.contains(r#"action="/devices/pick""#),
+        "and the pick form is on the page: {body}"
+    );
+}
+
+/// A refusal degrades to `DeviceScanView::default()`, and that default must
+/// license nothing. This is the invariant the `show:` flags depend on: they
+/// read `no_pickable_board_found` / `no_configured_device` alone, with no
+/// `&& unavailable.is_empty()` in either language, which is only sound while
+/// every refusing path in `collect_devices` hands over a defaulted scan.
+#[test]
+fn a_refusal_serves_a_scan_that_asserts_nothing() {
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(true)),
+        Arc::new(ScriptedMachine::refusing()),
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/devices"))).unwrap();
+
+    assert_ne!(
+        json.pointer("/unavailable"),
+        Some(&serde_json::json!("")),
+        "the refusal itself must be on the wire: {json}"
+    );
+    assert_eq!(
+        json.pointer("/scan/no_pickable_board_found"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        json.pointer("/scan/no_configured_device"),
+        Some(&serde_json::json!(false))
+    );
+    for line in ["/scan/boards_summary", "/scan/configured_summary"] {
+        let value = json.pointer(line).and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            value.contains("nothing could be READ"),
+            "{line} must say why it is empty, got {value:?}"
+        );
+    }
+}
+
+/// The page and the poller serve one shape.
+#[test]
+fn api_devices_serves_the_same_payload_the_page_embeds() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let json: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/devices"))).unwrap();
+    assert_eq!(
+        json.pointer("/scan/boards/1/name"),
+        Some(&serde_json::json!("Ultimarc I-PAC 4X"))
+    );
+    assert_eq!(
+        json.pointer("/scan/configured/0/alias"),
+        Some(&serde_json::json!("panel"))
+    );
+    // Both transports, in one list, each saying which backends reach it —
+    // the poller and the SSR seam read the same fields off the same payload.
+    assert_eq!(
+        json.pointer("/scan/boards/0/transport"),
+        Some(&serde_json::json!("bluetooth"))
+    );
+    assert_eq!(
+        json.pointer("/scan/boards/0/winusb_eligible"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        json.pointer("/scan/boards/0/interception_eligible"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        json.pointer("/scan/boards/1/transport"),
+        Some(&serde_json::json!("usb"))
+    );
+    // Two separate reads, two separate flags: a dead Bluetooth walk must not
+    // hide behind a healthy USB one.
+    assert_eq!(
+        json.pointer("/scan/bluetooth_available"),
+        Some(&serde_json::json!(true))
+    );
+    // A poll is not an action.
+    assert_eq!(json.pointer("/flash"), Some(&serde_json::json!(null)));
+}
+
+/// The pick write: 303 back to the page with the outcome as the flash, and the
+/// spec that reached the backend is the KEYBOARD interface — not the board's
+/// composite parent, which no resolver would accept.
+#[test]
+fn picking_a_board_calls_the_backend_and_redirects_with_the_outcome() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_form(
+        addr,
+        "/devices/pick",
+        "query=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&alias=panel",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/devices?flash="), "{response}");
+
+    let picked = machine.picked.lock().unwrap();
+    assert_eq!(picked.len(), 1, "exactly one pick reached the backend");
+    assert_eq!(picked[0].0, IPAC_KB);
+    assert_eq!(picked[0].1.as_deref(), Some("panel"));
+}
+
+/// A blank name box is "derive one from the board", exactly like the absent
+/// `--alias` flag. The form always submits the field, so the emptiness has to
+/// survive the wire; `LocalMachine::device_pick` is what turns it back into
+/// `None` before the writer sees it.
+#[test]
+fn a_blank_alias_still_posts_and_is_accepted() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_form(addr, "/devices/pick", "query=MI_00&alias=");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    let picked = machine.picked.lock().unwrap();
+    assert_eq!(picked[0].1.as_deref(), Some(""), "the form sends it empty");
+}
+
+/// The remove write, and the fact that surprises people: deleting the entry did
+/// not release the board. It has to be in the flash, because the flash is all
+/// the user sees on the way back.
+#[test]
+fn removing_an_entry_says_the_board_is_still_claimed() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_form(addr, "/devices/remove", "alias=panel");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("STILL%20CLAIMED"),
+        "the flash must carry the claim warning: {response}"
+    );
+
+    let removed = machine.removed.lock().unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].0, "panel");
+    assert!(
+        !removed[0].1,
+        "an unticked checkbox is not sent at all, so no --force"
+    );
+}
+
+/// The checkbox is the consent, and HTML omits an unchecked box entirely — so
+/// `force` is "present at all", never a parsed boolean.
+#[test]
+fn a_ticked_force_box_reaches_the_backend_as_force() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    post_form(addr, "/devices/remove", "alias=panel&force=yes");
+    assert!(machine.removed.lock().unwrap()[0].1, "--force must carry");
+}
+
+/// Both writes are POST and both sit inside the guarded router. The assertion
+/// that matters is not the status code — it is that the WRITER never saw the
+/// request.
+#[test]
+fn a_cross_site_post_never_reaches_the_device_writer() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    for (path, body) in [
+        ("/devices/pick", "query=MI_00&alias=stolen"),
+        ("/devices/remove", "alias=panel&force=yes"),
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                 Origin: https://evil.example\r\nConnection: close\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{path} must refuse a cross-site write, got: {response}"
+        );
+    }
+    assert!(
+        machine.picked.lock().unwrap().is_empty(),
+        "no cross-site request may reach the device writer"
+    );
+    assert!(machine.removed.lock().unwrap().is_empty());
+}
+
+/// DNS rebinding: the read is guarded too, on every request, by NAME.
+#[test]
+fn a_rebound_host_cannot_read_the_device_list() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let response = http(
+        addr,
+        "GET /api/devices HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 421"),
+        "a rebound read must be refused, got: {response}"
+    );
+}
+
+/// Device selection now lives directly in the customer Setup flow. Existing
+/// and specialist screens must reach that flow, and the destination must still
+/// contain the real picker form rather than merely borrowing its label.
+#[test]
+fn every_page_links_to_the_device_picker() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let picker = body_of(&get(addr, "/start")).to_owned();
+    assert!(
+        picker.contains(r#"action="/start/device""#),
+        "the Setup destination has no device picker: {picker}"
+    );
+    for route in ["/", "/map", "/devices"] {
+        let page = get(addr, route);
+        let body = body_of(&page);
+        assert!(
+            body.contains(r#"href="/start""#),
+            "{route} has no link to the device picker: {body}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /profiles — the games.toml profiles and the presets (v15)
+// ---------------------------------------------------------------------------
+
+/// A missing program is called out before Play, without turning a machine path
+/// into alarm copy. The editable value remains in the affected row's form.
+#[test]
+fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = get(addr, "/profiles");
+    let body = body_of(&response);
+
+    assert!(body.contains("Games that need attention"), "{body}");
+    let alarm = body
+        .split_once("Games that need attention")
+        .and_then(|(_, rest)| rest.split_once("</section>"))
+        .map(|(alarm, _)| alarm)
+        .expect("attention card");
+    assert!(alarm.contains("Missing Example Game"), "{alarm}");
+    assert!(alarm.contains("The program could not be found"), "{alarm}");
+    assert!(!alarm.contains("X:\\Examples\\missing-game.exe"), "{alarm}");
+    assert!(
+        body.contains(r#"value="X:\Examples\missing-game.exe""#),
+        "the edit form must retain the value that needs correction: {body}"
+    );
+    // The healthy one is listed too.
+    assert!(body.contains("Example Game"), "{body}");
+    assert!(body.contains(r#"action="/profiles/update""#), "{body}");
+    assert!(body.contains(r#"action="/profiles/delete""#), "{body}");
+    assert!(body.contains("Edit or delete"), "{body}");
+    // The presets and the in-box templates both arrived — the second is what
+    // `LocalMachine::presets` used to answer with an empty list.
+    assert!(body.contains("Arcade"), "{body}");
+    assert!(body.contains("keyboard-2p"), "{body}");
+}
+
+/// The JSON twin serves the same shape the page embeds — one struct, one
+/// serializer, like `/api/status` and `/api/map`.
+#[test]
+fn the_profiles_api_serves_the_pages_own_payload() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = get(addr, "/api/profiles");
+    assert!(response.contains("no-store"), "{response}");
+
+    let value: serde_json::Value = serde_json::from_str(body_of(&response)).expect("json");
+    assert_eq!(
+        value.pointer("/profiles/profiles/1/state"),
+        Some(&serde_json::json!("broken"))
+    );
+    assert_eq!(
+        value.pointer("/profiles/profiles/1/broken_path"),
+        Some(&serde_json::json!("X:\\Examples\\missing-game.exe"))
+    );
+    assert_eq!(
+        value.pointer("/profiles/profiles/0/revision"),
+        Some(&serde_json::json!("g1-example"))
+    );
+    assert_eq!(
+        value.pointer("/presets/templates/0/id"),
+        Some(&serde_json::json!("keyboard-2p"))
+    );
+    // A poll is not an action.
+    assert_eq!(value.pointer("/flash"), Some(&serde_json::json!(null)));
+}
+
+/// `/profiles?flash=` is attacker-controlled. Escaping is insufficient: raw
+/// internal text would still be safe HTML but bad product copy.
+#[test]
+fn a_hostile_profiles_query_flash_is_replaced_not_reflected() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let response = get(
+        addr,
+        "/profiles?flash=error%3A%20daemon%20TOML%20profile%20preset%20slot%20CLI%20C%3A%5Csecret%5Cgames.toml%20--force",
+    );
+    let body = body_of(&response);
+    let block = body
+        .split_once(r#"<script id="__ksx-payload" type="application/json">"#)
+        .and_then(|(_, rest)| rest.split_once("</script>"))
+        .map(|(json, _)| json)
+        .expect("profiles payload block");
+    let payload: serde_json::Value = serde_json::from_str(block).expect("payload json");
+    let flash = payload["flash"].as_str().expect("safe flash");
+    assert_eq!(
+        flash,
+        "error: Saved Games could not finish that request. Reopen ksx and try again."
+    );
+    let lower = flash.to_ascii_lowercase();
+    for leaked in [
+        "daemon", "toml", "profile", "preset", "slot", "cli", "secret", "--force",
+    ] {
+        assert!(
+            !lower.contains(leaked),
+            "query text leaked through flash: {flash}"
+        );
+    }
+}
+
+/// Provider messages and remedies are untrusted presentation input too. Every
+/// Saved Games action maps success/refusal to its own fixed customer copy.
+#[test]
+fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
+    fn assert_safe(response: &str, expected: &str) {
+        assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+        let location = response
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("location:"))
+            .expect("redirect Location");
+        let flash = location
+            .split_once("flash=")
+            .map(|(_, flash)| flash)
+            .expect("flash");
+        assert!(flash.contains(expected), "{response}");
+        let lower = flash.to_ascii_lowercase();
+        for leaked in [
+            "daemon", "toml", "profile", "preset", "slot", "cli", "secret", "--force",
+        ] {
+            assert!(!lower.contains(leaked), "provider text leaked: {response}");
+        }
+    }
+
+    let control = Arc::new(ScriptedControl::dead());
+    let machine = Arc::new(ScriptedMachine::hostile_profile_writes());
+    let addr = start_server_with_machine(control, machine);
+    for (path, body, expected) in [
+        (
+            "/profiles/new",
+            "title=T&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
+            "Saved%20game%20could%20not%20be%20added",
+        ),
+        (
+            "/profiles/update",
+            "original_title=T&revision=g1-t&title=T&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
+            "Saved%20game%20could%20not%20be%20updated",
+        ),
+        (
+            "/profiles/delete",
+            "title=T&revision=g1-t&confirm_delete=yes",
+            "Saved%20game%20could%20not%20be%20deleted",
+        ),
+        (
+            "/profiles/preset/new",
+            "name=T&template=keyboard-2p&player=1",
+            "Controller%20layout%20could%20not%20be%20created",
+        ),
+        (
+            "/profiles/switch",
+            "profile=T",
+            "That%20game%20could%20not%20be%20started",
+        ),
+        ("/profiles/stop", "", "Play%20could%20not%20be%20stopped"),
+    ] {
+        assert_safe(&post_form(addr, path, body), expected);
+    }
+}
+
+/// Creating a profile: the form's own values reach the backend verb, and the
+/// outcome comes back as a flash on a 303 — never HTML from a POST.
+#[test]
+fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_form(
+        addr,
+        "/profiles/new",
+        "title=Tekken&path=C%3A%5Cgames%5Ctekken.exe&arguments=-windowed&slots=4&preset=Arcade",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("Saved%20game%20added."), "{response}");
+
+    let spec = machine
+        .created_profile
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("spec");
+    assert_eq!(spec.title, "Tekken");
+    assert_eq!(spec.path, "C:\\games\\tekken.exe");
+    assert_eq!(spec.arguments, "-windowed");
+    assert_eq!(spec.slots, 4);
+    assert_eq!(spec.preset, "Arcade");
+}
+
+/// Profile repair is a first-class Studio operation: every editable field,
+/// including the explicit device-refresh choice, reaches one typed backend
+/// verb and comes back to the same page with feedback.
+#[test]
+fn updating_a_profile_reaches_the_typed_verb() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_form(
+        addr,
+        "/profiles/update",
+        "original_title=Example+Game&revision=g1-example&title=Example+Game+Updated&path=%22C%3A%5CExamples%5Cexample-game-updated.exe%22&arguments=-fullscreen&slots=2&preset=Arcade&rebase_devices=true",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("Saved%20game%20updated."), "{response}");
+
+    let spec = machine
+        .updated_profile
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("update spec");
+    assert_eq!(spec.original_title, "Example Game");
+    assert_eq!(spec.revision, "g1-example");
+    assert_eq!(spec.title, "Example Game Updated");
+    assert_eq!(spec.path, "\"C:\\Examples\\example-game-updated.exe\"");
+    assert_eq!(spec.arguments, "-fullscreen");
+    assert_eq!(spec.slots, 2);
+    assert_eq!(spec.preset, "Arcade");
+    assert!(spec.rebase_devices);
+}
+
+/// Deleting a profile never implies deleting the layouts it references. The
+/// route carries only the exact profile title into the typed delete verb.
+#[test]
+fn deleting_a_profile_reaches_the_typed_verb() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_form(
+        addr,
+        "/profiles/delete",
+        "title=Missing+Example+Game&revision=g1-missing&confirm_delete=yes",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("Saved%20game%20deleted."), "{response}");
+    assert_eq!(
+        machine.deleted_profile.lock().unwrap().clone(),
+        Some(ksx_api::DeleteProfile {
+            title: "Missing Example Game".to_owned(),
+            revision: "g1-missing".to_owned(),
+        })
+    );
+}
+
+/// Deletion requires server-side confirmation too. Browser validation and the
+/// JavaScript dialog improve the interaction, but neither is an authorization
+/// boundary for a destructive POST.
+#[test]
+fn deleting_a_profile_without_confirmation_changes_nothing() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_form(addr, "/profiles/delete", "title=Missing+Example+Game");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("flash=error%3A"), "{response}");
+    assert!(machine.deleted_profile.lock().unwrap().is_none());
+}
+
+#[test]
+fn stale_update_and_delete_forms_are_worded_refusals() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine);
+
+    let update = post_form(
+        addr,
+        "/profiles/update",
+        "original_title=Example+Game&revision=g1-old&title=Example+Game&path=C%3A%5CExamples%5Cexample-game.exe&slots=2&preset=Arcade",
+    );
+    assert!(update.contains("flash=error%3A"), "{update}");
+    assert!(
+        update.contains("Saved%20game%20could%20not%20be%20updated"),
+        "{update}"
+    );
+    assert!(!update.contains("changed%20while"), "{update}");
+
+    let delete = post_form(
+        addr,
+        "/profiles/delete",
+        "title=Missing+Example+Game&revision=g1-old&confirm_delete=yes",
+    );
+    assert!(delete.contains("flash=error%3A"), "{delete}");
+    assert!(
+        delete.contains("Saved%20game%20could%20not%20be%20deleted"),
+        "{delete}"
+    );
+    assert!(!delete.contains("changed%20while"), "{delete}");
+}
+
+/// A refusal flashes too, prefixed `error:` so the page's `show:flashError`
+/// pair picks the red side. Nothing fails silently.
+#[test]
+fn a_refused_profile_create_flashes_the_reason() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = post_form(
+        addr,
+        "/profiles/new",
+        "title=&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("flash=error%3A"), "{response}");
+}
+
+/// A post with a field missing OR EMPTY still comes back as a 303 with a
+/// worded flash, NOT a 422.
+///
+/// The distinction is not pedantry. The island fetch-submits and reads its
+/// outcome out of the redirect's `?flash=` — a 422 carries no `Location`, so
+/// the page would show nothing whatsoever and the user would be left pressing
+/// a button that appears to do nothing. That is the failure mode this whole
+/// screen replaced; it must not come back through the extractor.
+///
+/// The EMPTY cases are the ones that matter, and the earlier version of this
+/// test did not have them: it covered only the absent key, which
+/// `#[serde(default)]` already handled, so it passed against the broken build.
+/// A browser sends `slots=` — present, empty — the instant a user clears a
+/// non-`required` `<input type="number">`, and serde_urlencoded answers
+/// "cannot parse integer from empty string" for an `Option<u8>`. The rows
+/// below fail against the `Option<u8>` version with a 422 and no `Location`;
+/// the `garbage` rows fail against any version that lets the extractor do the
+/// parsing at all.
+#[test]
+fn a_post_with_a_missing_or_empty_number_still_flashes_instead_of_422() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    for (path, body, why) in [
+        ("/profiles/new", "path=C%3A%5Cx.exe", "the key is absent"),
+        (
+            "/profiles/new",
+            "title=T&path=C%3A%5Cx.exe&slots=&preset=Arcade",
+            "the user cleared the slots box",
+        ),
+        (
+            "/profiles/update",
+            "original_title=T&title=T&path=C%3A%5Cx.exe&slots=&preset=Arcade",
+            "the user cleared the update players box",
+        ),
+        (
+            "/profiles/update",
+            "original_title=T&title=T&path=C%3A%5Cx.exe&slots=many&preset=Arcade",
+            "the update players box is not a number",
+        ),
+        (
+            "/profiles/new",
+            "title=T&path=C%3A%5Cx.exe&slots=lots&preset=Arcade",
+            "the slots box holds something that is not a number",
+        ),
+        ("/profiles/preset/new", "name=Couch", "the key is absent"),
+        (
+            "/profiles/preset/new",
+            "name=Couch&template=keyboard-2p&player=",
+            "the user cleared the player box",
+        ),
+        (
+            "/profiles/preset/new",
+            "name=Couch&template=keyboard-2p&player=two",
+            "the player box holds something that is not a number",
+        ),
+    ] {
+        let response = post_form(addr, path, body);
+        assert!(
+            response.starts_with("HTTP/1.1 303"),
+            "{path} must redirect with a flash when {why}, not reject the \
+             body — a 422 carries no Location and the island renders it as \
+             nothing at all: {response}"
+        );
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("location: /profiles"),
+            "{path} ({why}) must carry a Location the island can read a flash \
+             out of: {response}"
+        );
+        assert!(response.contains("flash="), "{path} ({why}): {response}");
+    }
+}
+
+/// A provider refusal is mapped to the form's own safe remedy. Provider
+/// message/remedy text never becomes customer presentation copy.
+#[test]
+fn a_layout_refusal_flashes_a_safe_way_out() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = post_form(
+        addr,
+        "/profiles/preset/new",
+        "name=Arcade&template=keyboard-2p&player=1",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("Controller%20layout%20could%20not%20be%20created"),
+        "{response}"
+    );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("choose%20a%20different%20name"),
+        "{response}"
+    );
+    assert!(!response.contains("already%20exists"), "{response}");
+    assert!(!response.contains("--force"), "{response}");
+}
+
+/// A REFUSED read must not render as an assertion of absence.
+///
+/// This is the page's own stated purpose turned on itself, and it is this
+/// project's signature bug: a surface answering for a read it never completed
+/// (the session that reported success while the arcade panel was dead because
+/// a WinUSB board had silently fallen back to Interception).
+///
+/// Fails against the shipped version on the first two assertions: there,
+/// `collect_profiles` substituted `ProfilesView::default()` / `PresetsView::
+/// default()` on `Err`, so the page printed "no profiles in games.toml" and
+/// "No presets on disk … Make a preset from an in-box template below first" —
+/// the second of which points at a form whose `<select>` is empty for exactly
+/// the same reason, so the only route it offers cannot succeed.
+#[test]
+fn a_refused_read_is_not_rendered_as_an_empty_machine() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server_with_machine(control, Arc::new(ScriptedMachine::reads_refusing()));
+    let response = get(addr, "/profiles");
+    let body = body_of(&response);
+
+    assert!(
+        !body.contains("no profiles in games.toml"),
+        "a failed read must not be reported as an empty games.toml: {body}"
+    );
+    assert!(
+        !body.contains("Make a preset from an in-box template below"),
+        "a failed presets read must not send the user to a form fed by the \
+         same read: {body}"
+    );
+    assert!(
+        !body.contains(r#"action="/profiles/preset/new""#),
+        "…and that form must not be on the page at all: {body}"
+    );
+    // What it says instead: both failed resources, and both reasons, in words.
+    assert!(body.contains("Saved games could not be read"), "{body}");
+    assert!(
+        body.contains("Controller layouts could not be read"),
+        "{body}"
+    );
+    assert!(body.contains("Reopen ksx and try again"), "{body}");
+    for leaked in [
+        "expected `=`",
+        "access is denied",
+        "ksx config",
+        "ksx doctor",
+    ] {
+        assert!(
+            !body.contains(leaked),
+            "internal read detail leaked: {body}"
+        );
+    }
+    for action in [
+        r#"action="/profiles/new""#,
+        r#"action="/profiles/update""#,
+        r#"action="/profiles/delete""#,
+    ] {
+        assert!(
+            !body.contains(action),
+            "a failed Saved Games read must disable Add/Edit/Delete: {body}"
+        );
+    }
+
+    // The JSON twin says it in a machine-readable field, not by omission.
+    let value: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/profiles"))).expect("json");
+    assert_eq!(
+        value.pointer("/view/profiles_unreadable"),
+        Some(&serde_json::json!(true)),
+        "a poller must be able to tell a refused read from an empty one: \
+         {value}"
+    );
+    assert_eq!(
+        value.pointer("/view/presets_unreadable"),
+        Some(&serde_json::json!(true)),
+        "{value}"
+    );
+    assert_eq!(
+        value.pointer("/view/no_presets_yet"),
+        Some(&serde_json::json!(false)),
+        "'no presets yet' is a claim about the FOLDER; nothing was read: \
+         {value}"
+    );
+}
+
+/// Creating a preset from a template, through the same `preset_new` verb
+/// `ksx preset new` performs.
+#[test]
+fn creating_a_preset_from_a_template_reaches_the_verb() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_form(
+        addr,
+        "/profiles/preset/new",
+        "name=Couch&template=keyboard-2p&player=2",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("Controller%20layout%20created."),
+        "{response}"
+    );
+    let spec = machine
+        .created_preset
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("spec");
+    assert_eq!(spec.name, "Couch");
+    assert_eq!(spec.template, "keyboard-2p");
+    assert_eq!(spec.player, 2);
+    // Overwriting a 25-binding mapping is not something a web form may do by
+    // accident; `--force` stays the CLI's consent step.
+    assert!(!spec.force);
+}
+
+/// Switching profile is the SAME `ControlSource::start` the status page posts
+/// — one backend verb, no second "switch" path — and it comes back to
+/// /profiles so the user keeps their place.
+#[test]
+fn switching_profile_calls_start_and_returns_to_profiles() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let response = post_form(addr, "/profiles/switch", "profile=Missing+Example+Game");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("location: /profiles?flash="),
+        "the redirect must come back HERE, not to / like the status page's \
+         twin of this verb: {response}"
+    );
+    assert!(response.contains("flash=Play%20started."), "{response}");
+    assert!(!response.contains("Missing%20Example%20Game"), "{response}");
+    assert!(
+        !response.to_ascii_lowercase().contains("slot"),
+        "{response}"
+    );
+    assert_eq!(
+        control.started_with.lock().unwrap().clone(),
+        Some(Some("Missing Example Game".to_owned())),
+        "the profile the row named must reach `start`"
+    );
+}
+
+#[test]
+fn stopping_play_returns_to_saved_games() {
+    let control = Arc::new(ScriptedControl::new(true));
+    control.running.store(true, Ordering::SeqCst);
+    let addr = start_server(control.clone());
+
+    let response = post_form(addr, "/profiles/stop", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("location: /profiles?flash="),
+        "{response}"
+    );
+    assert!(response.contains("flash=Play%20stopped."), "{response}");
+    assert!(!control.running.load(Ordering::SeqCst));
+}
+
+/// The guard is a router-wide layer, so a route declared in the same chain is
+/// guarded by construction — but "by construction" is exactly the claim worth
+/// testing, once, per new mutating route.
+#[test]
+fn the_profiles_write_routes_refuse_a_cross_site_post() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+    control.running.store(true, Ordering::SeqCst);
+
+    for (path, body) in [
+        (
+            "/profiles/new",
+            "title=Evil&path=C%3A%5Cevil.exe&slots=1&preset=Arcade",
+        ),
+        (
+            "/profiles/update",
+            "original_title=Street+Fighter&title=Evil&path=C%3A%5Cevil.exe&slots=1&preset=Arcade",
+        ),
+        ("/profiles/delete", "title=Street+Fighter"),
+        (
+            "/profiles/preset/new",
+            "name=Evil&template=keyboard-2p&player=1",
+        ),
+        ("/profiles/switch", "profile=Missing+Example+Game"),
+        ("/profiles/stop", ""),
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+                 Origin: http://evil.example\r\nConnection: close\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: {len}\r\n\r\n{body}",
+                port = addr.port(),
+                len = body.len(),
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{path} must refuse a cross-site POST: {response}"
+        );
+    }
+    // Not "it returned 403" — that no write happened.
+    assert!(machine.created_profile.lock().unwrap().is_none());
+    assert!(machine.updated_profile.lock().unwrap().is_none());
+    assert!(machine.deleted_profile.lock().unwrap().is_none());
+    assert!(machine.created_preset.lock().unwrap().is_none());
+    assert!(control.started_with.lock().unwrap().is_none());
+    assert!(
+        control.running.load(Ordering::SeqCst),
+        "the rejected Stop request must not reach the control provider"
+    );
+}
+
+/// A rebound host cannot even READ the profile list. The same Host check
+/// covers every route; it is asserted on this one because a page that lists
+/// filesystem paths is worth naming explicitly.
+#[test]
+fn a_rebound_host_cannot_read_the_profiles() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = http(
+        addr,
+        "GET /api/profiles HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 421"), "{response}");
+}
+
+/// Every page carries the customer workflow: Setup → Controls → Test. Advanced
+/// and diagnostic screens remain reachable from contextual affordances rather
+/// than expanding this primary rail. Controls itself is deliberately a
+/// non-link so an editing target cannot be lost by clicking the active stage.
+#[test]
+fn every_page_links_to_every_other_page() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    for route in [
+        "/",
+        "/start",
+        "/map",
+        "/check",
+        "/devices",
+        "/profiles",
+        "/setup",
+        "/pads",
+    ] {
+        let response = get(addr, route);
+        let body = body_of(&response);
+        assert!(body.contains(r#"href="/start""#), "{route}: {body}");
+        assert!(body.contains(r#">Setup<"#), "{route}: {body}");
+        assert!(body.contains(r#">Controls<"#), "{route}: {body}");
+        assert!(body.contains(r#"href="/check""#), "{route}: {body}");
+        assert!(body.contains(r#">Test<"#), "{route}: {body}");
+        if route == "/map" {
+            assert!(
+                body.contains(r#"<span class="navlink on" aria-current="page">Controls</span>"#),
+                "the active Controls stage must preserve mapper context: {body}"
+            );
+        } else {
+            assert!(
+                body.contains(r#"href="/map">Controls"#),
+                "{route} cannot reach Controls: {body}"
+            );
+        }
+    }
+}
+
+// ── /setup: the config first, and the first run ────────────────────────────
+
+/// The page a first run lands on, over real HTTP: the configuration is the
+/// first card, the two verbs are on it, and the checklist is what the backend
+/// decided rather than anything this page worked out.
+#[test]
+fn the_setup_page_leads_with_the_config_and_its_two_verbs() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+    let response = get(addr, "/setup");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        response.contains("cache-control: no-store"),
+        "a config read is point-in-time: {response}"
+    );
+    let body = body_of(&response);
+
+    // The two verbs, both reachable with no JavaScript at all.
+    assert!(body.contains(r#"href="/setup/export.json""#), "{body}");
+    assert!(body.contains(r#"action="/setup/import""#), "{body}");
+    // The checklist, straight off the provider.
+    assert!(body.contains("Press a button and watch it land"), "{body}");
+    assert!(body.contains(r#"class="step now""#), "{body}");
+    // Onward, rather than duplicated: the board step belongs to /devices.
+    assert!(body.contains(r#"href="/devices""#), "{body}");
+    // The path is present exactly once, in the support line — never as a
+    // control. This is the owner's brief, checked over the wire.
+    let at = body.find("C:\\cfg").expect("the config root, for support");
+    let smallprint = body.find(r#"class="smallprint""#).expect("support line");
+    assert!(
+        smallprint < at,
+        "the config root must be inside the small print"
+    );
+    assert!(!body.contains(r#"href="C:\cfg"#), "{body}");
+}
+
+/// The page and the poller serve one shape (the parity render_setup.rs pins
+/// server-side, observed here end to end).
+#[test]
+fn the_setup_api_serves_the_payload_the_page_embeds() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/setup"))).expect("json");
+    assert_eq!(payload["setup"]["available"], serde_json::json!(true));
+    assert_eq!(
+        payload["setup"]["view"]["config_exists"],
+        serde_json::json!(true)
+    );
+    assert_eq!(payload["setup"]["view"]["steps"][2]["state"], "now");
+    assert_eq!(payload["learn"]["state"], "idle");
+    // A poll is not an action.
+    assert_eq!(payload["flash"], serde_json::json!(null));
+}
+
+/// EXPORT is a download, not a path. The bytes come back with a file name
+/// attached, so a plain `<a download>` finishes the job.
+#[test]
+fn export_hands_back_the_document_itself() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+    let response = get(addr, "/setup/export.json");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        response.contains("content-disposition: attachment; filename=\"ksx-config-"),
+        "{response}"
+    );
+    assert!(
+        response.contains("content-type: application/json"),
+        "{response}"
+    );
+    assert!(body_of(&response).contains("ksx_interop"), "{response}");
+}
+
+/// The consent shape, over HTTP: no "write it" box, no write — and the answer
+/// says so in a sentence short enough to have survived the redirect.
+#[test]
+fn import_is_a_dry_run_until_the_box_is_ticked() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    let document = "%7B%22ksx_interop%22%3A1%7D";
+    let dry = post_form(addr, "/setup/import", &format!("document={document}"));
+    assert!(dry.starts_with("HTTP/1.1 303"), "{dry}");
+    assert!(dry.contains("nothing%20written%20yet"), "{dry}");
+    assert!(
+        !dry.contains("flash=error"),
+        "a clean dry run is not an error: {dry}"
+    );
+
+    let applied = post_form(
+        addr,
+        "/setup/import",
+        &format!("document={document}&apply=yes"),
+    );
+    assert!(applied.starts_with("HTTP/1.1 303"), "{applied}");
+    assert!(applied.contains("imported%20config"), "{applied}");
+
+    // The CONSENT CONTROL is named by this page, not by the backend: the
+    // report's own sentence says what would happen and that nothing was
+    // written, and the flash adds the label on the box that makes it write.
+    // (The backend used to bake `Tick "write it"` in, where the cabinet egui —
+    // which has no such box — reads the same string.)
+    assert!(dry.contains("Tick%20%22write%20it%22"), "{dry}");
+    assert!(
+        !applied.contains("Tick%20%22write%20it%22"),
+        "a write that happened must not ask for consent again: {applied}"
+    );
+
+    // A document that does not say what it is comes back as an ERROR flash —
+    // never silence, and never a claim that something was written.
+    let junk = post_form(addr, "/setup/import", "document=%7B%7D");
+    assert!(junk.contains("flash=error"), "{junk}");
+    // …and an empty box is refused before the provider is even asked.
+    let empty = post_form(addr, "/setup/import", "document=");
+    assert!(empty.contains("flash=error"), "{empty}");
+    assert!(empty.contains("paste%20a%20configuration"), "{empty}");
+}
+
+/// The commonest way an import fails is a document that will not validate —
+/// and the page that OWNS config editing (docs/SURFACES.md §3) must be able to
+/// say what is wrong with it.
+///
+/// Fails against the version that shipped: it flashed `report.summary` alone
+/// and threw the populated `faults` list away, ending on "`ksx config import
+/// --dry-run` lists them" — a page handing the user to a shell to read a list
+/// it was already holding.
+#[test]
+fn a_refused_import_says_what_is_wrong_with_the_document() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    let document = "%7B%22ksx_interop%22%3A1%2C%22faulty%22%3Atrue%7D";
+    let refused = post_form(addr, "/setup/import", &format!("document={document}"));
+    assert!(refused.contains("flash=error"), "{refused}");
+    // The count, from the backend…
+    assert!(refused.contains("3%20validation%20fault"), "{refused}");
+    // …and the first fault itself, plus how many more there are, from here.
+    assert!(refused.contains("First%3A"), "{refused}");
+    assert!(refused.contains("Nope"), "{refused}");
+    assert!(refused.contains("%2B2%20more"), "{refused}");
+    // Never the CLI dead end.
+    assert!(!refused.contains("dry-run%60%20lists"), "{refused}");
+}
+
+/// A bare document — the one "an assistant wrote you", which the import card
+/// invites — needs a way to say what it is, and the form has one.
+#[test]
+fn the_import_form_can_say_what_a_bare_document_is() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    // The invitation is on the page, and so is the control that makes it true.
+    let body = body_of(&get(addr, "/setup")).to_owned();
+    assert!(body.contains("an assistant that wrote you one"), "{body}");
+    assert!(body.contains(r#"name="what""#), "{body}");
+
+    // Bare + unsaid: refused, as it must be — importing the wrong file over
+    // the wrong file is what that refusal exists to prevent.
+    let unsaid = post_form(addr, "/setup/import", "document=%7B%22slots%22%3A%5B%5D%7D");
+    assert!(unsaid.contains("flash=error"), "{unsaid}");
+    assert!(
+        unsaid.contains("does%20not%20say%20what%20it%20is"),
+        "{unsaid}"
+    );
+
+    // Bare + said: the same document goes through.
+    let said = post_form(
+        addr,
+        "/setup/import",
+        "document=%7B%22slots%22%3A%5B%5D%7D&what=config",
+    );
+    assert!(said.starts_with("HTTP/1.1 303"), "{said}");
+    assert!(!said.contains("flash=error"), "{said}");
+}
+
+/// Every refusal on this route is a flashed sentence — including the ones axum
+/// would otherwise answer itself.
+///
+/// The page's whole feedback channel with scripting off is the flash (see
+/// `ImportForm`'s doc comment), so a body this route cannot read has to arrive
+/// as one too. It used to fall through to axum's bare 4xx with no way back.
+#[test]
+fn an_unreadable_import_body_is_a_flashed_sentence_not_a_bare_4xx() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    // Wrong content type: the same rejection arm an over-large paste takes.
+    let body = "{\"ksx_interop\":1}";
+    let response = http(
+        addr,
+        &format!(
+            "POST /setup/import HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 303"),
+        "a body this route cannot read must come back as a flash: {response}"
+    );
+    assert!(response.contains("flash=error"), "{response}");
+    assert!(response.contains("ksx%20config%20import"), "{response}");
+}
+
+/// Step 2 is ONE backend verb — `ControlSource::assign_slot`, the same pipe
+/// verb `ksx slot assign` performs — and the flash is
+/// `SlotOutcome::headline()`, the canonical renderer the cabinet and the daemon
+/// already print.
+///
+/// **The idle half is the regression test.** The version that shipped rebuilt
+/// the sentence from flags and appended " The pads replugged." whenever
+/// `restarted` was set — and this page offers the wire form whenever the daemon
+/// is REACHABLE, not running. So an idle cabinet was told its four controllers
+/// had just vanished and come back by a write that replugged nothing. The
+/// ledger test `control.rs::a_slot_outcome_prints_what_the_daemon_said_rather
+/// _than_re_deriving_it` forbids that re-derivation by name.
+#[test]
+fn wiring_a_slot_goes_through_assign_slot_and_prints_the_daemons_own_sentence() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    // Nothing running: the daemon says so, and the page does not invent a
+    // bounce on top of it.
+    let idle = post_form(addr, "/setup/slot", "slot=2&preset=Panel+P1&profile=");
+    assert!(idle.starts_with("HTTP/1.1 303"), "{idle}");
+    assert!(idle.contains("slot%202%20now%20uses"), "{idle}");
+    assert!(idle.contains("nothing%20is%20running"), "{idle}");
+    assert!(
+        !idle.contains("replugged"),
+        "the flash claimed a pad bounce against an idle daemon: {idle}"
+    );
+
+    // A running session: the bounce is named once, by the daemon, and not
+    // again by this page.
+    let started = post_form(addr, "/session/start", "profile=");
+    assert!(started.starts_with("HTTP/1.1 303"), "{started}");
+    let running = post_form(addr, "/setup/slot", "slot=2&preset=Panel+P1&profile=");
+    assert!(running.contains("pads%20replugged"), "{running}");
+    assert_eq!(
+        running.matches("replugged").count(),
+        1,
+        "the bounce was named twice — once by the daemon and once by the page: {running}"
+    );
+
+    // A preset that is not there is a refusal, flashed as one.
+    let bad = post_form(addr, "/setup/slot", "slot=2&preset=Nope");
+    assert!(bad.contains("flash=error"), "{bad}");
+    // …and so is submitting the form with nothing chosen.
+    let empty = post_form(addr, "/setup/slot", "slot=2&preset=");
+    assert!(empty.contains("flash=error"), "{empty}");
+}
+
+/// The slot menu offers what the DAEMON accepts, over the wire.
+///
+/// `ksx-core` is a test-only dependency of this crate for exactly this kind of
+/// assertion (see Cargo.toml): the page knows no vocabulary at runtime, the
+/// test reads the one true constant. Fails against the shipped version, which
+/// held `SLOT_CHOICES = 8` in two languages while `MAX_SLOTS` was 16.
+#[test]
+fn the_setup_slot_menu_offers_every_slot_the_daemon_accepts() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+    let body = body_of(&get(addr, "/setup")).to_owned();
+    for n in 1..=ksx_core::MAX_SLOTS {
+        assert!(
+            body.contains(&format!(">Slot {n}<")),
+            "the menu skips slot {n}, which `slot assign` takes: {body}"
+        );
+    }
+    let past = u16::from(ksx_core::MAX_SLOTS) + 1;
+    assert!(!body.contains(&format!(">Slot {past}<")), "{body}");
+}
+
+/// A machine provider that REFUSED produces a page that says so — and says
+/// nothing else about the machine.
+///
+/// The signature bug of this project is a surface reporting success over a
+/// read that failed. Here it would be a first-run page telling a cabinet with a
+/// full configuration that it has no boards, no slots and no presets, because
+/// the provider that could not answer was rendered as an empty one. Fails
+/// against the shipped version six sentences over.
+#[test]
+fn a_refused_machine_provider_never_claims_the_machine_is_empty() {
+    struct NoMachine;
+    // Every method defaulted: `setup_state` refuses with the CONTROL-SURFACE
+    // sentence, which is exactly the state this test is about.
+    impl ksx_api::MachineSource for NoMachine {}
+
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server_with_machine(control, Arc::new(NoMachine));
+    let body = body_of(&get(addr, "/setup")).to_owned();
+
+    assert!(
+        body.contains("The configuration could not be read"),
+        "{body}"
+    );
+    assert!(body.contains("cannot say which step is next"), "{body}");
+    for claim in [
+        "There is no configuration on this machine yet.",
+        "no boards named yet",
+        "No board has a name yet",
+        "no slots wired yet",
+        "No slot is wired yet",
+        "0 preset(s) and 0 game profile(s) on disk.",
+        "Three steps, in order.",
+    ] {
+        assert!(
+            !body.contains(claim),
+            "a refused read claimed {claim:?} over the wire: {body}"
+        );
+    }
+    // …and no live control that would write against a config nobody read.
+    assert!(!body.contains(r#"action="/setup/slot""#), "{body}");
+    assert!(
+        body.contains("could not be read, so ksx cannot offer"),
+        "{body}"
+    );
+
+    // The poller sees the same refusal, in the same words.
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/setup"))).expect("json");
+    assert_eq!(payload["setup"]["available"], serde_json::json!(false));
+    assert_eq!(
+        payload["lines"]["config"],
+        serde_json::json!("The configuration could not be read.")
+    );
+    assert_eq!(payload["flags"]["no_boards"], serde_json::json!(false));
+    assert_eq!(payload["flags"]["setup_known"], serde_json::json!(false));
+}
+
+/// Step 3 is the daemon's own learner, and it is operable with scripting off:
+/// POST, 303, and the next render shows the state the poll would have.
+#[test]
+fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    let started = post_form(addr, "/setup/prove", "");
+    assert!(started.starts_with("HTTP/1.1 303"), "{started}");
+    assert!(started.contains("Listening"), "{started}");
+
+    // The page itself now says the learner is listening — no client code
+    // involved, which is what makes the <noscript> refresh enough.
+    let page = body_of(&get(addr, "/setup")).to_owned();
+    assert!(page.contains("press any button on the panel"), "{page}");
+    assert!(page.contains(r#"action="/setup/prove/cancel""#), "{page}");
+
+    let stopped = post_form(addr, "/setup/prove/cancel", "");
+    assert!(stopped.starts_with("HTTP/1.1 303"), "{stopped}");
+}
+
+/// Every mutating /setup route is inside the guarded router, and the reads are
+/// covered by the Host check like every other read. Written as a loop over the
+/// routes rather than as one case, because the failure this catches is a route
+/// added later and attached in the wrong place.
+#[test]
+fn the_setup_routes_are_guarded_like_every_other_one() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+
+    for path in [
+        "/setup/import",
+        "/setup/slot",
+        "/setup/prove",
+        "/setup/prove/cancel",
+    ] {
+        let body = "document=%7B%7D&slot=1&preset=Panel+P1";
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                 Origin: https://evil.example\r\nConnection: close\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{path} must refuse a cross-site write, got: {response}"
+        );
+    }
+
+    // Reads too: a rebound name never reaches a handler, on any route.
+    for path in ["/setup", "/api/setup", "/setup/export.json"] {
+        let response = http(
+            addr,
+            &format!("GET {path} HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 421"),
+            "{path} must refuse a rebound read, got: {response}"
+        );
+    }
+}
+
+/// With no daemon, the config half of the page keeps working and the two verbs
+/// stay live — Import and Export are the config store, not the pipe. The steps
+/// that DO need a daemon say so instead of offering a dead button.
+#[test]
+fn the_config_verbs_survive_a_dead_daemon() {
+    let control = Arc::new(ScriptedControl::dead());
+    let addr = start_server(control);
+    let body = body_of(&get(addr, "/setup")).to_owned();
+
+    assert!(body.contains(r#"href="/setup/export.json""#), "{body}");
+    assert!(body.contains(r#"action="/setup/import""#), "{body}");
+    assert!(
+        body.contains("Import and Export below still work"),
+        "{body}"
+    );
+    // …and no live control that would silently do nothing.
+    assert!(!body.contains(r#"action="/setup/slot""#), "{body}");
+    assert!(!body.contains(r#"action="/setup/prove""#), "{body}");
+    assert!(body.contains("the listener lives in the daemon"), "{body}");
+
+    // An export still produces a document.
+    assert!(
+        get(addr, "/setup/export.json").starts_with("HTTP/1.1 200"),
+        "the config store needs no daemon"
+    );
+}
+
+/// The product Setup stage is `/start`; the older import/export setup screen is
+/// a specialist surface, not the first-run destination in the primary rail.
+#[test]
+fn the_existing_pages_link_to_setup() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control);
+    for path in ["/", "/map"] {
+        let body = body_of(&get(addr, path)).to_owned();
+        assert!(
+            body.contains(r#"href="/start">Setup"#),
+            "{path} must reach the product Setup flow from its nav: {body}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /pads — the ViGEm bus, a bounded pad test, and the prune (v15)
+// ---------------------------------------------------------------------------
+
+/// The page renders from ONE `MachineSource::pads_view` call, with no
+/// JavaScript involved: the pads, the bus devnode, the ceiling sentence and
+/// the spawn form are all in the first paint.
+#[test]
+fn the_pads_page_renders_the_bus_server_side() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = get(addr, "/pads");
+    let body = body_of(&response);
+
+    assert!(body.contains("2 virtual pads on the ViGEm bus"), "{body}");
+    assert!(body.contains(r"USB\TEST\PAD1"), "{body}");
+    assert!(body.contains(r"USB\TEST\PAD2"), "{body}");
+    assert!(body.contains(r"ROOT\SYSTEM\0002"), "{body}");
+    assert!(body.contains("ksx.exe (pid 1)"), "{body}");
+    // The no-JS baseline: real forms, not fetch handlers.
+    assert!(body.contains(r#"action="/pads/spawn""#), "{body}");
+}
+
+/// **Task #16 reaches the user before the click, not after it.**
+///
+/// Two independent channels, both server-rendered so a browser with scripting
+/// switched off gets them: the standing ceiling paragraph, and the label on
+/// the `<option>` that would cause it. Both strings are the PROVIDER's — this
+/// asserts they survive the route and the render, which is the only part
+/// Studio owns.
+#[test]
+fn the_pads_page_warns_about_the_xinput_ceiling_before_the_button_is_pressed() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+    let response = get(addr, "/pads");
+    let body = body_of(&response);
+
+    assert!(
+        body.contains("Windows exposes exactly 4 XInput slots"),
+        "the ceiling paragraph must render: {body}"
+    );
+    assert!(
+        body.contains(OVER_CEILING_LABEL),
+        "the over-ceiling count must warn in its own option label: {body}"
+    );
+    // The warning has to name the persona it applies to. A persona-blind "4
+    // invisible to games" contradicts the persona `<select>` beside it, the
+    // card paragraph above it and the post-submit flash — three sentences on
+    // one screen disagreeing about one click.
+    assert!(
+        body.contains("as xbox360") && body.contains("as playstation"),
+        "the count warning must say which persona it applies to: {body}"
+    );
+}
+
+/// **One session read feeds the whole render.**
+///
+/// Fails against the version this replaced, where `collect_pads` called
+/// `control.session()` and then `pads_view()` dialled the daemon pipe a second
+/// time on its own. Two round-trips are two points in time: a session starting
+/// between them painted an "idle" header pill beside a spawn panel refused
+/// because a session was running — or, worse, the reverse, offering a Spawn
+/// button the verb would refuse. Here the fixture ECHOES what it was told, so
+/// the two halves of the page can only agree if one read produced both.
+#[test]
+fn the_page_reads_the_session_once_and_both_halves_agree() {
+    for running in [false, true] {
+        let control = Arc::new(ScriptedControl::new(true));
+        control.running.store(running, Ordering::SeqCst);
+        let addr = start_server(control);
+        let response = get(addr, "/pads");
+        let body = body_of(&response);
+
+        let value: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/pads"))).expect("json");
+        assert_eq!(
+            value["pads"]["session_running"],
+            serde_json::json!(running),
+            "the machine view must have been told what the control read said"
+        );
+        assert_eq!(value["session"]["running"], serde_json::json!(running));
+
+        if running {
+            // The panel is refused AND the pill says running — one answer.
+            assert!(body.contains("a session is running"), "{body}");
+            assert!(
+                !body.contains(r#"action="/pads/spawn""#),
+                "a running session must not be offered a Spawn button: {body}"
+            );
+        } else {
+            assert!(body.contains(r#"action="/pads/spawn""#), "{body}");
+        }
+    }
+}
+
+/// **A refused read is not an empty bus.**
+///
+/// The default `MachineSource` refuses every verb in words, which is what a
+/// surface with no provider wired sees. Fails against the version this
+/// replaced, which rendered a `PadsView::default()` through the same seam: the
+/// devnode line asserted "ViGEmBus is not installed", four ghost tiles drew an
+/// empty four-slot cabinet, and the prune panel said there was nothing to do —
+/// three claims about a machine ksx had never managed to look at, under a
+/// banner saying the read had failed.
+#[test]
+fn a_provider_that_cannot_answer_says_so_instead_of_showing_a_clean_bus() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server_with(control, Box::new(UnreadableMachine));
+    let response = get(addr, "/pads");
+    let body = body_of(&response);
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "never a 500: {response}"
+    );
+    assert!(
+        body.contains("ksx could not read the ViGEm bus"),
+        "the banner must say the read failed: {body}"
+    );
+    for absence in [
+        "not installed",
+        ">empty<",
+        "Nothing for this panel to do",
+        "no virtual pads on the ViGEm bus",
+    ] {
+        assert!(
+            !body.contains(absence),
+            "a failed read rendered '{absence}', a claim about a machine never read: {body}"
+        );
+    }
+    // …and neither verb is offered, because neither can be described.
+    assert!(!body.contains(r#"action="/pads/spawn""#), "{body}");
+    assert!(!body.contains(r#"href="/pads?confirm=1""#), "{body}");
+}
+
+/// The spawn form's values reach the verb intact — the echo proves all three.
+#[test]
+fn spawning_pads_passes_the_whole_spec_through_and_303s_back() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let response = post_form(addr, "/pads/spawn", "count=8&persona=xbox360&hold_secs=30");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("/pads?flash=spawned%208%20xbox360%20pad%28s%29%20for%2030s"),
+        "the spec must arrive whole: {response}"
+    );
+}
+
+/// A refusal flashes too, prefixed `error:` so the page colours it — never a
+/// silent failure and never an error page dead-ending the no-JS loop.
+#[test]
+fn a_refused_spawn_flashes_the_refusal() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let response = post_form(addr, "/pads/spawn", "count=0&persona=xbox360&hold_secs=10");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("flash=error%3A%20pad%20count%20must%20be"),
+        "{response}"
+    );
+}
+
+/// **The consent shape, end to end.** Unarmed, the document carries no submit
+/// that could restart the bus — not hidden, not disabled, ABSENT — because the
+/// SSR paint is what a no-JS browser gets and a `display:none` button is one
+/// CSS failure away from being pressable. Arming is a GET, and only the armed
+/// page names every pad that goes.
+#[test]
+fn prune_is_absent_until_armed_and_then_names_every_pad() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let unarmed_response = get(addr, "/pads");
+    let unarmed = body_of(&unarmed_response);
+    assert!(
+        !unarmed.contains(r#"name="confirm" value="yes""#),
+        "an unarmed page must not carry the confirmed submit: {unarmed}"
+    );
+    assert!(unarmed.contains(r#"href="/pads?confirm=1""#), "{unarmed}");
+
+    let armed_response = get(addr, "/pads?confirm=1");
+    let armed = body_of(&armed_response);
+    assert!(armed.contains(r#"action="/pads/prune""#), "{armed}");
+    assert!(armed.contains(r#"name="confirm" value="yes""#), "{armed}");
+    assert!(armed.contains("This removes 2 pad(s)"), "{armed}");
+    assert!(armed.contains(r"USB\TEST\PAD1"), "{armed}");
+    assert!(armed.contains(r"USB\TEST\PAD2"), "{armed}");
+    // Elevation is stated before the click, not discovered after the refusal.
+    assert!(armed.contains("NOT running elevated"), "{armed}");
+    // …and the confirmation does not navigate itself away while it is being
+    // read. The no-JS refresh targets "/pads" with no query string, so it
+    // would drop `?confirm=1` and drop the reader back to the disarmed view
+    // five seconds in — every time, on a list that can be fifteen rows long.
+    assert!(
+        !armed.contains("http-equiv=\"refresh\""),
+        "an armed confirmation must not carry a refresh timer: {armed}"
+    );
+    assert!(
+        unarmed.contains(r#"content="5; url=/pads""#),
+        "the unarmed page is a live view and keeps its refresh: {unarmed}"
+    );
+}
+
+/// `confirm` is what turns a dry run into a bus restart, and a POST that did
+/// not come from the confirm screen gets the dry run. Not an error — the CLI
+/// answers the same way without `--yes`, and answering "what would happen" is
+/// strictly better than answering "no".
+#[test]
+fn a_prune_without_the_confirm_field_is_a_dry_run() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let dry = post_form(addr, "/pads/prune", "");
+    assert!(dry.starts_with("HTTP/1.1 303"), "{dry}");
+    assert!(dry.contains("flash=dry%20run"), "{dry}");
+
+    let confirmed = post_form(addr, "/pads/prune", "confirm=yes");
+    assert!(confirmed.starts_with("HTTP/1.1 303"), "{confirmed}");
+    assert!(
+        confirmed.contains("flash=cleared%202%20virtual%20pad"),
+        "{confirmed}"
+    );
+}
+
+/// Both mutating routes are inside the guarded router. A cross-origin POST is
+/// refused by `Origin`, and any request at all is refused by `Host` — the
+/// property that has to hold for EVERY new route, and the one a route declared
+/// outside the `Router::new()` chain would silently lose.
+#[test]
+fn the_pads_routes_are_behind_the_guard() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    for path in ["/pads/spawn", "/pads/prune"] {
+        let body = "confirm=yes";
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+                 Origin: https://evil.example\r\nConnection: close\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: {len}\r\n\r\n{body}",
+                port = addr.port(),
+                len = body.len(),
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{path} must refuse a foreign origin: {response}"
+        );
+    }
+    // …and the rebinding defence covers the read as well.
+    let rebound = http(
+        addr,
+        "GET /pads HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+}
+
+/// The poller's endpoint serves the same struct the page embeds — and never
+/// an armed one. A 2 s poll is not a user saying yes, and a poll that could
+/// re-arm the prune would make the confirm panel reappear after someone had
+/// deliberately navigated away from it.
+#[test]
+fn the_pads_api_serves_the_payload_and_never_arms_it() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let addr = start_server(control);
+
+    let response = get(addr, "/api/pads?confirm=1");
+    // A pad list that is quietly ten minutes old is worse than one that took
+    // 40 ms to fetch (sources.rs's rule); nothing on this page may be cached.
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let value: serde_json::Value = serde_json::from_str(body_of(&response)).expect("json");
+    assert_eq!(value["confirm"], serde_json::json!(false));
+    assert_eq!(value["flash"], serde_json::json!(null));
+    assert_eq!(value["pads"]["prune"]["kind"], serde_json::json!("restart"));
+    assert_eq!(value["pads"]["pads"].as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// /api/live — the live input feed, as Server-Sent Events.
+// ---------------------------------------------------------------------------
+
+/// **No daemon is an ANSWER, over real HTTP, and the browser keeps trying.**
+///
+/// The three things a browser needs from this endpoint when the feed is not
+/// there, all in one response: a 200 (an `EventSource` treats any other status
+/// as fatal and stops retrying — so a page opened before the daemon started
+/// would stay dead until somebody reloaded it by hand), a `text/event-stream`
+/// content type, and the refusal itself as an event it can put on screen.
+///
+/// Catches the shape that returned 503 with a JSON body: perfectly readable in
+/// curl, and a permanently dead feed in a browser.
+#[test]
+fn the_live_feed_answers_without_a_daemon_and_keeps_the_browser_retrying() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let response = get(addr, "/api/live");
+
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("content-type: text/event-stream"),
+        "{response}"
+    );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "a buffered live feed is worse than none: {response}"
+    );
+
+    let body = body_of(&response);
+    assert!(
+        body.contains("event: unavailable"),
+        "the refusal travels as an event: {body}"
+    );
+    assert!(
+        body.contains("retry: "),
+        "the SERVER sets the reconnect interval, not each browser: {body}"
+    );
+
+    let data = body
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("a data line");
+    let refusal: Refusal = serde_json::from_str(data).expect("the refusal is JSON");
+    assert!(!refusal.message.trim().is_empty(), "{refusal:?}");
+    assert!(
+        refusal.remedy.is_some(),
+        "a refusal owes a way out: {refusal:?}"
+    );
+}
+
+/// The feed is a READ, and reads are not what `guard.rs` polices — but the Host
+/// check covers every route, and a live stream is the one route somebody would
+/// be most tempted to exempt "because it is only a stream".
+///
+/// A rebound host reaching this endpoint would be a page on another origin
+/// watching what is typed on this cabinet's panel.
+#[test]
+fn the_live_feed_is_behind_the_guard_like_every_other_route() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let response = http(
+        addr,
+        "GET /api/live HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 421"),
+        "a rebound host must not be able to watch the panel: {response}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// /check — BUILD C, the button check.
+// ---------------------------------------------------------------------------
+
+/// **The page is useful with the daemon down, and honest about which half.**
+///
+/// The binding table is a disk read, so it is correct whatever the pipe is
+/// doing — that half answers "what SHOULD this key do". The echo needs the
+/// feed, and the page must not imply it has one it has not opened.
+///
+/// Catches a paint that rendered the grid with a "live" state: on a machine
+/// with no daemon the chips would sit dark under the word "live", which is
+/// indistinguishable from a working check on a panel nobody is touching — this
+/// project's signature bug, on the one screen built to disprove it.
+#[test]
+fn the_button_check_renders_its_roster_and_never_claims_a_feed_it_has_not_opened() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let response = get(addr, "/check");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+    let body = body_of(&response);
+    // The roster came from the SAME `StatusSource::mapper()` the /map page
+    // reads, so the fixture's slot and its bindings are on the page.
+    assert!(body.contains("data-control="), "no chips at all: {body}");
+    assert!(body.contains("data-slot="), "chips with no slot: {body}");
+    // ...and the server paint says it is still connecting, with the explicit
+    // show slot for a confirmed live feed false.
+    assert!(body.contains("connecting to live input"), "{body}");
+    assert!(body.contains(r#""show:live":false"#), "{body}");
+}
+
+/// The nav has a way in. "One action away from the mapper" (docs/MAPPER-UX.md
+/// Build C) is a claim about navigation, and nothing else in the suite would
+/// notice it becoming false.
+#[test]
+fn the_mapper_is_one_click_from_the_button_check() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let map = get(addr, "/map");
+    assert!(
+        body_of(&map).contains(r#"href="/check""#),
+        "the mapper lost its link to the button check"
+    );
+}
+
+/// The roster endpoint serves the same shape the page embeds — one struct, one
+/// serializer, so the poller cannot disagree with the paint.
+#[test]
+fn the_check_api_serves_the_roster_and_is_never_cached() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let response = get(addr, "/api/check");
+    assert!(
+        response.contains("cache-control: no-store"),
+        "a stale roster is a wrong answer about what a key does: {response}"
+    );
+    let value: serde_json::Value = serde_json::from_str(body_of(&response)).expect("json");
+    assert!(value["mapper"].is_object(), "{value}");
+    assert!(value["session"].is_object(), "{value}");
+    assert!(
+        value["feed_hint"].as_str().is_some_and(|s| !s.is_empty()),
+        "the hint is composed in Rust and must reach the page: {value}"
+    );
+    // The frame data is NOT here, and that is the page's shape: the echo
+    // arrives on /api/live at display rate. A roster poll carrying a frame
+    // would be a button check as fast as an HTTP poll.
+    assert!(value.get("frame").is_none(), "{value}");
+}
+
+#[test]
+fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http() {
+    let unavailable = start_server_with_status(
+        Arc::new(ScriptedControl::new(false)),
+        Box::new(FixedMapperStatus(MapperSnapshot::unavailable(
+            r#"preset read failed at C:\Users\TestUser\.ksx; run `ksx preset list`"#,
+        ))),
+    );
+    let unavailable = rendered_body(&get(unavailable, "/check"));
+    assert!(
+        unavailable.contains("Controls could not be checked"),
+        "{unavailable}"
+    );
+    assert!(unavailable.contains("Open Setup"), "{unavailable}");
+    assert!(!unavailable.contains("ksx preset list"), "{unavailable}");
+
+    let empty = start_server_with_status(
+        Arc::new(ScriptedControl::new(false)),
+        Box::new(FixedMapperStatus(MapperSnapshot {
+            generated_at: "test".into(),
+            source: "saved setup".into(),
+            config_root: "test".into(),
+            slots: Vec::new(),
+            profile: None,
+        })),
+    );
+    let empty = rendered_body(&get(empty, "/check"));
+    assert!(empty.contains("No controller is ready to test"), "{empty}");
+    assert!(empty.contains("Add a controller in Setup"), "{empty}");
+
+    let zero = start_server_with_status(
+        Arc::new(ScriptedControl::new(false)),
+        Box::new(FixedMapperStatus(MapperSnapshot {
+            generated_at: "test".into(),
+            source: "saved setup".into(),
+            config_root: "test".into(),
+            slots: vec![MapperSlot {
+                number: 1,
+                persona: "xbox360".into(),
+                persona_label: "Xbox 360".into(),
+                preset: "Player 1".into(),
+                keyboard: "panel".into(),
+                bindings: Default::default(),
+                backup: None,
+                session_backup: false,
+                turbo: Default::default(),
+                macros_off: false,
+            }],
+            profile: None,
+        })),
+    );
+    let zero = rendered_body(&get(zero, "/check"));
+    assert!(zero.contains("No controls are ready to test"), "{zero}");
+    assert!(zero.contains(r#"href="/map""#), "{zero}");
+
+    assert_ne!(unavailable, empty);
+    assert_ne!(empty, zero);
+    for body in [&unavailable, &empty, &zero] {
+        assert!(!body.contains("No controllers to check"), "{body}");
+    }
+}
+
+#[test]
+fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
+    let mapper = MapperSnapshot {
+        generated_at: "test".into(),
+        source: "saved setup".into(),
+        config_root: "test".into(),
+        slots: vec![
+            MapperSlot {
+                number: 1,
+                persona: "xbox360".into(),
+                persona_label: "Xbox 360".into(),
+                preset: "Player 1".into(),
+                keyboard: "panel".into(),
+                bindings: std::collections::BTreeMap::from([(
+                    "dpad.up".to_owned(),
+                    vec!["Up".to_owned()],
+                )]),
+                backup: None,
+                session_backup: false,
+                turbo: Default::default(),
+                macros_off: false,
+            },
+            MapperSlot {
+                number: 2,
+                persona: "xbox360".into(),
+                persona_label: "Xbox 360".into(),
+                preset: "Player 2".into(),
+                keyboard: "panel".into(),
+                bindings: Default::default(),
+                backup: None,
+                session_backup: false,
+                turbo: Default::default(),
+                macros_off: false,
+            },
+        ],
+        profile: None,
+    };
+    let addr = start_server_with_status(
+        Arc::new(ScriptedControl::new(false)),
+        Box::new(FixedMapperStatus(mapper)),
+    );
+    let body = rendered_body(&get(addr, "/check"));
+    assert!(body.contains(r#"data-control="dpad.up""#), "{body}");
+    assert!(body.contains("D-pad ↑"), "{body}");
+    assert!(!body.contains(">dpad.up<"), "{body}");
+    assert!(body.contains("Player 2 has no controls yet"), "{body}");
+    assert!(body.contains(r#"href="/map?slot=2""#), "{body}");
+}
+
+/// A rebound host must not be able to read this cabinet's binding table.
+#[test]
+fn the_check_routes_are_behind_the_guard() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in ["/check", "/api/check"] {
+        let response = http(
+            addr,
+            &format!("GET {path} HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 421"),
+            "{path} answered a rebound host: {response}"
+        );
+    }
+}
+
+// ── /start: the first run, walked over HTTP ────────────────────────────────
+
+const PREPARE_IPAC_FORM: &str = "expected_selector=usb%3Ad209%3A0430%3A00&\
+instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&\
+confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes";
+
+const RELEASE_IPAC_FORM: &str = "expected_selector=usb%3Ad209%3A0430%3A00&\
+instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&\
+confirm_release=yes";
+
+fn prepare_ipac(addr: SocketAddr) -> String {
+    post_form(addr, "/start/capture/prepare", PREPARE_IPAC_FORM)
+}
+
+#[test]
+fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    let fresh = rendered_body(&get(addr, "/start"));
+    assert!(
+        !fresh.contains(r#"href="/map?target=stage"#),
+        "an empty setup offered Controls: {fresh}"
+    );
+
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    let chosen = rendered_body(&get(addr, "/start"));
+    assert!(
+        !chosen.contains(r#"href="/map?target=stage"#),
+        "a keyboard without a controller offered Controls: {chosen}"
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    let staged = rendered_body(&get(addr, "/start"));
+    assert!(
+        staged.contains(r#"href="/map?target=stage&amp;slot=1""#),
+        "the staged controller has no Controls action: {staged}"
+    );
+
+    control.running.store(true, Ordering::SeqCst);
+    let running = rendered_body(&get(addr, "/start"));
+    assert!(
+        running.contains("stop that session and replace it with the setup on this screen"),
+        "{running}"
+    );
+    assert!(
+        !running.contains("Play will not replace what is running"),
+        "{running}"
+    );
+
+    let hostile = rendered_body(&get(
+        addr,
+        "/start?flash=error%3A%20daemon%20pipe%20C%3A%5CUsers%5CTestUser%5C.ksx%20--preset%20claim",
+    ));
+    assert!(
+        hostile.contains("Setup could not finish that request"),
+        "{hostile}"
+    );
+    for raw in ["daemon pipe", r"C:\Users\TestUser", "--preset"] {
+        assert!(
+            !hostile.contains(raw),
+            "raw flash fragment {raw:?}: {hostile}"
+        );
+    }
+
+    let dead = start_server(Arc::new(ScriptedControl::dead()));
+    let refused = post_form(
+        dead,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    assert!(
+        refused.contains("location: /start?flash=error"),
+        "{refused}"
+    );
+    for raw in ["daemon", "pipe", "control%20channel", "%60ksx"] {
+        assert!(
+            !refused.contains(raw),
+            "raw provider text {raw:?}: {refused}"
+        );
+    }
+}
+
+#[test]
+fn capture_preparation_requires_all_consents_transitions_only_verified_exact_state_and_releases() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(addr, "/start/blocking", "blocking=bound-keys");
+
+    let before: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    assert_eq!(before["flags"]["capture_prepare"], true, "{before}");
+    assert_eq!(before["flags"]["capture_release"], false, "{before}");
+    assert_eq!(before["flags"]["ready"], false, "{before}");
+    assert!(
+        before["capture"].get("backend").is_none(),
+        "the browser must never select a backend: {before}"
+    );
+
+    // A hand-authored Save/Play bypasses no readiness gate. The domain stage
+    // is otherwise complete, so capture is the only remaining refusal.
+    let save = post_form(addr, "/start/save", "");
+    let play = post_form(addr, "/start/play", "");
+    assert!(save.contains("not%20ready%20to%20save"), "{save}");
+    assert!(play.contains("not%20ready%20to%20play"), "{play}");
+    assert!(!control.committed.load(Ordering::SeqCst));
+    assert!(!control.played.load(Ordering::SeqCst));
+
+    // HTML `required` is convenience only. The server rejects a crafted form
+    // missing even one consent and never calls the privileged provider.
+    let missing = post_form(
+        addr,
+        "/start/capture/prepare",
+        "expected_selector=usb%3Ad209%3A0430%3A00&\
+         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&\
+         confirm_spare_keyboard=yes&confirm_rebind=yes",
+    );
+    assert!(missing.contains("Confirm%20all%20three"), "{missing}");
+    assert!(machine.prepared_with.lock().unwrap().is_empty());
+    assert_eq!(
+        control.staged().device.unwrap().backend,
+        "interception",
+        "a refused consent changed the stage"
+    );
+
+    let prepared = prepare_ipac(addr);
+    assert!(!prepared.contains("flash=error"), "{prepared}");
+    for raw in ["generated.inf", "private%20provider", "--repair"] {
+        assert!(
+            !prepared.contains(raw),
+            "provider/helper detail leaked through the redirect: {prepared}"
+        );
+    }
+    let calls = machine.prepared_with.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].expected_selector, "usb:d209:0430:00");
+    assert!(calls[0].instance_id.eq_ignore_ascii_case(IPAC_KB));
+    assert!(calls[0].confirm_spare_keyboard);
+    assert!(calls[0].confirm_rebind);
+    assert!(calls[0].confirm_machine_certificate);
+    drop(calls);
+    assert_eq!(control.staged().device.unwrap().backend, "winusb");
+
+    let ready: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("ready start payload");
+    assert_eq!(ready["flags"]["capture_prepare"], false, "{ready}");
+    assert_eq!(ready["flags"]["capture_release"], true, "{ready}");
+    assert_eq!(ready["flags"]["capture_blocked"], false, "{ready}");
+    assert_eq!(ready["flags"]["ready"], true, "{ready}");
+
+    let missing_release = post_form(
+        addr,
+        "/start/capture/release",
+        "expected_selector=usb%3Ad209%3A0430%3A00&\
+         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000",
+    );
+    assert!(
+        missing_release.contains("Confirm%20that%20you%20want%20to%20release"),
+        "{missing_release}"
+    );
+    assert!(machine.released_with.lock().unwrap().is_empty());
+    assert_eq!(control.staged().device.unwrap().backend, "winusb");
+
+    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    assert!(!released.contains("flash=error"), "{released}");
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+    assert_eq!(control.staged().device.unwrap().backend, "interception");
+    let after: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("released start payload");
+    // Interception is available in this fixture, so release restores a ready
+    // ordinary path while the same prepare card remains as the optional
+    // built-in USB-mode choice.
+    assert_eq!(after["flags"]["capture_prepare"], true, "{after}");
+    assert_eq!(after["flags"]["capture_release"], false, "{after}");
+    assert_eq!(after["flags"]["capture_blocked"], false, "{after}");
+    assert_eq!(after["flags"]["ready"], true, "{after}");
+}
+
+#[test]
+fn capture_preparation_refuses_stale_or_noncanonical_results_without_retargeting_stage() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.winusb_claimed.store(false, Ordering::SeqCst);
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+
+    // A platform phase such as `active` is not the canonical MachineSource
+    // result. Studio does not infer success from it or from helper copy.
+    *machine.prepare_state.lock().unwrap() = Some("active".to_owned());
+    let noncanonical = prepare_ipac(addr);
+    assert!(noncanonical.contains("flash=error"), "{noncanonical}");
+    assert!(!noncanonical.contains("active"), "{noncanonical}");
+    assert!(!noncanonical.contains("generated.inf"), "{noncanonical}");
+    assert_eq!(control.staged().device.unwrap().backend, "interception");
+
+    *machine.prepare_state.lock().unwrap() = Some("recovery-required".to_owned());
+    let recovery = prepare_ipac(addr);
+    assert!(recovery.contains("may%20need%20recovery"), "{recovery}");
+    assert!(!recovery.contains("private%20provider"), "{recovery}");
+    assert_eq!(control.staged().device.unwrap().backend, "interception");
+
+    // Even canonical state cannot license a different returned interface.
+    *machine.prepare_state.lock().unwrap() = Some("prepared".to_owned());
+    *machine.prepare_instance.lock().unwrap() = Some(r"USB\VID_0000&PID_0000\OTHER".to_owned());
+    let wrong_instance = prepare_ipac(addr);
+    assert!(wrong_instance.contains("flash=error"), "{wrong_instance}");
+    assert!(!wrong_instance.contains("VID_0000"), "{wrong_instance}");
+    assert_eq!(control.staged().device.unwrap().backend, "interception");
+
+    let calls_before_stale = machine.prepared_with.lock().unwrap().len();
+    let missing_target = post_form(
+        addr,
+        "/start/capture/prepare",
+        "confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes",
+    );
+    assert!(
+        missing_target.starts_with("HTTP/1.1 303"),
+        "{missing_target}"
+    );
+    assert!(
+        missing_target.contains("selected%20keyboard%20changed"),
+        "{missing_target}"
+    );
+    let stale = post_form(
+        addr,
+        "/start/capture/prepare",
+        "expected_selector=usb%3Ad209%3A0430%3A01&\
+         instance_id=USB%5CVID_D209%26PID_0430%26MI_01%5C7%261A2B3C4D%260%260001&\
+         confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes",
+    );
+    assert!(stale.contains("selected%20keyboard%20changed"), "{stale}");
+    assert_eq!(
+        machine.prepared_with.lock().unwrap().len(),
+        calls_before_stale,
+        "a stale browser target reached the privileged provider"
+    );
+    assert_eq!(control.staged().device.unwrap().backend, "interception");
+}
+
+/// **`docs/FIRST-RUN.md` §7 as far as HTTP can carry it**: the four moments a
+/// browser performs, in order, against the real router and the real staging
+/// domain — no terminal, no file editing, and nothing typed but a click.
+///
+/// This is the journey the shipped page could not complete honestly. It fails
+/// against the version at `179324e` in three separate places:
+///
+///  1. `/start/controller` staged an EMPTY preset, so the setup was `ready`
+///     the moment a persona was picked and `/start/play` started a pad on
+///     which every button was dead;
+///  2. the split-or-freeze question was never required, so both buttons were
+///     live with it unanswered and Save wrote `block_keyboards = "whole"`
+///     from an answer nobody gave;
+///  3. there was no way at all to give a staged controller individual
+///     bindings or macros — the mapper only edited files this flow had not
+///     written.
+///
+/// The `played` flag is the load-bearing assertion: it proves a refused Play
+/// started NOTHING, rather than merely that the flash looked unhappy.
+#[test]
+fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    // Moment 4 — a keyboard, posted as the SERVED selector. Nothing typed.
+    let response = post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=Ultimarc+I-PAC+4",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    // This fixture's I-PAC begins already bound to WinUSB while the staged
+    // choice starts on the compatible Interception default. The explicit
+    // preparation closes that gap and proves the no-terminal clean path.
+    let response = prepare_ipac(addr);
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(!response.contains("flash=error"), "{response}");
+
+    // Moment 5 + 6's menu half — a controller AND the layout it starts from,
+    // in one click, which is what the form posts.
+    let response = post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+
+    // The bindings are really in the stage — no file was written to get them.
+    let page = get(addr, "/start");
+    assert!(page.contains("controls bound"), "{page}");
+    assert!(
+        !page.contains("nothing mapped yet"),
+        "a controller staged from a layout binds something: {page}"
+    );
+
+    // Moment 6's full editor half — the SAME mapper as a saved layout, aimed
+    // at the in-memory stage. The read says which target it is showing.
+    let map: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+            .expect("staged mapper json");
+    assert_eq!(map["target"], "stage", "{map}");
+    assert_eq!(map["mapper"]["slots"][0]["preset"], "Player 1", "{map}");
+
+    // Multi-key, turbo-capable binding writes land in the stage and nowhere
+    // else. Two keys here is intentional: the old one-key daemon verb cannot
+    // make this pass by accident.
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/bind/keys",
+        r#"{"target":"stage","slot":1,"preset":"Player 1","function":"A",
+            "keys":["H","Enter"],"turbo_hz":12,"reload":true}"#,
+    )))
+    .expect("staged binding outcome");
+    assert_eq!(bound["ok"], true, "{bound}");
+    assert_eq!(bound["reloaded"], false, "staging never reloads: {bound}");
+    assert!(
+        control.bound_with.lock().unwrap().is_none(),
+        "the saved-layout writer was called for an unsaved setup"
+    );
+
+    // A plain HTML form preserves that destination too. It adds one key to
+    // the staged set and redirects back to the staged URL.
+    let response = post_form(addr, "/map/add", "target=stage&slot=1&function=A&key=J");
+    assert!(
+        response.contains("location: /map?target=stage&slot=1"),
+        "{response}"
+    );
+
+    // Macro body and trigger use the same target. Neither a disk backup nor a
+    // live reload may be claimed for an in-memory change.
+    let macro_saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        r#"{"target":"stage","slot":1,"preset":"Player 1","name":"dash",
+            "steps":[{"hold":["A"],"ms":50}]}"#,
+    )))
+    .expect("staged macro outcome");
+    assert_eq!(macro_saved["ok"], true, "{macro_saved}");
+    assert_eq!(
+        macro_saved["backup"],
+        serde_json::Value::Null,
+        "{macro_saved}"
+    );
+    assert_eq!(macro_saved["reloaded"], false, "{macro_saved}");
+    assert!(control.saved_macro.lock().unwrap().is_none());
+
+    let trigger: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/bind/keys",
+        r#"{"target":"stage","slot":1,"preset":"Player 1",
+            "function":"macro.dash","keys":["M"],"reload":true}"#,
+    )))
+    .expect("staged macro trigger outcome");
+    assert_eq!(trigger["ok"], true, "{trigger}");
+
+    let mapped: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+            .expect("refreshed staged mapper json");
+    assert_eq!(
+        mapped["mapper"]["slots"][0]["bindings"]["A"],
+        serde_json::json!(["H", "Enter", "J"]),
+        "{mapped}"
+    );
+    assert_eq!(mapped["macros"]["macros"][0]["name"], "dash", "{mapped}");
+    assert_eq!(
+        mapped["macros"]["macros"][0]["triggers"],
+        serde_json::json!(["M"]),
+        "{mapped}"
+    );
+
+    // A stale tab is never redirected to Player 1. Reads keep the requested
+    // number visible as unavailable; every JSON and plain-form write refuses
+    // with the same target intact and leaves the live draft byte-for-byte
+    // equivalent at the API seam.
+    let stale_read: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=9")))
+            .expect("stale staged mapper json");
+    assert_eq!(stale_read["selected"], 9, "{stale_read}");
+    assert!(
+        stale_read["mapper"]["slots"].as_array().unwrap().is_empty(),
+        "a missing player must not paint Player 1: {stale_read}"
+    );
+
+    for request in [
+        r#"{"target":"stage","preset":"Player 1","function":"B","keys":["K"]}"#,
+        r#"{"target":"stage","slot":9,"preset":"Player 1","function":"B","keys":["K"]}"#,
+    ] {
+        let refused: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/bind/keys", request)))
+                .expect("stale binding refusal");
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], ksx_api::codes::BAD_SLOT, "{refused}");
+    }
+    for request in [
+        r#"{"target":"stage","preset":"Player 1","name":"dash","enabled":false}"#,
+        r#"{"target":"stage","slot":9,"preset":"Player 1","name":"dash","enabled":false}"#,
+    ] {
+        let refused: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/macro/save", request)))
+                .expect("stale macro refusal");
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], ksx_api::codes::BAD_SLOT, "{refused}");
+    }
+    for (path, form) in [
+        ("/map/bind", "target=stage&slot=9&function=B&key=K"),
+        ("/map/add", "target=stage&slot=9&function=B&key=K"),
+        ("/map/key/remove", "target=stage&slot=9&function=A&key=H"),
+        ("/map/clear", "target=stage&slot=9&function=B"),
+        ("/map/turbo", "target=stage&slot=9&function=A&turbo_hz=10"),
+    ] {
+        let stale_form = post_form(addr, path, form);
+        assert!(
+            stale_form.contains("location: /map?target=stage&slot=9"),
+            "{path}: {stale_form}"
+        );
+    }
+    let after_stale: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+            .expect("unchanged staged mapper json");
+    assert_eq!(after_stale["mapper"], mapped["mapper"]);
+    assert_eq!(after_stale["macros"], mapped["macros"]);
+
+    // ...and Play is NOT offered yet, because §3 is unanswered.
+    assert!(
+        !page.contains(r#"action="/start/play""#),
+        "Play was offered with the one question unanswered: {page}"
+    );
+    assert!(page.contains("split-or-freeze"), "{page}");
+    assert!(
+        page.contains("Not asked yet"),
+        "and it must still not be pre-answered: {page}"
+    );
+
+    // A hand-made POST to Play — the thing a disabled button cannot stop — is
+    // refused by the DOMAIN, and starts nothing.
+    let response = post_form(addr, "/start/play", "");
+    assert!(
+        response.contains("flash=error"),
+        "Play was accepted with §3 unanswered: {response}"
+    );
+    assert!(
+        response.contains("not%20ready%20to%20play"),
+        "the refusal must give a safe next step: {response}"
+    );
+    assert!(
+        !response.contains("split-or-freeze"),
+        "the provider's internal refusal leaked through the Studio boundary: {response}"
+    );
+    assert!(
+        !control.played.load(Ordering::SeqCst),
+        "a refused Play started a session"
+    );
+    // Save is refused for the same reason, so it cannot write Freeze either.
+    let response = post_form(addr, "/start/save", "");
+    assert!(response.contains("flash=error"), "{response}");
+    assert!(response.contains("not%20ready%20to%20save"), "{response}");
+
+    // Moment 6's question, answered — with SPLIT, the answer a default would
+    // never have produced.
+    let response = post_form(addr, "/start/blocking", "blocking=bound-keys");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+
+    let page = get(addr, "/start");
+    assert!(page.contains(r#"action="/start/play""#), "{page}");
+    assert!(page.contains(r#"action="/start/save""#), "{page}");
+    assert!(page.contains("Answered: Split this keyboard."), "{page}");
+
+    // Moment 7.
+    let response = post_form(addr, "/start/play", "");
+    assert!(
+        !response.contains("flash=error"),
+        "a complete setup was refused: {response}"
+    );
+    assert!(control.played.load(Ordering::SeqCst), "{response}");
+}
+
+/// **A controller with no layout is staged, refused by name, and fixable
+/// without leaving the page.**
+///
+/// The blank layout is a real choice and it must stay reachable — but it is
+/// the one that cannot play, and every screen and every verb has to say so in
+/// the same words. Fails against any build where `/start/play` accepts a slot
+/// whose preset binds nothing.
+#[test]
+fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    let prepared = prepare_ipac(addr);
+    assert!(!prepared.contains("flash=error"), "{prepared}");
+    // The blank layout: every control listed, nothing bound.
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=empty",
+    );
+    post_form(addr, "/start/blocking", "blocking=whole");
+
+    let page = get(addr, "/start");
+    assert!(
+        page.contains("not ready — no controls are mapped"),
+        "{page}"
+    );
+    assert!(
+        !page.contains(r#"action="/start/play""#),
+        "Play was offered for a pad that binds nothing: {page}"
+    );
+
+    let response = post_form(addr, "/start/play", "");
+    assert!(response.contains("flash=error"), "{response}");
+    assert!(
+        response.contains("not%20ready%20to%20play"),
+        "the refusal must give a customer-safe remedy: {response}"
+    );
+    assert!(
+        !response.contains("slot%201"),
+        "the provider's raw slot failure leaked through the Studio boundary: {response}"
+    );
+    assert!(!control.played.load(Ordering::SeqCst), "{response}");
+
+    // The fix is on the page — one POST, no file, no mapper, no shell.
+    let response = post_form(
+        addr,
+        "/start/controller/layout",
+        "number=1&layout=arcade-6button",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    let page = get(addr, "/start");
+    assert!(page.contains("controls bound"), "{page}");
+    assert!(page.contains(r#"action="/start/play""#), "{page}");
+
+    let response = post_form(addr, "/start/play", "");
+    assert!(!response.contains("flash=error"), "{response}");
+    assert!(control.played.load(Ordering::SeqCst), "{response}");
+}
+
+/// Every mutating `/start` route is behind the guard: a rebound host must not
+/// be able to stage, save or start anything on this machine.
+#[test]
+fn the_start_routes_are_behind_the_guard() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in [
+        "/start/device",
+        "/start/capture/prepare",
+        "/start/capture/release",
+        "/start/controller",
+        "/start/controller/persona",
+        "/start/controller/layout",
+        "/start/controller/remove",
+        "/start/blocking",
+        "/start/discard",
+        "/start/save",
+        "/start/play",
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
+            "{path} accepted a cross-origin POST: {response}"
+        );
+    }
+}

@@ -1,0 +1,40 @@
+---
+source: crates/ksx-backend/src/pads.rs
+assertion_line: 388
+expression: "serde_json::to_string_pretty(&v).unwrap()"
+---
+{
+  "driver": {
+    "driver_file": {
+      "company": "Nefarius Software Solutions e.U.",
+      "description": null,
+      "file_version": "1.21.442.0",
+      "file_version_string": null,
+      "path": "C:\\Windows\\System32\\drivers\\ViGEmBus.sys",
+      "signature": null
+    },
+    "installed": true,
+    "service": {
+      "display_name": "Nefarius Virtual Gamepad Emulation Bus Driver",
+      "image_path": "System32\\drivers\\ViGEmBus.sys",
+      "start_type": "demand",
+      "state": "running"
+    }
+  },
+  "pads": [
+    {
+      "handle": 0,
+      "led_number": 2,
+      "persona": "xbox360",
+      "slot": 1,
+      "user_index": 0
+    },
+    {
+      "handle": 1,
+      "led_number": null,
+      "persona": "playstation",
+      "slot": 2,
+      "user_index": null
+    }
+  ]
+}

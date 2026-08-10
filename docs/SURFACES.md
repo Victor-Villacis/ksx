@@ -1,0 +1,612 @@
+# Surfaces: what each one is for
+
+ksx has three faces — the CLI, the egui cabinet app, and Studio in a browser —
+and one backend. This file records which face owns what, in what order they get
+built, and the alternatives that were considered and rejected. It exists so that
+"which surface does this go on?" is answered once instead of re-argued per
+feature.
+
+Written 2026-08-07, after `ksx device pick` shipped as a verb with no web face
+and the question came up for the fourth time. Audited and corrected the same
+week — the matrix had four cells describing capabilities that do not exist, and
+§1's supporting anecdote was false in both halves. Every correction below names
+the code it was checked against.
+
+> This file is **cited from source**, like every other design doc here. That is
+> not decoration: at its first audit `SURFACES.md` had zero references anywhere
+> in the repository — `.rs`, `.md`, `.toml`, `.ts` — while `INPUT-TRANSFORMS.md`
+> had 106 and `CONTROL-SURFACE.md` 29. A design document nothing points at is a
+> memo, and a memo cannot be violated because nobody is looking at it when they
+> write the code. `crates/ksx-app/tests/docs.rs` now fails if a governing doc
+> loses its last citation.
+
+## §1 The backend owns state; every surface is a view
+
+Already the architecture, stated here so it stops being implicit. From
+`crates/ksx-backend/src/device_edit.rs`:
+
+> One writer, like every other write. A typed spec in, a pure plan out, a
+> timestamped backup taken before the write, and the store's atomic save doing
+> the I/O.
+
+And from `ksx studio --help`:
+
+> every button is one backend verb, no GUI-only code paths.
+
+**No surface may hold logic another surface would need.** A capability becomes a
+typed spec and a pure plan in the backend; surfaces call it and render the
+result. `ksx-api` is the wire contract between them.
+
+### Where this is currently broken, on purpose and by accident
+
+Stated here because an unqualified rule that the code visibly does not follow
+teaches people to ignore the rule rather than to fix the code.
+
+- **The mapper's timing arithmetic exists three times.** `ksx_core` owns it;
+  `ksx-studio/src/render_map.rs` mirrors `MIN_STEP_MS`, `TURBO_MAX_HZ`, the
+  frame maths, `MacroStep::effective_ms`, the turbo on/off split, the turbo gap
+  and two SOCD/diagonal helpers, each with a comment saying it is a mirror; and
+  `studio-ui/src/MapIsland.ts` mirrors the same values a third time so the
+  no-JS page and the interactive island agree. The Rust copy is pinned to
+  `ksx_core` by a test. **The TypeScript copy is pinned to nothing**, which
+  makes it the one that will drift, and it will drift silently because a wrong
+  step preview looks like a wrong step preview and nothing else.
+- **The mappable-function vocabulary lives in the surface.** `ZONE_XBOX` and
+  `ZONE_DS4` in `render_map.rs` hold the 25 canonical pad functions, and the
+  test that checks them re-types the same 25 strings, so adding a function to
+  `ksx-core` fails nothing. The bindable-*key* vocabulary next to it does this
+  right — it is pinned against `ksx_core::key::Key::ALL` through a test-only
+  dev-dependency — and the fix is the same shape: a canonical `ALL` on the
+  function type, then compare against it. There is no such list to compare
+  against yet, which is why this is still written down instead of tested.
+- **The egui takes a few decisions of its own.** `Screen::ButtonCheck`'s action
+  clears a local log, `Screen::Status`'s prints a nag, and `Ask::Refresh` is a
+  re-read: three actions that are not backend verbs, in a file whose own comment
+  says there is no such variant. All three are state-free, so the harm is nil
+  and the claim is what is wrong, not the code.
+
+The cost of breaking this rule is concrete in the present tree.
+`MachineSource::devices()` is implemented in `ksx-backend/src/sources.rs`, but
+the cabinet navigation contains only ButtonCheck, Status, Session, Profiles,
+and Presets. The backend read is compiled behind
+`#[cfg(all(windows, feature = "cabinet"))]` even though that surface has no
+devices screen and no caller for the read.
+
+So the failure mode is symmetric, and the rule needs both halves: a surface must
+not own a capability the backend lacks, **and a backend verb with no face is not
+finished either** — it is untested against a real caller, and its shape is a
+guess.
+
+That was the surface-parity guard on the task list (#26), and it now exists:
+`crates/ksx-app/tests/parity.rs` walks the clap command tree, reads Studio's
+routes out of `Router::new()` and the cabinet's screens and `Ask` variants out
+of its source, and asks of every cell in §3 whether the tree agrees. A verb no
+row names and no exemption covers fails it. So does a cell claiming a face that
+is not there — and so does the opposite, which is what it found on the day it
+was written: two cells still saying `planned` about pages that had shipped.
+What it cannot check is a capability nobody wrote a row for, which is the
+remaining reason to keep §3 current by hand.
+
+### §1a Rendered COPY is logic too, and one page proves it
+
+A Studio island seeds its signals from the server's paint and then rewrites the
+same signals from a 2 s poll. It is very easy to let the island compose its own
+sentences from the polled data, and every one of them is then a second
+implementation of a backend rule in another language.
+
+The Profiles page shipped that way and review found the drift immediately: the
+slot-count input's ceiling was `createSignal("16")` in `ProfilesIsland.ts`, its
+setter was never called, and no payload field could reach it. `MAX_SLOTS` has
+already been raised once (task #17). The next raise would have had the server
+render `max="32"` and hydration write `16` straight back over it — a *legal*
+input silently refused, for the same reason `main.rs`'s `slot_arg` module
+exists. The summary lines, the pill mapping and the row text were duplicated the
+same way; they had not drifted yet.
+
+The shape that fixes it: **one serialized derived block**. `ProfilesDerived`
+(`crates/ksx-studio/src/snapshot.rs`) holds every displayed string, every count,
+both numeric ceilings and every `show:` boolean, computed once from the provider
+data; `render_profiles.rs` injects it into the FMIR slots and `applyProfiles`
+assigns it to signals. Neither composes anything. A new page copies this, not
+the two-halves version.
+
+### §1b A refused READ is not an empty result
+
+"I could not read this" and "there is nothing here" are different sentences, and
+a user acts on them differently: one says *go fix your config*, the other says
+*go make your first profile*. A surface that renders the second when the first
+is true has reported success over a read that did not happen — which is the
+failure mode this project keeps hitting (the session that read as healthy while
+the arcade panel was dead, because a WinUSB board had fallen back to
+Interception).
+
+The rule: **an `Err` from a provider gets a typed field on the payload, never a
+`Default::default()` view.** Substituting a default is what turns a refusal into
+a count of zero, and a count of zero into a confident wrong sentence. See
+`ProfilesPayload::profiles_error` / `presets_error`, and note the second-order
+bug the Profiles page had: a defaulted `PresetsView` set `noPresetsYet`, whose
+copy points at a template form fed by *the same read that just failed* — a
+closed loop with a wrong sentence on it.
+
+A page that gets this right needs a test that fails when the two are conflated;
+asserting the failure state renders is not enough, because that passes while the
+absence sentence renders too.
+
+## §2 Build order
+
+1. **Backend verb** — typed spec, pure plan, tested against synthetic fixtures.
+2. **CLI** — the cheapest surface to test and the one CI can drive headlessly.
+3. **The surface the task is actually performed on** (§3, §4).
+
+There is no "egui first or web first" question. That framing assumes a surface
+owns a capability, which §1 forbids. The real question is only ever *which
+surface does a human perform this task on*, and that is answered by the matrix.
+
+## §3 The capability matrix
+
+> **This table is a test.** `crates/ksx-app/tests/parity.rs` parses it and
+> checks every cell against the tree — the clap command tree, Studio's routes,
+> the cabinet's screens and `Ask` variants. Editing a row means editing that
+> test's anchors too, and a word the guard has not been taught (the vocabulary
+> is below) fails it rather than passing unread. Adding a ROW with no anchors
+> also fails: an unbound row is checked by nothing, which is the state the whole
+> table was in before the guard existed.
+
+| Capability | CLI | egui (cabinet) | Studio (browser) |
+|---|---|---|---|
+| First run: stage a setup, save or play | planned (`ksx stage`) | — | **primary** |
+| Author presets / key mappings | owns | — | **primary** |
+| Edit configuration | owns | slot→preset only | **primary** |
+| Create / update / delete profiles | planned | view | **primary** |
+| Device pick / remove | owns | planned | **primary** |
+| WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |
+| "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
+| Is it working: pads, drivers | owns | **primary** | view |
+| Spawn test pads / prune the bus | owns | — | **primary** (§3a) |
+| Start / stop / switch profile | owns | **primary** | convenience |
+| Record / replay a session | owns | planned (§3b) | planned (§3b) |
+
+"owns" = the verb lives here. "primary" = where a human does it. "view" =
+renders backend state, takes no decisions. **"planned" = nothing is there** —
+and it is spelled out because the previous version of this table used "view" for
+two cells that render nothing at all, which reads as a shipped capability and
+cost an audit to catch.
+
+Four cells were corrected, each against the code:
+
+- **Edit configuration — egui.** Was "—". The egui *does* write config: the Presets
+  screen builds an `Ask::Assign`, which becomes a `SlotAssignRequest` that
+  rewrites a `[[slot]]`'s preset. It also decides **which file** the write lands
+  in (`config.toml` or a `games.toml` profile) in `assign_destination`, whose
+  own doc comment records the data-loss bug the previous version of that
+  decision caused. That is a targeting decision taken in a surface; it is the
+  strongest live counter-example to §1 in the tree, and it stays until the
+  destination rule moves behind the verb.
+- **Edit configuration — Studio.** *Superseded 2026-08-08; see below.* Was
+  "**primary**". At the audit no Studio route wrote `config.toml` or
+  `games.toml`; the only config-adjacent route re-read. Every `/map/*` write
+  went to a preset file. `AppState` held no `MachineSource`, and `ControlSource`
+  had exactly one config-writing verb (`slot-assign`) which Studio never called.
+  It was the right destination, so it stayed in the table — as a plan.
+- **Device pick / remove, WinUSB claim / release — egui.** Both were "view".
+  The cabinet has no device mutation screen, so both remain planned there.
+  The old audit also concluded that Studio could never own WinUSB because it
+  could not elevate safely. That premise is now superseded: installed `/start`
+  calls typed `MachineSource::winusb_prepare`/`winusb_release`, which elevate a
+  fixed GUI helper and return only after exact re-survey. The browser never
+  supplies a helper path or backend.
+- **"Press a button, see it light" — CLI and Studio.** The CLI cell was "—",
+  but `ksx monitor` streams `<alias> <Key> down|up` per keystroke: that is the
+  input half, and what it lacks is the second column the egui has (what the
+  panel sent *and* what the pad published — screens.rs explains that the pair is
+  the diagnostic). The Studio cell claimed "useful on phone (§6)": there is no
+  live-input channel in Studio at any screen size — no feed on `AppState`, no
+  frame type, nothing — and the cross-reference pointed at the wrong section
+  (mobile is §8; §6 is launching).
+
+Two more were corrected on 2026-08-08, and this time by the guard rather than
+by a person reading the table — both in the direction that is cheaper to make
+and harder to notice, a face that SHIPPED while the cell still said `planned`:
+
+- **Edit configuration — Studio.** Was "planned primary". `/setup` has since
+  shipped and the plan is the surface: `/setup/import` rewrites the whole
+  config root and `/setup/slot` posts the same `ControlSource::assign_slot`
+  that `ksx slot assign` performs. **primary**, which is where the bullet above
+  already said it belonged.
+- **Profile management — Studio.** `/profiles` now creates, updates and deletes
+  saved game profiles through typed `MachineSource` verbs, and switches through
+  the existing control verb. The CLI CRUD half is explicitly planned rather
+  than hidden inside a broader "owns" claim; the cabinet list remains a view
+  and its operating switch belongs to the start/stop row below.
+- **Device pick / remove — Studio.** Was "planned (#22)"; #22 shipped
+  `/devices`, `/devices/pick` and `/devices/remove`. The egui half stays planned
+  and drops the issue number, because #22 was never about the cabinet — its five
+  screens are still ButtonCheck, Status, Session, Profiles, Presets.
+
+### §3c The first-run row, and the build order it ran backwards
+
+Row 1 is new on 2026-08-08, and it is the first row in this table whose **CLI
+cell is honestly `planned`**. `docs/FIRST-RUN.md` is a spec for a product
+someone who is not us can use, and its §1 premise is that no step may require a
+shell — so the surface came first and `ksx stage` is owed. That is §2's build
+order run 1 → 3 with 2 skipped, the same way `/profiles/new` did it, and it is
+recorded here rather than quietly for the reason that entry gives: the backend
+half then has no second caller checking its shape.
+
+What exists: `ksx_core::StagedSetup` (the value, with no path to a file), the
+four `stage*` pipe verbs, and Studio's `/start` performing all of them. What
+does not: any way to stage a setup from a terminal. The four verbs are on the
+control pipe, so the CLI half is a driver over `ControlSource`, not new logic.
+
+**Moment 6 is implemented without a second mapper.** A staged controller can
+start from a served layout, then `/map?target=stage&slot=N` opens the existing
+button/chord/turbo/macro authoring UI against the slot's optional full
+`PresetFile` snapshot. `staged_bind_edit` and `staged_macro_edit` prepare pure
+edits, validate cross-stage conflicts and apply one `StageEdit::SetBindings`
+only after acceptance. Refusal leaves the stage unchanged; force has the same
+explicit conflict meaning as the saved mapper. No staged GET/edit touches disk,
+takes a backup or claims a config reload. Save and Play remain separate.
+
+The daemon's empty-default startup is part of this row too: it stays alive as
+an idle staging/control host with no session, capture, claim or pads. Explicit
+empty game profiles and other plan failures still refuse. The terminal driver
+`ksx stage` remains planned; it must call this same control contract rather
+than growing a second staging implementation.
+
+**This row is also why the guard's bookkeeping changed.** It used to require
+every CLI anchor to exist in the clap tree, whatever its cell said — which is
+right for a cell claiming `owns` and wrong for one saying `planned`, where a
+name that does not resolve is exactly the claim being made. The egui and Studio
+columns have always worked that way (`Screen::Mapper` and `/buttons` name
+nothing, which is what makes their `—` honest); the CLI column now does too, and
+`every_cell_claiming_a_shipped_face_has_one` is what holds the shipped
+direction.
+
+### §3a Why installed WinUSB preparation has a narrow Studio face
+
+WinUSB is still the most dangerous action in the matrix: it takes a keyboard
+out of the Windows keyboard stack. The old conclusion was therefore “never in
+Studio.” That solved the browser problem by leaving a clean-install customer
+with a terminal-only dead end. The shipped design changes the privilege
+boundary, not the safety bar.
+
+Studio owns only the consent and exact stale-action guard. `/start` shows the
+selected human-named keyboard, states the ordinary-typing consequence, and
+requires three independent confirmations: a different tested keyboard, consent
+to rebind this selected keyboard, and consent to a machine-local signing
+certificate. The forms carry the served selector and instance only. They carry
+no backend, command, DLL, path, certificate name, or provider result.
+
+The server then re-reads the stage and machine inventory. It requires one exact
+selector match, one exact case-insensitive interface instance, WinUSB
+eligibility, and the correct current binding. Unsupported, ambiguous,
+shared-hardware-ID, stale and last-keyboard targets refuse before elevation.
+Because a Windows package matches a hardware ID, the user is told to release
+before connecting another identical keyboard. If one is connected later,
+Studio refuses to guess between twins: unplug it, then Release removes the
+shared package so the twin returns to HidUsb when reconnected.
+
+Only an installed Program Files copy may elevate its fixed GUI-subsystem
+`ksx-winusb-helper.exe`; that helper may load only its fixed installed sibling
+`libwdi.dll`. Both canonicalize from Windows Known Folders and repeat live
+owner/DACL/reparse checks. Portable and user-writable copies refuse. The helper
+journals, performs the package transaction, compensates failures or records
+recovery-required, and re-surveys. Studio accepts only the typed boundary's
+canonical `prepared`/`released` state plus the exact instance, then performs a
+guarded stage backend transition. Helper stdout, a zero exit code, or a browser
+field can never produce success.
+
+The existing loopback Host and mutating-Origin guard still wraps both POSTs.
+This does not make driver mutation safe on a LAN; pairing/token work remains a
+prerequisite before Studio binds beyond loopback.
+
+Pad testing keeps its different contract. A test-pad action cannot lock out the
+keyboard, so it needs state bounds and clear consequences rather than UAC
+device ownership. `/start` still cannot install ViGEmBus: that belongs to the
+installer's explicit checkbox. A surface may own one narrowly designed elevated
+transaction without becoming a generic driver console.
+
+### §3b Record / replay, and why both other cells say `planned`
+
+`ksx monitor --record` writes a session; `ksx play` plays one back into the
+real pipeline. Together they are one capability, and today the CLI owns all of
+it.
+
+Both other cells are `planned` rather than `never`, and the distinction is the
+one §3 draws: nothing is there *yet*, and there is no reason in principle for
+that. An attract-mode loop is a **cabinet** feature — it belongs on the egui,
+started from the panel with no keyboard in reach, which is precisely what §4
+says that surface is for. Recording a session and picking one to replay is a
+list and a button, which is what §5 says Studio is good at. Neither is written,
+so neither is claimed.
+
+What is genuinely CLI-shaped, and would stay here even after both faces exist,
+is the *argument surface*: `--as`, `--speed`, `--game`. Those are the flags of
+someone debugging a mapping against a recording, which is a keyboard-and-shell
+activity by nature. A cabinet needs one button that says "play the demo" and a
+browser needs a list of recordings — neither needs the flags.
+
+## §4 The egui is an appliance panel, not a worse browser
+
+The egui's five screens (`ksx-cabinet/src/nav.rs`) are ButtonCheck, Status,
+Session, Profiles, Presets — and ButtonCheck is described in the source as "the
+spine". That is correct and it generalises:
+
+**At an arcade cabinet there is no mouse and no keyboard. The panel is the
+input.** A browser UI cannot be driven by an arcade stick; the egui already
+responds to panel presses. This is a structural advantage no web surface can
+take, and it is why "just use Studio for everything" is not on the table.
+
+The egui's job is therefore everything a person does **standing at the machine,
+with only the panel to touch**: confirm it works, start and stop, switch
+profile. Anything requiring text entry belongs elsewhere.
+
+## §5 Studio is the workbench
+
+Studio binds `127.0.0.1` and refuses anything else — `ksx-studio/src/error.rs`
+returns `NonLoopbackBind` rather than serving a LAN address. Its **pages** are
+`/start` (the first run), `/` (status), `/map` (the mapper), `/check` (the
+button check), `/pads` (the ViGEm bus and its two verbs), `/devices` (the
+picker), `/profiles` (profiles & presets) and `/setup` (the configuration).
+
+`/start` and `/setup` are the two that look like each other and are not, and
+the difference is a contract rather than a layout. **`/setup` is the
+disk-backed maintenance checklist**, but not every control on it is a write:
+the board step links to `/devices`, slot assignment performs one saved-config
+write, the proof step only operates the daemon learner, Export is a read, and
+Import is a dry run unless its consent box is ticked. A write that does happen
+is a complete backend act rather than a half-written wizard step.
+
+**`/start` does not use the saved config as its draft.** It drives
+`ksx_core::StagedSetup`, held in the daemon for the length of a visit and with
+no path to a file (`FIRST-RUN.md` §2). Its staged choices and accepted mapper
+edits remain in memory; Play starts that value without saving; only the button
+marked Save crosses the disk boundary. Rebuilding `/setup` around a staged
+value was the alternative and it was rejected: one screen holding both rules
+is a screen where a user cannot tell which controls commit, which is the
+confusion staging exists to remove. Two pages, with Save as the explicit
+boundary between an in-memory proposal and a disk-backed configuration.
+
+`/start` also links every staged controller into the full `/map?target=stage`
+authoring path. `/profiles` owns customer-facing create/update/delete/switch:
+new profiles inherit matching saved base devices and controller behavior;
+updates preserve profile-specific devices by default (or explicitly refresh
+keyboard/mouse selectors); the selected layout applies to every resulting
+player; delete removes exactly one profile and keeps layouts. Update/delete
+use backups and stale-write guards in the backend.
+
+`/check` is the one page that performs no verb at all, and the one fed by a
+channel that is not the control pipe: `GET /api/live` is Server-Sent Events
+over the daemon's own outbound-only feed pipe, which is what lets a press on
+the panel light a control in a browser at display rate. It is still a VIEW —
+it writes nothing, and it decides nothing, because its whole control roster is
+`MapperSlot::bindings`' key set arriving from the backend (§1).
+
+Eight pages, dozens of routes: the rest are the `/api/*` reads, the mutating
+form endpoints, the service worker, the asset handler and three icons. The
+distinction is not pedantry — it is the whole reason the CSRF guard is one
+layer over the router rather than a check per handler, because "the mapper
+alone grew eight form endpoints in three milestones" and the failure mode
+being prevented is forgetting one.
+
+For the **whole config root**, `/setup` has exactly two verbs: Export downloads
+it as one JSON document, and Import pastes one back (dry run unless the write
+box is ticked — `ksx config import`'s consent shape, unchanged). Neither takes
+a path: `MachineSource::config_export|config_import` are in-memory on purpose,
+because a person who asked a page for their configuration should not be handed
+a directory to go and find. These are not the page's only actions: the
+checklist also reaches slot assignment and the learner's prove/cancel pair, and
+its board step links to `/devices`. A config root appears on that page once, in
+small print, for a bug report to quote.
+
+`/map` is good enough to stop treating as supplemental tooling. Authoring a
+25-binding preset is a pointer-and-keyboard task and the browser is simply
+better at it than immediate-mode GUI. **Studio is promoted to a core surface for
+authoring** — co-equal with the egui, not above it.
+
+It is deliberately *not* promoted to primary for operating. If Studio were the
+only way to start a session, a cabinet in attract mode would need a web server,
+a free port and a browser running before anyone could play. That is a worse
+appliance than the one that exists now.
+
+## §6 Product launch and cabinet-to-Studio navigation
+
+Windows customer launch is `ksx-launcher.exe` → sibling `ksx.exe open` → an
+idle or configured daemon → Studio `/start`. The launcher is a GUI-subsystem
+handoff used by the installer and customer shortcuts, not another surface.
+The empty-config daemon owns the control pipe/tray while doing no emulation
+work, which is what makes first-run staging reachable.
+
+The cabinet app has an "Open Studio" action. That direction is correct: the
+process already running at the machine can open the workbench.
+
+**The reverse was rejected.** A browser cannot launch a native app without a
+registered custom protocol (`ksx://`), which means writing registry entries at
+install time and a security prompt on every click — real friction and a real
+install-time footprint, bought for a convenience the egui already provides in
+the direction that works.
+
+## §7 LAN access needs a pairing token, and the guard needs to learn about it
+
+`ksx studio --help` already records the intent:
+
+> Localhost only — there is no LAN option; that arrives with the pairing token.
+
+**A LAN bind is not the same class of problem as a Node dev server on a laptop.**
+That comparison is tempting and wrong. A dev server serves files nobody attacks;
+Studio can **start and stop input capture, stream per-key activity, create test
+pads, rewrite config, and request an installed exact-device WinUSB
+prepare/release transaction**. The fixed elevated helper keeps that request
+from becoming arbitrary privileged execution, but the capability makes a LAN
+token more—not less—necessary. A home network is not a trust boundary: a guest
+phone, a smart TV or a compromised IoT device is on the same WiFi.
+
+So LAN access is: bind beyond loopback, require a token, reject anything
+unauthenticated. Two consequences worth writing down before the work starts:
+
+- **Discovery is a QR code in the egui.** Nobody types
+  `http://192.168.1.47:4460/?t=xK9m…` on a phone. A copyable URL is the laptop
+  fallback, not the primary path.
+- **`ksx-studio/src/guard.rs` will reject it — twice, and the second one is the
+  easy miss.** There are two independent checks and a LAN bind has to clear
+  both:
+
+  1. `is_loopback_host` on the `Host` header, the DNS-rebinding defence. A LAN
+     address fails it, and the request never reaches a handler (421).
+  2. `is_own_origin` on the `Origin` header of every mutating request. A form
+     posted from `http://192.168.1.47:4460` fails it too, because the origin
+     check ends in *and the host is a loopback name*.
+
+  Fix only the first and you ship a Studio that **renders on the phone and
+  refuses every button** — a 403 on every form, which reads as a broken app, not
+  as a security feature. Both checks now consult the bound address, so each
+  passes for the address ksx is actually serving on; that half is inert while
+  the bind stays loopback-only, and it is pinned by two tests in `guard.rs` so
+  the LAN change-set cannot land with the trap still in it. What is still
+  missing is the token, which is the part that makes the bind *safe* rather than
+  merely *working*.
+
+  Writing those tests turned up the same shape of bug already shipped: the two
+  checks disagreed about `[::1]`. `Host` accepted it, `Origin` did not — an
+  already-split IPv6 name was being re-split on its own colons, so `::1` became
+  `::` — and a dual-stack machine that landed on the IPv6 loopback got a Studio
+  that rendered and 403'd every form. Exactly the failure this bullet predicts,
+  arriving early and by a different route.
+
+## §8 Mobile: responsive-only, aimed at diagnostics
+
+No dedicated touch layout yet, and no deferring mobile either — because there is
+one phone use case that beats every other surface:
+
+**You are behind the cabinet with the panel open, pressing buttons, and the
+phone in your hand shows which key fired.** That is ButtonCheck on a phone, and
+it is better than walking round to the monitor for every wire.
+
+Two corrections to how that reads — the first of which was itself wrong, and
+is kept because *how* it was wrong is this repo's most instructive audit
+failure to date:
+
+**The viewport tag was never missing.** An earlier revision of this section
+said "responsive-only currently means not responsive at all: there is no
+`<meta name="viewport">` anywhere in `studio-ui/` or `ksx-studio/assets`", a
+task was filed to add the one line, and the line was added — producing a
+DUPLICATE, because `forma-server`'s own template (`template.rs`, 0.1.4 and
+0.2.0 alike) has emitted the tag on every page this crate ever rendered.
+Three separate greps reached the same false conclusion the same way: they
+searched the page's *source*, and the head of these pages is assembled by a
+dependency, so the truth was only ever in the *output*. The claim is now
+pinned where the truth lives — `render.rs::assert_complete_head` reads the
+rendered HTML and asserts the tag is present, in `<head>`, exactly once —
+and the lesson generalises: **an audit of a claim about output must read the
+output.** Breakpoints and media queries therefore already fire on phones;
+what they fire *against* is layouts nobody has tuned, which is the actual
+work (task #24).
+
+**The missing Studio live channel was real at the audit and is now closed.** At
+that point there was no feed on `AppState`, no frame type and no handler, so the
+phone argument rested on an egui-only capability. Today `/check` gets its
+control roster from the ordinary snapshot and lights it from `GET /api/live`,
+an SSE bridge over the daemon's outbound feed pipe (§5). The matrix therefore
+calls Studio a `view`, not `planned`: it renders live backend state and performs
+no decision or write.
+
+What remains is the responsive pass itself: tune `/check` first for the behind-
+the-cabinet phone use case, then `/` and status, with `/map` last. Mapping asks
+you to press the key it is capturing, which a phone cannot do for a desk
+keyboard, so it is the least valuable page on the smallest screen.
+
+## §9 User flows worth writing down
+
+Five journeys carry nearly all the product's surface area:
+
+1. **First-time setup and later repair** — two related journeys on two pages,
+   not an automatic history-based fork. `ksx open` always lands on `/start`;
+   someone maintaining a saved configuration deliberately chooses `/setup`.
+   `/devices` remains read/pick/remove only. The `/start` journey has the one
+   deliberate exception: a separate top-level, three-consent installed WinUSB
+   preparation/release card for the exact selected keyboard. Picking the row
+   itself still changes only the in-memory stage.
+
+   **Studio's `/start`** is the download-to-gaming path (`docs/FIRST-RUN.md`
+   moments 4–7): pick a keyboard from a list nobody had to ask for, pick what it
+   should become, map buttons/chords/turbo/macros in the reused mapper, answer
+   split-or-freeze, then save or play. It reads the live device/pad state and
+   available controller layouts, but it does not seed the proposal from
+   `config.toml` and writes no file until Save. The person walking it has not
+   decided anything yet and must not be punished for exploring. Play can happen
+   without Save. Its whole draft is one `ksx_core::StagedSetup` in the idle
+   daemon/control host. The final Guide instruction is conditional on Windows'
+   controller-to-Game-Bar setting and links directly to that Settings page.
+
+   **Studio's `/setup`** (§5) is the same territory for someone who already has
+   a configuration: the checklist is decided in the backend
+   (`ksx-backend::onboard::plan_steps`, pure) and rendered, never re-derived per
+   surface. The board step LINKS to the devices screen instead of duplicating
+   it; slot assignment is one complete saved-config act; the proof step uses the
+   learner and writes nothing. Because there is no multi-step pending wizard
+   transaction, an abandoned run leaves the last complete config valid.
+2. **Change a mapping** — running cabinet, one binding is wrong.
+3. **"It doesn't work"** — the diagnostic path, which must terminate in a cause
+   and not a shrug.
+4. **Start a session** — the everyday path, and the one that must never need a
+   keyboard.
+5. **Manage saved games** — create, repair, rename or delete a profile and
+   switch to it entirely in Studio. Program paths are edited in the profile
+   disclosure; no TOML or CLI is part of the customer flow.
+
+Each should name the surface it happens on. Where a flow crosses surfaces, that
+crossing is a design smell worth a second look.
+
+## §10 What this settles for open work
+
+- **Slot persona menu** — **settled and built, 2026-08-08 (task #8).** The
+  decision stands as it was written: authoring, so Studio primary, egui view.
+
+  The wire type changed, which is what this entry was waiting for.
+  `SlotAssignRequest` now carries `persona` as an **optional string**, and both
+  halves of that are load-bearing. *Optional*, because `Persona::default()` is
+  `xbox360`: a defaulted field would have read every pre-2026-08-08 request as
+  "make this slot an Xbox 360 pad" and silently un-PlayStation-ed slots 5–8 the
+  first time somebody re-pointed a preset. *A string*, because ksx-core carries
+  no serde and the alias table lives in one `FromStr` — a surface must never
+  hold a copy of it to fill this field. The serde test that pinned the old
+  field set still pins the new one; it was renamed and re-argued, not deleted.
+
+  What each surface got, and why:
+
+  - **Backend** (`ksx-backend/src/slots.rs`) applies it, and refuses two things in
+    words: a persona this build cannot plug (`Persona::can_plug`, which reads
+    the backend's `is_implemented` and never a driver probe) and a fifth XInput
+    slot — counted **after** the write would land, over the whole destination
+    file, so the refusal is about the config that would exist rather than about
+    the one field being touched.
+  - **CLI** — `ksx slot assign --slot N --persona P`, lenient parsing through
+    the same `FromStr`. Preset and persona are independently optional: either,
+    both, or the preset alone.
+  - **Studio** — the picker sits on `/setup`'s "Wire a slot" form, beside the
+    slot and preset selects that already POST `slot-assign`. **Not `/profiles`,
+    which has no slot rows**: a second slot editor on a second page would be
+    two front doors onto one verb, which is the drift §1 forbids. The option
+    list is `SetupView::personas`, served by the backend with a `can_plug` flag
+    and a `why_not` sentence per entry; nothing about personas is spelled in
+    TypeScript.
+  - **egui** — renders the persona in the Presets screen's slot rows. No
+    picker: §4's rule is that anything needing text entry or a menu of five
+    belongs elsewhere, and re-personaing is a between-sessions authoring act,
+    not something done standing at the cabinet mid-evening.
+- **Device pick UI** — Studio, following the existing CLI verb (§3). Also the
+  egui: §3 row 3 no longer claims a view exists there. `/setup`'s first step
+  links to `/devices` rather than growing a second picker.
+- **`ksx games new|update|delete` — the CLI half of profile CRUD, owed.**
+  Studio's `/profiles` page calls typed `MachineSource` verbs over pure
+  plan/apply pairs in `ksx-backend::profile_edit`; the CLI row is now honestly
+  `planned` instead of hiding that absence inside configuration verbs. A future
+  CLI is a thin driver over these same planners, not new profile logic.
+- **Cabinet slot list scrolling** — egui, operating surface, still broken above
+  four slots. The body *is* inside a `ScrollArea`; what is missing is any
+  scroll-to-focus call, so the joystick can move the cursor to a row that is
+  off-screen with no way to bring it into view (`nav.rs` moves the cursor with
+  wraparound and no page-up, deliberately).
+- **LAN + token + QR** — one coherent change-set, not three (§7), and the guard
+  has two checks in it, not one.
+- **Viewport meta tag** — one line, and the precondition for anything in §8.

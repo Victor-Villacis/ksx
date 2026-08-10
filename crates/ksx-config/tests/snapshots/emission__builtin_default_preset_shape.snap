@@ -1,0 +1,32 @@
+---
+source: crates/ksx-config/tests/emission.rs
+expression: "toml::to_string(&file).unwrap()"
+---
+name = "default"
+
+[bindings]
+A = "Space"
+B = "C"
+X = "R"
+Y = "F"
+back = "Backspace"
+"dpad.down" = "Numpad2"
+"dpad.left" = "Numpad4"
+"dpad.right" = "Numpad6"
+"dpad.up" = "Numpad8"
+guide = "LeftWindows"
+lb = "Q"
+lt = "Z"
+lthumb = "LeftShift"
+"lx.max" = "D"
+"lx.min" = "A"
+"ly.max" = "W"
+"ly.min" = "S"
+rb = "E"
+rt = "X"
+rthumb = "V"
+"rx.max" = "Right"
+"rx.min" = "Left"
+"ry.max" = "Up"
+"ry.min" = "Down"
+start = "Enter"

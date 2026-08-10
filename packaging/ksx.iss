@@ -153,17 +153,19 @@ Name: "vigembus"; Description: "Install the ViGEmBus controller driver (required
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; There is deliberately no `dontcopy` second copy of the helper here, and no
-; pre-copy extraction of it into {tmp}.
+; A second copy of the helper, extracted into {tmp} for the pre-install AUDIT
+; only — `check-store`, which reads and never writes.
 ;
-; That is what this installer used to do, and it could not work on any machine.
-; The helper's first act is to prove it is running from a directory only
-; SYSTEM/Administrators/TrustedInstaller own and only they can write. Inno's
-; {tmp} is created inside the invoking user's own TEMP: owned by that user,
-; writable by that user, by construction. So the very first thing setup did was
-; refuse itself, exit code 3, "no KSX files were installed" - every time, for
-; everyone. The store is now initialized from {app} after the copy, where that
-; proof is true rather than impossible. See CurStepChanged.
+; It may not run `initialize-store` there, and once did. That verb proves its
+; own executable sits in a directory only SYSTEM/Administrators/TrustedInstaller
+; can write, and Inno creates {tmp} inside the invoking user's own TEMP: owned
+; by that user, writable by that user, always. So setup refused itself on every
+; machine, exit code 3, before copying a file. The mutating verb keeps that rule
+; and now runs from {app}; the read-only verb does not need it, because the
+; worst a swapped caller achieves is being told about a directory it can already
+; read. `noencryption` is required for a pre-install extraction even if a future
+; release enables installer encryption.
+Source: "{#RepoRoot}\target\release\{#WinUsbHelper}"; Flags: dontcopy noencryption
 Source: "{#RepoRoot}\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; GUI-subsystem hand-off used by every customer entry point. ksx.exe stays
 ; installed beside it for internal/dev verbs and for this launcher's `open`.
@@ -289,6 +291,53 @@ var
 // makes Inno undo the copy. The user-visible promise is the same — nothing of
 // KSX is left behind — but it is delivered by rollback rather than by never
 // starting.
+// The pre-install audit, and the ONLY refusal that can still stop an install.
+//
+// PrepareToInstall returning a non-empty string aborts before a single file is
+// copied. Nothing later can: an exception from CurStepChanged(ssPostInstall) is
+// reported and then ignored, because Inno has already written "Installation
+// process succeeded" to its log by that point. That was measured, not assumed —
+// a helper refusal there produced a complaint, a green exit code, and a fully
+// installed product.
+//
+// So the hostile-ProgramData question is asked here, of a `check-store` that
+// reads and never writes, from the extracted copy in {tmp}. The mutation that
+// follows it lives in CurStepChanged, from {app}, under the strict rule.
+function PrepareToInstall(var NeedsRestart: Boolean): string;
+var
+  HelperPath: string;
+  ResultCode: Integer;
+begin
+  Result := '';
+  try
+    ExtractTemporaryFile('{#WinUsbHelper}');
+    HelperPath := ExpandConstant('{tmp}\{#WinUsbHelper}');
+    if not FileExists(HelperPath) then
+    begin
+      Result := 'Setup could not extract its WinUSB recovery auditor.';
+      exit;
+    end;
+
+    if not Exec(HelperPath, 'check-store', ExpandConstant('{tmp}'),
+                SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      Result :=
+        'Setup could not start its WinUSB recovery auditor.' + #13#10 +
+        'No KSX files were installed.';
+      exit;
+    end;
+    if ResultCode <> 0 then
+      Result :=
+        'Setup refused an unsafe KSX WinUSB recovery directory (auditor exit code ' +
+        IntToStr(ResultCode) + ').' + #13#10 +
+        'No KSX files were installed. Remove unexpected ProgramData links or objects and retry.';
+  except
+    Result :=
+      'Setup could not audit the KSX WinUSB recovery directory: ' +
+      GetExceptionMessage + #13#10 + 'No KSX files were installed.';
+  end;
+end;
+
 function RecoveryStoreProblem: string;
 var
   HelperPath: string;

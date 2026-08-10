@@ -2973,6 +2973,48 @@ pub fn initialize_store() -> Result<(), TransactionError> {
     Err(TransactionError::Unsupported)
 }
 
+/// Read-only audit of the fixed store path, for Setup to run BEFORE it copies
+/// anything.
+///
+/// This exists because `initialize_store` cannot run at that moment and never
+/// could: it requires the calling executable to sit in a directory only
+/// SYSTEM/Administrators/TrustedInstaller can write, and Setup necessarily runs
+/// its extracted copy from a temporary directory owned by the invoking user.
+/// The mutating path keeps that rule. This one does not need it, because it
+/// creates nothing, changes no DACL, and writes nothing: the worst a swapped
+/// caller achieves is being told about a directory it can already read.
+///
+/// `PrepareToInstall` is also the only phase whose failure aborts an install.
+/// An exception from `CurStepChanged(ssPostInstall)` is reported and then
+/// ignored — Inno has already logged "Installation process succeeded" by then —
+/// so a hostile ProgramData has to be refused here or not at all.
+#[cfg(windows)]
+pub fn check_store() -> Result<(), TransactionError> {
+    let program_data = known_program_data()?;
+    let ksx = program_data.join("KSX");
+    let root = ksx.join("WinUSB");
+
+    for path in [&ksx, &root] {
+        if !entry_exists(path)? {
+            continue;
+        }
+        // Explicit, rather than inferred from the open below: a junction whose
+        // own reparse point happens to be admin-owned would otherwise pass an
+        // owner check while still pointing wherever its author chose.
+        crate::process::verify_non_reparse_kind(path, true)
+            .map_err(|err| TransactionError::Journal(err.to_string()))?;
+        // Opens the entry as itself and proves a trusted owner. Elevation must
+        // never bless an object an ordinary user owns.
+        open_existing_store_directory(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn check_store() -> Result<(), TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
 /// Real exact-device preparation. The installed elevated helper is the only
 /// intended caller.
 #[cfg(windows)]

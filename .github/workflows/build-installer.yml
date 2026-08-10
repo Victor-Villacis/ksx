@@ -431,9 +431,9 @@ jobs:
             # fails to act on it" -- which are opposite defects, and the reason
             # the previous run could not be acted on.
             $directHelper = Start-Process -FilePath 'target\release\ksx-winusb-helper.exe' `
-              -ArgumentList 'initialize-store' -Wait -PassThru -WindowStyle Hidden
-            Write-Host "DIAG: helper initialize-store exit, junction present = $($directHelper.ExitCode)"
-            Write-Host ("DIAG: junction target child count after direct helper = " +
+              -ArgumentList 'check-store' -Wait -PassThru -WindowStyle Hidden
+            Write-Host "DIAG: helper check-store exit, junction present = $($directHelper.ExitCode)"
+            Write-Host ("DIAG: junction target child count after direct auditor = " +
               @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue).Count)
 
             # Inno's own log, because this step's assertions can only say THAT
@@ -499,7 +499,7 @@ jobs:
               throw "installer created content through the hostile junction: $($unexpected.Name -join ', ')"
             }
             if (Test-Path -LiteralPath (Join-Path $install 'ksx.exe')) {
-              throw 'installer left product files behind after the recovery-store refusal rolled the install back'
+              throw 'installer copied product files after the pre-install audit refusal'
             }
           }
           finally {

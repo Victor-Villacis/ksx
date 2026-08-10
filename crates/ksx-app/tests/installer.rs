@@ -645,26 +645,29 @@ fn installer_and_ci_package_the_prepare_provider_only_in_the_installed_product()
     // initialized from {app} now, where that proof can actually hold.
     assert_eq!(
         helper_entries.len(),
-        1,
-        "the helper is installed once, to {{app}}; a pre-install copy cannot satisfy its own \
-         location check and makes setup refuse itself"
+        2,
+        "one extracted copy for the read-only pre-install audit, one installed copy for the          mutating verbs"
     );
-    let installed = helper_entries[0];
-    assert_eq!(
-        field(installed, "DestDir").as_deref(),
-        Some("{app}"),
-        "the helper must be installed where its admin-only location proof is true: {installed}"
-    );
+    let installed = helper_entries
+        .iter()
+        .find(|entry| field(entry, "DestDir").as_deref() == Some("{app}"))
+        .expect("the mutating helper must be installed to {app}, where its own admin-only location proof can hold");
     assert!(
         field(installed, "Flags")
             .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "ignoreversion")),
         "the installed helper needs `ignoreversion`: {installed}"
     );
-    assert!(
-        !files.iter().any(|line| field(line, "Flags")
-            .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "dontcopy"))),
-        "no [Files] entry may use `dontcopy`: running an extracted copy from {{tmp}} before the \
-         install is what made every install fail"
+    let bootstrap = helper_entries
+        .iter()
+        .find(|entry| {
+            field(entry, "Flags")
+                .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "dontcopy"))
+        })
+        .expect("the auditor must be extractable before installation begins");
+    assert_eq!(
+        field(bootstrap, "DestDir"),
+        None,
+        "the extracted copy exists only for PrepareToInstall: {bootstrap}"
     );
     let source_entry = files
         .iter()
@@ -888,6 +891,10 @@ fn installer_initializes_state_from_the_installed_helper_and_uninstall_is_cleanu
         // TEMP, so it is user-owned and user-writable, and the helper's first
         // act is to prove its own directory is neither. Running it there made
         // setup refuse itself with exit code 3 on every machine, every time.
+        "function PrepareToInstall(var NeedsRestart: Boolean): string;",
+        "ExtractTemporaryFile('{#WinUsbHelper}')",
+        "'check-store'",
+        "No KSX files were installed",
         "function RecoveryStoreProblem: string;",
         "HelperPath := ExpandConstant('{app}\\{#WinUsbHelper}')",
         "'initialize-store'",

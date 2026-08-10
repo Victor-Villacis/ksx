@@ -137,7 +137,10 @@ pub fn protected_store_initializer() -> Result<PathBuf, ProtectedInstallError> {
 }
 
 #[cfg(windows)]
-fn verify_non_reparse_kind(path: &Path, directory: bool) -> Result<(), ProtectedInstallError> {
+pub(crate) fn verify_non_reparse_kind(
+    path: &Path,
+    directory: bool,
+) -> Result<(), ProtectedInstallError> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,

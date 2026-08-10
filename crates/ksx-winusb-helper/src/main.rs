@@ -15,8 +15,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use ksx_platform::winusb::transaction::{
-    cleanup_owned, initialize_store, prepare_exact, release_exact, CleanupResult, MutationResult,
-    Phase, PrepareSpec, ReleaseSpec, TransactionError,
+    check_store, cleanup_owned, initialize_store, prepare_exact, release_exact, CleanupResult,
+    MutationResult, Phase, PrepareSpec, ReleaseSpec, TransactionError,
 };
 use serde_json::{json, Value};
 
@@ -40,6 +40,10 @@ enum Operation {
     Release(ReleaseSpec),
     CleanupCoordinator,
     CleanupWorker,
+    /// Read-only pre-install audit. Deliberately NOT anchored to a protected
+    /// directory: Setup runs it from its temporary directory, which the
+    /// invoking user owns, and it mutates nothing.
+    CheckStore,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +63,7 @@ where
 
     match args.as_slice() {
         [verb] if verb == "initialize-store" => Ok(Operation::InitializeStore),
+        [verb] if verb == "check-store" => Ok(Operation::CheckStore),
         [verb, instance, spare, rebind, certificate]
             if verb == "prepare-exact"
                 && spare == "--confirm-spare-keyboard"
@@ -337,6 +342,20 @@ fn failed_transaction_value(name: &'static str, error: TransactionError) -> (i32
 
 fn execute(operation: Operation) -> (i32, Value) {
     match operation {
+        // No `protected_store_initializer` here, and that is the point: this
+        // runs from Setup's temporary directory, before anything is installed,
+        // which is the only moment an install can still be refused. It reads.
+        Operation::CheckStore => match check_store() {
+            Ok(()) => (
+                EXIT_SUCCESS,
+                json!({
+                    "ok": true,
+                    "operation": "check-store",
+                    "message": "the fixed machine-wide WinUSB recovery path holds no unsafe object",
+                }),
+            ),
+            Err(error) => failed_transaction_value("check-store", error),
+        },
         Operation::InitializeStore => match ksx_platform::process::protected_store_initializer() {
             Ok(_) => match initialize_store() {
                 Ok(()) => (
@@ -406,7 +425,7 @@ fn run(args: impl IntoIterator<Item = OsString>) -> i32 {
             let message = match error {
                 ParseError::NonUnicode => "arguments must be ordinary Windows text",
                 ParseError::WrongShape => {
-                    "the helper accepts only initialize-store, prepare-exact, release-exact or cleanup-owned in their fixed forms"
+                    "the helper accepts only check-store, initialize-store, prepare-exact, release-exact or cleanup-owned in their fixed forms"
                 }
             };
             let _ = emit(&error_value("arguments", "refused", message.to_owned()));

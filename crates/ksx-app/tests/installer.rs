@@ -1659,3 +1659,45 @@ fn the_release_body_carries_the_hash_the_commit_and_the_smartscreen_step() {
         rest = &tail[end + 2..];
     }
 }
+
+/// Setup must not put ksx back on its feet while it is still installing.
+///
+/// Defect 6 of the 2026-08-11 hardware session: an upgrade died on *"Setup
+/// refused an unsafe or unavailable KSX WinUSB recovery directory (initializer
+/// exit code 3)"*, with the progress label reading "Restarting
+/// applications...". Inno's default `RestartApplications=yes` had the
+/// RestartManager bring ksx.exe back while `CurStepChanged(ssPostInstall)` was
+/// still running `initialize-store`, and the restarted ksx reopens the
+/// protected WinUSB store and takes the handles the initializer needs.
+///
+/// The initializer is the one step that can roll an install back, so it must
+/// not be the step racing a process Setup itself started. `RestartApplications`
+/// is one word on one line, ISCC compiles either value happily, and the failure
+/// only appears on a machine that already had ksx running — which is to say,
+/// never in CI and always on a customer's second install.
+#[test]
+fn setup_closes_a_running_ksx_and_does_not_restart_it_mid_install() {
+    let entries = section(&script(), "[Setup]");
+    let value = |key: &str| {
+        entries
+            .iter()
+            .find_map(|line| {
+                let (name, value) = line.split_once('=')?;
+                name.trim()
+                    .eq_ignore_ascii_case(key)
+                    .then(|| value.trim().to_ascii_lowercase())
+            })
+            .unwrap_or_else(|| panic!("[Setup] does not set {key}"))
+    };
+    assert_eq!(
+        value("CloseApplications"),
+        "yes",
+        "a running ksx must be closed, or its files cannot be replaced"
+    );
+    assert_eq!(
+        value("RestartApplications"),
+        "no",
+        "restarting ksx before ssPostInstall finishes races `initialize-store` \
+         for the protected WinUSB store, which rolls the whole install back"
+    );
+}

@@ -481,7 +481,11 @@ jobs:
               throw ("check-store refused the junction for some other reason; " +
                      "nothing here proves it saw the junction at all: $directOut")
             }
-            if ($directOut -notmatch [regex]::Escape('C:\ProgramData\KSX')) {
+            # One-or-more backslashes: the helper prints JSON, so the path
+            # arrives escaped as C:\\ProgramData\\KSX.  Matching the literal
+            # single-backslash form failed this step on its first run -- which
+            # is the check working, just not on the defect it was aimed at.
+            if ($directOut -notmatch 'ProgramData\\+KSX') {
               throw "check-store did not name the path it refused: $directOut"
             }
             Write-Host ("DIAG: junction target child count after direct auditor = " +

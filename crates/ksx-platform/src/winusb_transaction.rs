@@ -3171,6 +3171,218 @@ pub fn check_store() -> Result<(), TransactionError> {
     Err(TransactionError::Unsupported)
 }
 
+/// What a store-free release found and did.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ReleaseAllResult {
+    /// `oemNN.inf` packages removed from the driver store.
+    pub packages_removed: Vec<String>,
+    /// Interfaces that were bound to `winusb.sys` before and are not after.
+    pub interfaces_released: Vec<String>,
+    /// Interfaces still bound to `winusb.sys` afterwards. Not necessarily
+    /// ksx's -- another program may legitimately own a WinUSB device -- which
+    /// is exactly why they are reported rather than removed.
+    pub still_bound: Vec<String>,
+    pub message: String,
+}
+
+/// Everything a release needs EXCEPT the journal.
+///
+/// Deliberately not [`Environment`]: the whole point is that this works when
+/// `C:\ProgramData\KSX` has been deleted, emptied, or corrupted, so it cannot
+/// be allowed to depend on a `TransactionStore` even accidentally.
+pub struct Machine<'a> {
+    pub surveys: &'a dyn SurveySource,
+    pub inventory: &'a dyn DriverInventory,
+    pub trust: &'a dyn TrustVerifier,
+    pub runner: &'a dyn CommandRunner,
+}
+
+/// Is this driver package one ksx published?
+///
+/// Decided by the INF's ORIGINAL name, which is the one identifier ksx controls
+/// end to end: the provider refuses to prepare a package under any name but
+/// `ksx-winusb-<32 lowercase hex>.inf` (`ksx_is_safe_inf_name` in
+/// `third_party/libwdi/src/libwdi.c`), so a package carrying that shape was
+/// published by ksx and nothing else on the machine can be mistaken for one.
+///
+/// The provider string is checked too, but only as a second opinion: it is a
+/// display field, and a rule that depended on it alone would be a rule about
+/// presentation.
+pub fn is_ksx_package(driver: &StoreDriver) -> bool {
+    let name = driver.original_name.to_ascii_lowercase();
+    let Some(stem) = name
+        .strip_prefix("ksx-winusb-")
+        .and_then(|rest| rest.strip_suffix(".inf"))
+    else {
+        return false;
+    };
+    stem.len() == 32
+        && stem
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+}
+
+/// Give every ksx-claimed keyboard back to Windows, using only what the MACHINE
+/// says.
+///
+/// # Why this exists
+///
+/// Every other release path starts from a receipt. That is right when there is
+/// one, and useless in the case that actually strands somebody: the recovery
+/// store deleted by a disk cleaner, emptied by a well-meaning uninstall, or
+/// corrupted. `cleanup_owned` enumerates receipts, so with the journal gone it
+/// finds nothing to do while a keyboard stays bound to `winusb.sys` -- invisible
+/// to Windows, with no record on the machine that ksx ever touched it.
+///
+/// libwdi -- the library ksx vendors, and the one Zadig is built on -- has no
+/// answer to this at all; its documented recovery is for the user to open
+/// Device Manager. This is ksx's answer.
+///
+/// # How a package is attributed
+///
+/// By [`is_ksx_package`], and then by letting Windows do the attribution for
+/// the devices: `/delete-driver <oem> /uninstall /force` removes the package
+/// *and* unbinds every device using it, so ksx never has to decide which
+/// devnodes were its own. A WinUSB device belonging to some other program is
+/// therefore never touched -- it is reported in `still_bound` and left exactly
+/// where it is.
+///
+/// # What it does not do
+///
+/// It does not write a receipt, read one, or need the store to exist. A caller
+/// that has a healthy store should still prefer [`release_exact`], which is
+/// journaled; this is the recovery, not the routine.
+pub fn release_all_with(machine: &Machine<'_>) -> Result<ReleaseAllResult, TransactionError> {
+    let before = machine.surveys.survey()?;
+    let bound_before = winusb_bound(&before);
+
+    let inventory = machine.inventory.enumerate()?;
+    let ours: Vec<_> = inventory.iter().filter(|d| is_ksx_package(d)).collect();
+
+    if ours.is_empty() && bound_before.is_empty() {
+        return Ok(ReleaseAllResult {
+            message: "no ksx driver package and no claimed interface: nothing to release"
+                .to_owned(),
+            ..ReleaseAllResult::default()
+        });
+    }
+
+    let mut removed = Vec::new();
+    for driver in &ours {
+        // `/uninstall` takes the package off every device using it; `/force`
+        // proceeds even while a device holds it. Together they are what makes
+        // this work without knowing which devnodes were ours.
+        let delete = command(
+            &[
+                "/delete-driver",
+                &driver.published_name,
+                "/uninstall",
+                "/force",
+            ],
+            "remove a ksx-published WinUSB package and unbind every device using it",
+        )?;
+        run_required(machine.runner, &delete)?;
+        removed.push(driver.published_name.clone());
+    }
+
+    if !removed.is_empty() {
+        // Only after the packages are gone can a rescan be trusted: until then
+        // Windows could re-select one of them for the very device being freed.
+        let scan = command(
+            &["/scan-devices"],
+            "let Windows rebind the freed interfaces",
+        )?;
+        run_required(machine.runner, &scan)?;
+    }
+
+    // Absence, proved rather than assumed -- the same rule the journaled path
+    // applies to its own package.
+    let after_inventory = machine.inventory.enumerate()?;
+    let remaining: Vec<_> = after_inventory
+        .iter()
+        .filter(|d| is_ksx_package(d))
+        .map(|d| d.published_name.clone())
+        .collect();
+    if !remaining.is_empty() {
+        return Err(TransactionError::RecoveryRequired(format!(
+            "ksx driver packages survived their own removal: {remaining:?}"
+        )));
+    }
+
+    let after = machine.surveys.survey()?;
+    let bound_after = winusb_bound(&after);
+    let released: Vec<_> = bound_before
+        .iter()
+        .filter(|id| !bound_after.contains(id))
+        .cloned()
+        .collect();
+
+    // Certificates and key containers, by their fixed namespaces rather than by
+    // any receipt -- the same reason the rest of this function exists.
+    machine.trust.cleanup_owned_residue()?;
+
+    let message = format!(
+        "removed {} ksx driver package(s); {} interface(s) returned to Windows{}",
+        removed.len(),
+        released.len(),
+        if bound_after.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} WinUSB interface(s) remain and are not ksx's to remove",
+                bound_after.len()
+            )
+        }
+    );
+    Ok(ReleaseAllResult {
+        packages_removed: removed,
+        interfaces_released: released,
+        still_bound: bound_after,
+        message,
+    })
+}
+
+/// Present USB interfaces currently bound to `winusb.sys`, uppercased.
+fn winusb_bound(survey: &Survey) -> Vec<String> {
+    let mut bound: Vec<_> = survey
+        .present_usb
+        .iter()
+        .filter(|node| node.service_is(super::WINUSB_SERVICE))
+        .map(|node| node.instance_id.to_uppercase())
+        .collect();
+    bound.sort();
+    bound.dedup();
+    bound
+}
+
+/// Real store-free release. The installed elevated helper is the only intended
+/// caller.
+#[cfg(windows)]
+pub fn release_all() -> Result<ReleaseAllResult, TransactionError> {
+    if crate::process::is_elevated() != Some(true) {
+        return Err(TransactionError::Windows(
+            "the WinUSB helper is not elevated".to_owned(),
+        ));
+    }
+    let _lock = MutationGuard::acquire()?;
+    let runner = PnPUtilRunner;
+    let inventory = PnPUtilInventory { runner: &runner };
+    let trust = WindowsTrustVerifier;
+    let surveys = SystemSurvey;
+    let machine = Machine {
+        surveys: &surveys,
+        inventory: &inventory,
+        trust: &trust,
+        runner: &runner,
+    };
+    release_all_with(&machine)
+}
+
+#[cfg(not(windows))]
+pub fn release_all() -> Result<ReleaseAllResult, TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
 /// Real exact-device preparation. The installed elevated helper is the only
 /// intended caller.
 #[cfg(windows)]
@@ -3772,6 +3984,251 @@ mod tests {
             .validate_receipt_paths(&receipt)
             .expect("a receipt this store wrote is a receipt this store can read");
         assert!(tx.ends_with(ID), "{}", tx.display());
+    }
+
+    // -----------------------------------------------------------------
+    // The store-free release: the rung that stops anyone being stranded
+    // -----------------------------------------------------------------
+
+    /// A machine with no journal at all, driven entirely from what Windows
+    /// reports. Nothing here can reach a `TransactionStore`, which is the
+    /// property under test.
+    struct Bare {
+        packages: Mutex<Vec<StoreDriver>>,
+        bound: Mutex<Vec<String>>,
+        commands: Mutex<Vec<String>>,
+    }
+
+    impl Bare {
+        fn new(packages: Vec<StoreDriver>, bound: &[&str]) -> Self {
+            Self {
+                packages: Mutex::new(packages),
+                bound: Mutex::new(bound.iter().map(|id| (*id).to_owned()).collect()),
+                commands: Mutex::new(Vec::new()),
+            }
+        }
+        fn ksx_package(id: &str, oem: &str) -> StoreDriver {
+            StoreDriver {
+                published_name: oem.to_owned(),
+                original_name: format!("ksx-winusb-{id}.inf"),
+                provider: "KSX".to_owned(),
+            }
+        }
+    }
+
+    impl SurveySource for &Bare {
+        fn survey(&self) -> Result<Survey, TransactionError> {
+            let bound = self.bound.lock().unwrap();
+            let mut nodes = Vec::new();
+            for id in bound.iter() {
+                nodes.push(node(id, HID_CLASS, "WinUSB", Some("8&x&0")));
+            }
+            // One keyboard that is always an ordinary keyboard, so a survey is
+            // never a machine with no way to type.
+            nodes.push(node(
+                r"USB\VID_A11A&PID_B22B&MI_00\SPARE",
+                HID_CLASS,
+                "HidUsb",
+                Some("8&spare&0"),
+            ));
+            nodes.push(node(
+                r"HID\VID_A11A&PID_B22B&MI_00\8&spare&0&0000",
+                super::super::KEYBOARD_CLASS_GUID,
+                "kbdhid",
+                None,
+            ));
+            Ok(Survey::from_nodes(&nodes))
+        }
+    }
+
+    impl DriverInventory for &Bare {
+        fn enumerate(&self) -> Result<Vec<StoreDriver>, TransactionError> {
+            Ok(self.packages.lock().unwrap().clone())
+        }
+    }
+
+    impl TrustVerifier for &Bare {
+        fn owned_private_keys(&self) -> Result<Vec<String>, TransactionError> {
+            Ok(Vec::new())
+        }
+        fn verify(&self, _: &ExpectedArtifacts) -> Result<TrustEvidence, TransactionError> {
+            Err(TransactionError::Unsupported)
+        }
+        fn cleanup(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<(), TransactionError> {
+            Ok(())
+        }
+    }
+
+    impl CommandRunner for &Bare {
+        fn run(&self, command: &PlannedCommand) -> Result<CommandResult, TransactionError> {
+            self.commands.lock().unwrap().push(command.args.join(" "));
+            if command.args.first().is_some_and(|a| a == "/delete-driver") {
+                let oem = command.args[1].clone();
+                // `/uninstall` takes the package off the devices using it, which
+                // is precisely why this path never has to identify them itself.
+                let mut packages = self.packages.lock().unwrap();
+                let ours: Vec<String> = packages
+                    .iter()
+                    .filter(|d| d.published_name == oem)
+                    .map(|d| d.original_name.clone())
+                    .collect();
+                packages.retain(|d| d.published_name != oem);
+                if ours.iter().any(|name| name.starts_with("ksx-winusb-")) {
+                    self.bound.lock().unwrap().retain(|id| !id.contains("IPAC"));
+                }
+            }
+            Ok(CommandResult {
+                code: 0,
+                output: String::new(),
+            })
+        }
+    }
+
+    fn release_bare(bare: &Bare) -> Result<ReleaseAllResult, TransactionError> {
+        let machine = Machine {
+            surveys: &bare,
+            inventory: &bare,
+            trust: &bare,
+            runner: &bare,
+        };
+        release_all_with(&machine)
+    }
+
+    const IPAC: &str = r"USB\VID_D209&PID_0430&MI_00\7&IPAC&0&0000";
+    const OTHER: &str = r"USB\VID_1234&PID_5678&MI_00\7&OTHER&0&0000";
+
+    /// **The rung that stops anyone being stranded.** A keyboard claimed by ksx
+    /// is given back with the journal gone entirely.
+    ///
+    /// `cleanup_owned` -- the uninstaller's path -- starts from
+    /// `store.owned_receipts()`, so a recovery store deleted by a disk cleaner
+    /// or corrupted by hand leaves it with nothing to do while the board stays
+    /// bound to `winusb.sys`, invisible to Windows and with no record on the
+    /// machine that ksx ever touched it. libwdi, which ksx vendors, has no
+    /// answer to this at all: its documented recovery is "open Device Manager".
+    #[test]
+    fn a_keyboard_is_released_with_no_journal_anywhere() {
+        let bare = Bare::new(
+            vec![Bare::ksx_package(
+                "0a468347dd47c74246cebd18d3830285",
+                "oem42.inf",
+            )],
+            &[IPAC],
+        );
+
+        let result = release_bare(&bare).expect("a machine can always be given back");
+
+        assert_eq!(result.packages_removed, vec!["oem42.inf".to_owned()]);
+        assert_eq!(result.interfaces_released.len(), 1, "{result:?}");
+        assert!(result.still_bound.is_empty(), "{result:?}");
+
+        let commands = bare.commands.lock().unwrap().clone();
+        assert!(
+            commands.iter().any(|c| c.contains("/delete-driver")
+                && c.contains("/uninstall")
+                && c.contains("/force")),
+            "the package must be removed FROM THE DEVICES USING IT: {commands:?}"
+        );
+        assert!(
+            commands.iter().any(|c| c.contains("/scan-devices")),
+            "Windows must be given the chance to rebind: {commands:?}"
+        );
+    }
+
+    /// Another program's WinUSB device is reported, never removed.
+    ///
+    /// This is the safety property that lets the release run without knowing
+    /// which devnodes were ksx's: Windows performs the attribution, through
+    /// `/delete-driver /uninstall`, and anything still bound afterwards is by
+    /// definition not ours to touch.
+    #[test]
+    fn a_foreign_winusb_device_is_reported_and_left_alone() {
+        let foreign = StoreDriver {
+            published_name: "oem99.inf".to_owned(),
+            original_name: "some-other-tool.inf".to_owned(),
+            provider: "Somebody Else".to_owned(),
+        };
+        let bare = Bare::new(
+            vec![
+                Bare::ksx_package("0a468347dd47c74246cebd18d3830285", "oem42.inf"),
+                foreign,
+            ],
+            &[IPAC, OTHER],
+        );
+
+        let result = release_bare(&bare).expect("release");
+
+        assert_eq!(result.packages_removed, vec!["oem42.inf".to_owned()]);
+        assert_eq!(result.still_bound.len(), 1, "{result:?}");
+        assert!(
+            bare.packages
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|d| d.published_name == "oem99.inf"),
+            "somebody else's driver package must survive ksx's recovery"
+        );
+        assert!(
+            result.message.contains("not ksx's to remove"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// A clean machine is not an error, and does not run a single command.
+    #[test]
+    fn nothing_to_release_is_not_a_failure() {
+        let bare = Bare::new(Vec::new(), &[]);
+        let result = release_bare(&bare).expect("a clean machine is fine");
+        assert!(result.packages_removed.is_empty());
+        assert!(
+            result.message.contains("nothing to release"),
+            "{}",
+            result.message
+        );
+        assert!(
+            bare.commands.lock().unwrap().is_empty(),
+            "nothing to do, nothing run"
+        );
+    }
+
+    /// Attribution is by the one name ksx controls end to end. The provider
+    /// refuses to prepare a package under any other spelling, so this shape is
+    /// proof of origin -- and a near miss is not.
+    #[test]
+    fn only_the_canonical_ksx_package_name_counts_as_ours() {
+        let named = |name: &str| StoreDriver {
+            published_name: "oem1.inf".to_owned(),
+            original_name: name.to_owned(),
+            provider: "KSX".to_owned(),
+        };
+        assert!(is_ksx_package(&named(
+            "ksx-winusb-0a468347dd47c74246cebd18d3830285.inf"
+        )));
+        // Uppercase published names are normal on Windows; the ID is not.
+        assert!(is_ksx_package(&named(
+            "KSX-WinUSB-0a468347dd47c74246cebd18d3830285.INF"
+        )));
+
+        for near_miss in [
+            "ksx-winusb.inf",
+            "ksx-winusb-.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d383028.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d38302855.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d383028z.inf",
+            "notksx-winusb-0a468347dd47c74246cebd18d3830285.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d3830285.cat",
+        ] {
+            assert!(
+                !is_ksx_package(&named(near_miss)),
+                "{near_miss} is not a ksx package name"
+            );
+        }
     }
 
     /// A release that ends in recovery must SAY so in the receipt.

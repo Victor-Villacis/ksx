@@ -532,7 +532,17 @@ const ANCHORS: &[Anchors] = &[
     },
     Anchors {
         capability: "WinUSB claim / release",
-        cli: &["winusb status", "winusb claim", "winusb release"],
+        // `release-all` is the same capability with the journal taken away:
+        // the surfaces carry per-device Release, and this is what remains
+        // reachable when the recovery store itself is gone. A page could
+        // not be the answer to that, because a page needs the product to
+        // be working.
+        cli: &[
+            "winusb status",
+            "winusb claim",
+            "winusb release",
+            "winusb release-all",
+        ],
         egui: &["Ask::WinusbClaim"],
         // Installed Studio gathers explicit device/certificate consent, then
         // crosses the narrow elevated helper boundary. The browser never

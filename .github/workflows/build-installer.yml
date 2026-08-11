@@ -615,9 +615,13 @@ jobs:
 
           function Invoke-Setup([string] $Tag) {
             $log = Join-Path $env:RUNNER_TEMP "ksx-upgrade-$Tag.log"
+            # QUOTED. Program Files has a space in it, and an unquoted
+            # /DIR= made Inno install to C:\Program -- which is not a
+            # protected directory, so the store initializer refused and the
+            # step reported a product failure that was entirely its own.
             $a = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
                    '/MERGETASKS=!vigembus,!desktopicon',
-                   "/DIR=$install", "/LOG=$log")
+                   "/DIR=""$install""", "/LOG=""$log""")
             $p = Start-Process -FilePath $setup.FullName -ArgumentList $a -Wait -PassThru
             $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
             Write-Host "DIAG: install $Tag exit = $($p.ExitCode)"
@@ -629,6 +633,13 @@ jobs:
               Write-Host "--- setup log ($Tag) ---"
               Write-Host $text
               throw "install $Tag did not complete cleanly (exit $($p.ExitCode))"
+            }
+            # Where it landed, checked -- because an argument Inno silently
+            # truncates produces a working install of the wrong thing in the
+            # wrong place, and every assertion after it is then about a
+            # directory nobody meant.
+            if (-not (Test-Path -LiteralPath (Join-Path $install 'ksx.exe'))) {
+              throw "install $Tag did not put ksx.exe in $install"
             }
           }
 

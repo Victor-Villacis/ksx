@@ -106,9 +106,7 @@ fn the_shipped_provider_binding_prepares_a_signed_package() {
         vendor_id: VID,
         product_id: PID,
         interface_number: Some(0),
-        // Unique per run: the provider mints a certificate for this subject and
-        // a collision with a previous run's would test caching, not signing.
-        certificate_subject: format!("CN=KSX WinUSB smoke {}", std::process::id()),
+        certificate_subject: certificate_subject(),
     };
 
     let prepared = provider
@@ -143,6 +141,30 @@ fn the_shipped_provider_binding_prepares_a_signed_package() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
+/// A subject in the shape the provider accepts: the fixed prefix, then at
+/// least 32 hex digits and nothing else but `-`.
+///
+/// Production mints it from the transaction id, which is 32 hex characters by
+/// construction. The first version of this test used
+/// `format!("CN=KSX WinUSB smoke {pid}")` and the provider refused it on its
+/// first CI run — correctly, and the fact that it did is the point of this
+/// file: a smoke that builds its own inputs would have accepted the malformed
+/// subject and told us nothing.
+///
+/// Unique per run because the provider mints a certificate for this subject,
+/// and reusing one would exercise the cache rather than the signing path.
+fn certificate_subject() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default();
+    format!(
+        "CN=KSX WinUSB {:016x}{:016x}",
+        u64::from(std::process::id()),
+        nanos
+    )
+}
+
 /// Two paths naming the same file. `canonicalize` is enough here: both sides
 /// are local, existing files.
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -150,4 +172,40 @@ fn same_file(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+/// The subject this file hands the provider satisfies the provider's own rule.
+///
+/// NOT `#[ignore]`d: it needs no DLL and no elevation, and it exists because
+/// the first version of the smoke above shipped a subject the provider refuses
+/// — which cost a full CI round trip to discover. The expensive test can only
+/// run in one place; this one runs everywhere and catches the same mistake in
+/// milliseconds.
+///
+/// Mirrors `ksx_is_safe_cert_subject` in `third_party/libwdi/src/libwdi.c`. It
+/// is a duplicate of a rule that lives in C, and that is deliberate: the two
+/// copies disagreeing is exactly the failure it reports.
+#[test]
+fn the_smoke_subject_is_one_the_provider_accepts() {
+    const PREFIX: &str = "CN=KSX WinUSB ";
+    let subject = certificate_subject();
+
+    let tail = subject
+        .strip_prefix(PREFIX)
+        .unwrap_or_else(|| panic!("the provider requires the exact prefix {PREFIX:?}: {subject}"));
+    assert!(
+        subject.len() < 96,
+        "the provider rejects a subject of 96 characters or more: {subject}"
+    );
+    assert!(
+        tail.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+        "the provider allows only hex digits and '-' after the prefix: {subject}"
+    );
+    assert!(
+        tail.chars().filter(char::is_ascii_hexdigit).count() >= 32,
+        "the provider requires at least 32 hex digits: {subject}"
+    );
+
+    // Unique per call, or the certificate cache is what gets exercised.
+    assert_ne!(certificate_subject(), subject);
 }

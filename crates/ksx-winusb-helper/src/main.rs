@@ -52,6 +52,8 @@ enum Operation {
     /// enumerates receipts -- finds nothing to do while a board stays bound to
     /// `winusb.sys`. This one asks Windows instead.
     ReleaseAll,
+    /// Bring the journal and the machine back into agreement.
+    Repair,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,6 +75,7 @@ where
         [verb] if verb == "initialize-store" => Ok(Operation::InitializeStore),
         [verb] if verb == "check-store" => Ok(Operation::CheckStore),
         [verb] if verb == "release-all" => Ok(Operation::ReleaseAll),
+        [verb] if verb == "repair" => Ok(Operation::Repair),
         [verb, instance, spare, rebind, certificate]
             if verb == "prepare-exact"
                 && spare == "--confirm-spare-keyboard"
@@ -374,6 +377,30 @@ fn execute(operation: Operation) -> (i32, Value) {
         // insisting on a pristine installation would withhold the recovery
         // precisely when it is needed. Elevation is still required, because
         // pnputil is.
+        Operation::Repair => match ksx_platform::winusb::transaction::repair() {
+            Ok(result) => (
+                EXIT_SUCCESS,
+                json!({
+                    "ok": true,
+                    "operation": "repair",
+                    "findings": result
+                        .findings
+                        .iter()
+                        .map(|f| json!({
+                            "transaction_id": f.transaction_id,
+                            "instance_id": f.instance_id,
+                            "phase": phase_value(f.phase),
+                            "drift": f.drift.word(),
+                        }))
+                        .collect::<Vec<_>>(),
+                    "corrected": result.corrected,
+                    "released": result.released,
+                    "orphan_packages": result.orphan_packages,
+                    "message": result.message,
+                }),
+            ),
+            Err(error) => failed_transaction_value("repair", error),
+        },
         Operation::ReleaseAll => match ksx_platform::winusb::transaction::release_all() {
             Ok(result) => (
                 EXIT_SUCCESS,

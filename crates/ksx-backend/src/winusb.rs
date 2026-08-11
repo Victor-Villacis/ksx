@@ -36,6 +36,8 @@ pub enum HelperMutation {
     /// reports. Takes no device, because the case it exists for is the one
     /// where nothing on disk can say which devices those were.
     ReleaseAll,
+    /// Bring the journal and the machine back into agreement.
+    Repair,
 }
 
 pub trait HelperElevator: Send + Sync {
@@ -50,6 +52,7 @@ impl HelperMutation {
             HelperMutation::Prepare => "prepare-exact",
             HelperMutation::Release => "release-exact",
             HelperMutation::ReleaseAll => "release-all",
+            HelperMutation::Repair => "repair",
         }
     }
 }
@@ -57,7 +60,7 @@ impl HelperMutation {
 fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
     // `release-all` names no device, and must not: the machine is the only
     // source of truth left in the situation it recovers from.
-    if action == HelperMutation::ReleaseAll {
+    if matches!(action, HelperMutation::ReleaseAll | HelperMutation::Repair) {
         return vec![action.verb().to_owned()];
     }
     let mut args = vec![action.verb().to_owned(), instance_id.to_owned()];
@@ -68,7 +71,7 @@ fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
             "--confirm-machine-certificate".to_owned(),
         ]),
         HelperMutation::Release => args.push("--confirm-release".to_owned()),
-        HelperMutation::ReleaseAll => unreachable!("handled above"),
+        HelperMutation::ReleaseAll | HelperMutation::Repair => unreachable!("handled above"),
     }
     args
 }
@@ -290,10 +293,10 @@ fn binding_gate(
         // Store-free release names no device, so no per-device gate applies to
         // it. Reaching here means a caller asked whether one binding is right
         // for an action that is about all of them.
-        HelperMutation::ReleaseAll => {
+        HelperMutation::ReleaseAll | HelperMutation::Repair => {
             return Err(ApiRefusal::new(
                 "winusb-live-state-changed",
-                "release-all is not a per-device action",
+                "this action is about the whole machine, not one device",
             ))
         }
     };
@@ -302,9 +305,9 @@ fn binding_gate(
     }
     if observed == already {
         return Err(match action {
-            HelperMutation::ReleaseAll => ApiRefusal::new(
+            HelperMutation::ReleaseAll | HelperMutation::Repair => ApiRefusal::new(
                 "winusb-live-state-changed",
-                "release-all is not a per-device action",
+                "this action is about the whole machine, not one device",
             ),
             HelperMutation::Prepare => ApiRefusal::with_remedy(
                 "winusb-already-prepared",
@@ -538,6 +541,8 @@ pub enum Action {
     },
     /// Every ksx-claimed keyboard, without consulting the journal.
     ReleaseAll,
+    /// Reconcile the journal against the machine.
+    Repair,
 }
 
 pub struct Options {
@@ -556,6 +561,7 @@ pub fn run(opts: Options) -> anyhow::Result<()> {
         Action::Claim { device } => claim(&survey, device, &opts),
         Action::Release { device, force } => release(&survey, device, *force, &opts),
         Action::ReleaseAll => release_all(&opts),
+        Action::Repair => repair(&opts),
     }
 }
 
@@ -746,6 +752,116 @@ fn report_claim(plan: &ClaimPlan, opts: &Options, will_apply: bool) -> anyhow::R
 // ---------------------------------------------------------------------------
 // release
 // ---------------------------------------------------------------------------
+
+/// `ksx winusb repair`: say what disagrees, then settle it.
+///
+/// The read-only half runs without elevation, which is the point: a user who
+/// wants to know whether anything is wrong should not have to approve a UAC
+/// prompt to be told "nothing is". Only `--yes` crosses into the helper.
+fn repair(opts: &Options) -> anyhow::Result<()> {
+    let (findings, orphans) = match ksx_platform::winusb::transaction::reconcile_report() {
+        Ok(pair) => pair,
+        Err(err) => {
+            if opts.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "ok": false, "error": err.to_string() })
+                );
+            } else {
+                println!("The recovery store could not be read: {err}");
+                println!();
+                println!("  If it has been deleted or damaged, `ksx winusb release-all --yes`");
+                println!("  gives every ksx-claimed keyboard back without reading it.");
+            }
+            std::process::exit(EXIT_REFUSED);
+        }
+    };
+
+    let drifted: Vec<_> = findings
+        .iter()
+        .filter(|f| f.drift != ksx_platform::winusb::transaction::Drift::Consistent)
+        .collect();
+    let will_apply = opts.yes && !opts.dry_run;
+
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "action": "repair",
+                "receipts": findings.len(),
+                "drifted": drifted.len(),
+                "orphan_packages": orphans,
+                "will_apply": will_apply,
+            }))?
+        );
+    } else {
+        println!("{} receipt(s) on this machine.", findings.len());
+        if drifted.is_empty() && orphans.is_empty() {
+            println!("  Nothing disagrees with the machine.");
+        }
+        for finding in &drifted {
+            println!(
+                "  {}  says {:?}, machine says {}",
+                &finding.transaction_id[..8.min(finding.transaction_id.len())],
+                finding.phase,
+                finding.drift.word()
+            );
+        }
+        for orphan in &orphans {
+            println!("  {orphan}  a ksx driver package with no receipt");
+        }
+        if !orphans.is_empty() {
+            println!();
+            println!("  Repair reports orphans and does not remove them.");
+            println!(
+                "  `ksx winusb release-all --yes` is what removes a package no receipt describes."
+            );
+        }
+        if !will_apply && !drifted.is_empty() {
+            println!();
+            println!("Nothing was changed. Re-run with --yes to settle it.");
+        }
+    }
+
+    if !will_apply || drifted.is_empty() {
+        return Ok(());
+    }
+
+    let exit = match SystemHelperElevator.run(HelperMutation::Repair, "") {
+        Ok(exit) => exit,
+        Err(err) => mutation_refused(&err, opts.json),
+    };
+    // The helper's own JSON never comes back through the UAC prompt, so the
+    // answer is a fresh read rather than its word -- the same rule every other
+    // mutating verb here follows.
+    let after = ksx_platform::winusb::transaction::reconcile_report()
+        .map(|(findings, orphans)| {
+            (
+                findings
+                    .iter()
+                    .filter(|f| f.drift != ksx_platform::winusb::transaction::Drift::Consistent)
+                    .count(),
+                orphans.len(),
+            )
+        })
+        .unwrap_or((usize::MAX, usize::MAX));
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::json!({ "helper_exit": exit, "drifted_after": after.0 })
+        );
+    } else if after.0 == 0 {
+        println!();
+        println!("Settled: the journal and the machine agree.");
+    } else {
+        println!();
+        println!(
+            "{} receipt(s) still disagree. `ksx winusb status` has the detail.",
+            after.0
+        );
+    }
+    Ok(())
+}
 
 /// `ksx winusb release-all`: the recovery that needs no journal.
 ///

@@ -542,6 +542,7 @@ const ANCHORS: &[Anchors] = &[
             "winusb claim",
             "winusb release",
             "winusb release-all",
+            "winusb repair",
         ],
         egui: &["Ask::WinusbClaim"],
         // Installed Studio gathers explicit device/certificate consent, then

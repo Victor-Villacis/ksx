@@ -3171,6 +3171,280 @@ pub fn check_store() -> Result<(), TransactionError> {
     Err(TransactionError::Unsupported)
 }
 
+/// How one receipt disagrees with the machine.
+///
+/// A receipt is a claim about hardware, and hardware changes underneath it:
+/// Windows Update replaces a driver, someone runs `pnputil` by hand, a board is
+/// moved to another port, a transaction dies between the rebind and the write
+/// that records it. None of that is exotic and none of it is corruption -- it is
+/// just a claim that has gone out of date, and a product that can only say
+/// "recovery required" about it is asking the user to do the reasoning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drift {
+    /// The receipt and the machine agree.
+    Consistent,
+    /// The receipt claims this board and the machine says it is an ordinary
+    /// keyboard again. Somebody else gave it back; the receipt is stale, not
+    /// wrong about anything that still matters.
+    StaleClaim,
+    /// The receipt stopped part-way through a release and the machine shows the
+    /// release finished. This is the shape four receipts on the reporting
+    /// machine were in: the keyboard typed perfectly and the journal said
+    /// `releasing`.
+    ReleaseFinished,
+    /// The receipt says this is over and the machine still shows a binding or a
+    /// package. The only drift that leaves a keyboard unusable, and the only
+    /// one that needs a driver operation rather than a journal write.
+    ReleaseIncomplete,
+}
+
+impl Drift {
+    /// Can this be settled by correcting the journal alone?
+    pub const fn is_bookkeeping(self) -> bool {
+        matches!(self, Self::StaleClaim | Self::ReleaseFinished)
+    }
+
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Consistent => "consistent",
+            Self::StaleClaim => "stale-claim",
+            Self::ReleaseFinished => "release-finished",
+            Self::ReleaseIncomplete => "release-incomplete",
+        }
+    }
+}
+
+/// One receipt, judged against the machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Finding {
+    pub transaction_id: String,
+    pub instance_id: String,
+    pub phase: Phase,
+    pub drift: Drift,
+}
+
+/// Compare what the journal claims against what Windows reports.
+///
+/// Pure: no clock, no registry, no pnputil. `bound` is the set of interfaces
+/// currently on `winusb.sys` and `packages` is the driver store, both read by
+/// the caller -- which is what lets every rule below be decided in CI instead of
+/// on a desk with an I-PAC on it.
+pub fn reconcile(receipts: &[Receipt], bound: &[String], packages: &[StoreDriver]) -> Vec<Finding> {
+    let bound: std::collections::BTreeSet<String> =
+        bound.iter().map(|id| id.to_uppercase()).collect();
+
+    receipts
+        .iter()
+        .map(|receipt| {
+            let is_bound = bound.contains(&receipt.target_instance_id.to_uppercase());
+            // Its OWN package, by the unique INF name minted for this
+            // transaction. This is the only residue that belongs to this
+            // receipt: a BINDING is device-level, and on a machine where the
+            // same board has been prepared more than once the live claim's
+            // binding would otherwise make every older receipt look
+            // unfinished. Acting on that would release a keyboard the user has
+            // prepared right now -- measured on the reporting machine, where
+            // two spent receipts and one live claim all name the I-PAC.
+            let residue = packages.iter().any(|p| {
+                p.original_name
+                    .eq_ignore_ascii_case(&receipt.original_inf_name)
+            });
+
+            let drift = match receipt.phase {
+                // A live claim the machine no longer honours. Nothing is
+                // broken -- the board types -- so this is bookkeeping.
+                Phase::Active if !is_bound => Drift::StaleClaim,
+                Phase::Active => Drift::Consistent,
+
+                // Stopped mid-release. If nothing is left, the release did in
+                // fact finish and only the record is behind.
+                Phase::Releasing | Phase::RecoveryRequired if !residue => Drift::ReleaseFinished,
+                Phase::Releasing | Phase::RecoveryRequired => Drift::ReleaseIncomplete,
+
+                // Terminal, or never got as far as a rebind. Either way the
+                // machine should show nothing.
+                _ if residue => Drift::ReleaseIncomplete,
+                _ => Drift::Consistent,
+            };
+
+            Finding {
+                transaction_id: receipt.transaction_id.clone(),
+                instance_id: receipt.target_instance_id.clone(),
+                phase: receipt.phase,
+                drift,
+            }
+        })
+        .collect()
+}
+
+/// ksx driver packages with no receipt to account for them.
+///
+/// The other half of the same question. A package with no receipt is what a
+/// deleted journal leaves behind, and it is invisible to [`reconcile`] because
+/// there is nothing left to reconcile it against.
+pub fn orphan_packages(receipts: &[Receipt], packages: &[StoreDriver]) -> Vec<String> {
+    packages
+        .iter()
+        .filter(|p| is_ksx_package(p))
+        .filter(|p| {
+            !receipts
+                .iter()
+                .any(|r| r.original_inf_name.eq_ignore_ascii_case(&p.original_name))
+        })
+        .map(|p| p.published_name.clone())
+        .collect()
+}
+
+/// What a repair found and what it did about it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RepairResult {
+    pub findings: Vec<Finding>,
+    /// Transactions whose recorded phase was corrected to match the machine.
+    pub corrected: Vec<String>,
+    /// Transactions whose own driver package is still installed. REPORTED,
+    /// not removed -- see the note in [`repair_with`].
+    pub released: Vec<String>,
+    /// ksx packages with no receipt at all.
+    pub orphan_packages: Vec<String>,
+    pub message: String,
+}
+
+/// Bring the journal and the machine back into agreement.
+///
+/// Three kinds of work, in increasing order of consequence, and it is worth
+/// keeping them apart:
+///
+/// 1. **Bookkeeping.** A claim the machine no longer honours, or a release that
+///    finished after the process recording it died. Nothing is wrong with the
+///    hardware; the record is behind. Corrected with a journal write.
+/// 2. **Leftovers.** A receipt says the transaction is over and its own driver
+///    package is still installed. Reported.
+/// 3. **Orphans.** A ksx package with no receipt at all. Reported.
+///
+/// **Repair never touches a driver.** It corrects the record and says what it
+/// cannot correct. That line is not timidity: deciding which of several
+/// receipts naming one board owns its current binding is exactly the reasoning
+/// that must not happen behind a user's back, and getting it wrong means
+/// releasing a keyboard somebody is using. `ksx winusb release <device>
+/// --force --yes` and [`release_all_with`] are where driver operations live,
+/// and both say what they will do before they do it.
+pub fn repair_with(env: &Environment<'_>) -> Result<RepairResult, TransactionError> {
+    let mut receipts = env.store.owned_receipts()?;
+    let survey = env.surveys.survey()?;
+    let bound = winusb_bound(&survey);
+    let packages = env.inventory.enumerate()?;
+
+    let findings = reconcile(&receipts, &bound, &packages);
+    let orphans = orphan_packages(&receipts, &packages);
+
+    let mut corrected = Vec::new();
+    let mut released = Vec::new();
+    for receipt in &mut receipts {
+        let Some(finding) = findings
+            .iter()
+            .find(|f| f.transaction_id == receipt.transaction_id)
+        else {
+            continue;
+        };
+        match finding.drift {
+            Drift::Consistent => {}
+            Drift::StaleClaim | Drift::ReleaseFinished => {
+                receipt.phase = Phase::Released;
+                receipt.recovery_reason = None;
+                env.store.update(receipt)?;
+                corrected.push(receipt.transaction_id.clone());
+            }
+            // Reported, never performed. Repair's whole job is to make the
+            // record true; a verb that also quietly ran pnputil would be a
+            // verb nobody could predict, and the device-level ambiguity above
+            // is exactly the kind of reasoning that must not happen behind a
+            // user's back. `ksx winusb release <device> --force --yes` and
+            // `release-all` are where driver operations live, and both say so
+            // before they run.
+            Drift::ReleaseIncomplete => released.push(receipt.transaction_id.clone()),
+        }
+    }
+
+    let message = format!(
+        "{} receipt(s) examined; {} corrected, {} still hold a driver package{}",
+        findings.len(),
+        corrected.len(),
+        released.len(),
+        if orphans.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} ksx package(s) have no receipt — `ksx winusb release-all` removes those",
+                orphans.len()
+            )
+        }
+    );
+    Ok(RepairResult {
+        findings,
+        corrected,
+        released,
+        orphan_packages: orphans,
+        message,
+    })
+}
+
+/// A read-only reconcile, for a surface that wants to SAY something is wrong
+/// without being the thing that fixes it.
+///
+/// The daemon runs this at startup. Before it existed, drift was discovered by
+/// a prepare failing -- which is the worst moment to learn it, because the user
+/// is mid-task and the message is about the prepare rather than about the
+/// state that made it impossible.
+#[cfg(windows)]
+pub fn reconcile_report() -> Result<(Vec<Finding>, Vec<String>), TransactionError> {
+    let store = ProgramDataStore::open()?;
+    let receipts = store.owned_receipts()?;
+    let survey = SystemSurvey.survey()?;
+    let runner = PnPUtilRunner;
+    let packages = PnPUtilInventory { runner: &runner }.enumerate()?;
+    Ok((
+        reconcile(&receipts, &winusb_bound(&survey), &packages),
+        orphan_packages(&receipts, &packages),
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn reconcile_report() -> Result<(Vec<Finding>, Vec<String>), TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
+/// Real repair. The installed elevated helper is the only intended caller.
+#[cfg(windows)]
+pub fn repair() -> Result<RepairResult, TransactionError> {
+    if crate::process::is_elevated() != Some(true) {
+        return Err(TransactionError::Windows(
+            "the WinUSB helper is not elevated".to_owned(),
+        ));
+    }
+    let _lock = MutationGuard::acquire()?;
+    ProgramDataStore::initialize()?;
+    let store = ProgramDataStore::open()?;
+    let runner = PnPUtilRunner;
+    let inventory = PnPUtilInventory { runner: &runner };
+    let provider = super::wdi::WdiProvider::installed_sibling()?;
+    let trust = WindowsTrustVerifier;
+    let surveys = SystemSurvey;
+    let environment = Environment {
+        surveys: &surveys,
+        inventory: &inventory,
+        preparer: &provider,
+        trust: &trust,
+        runner: &runner,
+        store: &store,
+    };
+    repair_with(&environment)
+}
+
+#[cfg(not(windows))]
+pub fn repair() -> Result<RepairResult, TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
 /// What a store-free release found and did.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ReleaseAllResult {
@@ -3984,6 +4258,206 @@ mod tests {
             .validate_receipt_paths(&receipt)
             .expect("a receipt this store wrote is a receipt this store can read");
         assert!(tx.ends_with(ID), "{}", tx.display());
+    }
+
+    // -----------------------------------------------------------------
+    // Reconcile: what the journal claims vs what the machine shows
+    // -----------------------------------------------------------------
+
+    fn receipt_in(phase: Phase, id: &str) -> Receipt {
+        Receipt {
+            schema: JOURNAL_SCHEMA,
+            phase,
+            transaction_id: id.to_owned(),
+            target_instance_id: DEVICE.to_owned(),
+            hardware_id: r"USB\VID_D209&PID_0430&MI_00".to_owned(),
+            original_service: Some("HidUsb".to_owned()),
+            original_inf: None,
+            original_inf_name: format!("ksx-winusb-{id}.inf"),
+            published_oem_inf: None,
+            inf_path: String::new(),
+            catalog_path: String::new(),
+            inf_sha256: None,
+            catalog_sha256: None,
+            certificate_subject: format!("CN=KSX WinUSB {id}"),
+            certificate_thumbprint_sha1: None,
+            certificate_der_sha256: None,
+            affected_instance_ids: vec![DEVICE.to_owned()],
+            keyboards_before: 2,
+            created_unix_seconds: 0,
+            recovery_reason: None,
+            driver_mutation_attempted: false,
+            reboot_reported: false,
+        }
+    }
+
+    fn package_for(id: &str) -> StoreDriver {
+        StoreDriver {
+            published_name: "oem42.inf".to_owned(),
+            original_name: format!("ksx-winusb-{id}.inf"),
+            provider: "KSX".to_owned(),
+        }
+    }
+
+    const ID: &str = "0a468347dd47c74246cebd18d3830285";
+    const DEVICE: &str = r"USB\VID_D209&PID_0430&MI_00\7&IPAC&0&0000";
+
+    fn drift_of(phase: Phase, bound: bool, package: bool) -> Drift {
+        let receipts = vec![receipt_in(phase, ID)];
+        let bound: Vec<String> = if bound {
+            vec![DEVICE.to_owned()]
+        } else {
+            Vec::new()
+        };
+        let packages = if package {
+            vec![package_for(ID)]
+        } else {
+            Vec::new()
+        };
+        reconcile(&receipts, &bound, &packages)[0].drift
+    }
+
+    /// **The four receipts on the reporting machine.** Stuck at `releasing`
+    /// beside a keyboard that typed perfectly: the rebind had committed, the
+    /// process recording it died, and every surface afterwards read the journal
+    /// and called it a failure.
+    ///
+    /// Nothing is wrong with that machine. The record is behind, and saying so
+    /// is a journal write.
+    #[test]
+    fn a_release_that_finished_after_its_receipt_stopped_is_bookkeeping() {
+        assert_eq!(
+            drift_of(Phase::Releasing, false, false),
+            Drift::ReleaseFinished
+        );
+        assert_eq!(
+            drift_of(Phase::RecoveryRequired, false, false),
+            Drift::ReleaseFinished
+        );
+        assert!(Drift::ReleaseFinished.is_bookkeeping());
+    }
+
+    /// A claim the machine no longer honours -- Windows Update replaced the
+    /// driver, or somebody ran pnputil by hand. The board types; only the
+    /// journal disagrees.
+    #[test]
+    fn a_claim_the_machine_gave_back_is_stale_not_broken() {
+        assert_eq!(drift_of(Phase::Active, false, false), Drift::StaleClaim);
+        assert!(Drift::StaleClaim.is_bookkeeping());
+        // Still claimed and still bound is simply correct.
+        assert_eq!(drift_of(Phase::Active, true, false), Drift::Consistent);
+    }
+
+    /// The one drift that leaves a keyboard unusable: the journal says the
+    /// transaction is over and this receipt's OWN driver package is still
+    /// installed. It needs a driver operation, not a journal write, and the
+    /// distinction is why `Drift` has four values rather than a bool.
+    #[test]
+    fn a_receipts_own_package_left_behind_needs_a_driver_operation() {
+        for phase in [Phase::Released, Phase::RolledBack] {
+            assert_eq!(drift_of(phase, false, true), Drift::ReleaseIncomplete);
+            assert_eq!(drift_of(phase, false, false), Drift::Consistent);
+        }
+        // A prepare that died before it finished leaves the same shape.
+        for phase in [Phase::Preparing, Phase::Prepared, Phase::Installed] {
+            assert_eq!(drift_of(phase, false, true), Drift::ReleaseIncomplete);
+            assert_eq!(drift_of(phase, false, false), Drift::Consistent);
+        }
+        assert!(!Drift::ReleaseIncomplete.is_bookkeeping());
+    }
+
+    /// A release that stopped is judged by its OWN package, never by whether
+    /// the board is bound.
+    #[test]
+    fn a_release_that_stopped_is_judged_by_its_own_package() {
+        assert_eq!(
+            drift_of(Phase::Releasing, false, true),
+            Drift::ReleaseIncomplete
+        );
+        assert_eq!(
+            drift_of(Phase::Releasing, false, false),
+            Drift::ReleaseFinished
+        );
+    }
+
+    /// **A spent receipt must not be blamed for a live claim's binding.**
+    ///
+    /// A board prepared more than once leaves several receipts naming it, and
+    /// only the newest owns the binding. Judging residue by "is this device
+    /// bound" would mark every older receipt unfinished -- and a repair that
+    /// acted on that would release a keyboard the user has prepared right now.
+    ///
+    /// Measured on the reporting machine, which is exactly this shape: one
+    /// live `active` claim on the I-PAC and several spent receipts naming the
+    /// same board.
+    ///
+    /// Fails against the version that treated a binding as residue: the spent
+    /// receipt below reads `release-incomplete`.
+    #[test]
+    fn a_spent_receipt_is_not_blamed_for_the_live_claims_binding() {
+        let live = receipt_in(Phase::Active, "1111111111111111111111111111aaaa");
+        let spent = receipt_in(Phase::Releasing, "2222222222222222222222222222bbbb");
+        // The board is bound, and the live claim's package is the one installed.
+        let bound = vec![DEVICE.to_owned()];
+        let packages = vec![package_for(&live.transaction_id)];
+
+        let findings = reconcile(&[live, spent], &bound, &packages);
+        assert_eq!(
+            findings[0].drift,
+            Drift::Consistent,
+            "the live claim is right"
+        );
+        assert_eq!(
+            findings[1].drift,
+            Drift::ReleaseFinished,
+            "a spent receipt owns no binding, so it has nothing left to finish"
+        );
+        assert!(
+            findings[1].drift.is_bookkeeping(),
+            "and settling it must never involve a driver"
+        );
+    }
+
+    /// A ksx package with no receipt is what a deleted journal leaves behind,
+    /// and `reconcile` cannot see it -- there is nothing left to reconcile it
+    /// against. It is reported rather than removed: removing a package no
+    /// receipt describes is `release-all`'s job, and a bigger hammer than
+    /// repair should swing on its own.
+    #[test]
+    fn a_package_with_no_receipt_is_reported_as_an_orphan() {
+        let orphans = orphan_packages(&[], &[package_for(ID)]);
+        assert_eq!(orphans, vec!["oem42.inf".to_owned()]);
+
+        // With its receipt present it is not an orphan.
+        let owned = orphan_packages(&[receipt_in(Phase::Active, ID)], &[package_for(ID)]);
+        assert!(owned.is_empty());
+
+        // Somebody else's package is never ksx's orphan.
+        let foreign = StoreDriver {
+            published_name: "oem99.inf".to_owned(),
+            original_name: "some-other-tool.inf".to_owned(),
+            provider: "Somebody Else".to_owned(),
+        };
+        assert!(orphan_packages(&[], &[foreign]).is_empty());
+    }
+
+    /// Instance paths are case-insensitive on Windows, and the two sides of
+    /// this comparison come from different APIs -- a receipt written once and a
+    /// survey read now. A reconcile that missed on case would report every live
+    /// claim as stale and "correct" a working claim into a lie.
+    #[test]
+    fn a_bound_interface_is_recognised_whatever_its_case() {
+        let receipts = vec![receipt_in(Phase::Active, ID)];
+        let shouted = vec![DEVICE.to_ascii_uppercase()];
+        let whispered = vec![DEVICE.to_ascii_lowercase()];
+        assert_eq!(
+            reconcile(&receipts, &shouted, &[])[0].drift,
+            Drift::Consistent
+        );
+        assert_eq!(
+            reconcile(&receipts, &whispered, &[])[0].drift,
+            Drift::Consistent
+        );
     }
 
     // -----------------------------------------------------------------

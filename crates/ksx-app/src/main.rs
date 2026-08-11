@@ -1356,6 +1356,23 @@ enum WinusbCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Say what the journal and the machine disagree about, and settle it
+    ///
+    /// Reporting needs no administrator; only --yes does. Drift is ordinary:
+    /// Windows Update replaces a driver, a board moves port, a transaction dies
+    /// between the rebind and the write recording it. A product that can only
+    /// say "recovery required" about that is asking you to do the reasoning.
+    Repair {
+        /// Report only; change nothing (the default)
+        #[arg(long)]
+        dry_run: bool,
+        /// Settle what it found (needs administrator)
+        #[arg(long)]
+        yes: bool,
+        /// JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Give an interface back to the keyboard driver (DRY RUN unless --yes)
     ///
     /// The rollback: pnputil /remove-device, delete the ksx INF from the driver
@@ -1912,6 +1929,12 @@ fn main() -> anyhow::Result<()> {
             }),
             WinusbCommand::ReleaseAll { dry_run, yes, json } => winusb::run(winusb::Options {
                 action: winusb::Action::ReleaseAll,
+                dry_run,
+                yes,
+                json,
+            }),
+            WinusbCommand::Repair { dry_run, yes, json } => winusb::run(winusb::Options {
+                action: winusb::Action::Repair,
                 dry_run,
                 yes,
                 json,

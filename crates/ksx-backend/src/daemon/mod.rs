@@ -1182,6 +1182,39 @@ fn set_game(state: &SharedState, game: Option<String>) {
     }
 }
 
+/// Say what the recovery journal and the machine disagree about, once, at
+/// startup. Logs; never refuses.
+#[cfg(windows)]
+fn report_winusb_drift() {
+    use ksx_platform::winusb::transaction::Drift;
+
+    let (findings, orphans) = match ksx_platform::winusb::transaction::reconcile_report() {
+        Ok(pair) => pair,
+        // No store is the ordinary case on a machine that has never prepared
+        // anything, and an unreadable one is exactly what `ksx winusb repair`
+        // and `release-all` exist for. Neither is this function's business.
+        Err(err) => {
+            tracing::debug!(%err, "the WinUSB recovery journal was not readable at startup");
+            return;
+        }
+    };
+    for finding in findings.iter().filter(|f| f.drift != Drift::Consistent) {
+        tracing::warn!(
+            transaction = %finding.transaction_id,
+            instance = %finding.instance_id,
+            recorded = ?finding.phase,
+            drift = finding.drift.word(),
+            "a WinUSB receipt disagrees with the machine; `ksx winusb repair` settles it"
+        );
+    }
+    if !orphans.is_empty() {
+        tracing::warn!(
+            packages = ?orphans,
+            "ksx driver packages have no receipt; `ksx winusb release-all` removes them"
+        );
+    }
+}
+
 /// Resolve what a newly-started daemon may run.
 ///
 /// A plain daemon is also the control host for first-run staging, so an empty
@@ -1257,6 +1290,20 @@ pub fn run(
         let _ = &plan;
         None
     };
+
+    // Drift, said at startup rather than discovered by a prepare failing.
+    //
+    // A receipt is a claim about hardware and hardware changes underneath it:
+    // Windows Update replaces a driver, a board moves port, a transaction dies
+    // between the rebind and the write recording it. Before this, the first
+    // anyone heard of that was a prepare refusing -- which is the worst moment
+    // to learn it, because the user is mid-task and the message is about the
+    // prepare rather than about the state that made it impossible.
+    //
+    // Read-only, and never fatal: a daemon that will not start because its
+    // journal is untidy would be a worse product than one that says so.
+    #[cfg(windows)]
+    report_winusb_drift();
 
     // The daemon-lifetime live fan-out. Created here, before any session, and
     // outliving all of them: a surface subscribed to it watches sessions come

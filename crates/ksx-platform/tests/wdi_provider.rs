@@ -95,7 +95,12 @@ fn the_shipped_provider_binding_prepares_a_signed_package() {
         output_dir.display()
     );
 
-    let inf_path = output_dir.join("ksx-winusb.inf");
+    // ONE id, spelled into both names, exactly as the transaction layer does
+    // (`winusb_transaction.rs`: `ksx-winusb-{transaction_id}.inf` and
+    // `CN=KSX WinUSB {transaction_id}`). Inventing either separately is how the
+    // first two runs of this test were refused — see `transaction_id`.
+    let id = transaction_id();
+    let inf_path = output_dir.join(format!("ksx-winusb-{id}.inf"));
     std::fs::write(&inf_path, CANONICAL_INF_TEMPLATE).expect("the template is readable input");
 
     let request = PrepareRequest {
@@ -106,7 +111,7 @@ fn the_shipped_provider_binding_prepares_a_signed_package() {
         vendor_id: VID,
         product_id: PID,
         interface_number: Some(0),
-        certificate_subject: certificate_subject(),
+        certificate_subject: format!("CN=KSX WinUSB {id}"),
     };
 
     let prepared = provider
@@ -141,28 +146,30 @@ fn the_shipped_provider_binding_prepares_a_signed_package() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
-/// A subject in the shape the provider accepts: the fixed prefix, then at
-/// least 32 hex digits and nothing else but `-`.
+/// A transaction id in production's shape: 32 lowercase hex characters.
 ///
-/// Production mints it from the transaction id, which is 32 hex characters by
-/// construction. The first version of this test used
-/// `format!("CN=KSX WinUSB smoke {pid}")` and the provider refused it on its
-/// first CI run — correctly, and the fact that it did is the point of this
-/// file: a smoke that builds its own inputs would have accepted the malformed
-/// subject and told us nothing.
+/// Both names the provider validates are spelled from this one value, and that
+/// is the lesson of this function's history. The provider refused two
+/// successive versions of this test, on its first CI run and on its second:
 ///
-/// Unique per run because the provider mints a certificate for this subject,
+/// | invented | the rule it broke |
+/// |---|---|
+/// | `CN=KSX WinUSB smoke <pid>` | `ksx_is_safe_cert_subject`: the prefix, then ≥32 characters that are hex digits or `-` and nothing else |
+/// | `ksx-winusb.inf` | `ksx_is_safe_inf_name`: `ksx-winusb-`, then lowercase hex or `-`, then `.inf` |
+///
+/// Both refusals were correct, and both were this test inventing a shape
+/// instead of using the product's. That is precisely the failure mode the
+/// PowerShell smoke could never have: it never asks the provider anything it
+/// did not construct itself, so it could not be told it was wrong.
+///
+/// Unique per call, because the provider mints a certificate for the subject
 /// and reusing one would exercise the cache rather than the signing path.
-fn certificate_subject() -> String {
+fn transaction_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or_default();
-    format!(
-        "CN=KSX WinUSB {:016x}{:016x}",
-        u64::from(std::process::id()),
-        nanos
-    )
+    format!("{:016x}{:016x}", u64::from(std::process::id()), nanos)
 }
 
 /// Two paths naming the same file. `canonicalize` is enough here: both sides
@@ -174,38 +181,50 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The subject this file hands the provider satisfies the provider's own rule.
+/// Both names this file hands the provider satisfy the provider's own rules.
 ///
 /// NOT `#[ignore]`d: it needs no DLL and no elevation, and it exists because
-/// the first version of the smoke above shipped a subject the provider refuses
-/// — which cost a full CI round trip to discover. The expensive test can only
-/// run in one place; this one runs everywhere and catches the same mistake in
-/// milliseconds.
+/// the smoke above was refused twice for inventing a name — one full CI round
+/// trip each. The expensive test can only run in one place; this one runs
+/// everywhere and catches the same class in milliseconds.
 ///
-/// Mirrors `ksx_is_safe_cert_subject` in `third_party/libwdi/src/libwdi.c`. It
-/// is a duplicate of a rule that lives in C, and that is deliberate: the two
-/// copies disagreeing is exactly the failure it reports.
+/// It duplicates `ksx_is_safe_cert_subject` and `ksx_is_safe_inf_name` from
+/// `third_party/libwdi/src/libwdi.c`, deliberately: the two copies disagreeing
+/// is exactly the failure it reports.
 #[test]
-fn the_smoke_subject_is_one_the_provider_accepts() {
-    const PREFIX: &str = "CN=KSX WinUSB ";
-    let subject = certificate_subject();
+fn the_smoke_names_are_ones_the_provider_accepts() {
+    let id = transaction_id();
 
-    let tail = subject
-        .strip_prefix(PREFIX)
-        .unwrap_or_else(|| panic!("the provider requires the exact prefix {PREFIX:?}: {subject}"));
+    // ksx_is_safe_cert_subject
+    let subject = format!("CN=KSX WinUSB {id}");
     assert!(
         subject.len() < 96,
         "the provider rejects a subject of 96 characters or more: {subject}"
     );
     assert!(
-        tail.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+        id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
         "the provider allows only hex digits and '-' after the prefix: {subject}"
     );
     assert!(
-        tail.chars().filter(char::is_ascii_hexdigit).count() >= 32,
+        id.chars().filter(char::is_ascii_hexdigit).count() >= 32,
         "the provider requires at least 32 hex digits: {subject}"
     );
 
+    // ksx_is_safe_inf_name. Lowercase only, which `{:x}` gives and `{:X}`
+    // would not — the kind of difference that costs a CI round trip.
+    let inf = format!("ksx-winusb-{id}.inf");
+    let stem = inf
+        .strip_prefix("ksx-winusb-")
+        .and_then(|rest| rest.strip_suffix(".inf"))
+        .unwrap_or_else(|| panic!("the provider requires ksx-winusb-<id>.inf: {inf}"));
+    assert!(!stem.is_empty(), "the id may not be empty: {inf}");
+    assert!(inf.len() < 120, "the provider caps the name at 120: {inf}");
+    assert!(
+        stem.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+        "the provider allows only lowercase letters, digits and '-' in the stem: {inf}"
+    );
+
     // Unique per call, or the certificate cache is what gets exercised.
-    assert_ne!(certificate_subject(), subject);
+    assert_ne!(transaction_id(), id);
 }

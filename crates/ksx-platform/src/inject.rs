@@ -525,6 +525,21 @@ impl<I: KeyInjector> Typethrough<I> {
         self.on_key(event.key, event.down);
     }
 
+    /// Count a transition that emulation owns, decided **upstream**.
+    ///
+    /// For a split take (`Take::BoundKeys`), ownership is per key rather than
+    /// per panel, and this type's mode is per panel — so the caller answers the
+    /// per-key question and reports the result here. Nothing is injected and
+    /// nothing is held, which is exactly what "emulation owns this key" means.
+    ///
+    /// It exists so `suppressed` stays the number of strokes that did not type,
+    /// whether emulation owns the whole board or three keys on it. A counter
+    /// that only sees one of those two ways of not typing is a counter that
+    /// reads as zero on the mode people ask about most.
+    pub fn count_suppressed(&mut self) {
+        self.stats.suppressed += 1;
+    }
+
     /// Feed one transition.
     ///
     /// A release for a key not in [`Self::held`] is dropped, not forwarded: it

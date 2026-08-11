@@ -1343,3 +1343,134 @@ fn an_observation_mutes_the_panel_and_dropping_it_types_again() {
     drop(tap);
     press_and_drain(&rig.wire, &rig.typed, Key::F3);
 }
+
+// ---------------------------------------------------------------------------
+// Split on a claimed board (2026-08-11)
+// ---------------------------------------------------------------------------
+
+/// The same panel plan, but the user answered **Split** instead of Freeze:
+/// `G` drives the pad, every other key still types.
+fn split_panel_plan() -> RunPlan {
+    let mut preset = Preset::builtin_empty();
+    preset.name = "split-panel".to_owned();
+    preset.protected = false;
+    preset
+        .entries
+        .push((Key::G, ksx_core::Binding::Button(ksx_core::XButton::A)));
+    let mut plan = panel_plan();
+    plan.block_keyboards = ksx_core::Blocking::BoundKeys;
+    plan.slots = vec![ResolvedSlot {
+        spec: SlotSpec::new(1, Some(DeviceId::from(PANEL)), None, preset.name.clone())
+            .expect("valid slot"),
+        preset,
+    }];
+    plan
+}
+
+/// **Split must not be Freeze.** On a claimed board, a bound key drives the pad
+/// and an unbound key still types — the whole promise of "Split this keyboard".
+///
+/// It did not. `ksx-capture/src/winusb` read `SetCapturedWith` for its device
+/// list and dropped the `Take`, and `panel::session_loop` did the same, so a
+/// `BoundKeys` take was rounded up to "mute the panel". On a board Windows
+/// cannot see, muting the typethrough IS freezing the board: nothing suppresses
+/// the key, but nothing re-injects it either. The card promised "Mapped keys
+/// drive the pad; everything else still types" and delivered a dead panel.
+///
+/// Fails against that version: `F2` never reaches the injection log.
+#[test]
+fn split_on_a_claimed_board_types_the_keys_it_does_not_bind() {
+    let rig = rig();
+    let (commands, rx) = crossbeam_channel::unbounded::<DaemonCommand>();
+    let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+    let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+    let reports = Reports::default();
+    let mut factory = PanelFactory::new(&rig.panel, &trace, &reports);
+    factory.plan = split_panel_plan();
+    let mut keyboard = PanelKeyboardHandle(Arc::clone(&rig.panel));
+
+    let user = std::thread::spawn({
+        let wire = rig.wire.clone();
+        let typed = rig.typed.clone();
+        let state = Arc::clone(&state);
+        let trace = Arc::clone(&trace);
+        move || {
+            commands
+                .send(DaemonCommand::Start { game: None })
+                .expect("loop alive");
+            eventually("the session to report Running", || {
+                matches!(run_state(&state), RunState::Running { .. })
+            });
+            eventually("blocking to be enabled by the real supervisor", || {
+                count(&trace, Step::BlockingEnabled) >= 1
+            });
+
+            typed.clear();
+            // The bound key: emulation owns it, so it must not type.
+            press(&wire, Key::G);
+            // The unbound key: it must. Fencing on it also fences `G` — one
+            // thread, one FIFO channel — so if `G` had typed it would appear
+            // ahead of `F2` in the trace.
+            press(&wire, Key::F2);
+            eventually("the unbound key to type", || {
+                typed.trace().ends_with("F2+ F2-")
+            });
+            assert_eq!(
+                typed.trace(),
+                "F2+ F2-",
+                "Split must type what it does not bind, and only that"
+            );
+
+            commands.send(DaemonCommand::Stop).expect("loop alive");
+            eventually("the session to be reaped", || {
+                matches!(
+                    run_state(&state),
+                    RunState::Stopped | RunState::Failed { .. }
+                )
+            });
+            commands.send(DaemonCommand::Quit).expect("loop alive");
+        }
+    });
+
+    let mut out: Vec<u8> = Vec::new();
+    control_loop_with(
+        rx,
+        Arc::clone(&state),
+        &mut factory,
+        &mut keyboard,
+        &super::NoUi,
+        &mut out,
+    );
+    user.join().expect("the user script must not panic");
+}
+
+/// Leaving Split lets go of a key that was typed *down* under it.
+///
+/// The hazard is one physical key: press `F2` while Split is live (it types,
+/// and the panel is now holding it down in Windows), then stop the session. If
+/// the mode change does not release what the typethrough is holding, the
+/// physical release arrives under a mode that no longer types it and Windows
+/// believes `F2` is held forever — on a board it cannot see, so nothing can
+/// clear it but a reboot or another keyboard. Same class as the held-key bug
+/// `Typethrough::set_emulating` exists to prevent, one mode over.
+#[test]
+fn a_key_typed_under_split_is_released_when_split_ends() {
+    let rig = rig();
+    let takes = vec![(
+        DeviceId::from(PANEL),
+        ksx_capture::Take::BoundKeys(std::iter::once(Key::G).collect()),
+    )];
+    rig.panel.set_owning(takes);
+
+    // Physically down, and typed: the panel is holding it in Windows.
+    rig.wire.send(event(Key::F2, true)).expect("wire open");
+    eventually("the unbound key to be typed down", || {
+        rig.typed.trace() == "F2+"
+    });
+
+    // The session ends. Everything held must be let go on the way out.
+    rig.panel.set_emulating(false);
+    eventually("the held key to be released by the mode change", || {
+        rig.typed.trace() == "F2+ F2-"
+    });
+}

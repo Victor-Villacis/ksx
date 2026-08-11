@@ -4231,6 +4231,31 @@ mod tests {
         }
     }
 
+    /// The REAL store on the machine this runs on, initialized by the real
+    /// code. Ignored, because it needs elevation and mutates the store's DACLs
+    /// -- which is exactly what the installer's post-copy step does, on every
+    /// install, so running it costs nothing a reinstall would not.
+    ///
+    /// It exists because the fixtures above can only assert what someone
+    /// thought to build. A machine that has actually prepared a keyboard has
+    /// receipts nobody designed, in shapes nobody predicted, and this defect
+    /// was invisible until one of those was read. Run it from an elevated
+    /// prompt when an install refuses the recovery directory:
+    ///
+    /// ```text
+    /// cargo test -p ksx-platform --lib the_real_store -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs an elevated prompt; normalizes the real store's DACLs"]
+    fn the_real_store_on_this_machine_initializes() {
+        match initialize_store() {
+            Ok(()) => println!("the store on this machine initializes cleanly"),
+            Err(err) => panic!(
+                "initialize-store refused this machine's real store, which is what                  Setup shows as \"initializer exit code 3\": {err}"
+            ),
+        }
+    }
+
     /// A release that ends in recovery must SAY so in the receipt.
     ///
     /// `set_recovery` persists the phase; `delete_matching` and

@@ -108,29 +108,46 @@ LicenseFile={#RepoRoot}\LICENSE-MIT
 ; kernel driver), so it needs an elevated install into Program Files.
 PrivilegesRequired=admin
 
-; CLOSE the running ksx so its files can be replaced — and do NOT bring it back
-; before Setup has finished.
+; CLOSE the running ksx without asking, and do NOT bring it back before Setup
+; has finished.
 ;
-; This is defect 6 of the 2026-08-11 session, and the reason an upgrade died on
-; "Setup refused an unsafe or unavailable KSX WinUSB recovery directory
-; (initializer exit code 3)" with the progress label reading "Restarting
-; applications...". Inno's default is RestartApplications=yes, so the
-; RestartManager put ksx.exe back while CurStepChanged(ssPostInstall) was still
-; running `initialize-store` — and the restarted ksx reopens the protected
-; WinUSB store and takes the handles the initializer needs to normalize it.
-; Two processes, one fixed directory, no ordering between them.
+; `force` rather than `yes` because the question Inno asks with `yes` has no
+; good answer and should never have been put to a customer: "The following
+; applications are using files that need to be updated. It is recommended that
+; you allow Setup to automatically close these applications." Answering "Do not
+; close" guarantees a broken install; the list reads "ksx — keyboard splitter
+; for arcade cabinets", twice, which tells them nothing; and nothing of value is
+; lost by closing, because ksx holds no unsaved document — its state is
+; config.toml and a driver binding, both already on disk. `force` closes it and
+; moves on.
 ;
-; The initializer is the ONE step that can roll an install back, so it must not
-; be the step that races a process Setup itself started. Not restarting removes
-; the race by construction rather than by timing: nothing of ksx is running
-; while the store is normalized.
+; RestartApplications=no is hygiene, NOT the fix for the exit-3 dialog. It was
+; first added believing it was: the progress label read "Restarting
+; applications..." when "initializer exit code 3" appeared, so the
+; RestartManager looked like it was racing `initialize-store` for the protected
+; store. It was not. Setting it changed nothing, and the real cause was in the
+; helper: `ProgramDataStore::open` canonicalizes its paths and
+; `ProgramDataStore::initialize` did not, so `initialize-store` judged every
+; receipt ksx had ever written to have "escaped its transaction directory" and
+; refused. Any machine that had once prepared a keyboard failed here; CI never
+; did, because a runner's store is empty. Fixed in
+; crates/ksx-platform/src/winusb_transaction.rs, pinned by a test.
 ;
-; Nothing is lost by it. The daemon returns at the next logon through its
-; autostart task, and the [Run] hand-off below puts ksx on screen the moment
-; the wizard finishes — which is a better answer than a silently resurrected
-; background process anyway.
-CloseApplications=yes
+; It stays because it is still right on its own terms: nothing of ksx should be
+; running while Setup mutates the store it owns, and a background process
+; silently resurrected mid-install is a worse answer than one the user starts.
+; The daemon returns at the next logon through its autostart task, and the
+; [Run] hand-off below puts ksx on screen the moment the wizard finishes.
+CloseApplications=force
 RestartApplications=no
+
+; ALWAYS write a log. This installer has now cost several rounds of guessing at
+; a single dialog ("initializer exit code 3") on a machine that kept no record
+; of why, because Inno only logs when asked. The log is the difference between
+; "it failed" and "it failed HERE", it costs nothing, and the one place it
+; matters is a customer's machine, which is the one place nobody thinks to pass
+; /LOG in advance.
+SetupLogging=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 

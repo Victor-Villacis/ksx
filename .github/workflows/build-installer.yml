@@ -584,6 +584,86 @@ jobs:
             }
           }
 
+      # `initialize-store` had only ever run against a store that DOES NOT
+      # EXIST, because a runner is a fresh machine every time. Every branch
+      # that runs only for an EXISTING store was therefore unreachable here
+      # and reachable on every customer machine that had once prepared a
+      # keyboard. One of them was wrong -- the per-receipt path validation --
+      # and it took every upgrade down with 'initializer exit code 3'.
+      #
+      # So seed a store that looks like a used one, receipt included, and
+      # require the initializer to accept it. The receipt carries the
+      # verbatim (\\?\C:...) artifact paths that ProgramDataStore::open
+      # really writes, which is the exact spelling that used to be refused.
+      - name: Initialize a store that already has receipts in it
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $root = 'C:\ProgramData\KSX'
+          if (Test-Path -LiteralPath $root) {
+            throw "$root exists before this step; refusing to touch it"
+          }
+          $id = '0a468347dd47c74246cebd18d3830285'
+          $txRel = 'WinUSB\transactions'
+          $tx = Join-Path $root (Join-Path $txRel $id)
+          $journal = Join-Path $root 'WinUSB\journal'
+          New-Item -ItemType Directory -Path $tx -Force | Out-Null
+          New-Item -ItemType Directory -Path $journal -Force | Out-Null
+
+          $inf = "ksx-winusb-$id.inf"
+          $cat = "ksx-winusb-$id.cat"
+          Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
+          Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
+
+          # The verbatim prefix is the entire point of this fixture.
+          $verbatim = '\\\\?\\' + $tx
+          $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
+          $receipt = [ordered]@{
+            schema = 1
+            phase = 'released'
+            transaction_id = $id
+            target_instance_id = $device
+            hardware_id = 'USB\VID_D209&PID_0430&MI_00'
+            original_service = 'HidUsb'
+            original_inf = $null
+            original_inf_name = $inf
+            published_oem_inf = $null
+            inf_path = (Join-Path $verbatim $inf)
+            catalog_path = (Join-Path $verbatim $cat)
+            inf_sha256 = $null
+            catalog_sha256 = $null
+            certificate_subject = "CN=KSX WinUSB $id"
+            certificate_thumbprint_sha1 = $null
+            certificate_der_sha256 = $null
+            affected_instance_ids = @($device)
+            keyboards_before = 2
+            created_unix_seconds = 0
+            recovery_reason = $null
+            driver_mutation_attempted = $false
+            reboot_reported = $false
+          }
+          $receipt | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $journal "$id.json") -Encoding utf8
+
+          $out = Join-Path $env:RUNNER_TEMP 'ksx-init-seeded.json'
+          $helper = 'target\release\ksx-winusb-helper.exe'
+          $p = Start-Process -FilePath $helper -ArgumentList 'initialize-store' -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $out
+          $said = Get-Content -LiteralPath $out -Raw
+          Write-Host "DIAG: initialize-store over a seeded store exit = $($p.ExitCode)"
+          Write-Host "DIAG: said = $said"
+          if ($p.ExitCode -ne 0) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            throw ("initialize-store refused a store holding an ordinary receipt " +
+                   "(exit $($p.ExitCode)). This is what every customer upgrade hit: $said")
+          }
+
+          # It normalizes; it must not prune.
+          if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            throw 'initialize-store removed a receipt it was only asked to verify'
+          }
+          Remove-Item -LiteralPath $root -Recurse -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: ksx-windows-installer

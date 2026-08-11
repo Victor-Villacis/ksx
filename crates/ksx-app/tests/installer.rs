@@ -1660,23 +1660,33 @@ fn the_release_body_carries_the_hash_the_commit_and_the_smartscreen_step() {
     }
 }
 
-/// Setup must not put ksx back on its feet while it is still installing.
+/// Setup closes ksx without asking, does not restart it mid-install, and keeps
+/// a log.
 ///
-/// Defect 6 of the 2026-08-11 hardware session: an upgrade died on *"Setup
-/// refused an unsafe or unavailable KSX WinUSB recovery directory (initializer
-/// exit code 3)"*, with the progress label reading "Restarting
-/// applications...". Inno's default `RestartApplications=yes` had the
-/// RestartManager bring ksx.exe back while `CurStepChanged(ssPostInstall)` was
-/// still running `initialize-store`, and the restarted ksx reopens the
-/// protected WinUSB store and takes the handles the initializer needs.
+/// None of the three is the fix for the "initializer exit code 3" dialog, and
+/// saying so here matters, because the first version of this test claimed the
+/// opposite. The progress label read "Restarting applications..." when the
+/// error appeared, so `RestartApplications=yes` looked like the cause; setting
+/// it to `no` changed nothing. The real defect was in the helper -- `open`
+/// canonicalized its store paths and `initialize` did not, so every receipt
+/// looked like it had escaped its own directory (`winusb_transaction.rs`).
 ///
-/// The initializer is the one step that can roll an install back, so it must
-/// not be the step racing a process Setup itself started. `RestartApplications`
-/// is one word on one line, ISCC compiles either value happily, and the failure
-/// only appears on a machine that already had ksx running — which is to say,
-/// never in CI and always on a customer's second install.
+/// What these three settings are, is the difference between an upgrade a
+/// customer can complete and one they have to interpret:
+///
+/// - `CloseApplications=force` -- `yes` asks a question with no good answer,
+///   over a list that reads "ksx — keyboard splitter for arcade cabinets"
+///   twice. ksx holds no unsaved document; closing it costs nothing.
+/// - `RestartApplications=no` -- nothing of ksx should be running while Setup
+///   mutates the store ksx owns.
+/// - `SetupLogging=yes` -- so the NEXT failure on a customer machine says
+///   where it failed instead of costing four rounds of guessing.
+///
+/// Each is one word on one line, ISCC compiles every value happily, and all
+/// three only matter on a machine that already has ksx on it — which is to
+/// say, never in CI and always on a second install.
 #[test]
-fn setup_closes_a_running_ksx_and_does_not_restart_it_mid_install() {
+fn setup_closes_ksx_without_asking_and_keeps_a_log() {
     let entries = section(&script(), "[Setup]");
     let value = |key: &str| {
         entries
@@ -1691,8 +1701,13 @@ fn setup_closes_a_running_ksx_and_does_not_restart_it_mid_install() {
     };
     assert_eq!(
         value("CloseApplications"),
+        "force",
+        "`yes` puts a question to the customer that has no good answer: \"Do not \n         close\" guarantees a broken install, and the list it shows names ksx twice"
+    );
+    assert_eq!(
+        value("SetupLogging"),
         "yes",
-        "a running ksx must be closed, or its files cannot be replaced"
+        "a customer's failed install must leave a record of WHERE it failed; \n         nobody thinks to pass /LOG before the thing goes wrong"
     );
     assert_eq!(
         value("RestartApplications"),

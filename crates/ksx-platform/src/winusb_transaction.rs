@@ -1809,6 +1809,31 @@ fn audit_existing_leaf_entries(
     Ok(())
 }
 
+/// A path with the Windows verbatim disk prefix removed, for COMPARING two
+/// spellings of the same location.
+///
+/// `Path::canonicalize` returns `\\?\C:\...`; `SHGetKnownFolderPath` returns
+/// `C:\...`; and `PathBuf` compares the prefix as a component, so the two are
+/// unequal as values while naming one directory. Every place that compares a
+/// path READ FROM DISK against a path BUILT NOW has to agree about this, which
+/// is why the mapping lives in one function.
+///
+/// Only the disk prefix is stripped. `\\?\UNC\server\share` is left alone: it
+/// names something genuinely different from a local path, and quietly making a
+/// remote path look local is a worse answer than an inequality.
+fn comparable(path: &str) -> PathBuf {
+    match path.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.len() > 2
+                && rest.as_bytes()[0].is_ascii_alphabetic()
+                && rest.as_bytes()[1] == b':' =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
 #[cfg(windows)]
 fn verify_protected_directory(path: &Path) -> Result<(), TransactionError> {
     verify_protected_object(path, true)
@@ -1923,9 +1948,19 @@ impl ProgramDataStore {
         audit_known_children(&root_path, &["journal", "transactions"])?;
         audit_existing_leaf_entries(&journal_path, &transactions_path)?;
 
+        // Canonicalized, so this constructor and `open` agree about what the
+        // store's path IS rather than merely about where it points. They did
+        // not: `open` canonicalizes and this one did not, so a receipt written
+        // through one was unreadable through the other, and the comparison in
+        // `validate_receipt_paths` is only the site where that surfaced. The
+        // directories exist by now -- `secure_or_create` above made them -- so
+        // canonicalizing here cannot fail for a store this call just built.
         let store = Self {
-            journal: journal_path,
-            transactions: transactions_path,
+            journal: journal_path.canonicalize().unwrap_or(journal_path),
+            transactions: transactions_path
+                .clone()
+                .canonicalize()
+                .unwrap_or(transactions_path),
         };
         // Parse every receipt and audit every child now, while all ancestor
         // handles still prevent swaps. Unknown, orphaned, malformed, or unsafe
@@ -1988,18 +2023,35 @@ impl ProgramDataStore {
             ));
         }
         let tx = self.transaction_dir(&receipt.transaction_id);
-        if Path::new(&receipt.inf_path).parent() != Some(tx.as_path())
-            || Path::new(&receipt.catalog_path).parent() != Some(tx.as_path())
-            || Path::new(&receipt.inf_path).file_name()
-                != Some(std::ffi::OsStr::new(&receipt.original_inf_name))
-            || Path::new(&receipt.catalog_path).file_name()
+        // Compared with the verbatim prefix removed from BOTH sides, because
+        // the two constructors of this store spell the same directory
+        // differently and a receipt outlives the one that wrote it:
+        // `open` canonicalizes (so every receipt on disk records
+        // `\\?\C:\ProgramData\...`) and `initialize` did not. `PathBuf` treats
+        // the prefix as a component, so this comparison answered "escaped" for
+        // every receipt ksx has ever written — and since `initialize` is the
+        // installer's post-copy step, every install on a machine that had once
+        // prepared a keyboard died on it.
+        //
+        // The traversal check this performs is unchanged: after the prefix is
+        // gone the parent must still be exactly this transaction's directory,
+        // so a `..` or an absolute path elsewhere is refused exactly as before.
+        let inf = comparable(&receipt.inf_path);
+        let catalog = comparable(&receipt.catalog_path);
+        let want = comparable(&tx.to_string_lossy());
+        if inf.parent() != Some(want.as_path())
+            || catalog.parent() != Some(want.as_path())
+            || inf.file_name() != Some(std::ffi::OsStr::new(&receipt.original_inf_name))
+            || catalog.file_name()
                 != Some(std::ffi::OsStr::new(
                     &receipt.original_inf_name.replace(".inf", ".cat"),
                 ))
         {
-            return Err(TransactionError::Journal(
-                "receipt artifact paths escaped their transaction directory".to_owned(),
-            ));
+            return Err(TransactionError::Journal(format!(
+                "receipt artifact paths escaped their transaction directory: {} is not in {}",
+                receipt.inf_path,
+                tx.display()
+            )));
         }
         Ok(tx)
     }
@@ -3661,6 +3713,65 @@ mod tests {
         fn phase(&self) -> Option<Phase> {
             self.state.lock().unwrap().receipt.as_ref().map(|r| r.phase)
         }
+    }
+
+    /// A receipt written by `prepare_exact` belongs to its own transaction
+    /// directory, even though the two constructors spell that directory
+    /// differently.
+    ///
+    /// `ProgramDataStore::open` canonicalizes, so every receipt on disk records
+    /// `\?\C:\ProgramData\KSX\WinUSB\transactions\<id>\...`.
+    /// `ProgramDataStore::initialize` did not, so it rebuilt the same directory
+    /// as plain `C:\ProgramData\...` and then asked whether each receipt's
+    /// artifacts lived inside it. They never did: `PathBuf` compares the
+    /// verbatim prefix as a component, so the answer was always "escaped".
+    ///
+    /// The consequence was total and invisible. `initialize-store` is the
+    /// installer's post-copy step, so **every install on a machine that had
+    /// ever prepared a keyboard died with "initializer exit code 3"** — while
+    /// CI stayed green, because a runner's store is always brand new and holds
+    /// no receipts to validate.
+    ///
+    /// Fails against that version: the receipt below is refused.
+    #[test]
+    fn a_receipt_belongs_to_its_transaction_however_the_store_spells_the_path() {
+        const ID: &str = "0a468347dd47c74246cebd18d3830285";
+        // Exactly what `initialize` builds: no verbatim prefix.
+        let store = ProgramDataStore {
+            journal: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\journal"),
+            transactions: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\transactions"),
+        };
+        // Exactly what was read off the reporting machine.
+        let verbatim = format!(r"\\?\C:\ProgramData\KSX\WinUSB\transactions\{ID}\ksx-winusb-{ID}");
+        let receipt = Receipt {
+            schema: JOURNAL_SCHEMA,
+            phase: Phase::Active,
+            transaction_id: ID.to_owned(),
+            target_instance_id: TARGET.to_owned(),
+            hardware_id: r"USB\VID_D209&PID_0430&MI_00".to_owned(),
+            original_service: Some("HidUsb".to_owned()),
+            original_inf: None,
+            original_inf_name: format!("ksx-winusb-{ID}.inf"),
+            published_oem_inf: None,
+            inf_path: format!("{verbatim}.inf"),
+            catalog_path: format!("{verbatim}.cat"),
+            inf_sha256: None,
+            catalog_sha256: None,
+            certificate_subject: format!("CN=KSX WinUSB {ID}"),
+            certificate_thumbprint_sha1: None,
+            certificate_der_sha256: None,
+            affected_instance_ids: vec![TARGET.to_owned()],
+            keyboards_before: 2,
+            created_unix_seconds: 0,
+            recovery_reason: None,
+            driver_mutation_attempted: false,
+            reboot_reported: false,
+        };
+
+        let tx = store
+            .validate_receipt_paths(&receipt)
+            .expect("a receipt this store wrote is a receipt this store can read");
+        assert!(tx.ends_with(ID), "{}", tx.display());
     }
 
     /// A release that ends in recovery must SAY so in the receipt.

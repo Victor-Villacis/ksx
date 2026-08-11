@@ -194,3 +194,41 @@ Do not treat an available shared Interception installation as proof that the
 clean-install path works. Studio intentionally keeps built-in USB mode visible
 as a secondary option on such a machine so that exact installed preparation can
 be exercised before release.
+
+## The three trade-offs, stated plainly
+
+Built-in USB mode is what lets KSX ship without a kernel driver, and there is no
+version of it that does not cost these three things. They are recorded here
+because a user meets all three in their first hour and none of them is a bug:
+
+**A Bluetooth keyboard cannot be prepared.** There is no USB interface to bind,
+so there is nothing for `winusb.sys` to take. A Bluetooth board can still be a
+*player's* keyboard on a machine where another board is prepared, but KSX cannot
+block it, which means its keystrokes reach Windows as well as the pad. If
+blocking matters, the board has to be USB.
+
+**A prepared keyboard is dark whenever KSX is not running.** This is the
+inversion the whole design rests on: the interface has left the keyboard stack,
+so it is not "KSX is suppressing it", it is "Windows has no keyboard there".
+Killing KSX frees an Interception-captured board; it does not un-bind a WinUSB
+one. Three mitigations, in the order you should reach for them:
+
+1. `ksx autostart --enable`, so the daemon is running before anything else is —
+   this is what makes the panel a working keyboard for the other 99% of the
+   time;
+2. `ksx winusb release <device> --yes` from any keyboard that still types;
+3. the `pnputil` lines in `RECOVERY.md` §2, for when KSX itself will not start.
+
+The refusal that keeps this survivable is the one in `winusb claim`: it will not
+take the machine's **last** keyboard. Keep one spare board on a different port
+and none of the above is worse than a minute's inconvenience.
+
+**Preparation is per keyboard, and it needs an administrator.** Every board is
+its own transaction — its own certificate, its own package, its own receipt —
+and each one costs a UAC prompt. There is no "prepare everything" button and
+there deliberately is not going to be one: the whole safety argument is that a
+rebind is an exact, named, individually consented act against one interface.
+
+Circling back on any of these means either a driver KSX would have to sign and
+maintain, or a Windows facility that does not exist today. They are the price of
+the 2026 cross-signing cliff, and they are cheaper than the cliff.

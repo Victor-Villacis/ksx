@@ -186,6 +186,36 @@ against the shipped version. The lesson is the second column: a smoke that
 exercises only the shape that works proves nothing about the shape the product
 sends.
 
+**Six more found by using it, 2026-08-11 — the day preparation first worked.**
+Getting past the install revealed the next layer, and it is the same pattern one
+step further in: code that had never executed, because the thing before it had
+never succeeded.
+
+| defect | why nothing caught it |
+|---|---|
+| the mapper went deaf on a prepared board: `learn-key` observed Raw Input, which a claimed interface has structurally left | no test ever learned a key from a claimed device; `rawinput.rs` and `CONTROL-SURFACE.md` both already SAID this would happen, filed as a follow-up |
+| release ended on `Releasing`, so a rebind that committed was reported as a failure | `rollback_installed` passed a `RecoveryRequired` through assuming it was persisted — true for `set_recovery`, false for the two callers that construct it directly, and no test drove that pair |
+| "Split this keyboard" was bit-for-bit "Freeze" on a claimed board: the `Take` was read for its device list and dropped | no coverage of `bound-keys` on a claimed board; the end-to-end split test drives the mock/Interception path |
+| preparing twice reported "Windows could not prepare this keyboard" | one refusal code covered every wrong binding, including the two that mean "already done" |
+| Setup restarted ksx into its own install, racing `initialize-store` | Inno's default; only reproducible on a machine that already had ksx running, which CI never is |
+| every refusal named "Driver recovery in KSX", a surface that does not exist | `cleanup-owned` has no caller outside the uninstaller, and nothing checks that advice names something real |
+
+One reported symptom was **not** a defect and is worth recording as such: no
+`config.toml` after a session of exploring. Play-without-Save writes nothing, on
+purpose (`FIRST-RUN.md` §2, pinned by `stage.rs playing_leaves_the_config_untouched`).
+It looked wrong for a real reason, though — `StagedSetupView::ready` is false
+while any slot binds nothing, so with the mapper deaf, **Save was never
+clickable all session**. Defect 4 was a consequence of defect 1 wearing a
+correct-behaviour disguise. When a "not a bug" is reported, check what made the
+user look.
+
+The recurring lesson, now three sessions deep: **a check that has only ever run
+against the passing shape proves nothing.** Every green check that hid one of
+these was structurally incapable of failing — asserting a nonzero exit that was
+nonzero for every input, or building its own inputs in a language whose defaults
+happened to be correct. The counter-measure is a control case: prove the check
+fails when it should, in the check itself.
+
 ### 3. Diagnosing an elevated helper refusal
 
 The helper is launched through `ShellExecuteEx` for the UAC prompt, which

@@ -1354,8 +1354,29 @@ fn known_program_data() -> Result<PathBuf, TransactionError> {
 /// SYSTEM and Builtin Administrators may mutate; Builtin Users may only
 /// read/list/execute. `P` disables inheritance, while `OI`/`CI` passes the same
 /// policy to receipts and transaction artifacts created later.
+///
+/// **The Users mask is written as specific rights, and must stay that way.**
+/// `0x1200a9` is FILE_GENERIC_READ|FILE_GENERIC_EXECUTE, the identical
+/// permission the readable `GRGX` asks for — but Windows MAPS generic rights
+/// when it stores an ACL on an object, and splits an inheritable generic ACE
+/// into two: an effective entry for this object plus an inherit-only entry
+/// keeping the generic bits. `GRGX` therefore went in as three ACEs and came
+/// back as four:
+///
+/// ```text
+/// written  O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)
+/// stored   O:BAG:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)
+/// ```
+///
+/// `verify_exact_dacl` compares the ACL byte for byte, so it could never match
+/// — including on directories this code had just created itself. Every install
+/// died at `initializer exit code 3`, and nothing caught it because a
+/// successful `initialize-store` had never once been executed, here or in CI.
+/// `the_exact_store_dacl_survives_a_round_trip_through_windows` now runs that
+/// round trip in milliseconds, without elevation.
 #[cfg(windows)]
-const STORE_DIRECTORY_SDDL: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)";
+const STORE_DIRECTORY_SDDL: &str =
+    "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 
 #[cfg(windows)]
 struct SecurityDescriptor(*mut core::ffi::c_void);
@@ -3153,6 +3174,54 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    /// The store DACL must survive a round trip through Windows, because
+    /// `verify_exact_dacl` compares the ACL byte for byte.
+    ///
+    /// It did not, and could not. `STORE_DIRECTORY_SDDL` carried GENERIC rights
+    /// (`GRGX`) on an inheritable ACE; Windows maps generic bits when it stores
+    /// an ACL on an object and SPLITS such an ACE into two — one effective
+    /// entry for this object, one inherit-only entry keeping the generic bits:
+    ///
+    ///   written  ...(A;OICI;GRGX;;;BU)
+    ///   stored   ...(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)
+    ///
+    /// Three ACEs out, four back, different sizes, never equal. So
+    /// `initialize-store` refused every directory it was given INCLUDING ones
+    /// it had just created itself, every install died at exit code 3, and no
+    /// test noticed because nothing had ever run a successful initialization.
+    ///
+    /// This needs no elevation: it sets a DACL on a directory it owns.
+    #[test]
+    fn the_exact_store_dacl_survives_a_round_trip_through_windows() {
+        let path = std::env::temp_dir().join(format!(
+            "ksx-store-dacl-roundtrip-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+
+        std::fs::create_dir_all(&path).expect("a scratch directory");
+        let security = SecurityDescriptor::exact_store().expect("the fixed store descriptor");
+        let directory = ProtectedDirectory::open(&path, true).expect("open the scratch directory");
+
+        // `apply_exact_dacl` sets the DACL and then verifies it, which is the
+        // exact pairing `initialize()` performs on every existing level. Owner
+        // and group are untouched by it, so this runs without elevation —
+        // `create_exact_directory` would additionally set `O:BA`, which a
+        // non-elevated process may not do (error 1307).
+        let verdict = directory.apply_exact_dacl(&security);
+
+        drop(directory);
+        let _ = std::fs::remove_dir_all(&path);
+
+        verdict.expect(
+            "a directory created with the exact store DACL must satisfy the exact-DACL check. \
+             If this fails, STORE_DIRECTORY_SDDL asks for something Windows does not store \
+             verbatim — generic rights on an inheritable ACE are the known cause — and every \
+             install will refuse itself.",
+        );
+    }
 
     const TARGET: &str = r"USB\VID_D209&PID_0430&MI_00\TARGET";
     const TX: &str = "0123456789abcdef0123456789abcdef";

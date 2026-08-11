@@ -725,18 +725,50 @@ pub fn observe_step(observer: &mut dyn Observer, secs: u64, tick: &mut dyn FnMut
     Input::Timeout
 }
 
-/// The real thing: `ksx_capture::observe_next_key`, the same Raw Input sink
-/// the daemon's learn service uses (`daemon/learn.rs`).
+/// The real thing: every source at once (`daemon::observe`) — Raw Input for
+/// ordinary keyboards, plus a claim on any board that is already prepared.
+///
+/// It used to be Raw Input alone, and that made the wizard's "press a button to
+/// prove it" step impossible to pass on exactly the board the wizard exists to
+/// set up: a WinUSB-claimed interface is off the keyboard stack, so `WM_INPUT`
+/// never carries a key from it. Same defect as the mapper's, same fix, one
+/// implementation.
+///
+/// `ksx setup` has no daemon, so there is no panel to tap — but it does ask for
+/// a dozen keys in a row, which is why the sources are built ONCE here and held
+/// for the wizard's lifetime rather than per prompt. A claimed board stays
+/// silent for that time; it was already silent, because a prepared board with
+/// no reader types nothing at all.
 #[cfg(windows)]
-pub struct RawInput;
+pub struct AnyKeyboard {
+    sources: crate::daemon::observe::Sources,
+}
 
 #[cfg(windows)]
-impl Observer for RawInput {
+impl AnyKeyboard {
+    pub fn new() -> Self {
+        Self {
+            sources: crate::daemon::observe::Sources::start(None),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Default for AnyKeyboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(windows)]
+impl Observer for AnyKeyboard {
     fn slice(&mut self, slice: Duration) -> Result<Option<(String, Key)>, String> {
-        let cancel = std::sync::atomic::AtomicBool::new(false);
-        ksx_capture::observe_next_key(slice, &cancel)
-            .map(|hit| hit.map(|k| (k.instance_path, k.key)))
-            .map_err(|e| e.to_string())
+        // A fresh flag per slice: the wizard cancels by stopping its loop, not
+        // by a flag, and a slice must never inherit a stop from the last one.
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.sources
+            .first(slice, &cancel)
+            .map(|hit| hit.map(|press| (press.device, press.key)))
     }
 }
 
@@ -928,7 +960,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         }
     }
 
-    let mut observer = RawInput;
+    // Built once, before the banner, and held for the whole wizard: it claims
+    // the prepared boards it is going to listen on, and doing that per prompt
+    // would be a claim/release cycle between every question.
+    let mut observer = AnyKeyboard::new();
     banner(&options);
 
     let mut runs: Vec<serde_json::Value> = Vec::new();

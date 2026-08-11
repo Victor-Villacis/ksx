@@ -252,6 +252,20 @@ jobs:
           Copy-Item -LiteralPath $firstDll -Destination 'target/release/libwdi.dll'
           Write-Host "reproducible libwdi.dll SHA256 $firstHash"
 
+      # The same boundary, driven through the code the product ships instead of
+      # a PowerShell replica of it.  test-provider.ps1 above builds its own
+      # `wdi_device_info`, its own options struct and its own path string, and
+      # it was green for months while three defects sat in the Rust side of
+      # exactly those three things -- a replica cannot fail the way the original
+      # does.  This runs the real `WdiProvider::prepare` against the real DLL,
+      # from a real canonicalized (`\?\`) directory, and asserts the artifacts.
+      - name: Provider smoke through the shipped binding
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $env:KSX_WDI_SMOKE_DLL = (Resolve-Path 'target/release/libwdi.dll').Path
+          cargo test -p ksx-platform --test wdi_provider -- --ignored --nocapture
+
       # Print the hash in the log so a downloaded artifact can be verified
       # against the run that produced it — and hand it up as a job output, so
       # the release body can carry the same number rather than a second one.
@@ -411,6 +425,25 @@ jobs:
             throw "$link already exists; refusing to replace or delete it"
           }
 
+          # THE CONTROL, before anything hostile exists.  Without it every
+          # assertion below is satisfied by an auditor that refuses its own
+          # name: "exits nonzero" was true of every input while the install
+          # died at step one, and that is exactly how three defects reached a
+          # customer through a green pipeline.  This one step is the difference
+          # between "refuses a junction" and "refuses".
+          $cleanJson = Join-Path $env:RUNNER_TEMP 'ksx-checkstore-clean.json'
+          $clean = Start-Process -FilePath 'target\release\ksx-winusb-helper.exe' `
+            -ArgumentList 'check-store' -Wait -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $cleanJson
+          $cleanOut = Get-Content -LiteralPath $cleanJson -Raw
+          Write-Host "DIAG: helper check-store exit, nothing present = $($clean.ExitCode)"
+          Write-Host "DIAG: helper check-store said = $cleanOut"
+          if ($clean.ExitCode -ne 0) {
+            throw ("check-store refused a machine with no C:\ProgramData\KSX at all " +
+                   "(exit $($clean.ExitCode)). Every refusal assertion below would pass " +
+                   "for the wrong reason: $cleanOut")
+          }
+
           $target = Join-Path $env:RUNNER_TEMP 'ksx-hostile-junction-target'
           $install = Join-Path $env:RUNNER_TEMP 'ksx-hostile-install'
           New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null
@@ -430,9 +463,31 @@ jobs:
             # accepts a junction" from "the helper refuses and the installer
             # fails to act on it" -- which are opposite defects, and the reason
             # the previous run could not be acted on.
+            $directJson = Join-Path $env:RUNNER_TEMP 'ksx-checkstore-junction.json'
             $directHelper = Start-Process -FilePath 'target\release\ksx-winusb-helper.exe' `
-              -ArgumentList 'check-store' -Wait -PassThru -WindowStyle Hidden
+              -ArgumentList 'check-store' -Wait -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput $directJson
+            $directOut = Get-Content -LiteralPath $directJson -Raw
             Write-Host "DIAG: helper check-store exit, junction present = $($directHelper.ExitCode)"
+            Write-Host "DIAG: helper check-store said = $directOut"
+            if ($directHelper.ExitCode -eq 0) {
+              throw 'check-store accepted a hostile C:\ProgramData\KSX junction'
+            }
+            # THE REASON, not just the refusal.  A refusal for an unrelated
+            # cause -- a missing dependency, a bad argument, an unelevated
+            # process -- must fail this job rather than be read as proof the
+            # junction was caught.
+            if ($directOut -notmatch 'reparse point') {
+              throw ("check-store refused the junction for some other reason; " +
+                     "nothing here proves it saw the junction at all: $directOut")
+            }
+            # One-or-more backslashes: the helper prints JSON, so the path
+            # arrives escaped as C:\\ProgramData\\KSX.  Matching the literal
+            # single-backslash form failed this step on its first run -- which
+            # is the check working, just not on the defect it was aimed at.
+            if ($directOut -notmatch 'ProgramData\\+KSX') {
+              throw "check-store did not name the path it refused: $directOut"
+            }
             Write-Host ("DIAG: junction target child count after direct auditor = " +
               @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue).Count)
 
@@ -478,6 +533,18 @@ jobs:
 
             if ($process.ExitCode -eq 0) {
               throw 'installer accepted a hostile C:\ProgramData\KSX junction'
+            }
+            # Same rule one layer up.  The installer aborting is not evidence
+            # unless it aborted for THIS: PrepareToInstall's refusal is written
+            # to the Inno log verbatim, and any other abort means the audit
+            # never ran.
+            if (-not (Test-Path -LiteralPath $setupLog)) {
+              throw 'no setup log, so nothing proves WHY the installer aborted'
+            }
+            $logText = Get-Content -LiteralPath $setupLog -Raw
+            if ($logText -notmatch 'WinUSB recovery directory') {
+              throw ('the installer aborted, but not on the WinUSB recovery audit; ' +
+                     'this assertion would pass for any broken installer')
             }
 
             $linkItem = Get-Item -LiteralPath $link -Force -ErrorAction Stop

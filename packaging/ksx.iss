@@ -107,6 +107,30 @@ LicenseFile={#RepoRoot}\LICENSE-MIT
 ; ksx installs for the machine (it registers autostart and talks to a
 ; kernel driver), so it needs an elevated install into Program Files.
 PrivilegesRequired=admin
+
+; CLOSE the running ksx so its files can be replaced — and do NOT bring it back
+; before Setup has finished.
+;
+; This is defect 6 of the 2026-08-11 session, and the reason an upgrade died on
+; "Setup refused an unsafe or unavailable KSX WinUSB recovery directory
+; (initializer exit code 3)" with the progress label reading "Restarting
+; applications...". Inno's default is RestartApplications=yes, so the
+; RestartManager put ksx.exe back while CurStepChanged(ssPostInstall) was still
+; running `initialize-store` — and the restarted ksx reopens the protected
+; WinUSB store and takes the handles the initializer needs to normalize it.
+; Two processes, one fixed directory, no ordering between them.
+;
+; The initializer is the ONE step that can roll an install back, so it must not
+; be the step that races a process Setup itself started. Not restarting removes
+; the race by construction rather than by timing: nothing of ksx is running
+; while the store is normalized.
+;
+; Nothing is lost by it. The daemon returns at the next logon through its
+; autostart task, and the [Run] hand-off below puts ksx on screen the moment
+; the wizard finishes — which is a better answer than a silently resurrected
+; background process anyway.
+CloseApplications=yes
+RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 

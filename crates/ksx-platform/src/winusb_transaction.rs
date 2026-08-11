@@ -795,7 +795,29 @@ fn rollback_installed(
 ) -> Result<(), TransactionError> {
     match rollback_installed_inner(env, receipt, trigger) {
         Ok(()) => Ok(()),
-        Err(err @ TransactionError::RecoveryRequired(_)) => Err(err),
+        // A `RecoveryRequired` may arrive already persisted — that is what
+        // `set_recovery` does, and its reason is more specific than anything
+        // this wrapper could add, so pass it through untouched.
+        //
+        // But it may also be minted directly, without the store ever being
+        // told: `delete_matching` and `delete_owned_private_keys` construct it
+        // that way. Those used to propagate here and return, leaving the
+        // receipt exactly as `release_with` wrote it — `Releasing`. The
+        // backend reports success only on `Released` and recovery only on
+        // `RecoveryRequired`, so a stuck `Releasing` matched neither and every
+        // such release told the user it had failed AFTER the driver was
+        // already rebound. Four receipts on the reporting machine, all with a
+        // keyboard that types fine.
+        //
+        // The phase, not the error type, is the record. Persist it here when
+        // nobody else has.
+        Err(TransactionError::RecoveryRequired(reason)) => {
+            if receipt.phase == Phase::RecoveryRequired {
+                Err(TransactionError::RecoveryRequired(reason))
+            } else {
+                Err(set_recovery(env.store, receipt, reason))
+            }
+        }
         Err(err) => Err(set_recovery(
             env.store,
             receipt,
@@ -2233,15 +2255,14 @@ struct WindowsTrustVerifier;
 #[cfg(windows)]
 mod windows_trust {
     use super::*;
-    use std::ffi::CStr;
     use std::os::windows::ffi::OsStrExt as _;
     use windows::core::{GUID, PCWSTR};
     use windows::Win32::Foundation::{
         GetLastError, CRYPT_E_NOT_FOUND, ERROR_NO_MORE_ITEMS, HANDLE, HWND,
     };
     use windows::Win32::Security::Cryptography::Catalog::{
-        CryptCATClose, CryptCATEnumerateMember, CryptCATOpen, CRYPTCAT_OPEN_EXISTING,
-        CRYPTCAT_VERSION_1,
+        CryptCATAdminCalcHashFromFileHandle, CryptCATClose, CryptCATEnumerateMember,
+        CryptCATGetAttrInfo, CryptCATOpen, CRYPTCAT_OPEN_EXISTING, CRYPTCAT_VERSION_1,
     };
     use windows::Win32::Security::Cryptography::{
         CertCloseStore, CertDeleteCertificateFromStore, CertDuplicateCertificateContext,
@@ -2249,11 +2270,11 @@ mod windows_trust {
         CertOpenStore, CryptAcquireContextW, CryptGetProvParam, CryptReleaseContext, CERT_CONTEXT,
         CERT_KEY_CONTEXT_PROP_ID, CERT_KEY_PROV_HANDLE_PROP_ID, CERT_KEY_PROV_INFO_PROP_ID,
         CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_NCRYPT_KEY_HANDLE_PROP_ID, CERT_OPEN_STORE_FLAGS,
-        CERT_QUERY_ENCODING_TYPE, CERT_SHA1_HASH_PROP_ID, CERT_STORE_OPEN_EXISTING_FLAG,
-        CERT_STORE_PROV_SYSTEM_W, CERT_SYSTEM_STORE_LOCAL_MACHINE, CRYPT_DELETEKEYSET, CRYPT_FIRST,
-        CRYPT_MACHINE_KEYSET, CRYPT_NEXT, CRYPT_SILENT, CRYPT_VERIFYCONTEXT, HCERTSTORE,
-        MS_ENH_RSA_AES_PROV_W, PKCS_7_ASN_ENCODING, PP_ENUMCONTAINERS, PROV_RSA_AES,
-        X509_ASN_ENCODING,
+        CERT_QUERY_ENCODING_TYPE, CERT_SHA1_HASH_PROP_ID, CERT_STORE_MAXIMUM_ALLOWED_FLAG,
+        CERT_STORE_OPEN_EXISTING_FLAG, CERT_STORE_PROV_SYSTEM_W, CERT_SYSTEM_STORE_LOCAL_MACHINE,
+        CRYPT_DELETEKEYSET, CRYPT_FIRST, CRYPT_MACHINE_KEYSET, CRYPT_NEXT, CRYPT_SILENT,
+        CRYPT_VERIFYCONTEXT, HCERTSTORE, MS_ENH_RSA_AES_PROV_W, PKCS_7_ASN_ENCODING,
+        PP_ENUMCONTAINERS, PROV_RSA_AES, X509_ASN_ENCODING,
     };
     use windows::Win32::Security::WinTrust::{
         WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust,
@@ -2297,17 +2318,6 @@ mod windows_trust {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect()
-    }
-
-    unsafe fn wide_ptr(ptr: *const u16) -> String {
-        if ptr.is_null() {
-            return String::new();
-        }
-        let mut len = 0usize;
-        while unsafe { *ptr.add(len) } != 0 {
-            len += 1;
-        }
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
 
     fn decode_prepared_inf(path: &Path) -> Result<String, TransactionError> {
@@ -2402,6 +2412,67 @@ mod windows_trust {
         Ok(())
     }
 
+    /// The hash the catalog subsystem itself computes for a file: the exact
+    /// value `CryptCATPutMemberInfo` recorded as the member digest.
+    fn catalog_file_hash(path: &Path) -> Result<Vec<u8>, TransactionError> {
+        use std::os::windows::io::AsRawHandle as _;
+        let file = std::fs::File::open(path)
+            .map_err(|err| TransactionError::Verification(format!("{}: {err}", path.display())))?;
+        let handle = HANDLE(file.as_raw_handle());
+        let mut length = 0u32;
+        // A null out-pointer asks for the size; it fails with
+        // ERROR_INSUFFICIENT_BUFFER, which is the documented way to be told.
+        let _ = unsafe { CryptCATAdminCalcHashFromFileHandle(handle, &mut length, None, None) };
+        if length == 0 {
+            return Err(TransactionError::Verification(format!(
+                "the catalog subsystem reported no hash length for {}",
+                path.display()
+            )));
+        }
+        let mut hash = vec![0u8; length as usize];
+        if !unsafe {
+            CryptCATAdminCalcHashFromFileHandle(handle, &mut length, Some(hash.as_mut_ptr()), None)
+        }
+        .as_bool()
+        {
+            return Err(TransactionError::Verification(format!(
+                "computing the catalog file hash for {} failed: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        hash.truncate(length as usize);
+        Ok(hash)
+    }
+
+    /// A catalog member's `File` attribute.
+    ///
+    /// # Safety
+    /// `member` must be a live member of the open `catalog`.
+    unsafe fn member_file_attribute(
+        catalog: HANDLE,
+        member: *mut windows::Win32::Security::Cryptography::Catalog::CRYPTCATMEMBER,
+    ) -> Result<String, TransactionError> {
+        let tag: Vec<u16> = "File".encode_utf16().chain(std::iter::once(0)).collect();
+        let attribute = unsafe { CryptCATGetAttrInfo(catalog, member, PCWSTR(tag.as_ptr())) };
+        if attribute.is_null() {
+            return Err(TransactionError::Verification(
+                "catalog member carries no File attribute".to_owned(),
+            ));
+        }
+        let bytes = unsafe { (*attribute).cbValue } as usize;
+        let value = unsafe { (*attribute).pbValue };
+        if value.is_null() || bytes < 2 {
+            return Err(TransactionError::Verification(
+                "catalog member File attribute is empty".to_owned(),
+            ));
+        }
+        let wide = unsafe { std::slice::from_raw_parts(value.cast::<u16>(), bytes / 2) };
+        Ok(String::from_utf16_lossy(wide)
+            .trim_end_matches(char::from(0))
+            .to_owned())
+    }
+
     fn verify_catalog_member(expected: &ExpectedArtifacts) -> Result<(), TransactionError> {
         let wide_path = wide(&expected.catalog_path);
         let encoding = X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0;
@@ -2421,8 +2492,12 @@ mod windows_trust {
             )));
         }
         let catalog = Catalog(handle);
-        let inf_hash = crate::sha256::hash_file(&expected.inf_path)
-            .map_err(|err| TransactionError::Verification(err.to_string()))?;
+        // The SAME primitive the provider used to build the member, so the two
+        // can never disagree about an algorithm again. This was
+        // `crate::sha256::hash_file` while the catalog carried SHA-1 members --
+        // the "both sides must move together" mistake, made in the verifier
+        // this time.
+        let inf_hash = catalog_file_hash(&expected.inf_path)?;
         let mut previous = std::ptr::null_mut();
         let mut members = 0usize;
         loop {
@@ -2432,7 +2507,11 @@ mod windows_trust {
             }
             previous = member;
             members += 1;
-            let name = unsafe { wide_ptr((*member).pwszFileName.0) };
+            // The name lives in the member's `File` ATTRIBUTE.
+            // `CryptCATPutMemberInfo` does not set `pwszFileName`, so the
+            // provider leaves it empty and reading it reported every member as
+            // '' -- which is what stopped preparation here.
+            let name = unsafe { member_file_attribute(catalog.0, member) }?;
             if !name.eq_ignore_ascii_case(&expected.inf_name) {
                 return Err(TransactionError::Verification(format!(
                     "catalog contains unexpected member '{name}'"
@@ -2444,19 +2523,13 @@ mod windows_trust {
                     "catalog member has no indirect digest".to_owned(),
                 ));
             }
-            let oid = unsafe { (*indirect).DigestAlgorithm.pszObjId.0 };
-            if oid.is_null()
-                || unsafe { CStr::from_ptr(oid.cast()) }.to_bytes() != b"2.16.840.1.101.3.4.2.1"
-            {
-                return Err(TransactionError::Verification(
-                    "catalog member is not SHA-256".to_owned(),
-                ));
-            }
             let digest = unsafe { (*indirect).Digest };
             if digest.cbData as usize != inf_hash.len() || digest.pbData.is_null() {
-                return Err(TransactionError::Verification(
-                    "catalog member has an invalid digest".to_owned(),
-                ));
+                return Err(TransactionError::Verification(format!(
+                    "catalog member digest is {} bytes, expected {}",
+                    digest.cbData,
+                    inf_hash.len()
+                )));
             }
             let recorded =
                 unsafe { std::slice::from_raw_parts(digest.pbData, digest.cbData as usize) };
@@ -2599,8 +2672,18 @@ mod windows_trust {
 
     fn open_machine_store(name: &str) -> Result<Store, TransactionError> {
         let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        // MAXIMUM_ALLOWED, because this store is also deleted from. Without it
+        // the system provider hands back a view whose
+        // `CertDeleteCertificateFromStore` REPORTS SUCCESS and never commits:
+        // compensation then found the certificate still present, called itself
+        // a failed rollback, and left the transaction recovery-required with a
+        // certificate in LocalMachine Root and TrustedPublisher per attempt.
+        // Measured on the reporting machine: the identical delete commits when
+        // the store is opened for write.
         let flags = CERT_OPEN_STORE_FLAGS(
-            CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_OPEN_EXISTING_FLAG.0,
+            CERT_SYSTEM_STORE_LOCAL_MACHINE
+                | CERT_STORE_OPEN_EXISTING_FLAG.0
+                | CERT_STORE_MAXIMUM_ALLOWED_FLAG.0,
         );
         let store = unsafe {
             CertOpenStore(
@@ -3234,6 +3317,11 @@ mod tests {
         events: Vec<String>,
         counts: HashMap<String, usize>,
         fail_at: Option<String>,
+        /// Like `fail_at`, but mints `RecoveryRequired` WITHOUT persisting a
+        /// phase — the shape `delete_matching` and `delete_owned_private_keys`
+        /// produce, and the one that used to leave a receipt stranded in
+        /// `Releasing`.
+        recovery_at: Option<String>,
         receipt: Option<Receipt>,
         installed: bool,
         bound: bool,
@@ -3254,6 +3342,12 @@ mod tests {
                 self.fail_at = None;
                 return Err(TransactionError::Windows(format!(
                     "injected failure at {event}"
+                )));
+            }
+            if self.recovery_at.as_deref() == Some(&event) {
+                self.recovery_at = None;
+                return Err(TransactionError::RecoveryRequired(format!(
+                    "injected unpersisted recovery at {event}"
                 )));
             }
             Ok(())
@@ -3553,6 +3647,63 @@ mod tests {
                 ),
             )
         }
+
+        fn release(&self) -> Result<MutationResult, TransactionError> {
+            release_with(
+                &self.environment(),
+                &ReleaseSpec {
+                    instance_id: TARGET.to_owned(),
+                    confirm_release: true,
+                },
+            )
+        }
+
+        fn phase(&self) -> Option<Phase> {
+            self.state.lock().unwrap().receipt.as_ref().map(|r| r.phase)
+        }
+    }
+
+    /// A release that ends in recovery must SAY so in the receipt.
+    ///
+    /// `set_recovery` persists the phase; `delete_matching` and
+    /// `delete_owned_private_keys` mint `RecoveryRequired` directly and do
+    /// not. Those used to pass through `rollback_installed` untouched, leaving
+    /// the receipt on `Releasing` — a phase the backend treats as neither
+    /// success nor recovery, so the user was told the release failed after the
+    /// driver had already been rebound. Four such receipts were found on the
+    /// machine that reported it, each beside a keyboard that typed perfectly.
+    ///
+    /// Fails against that version: the assertion below reads `Releasing`.
+    #[test]
+    fn a_release_that_ends_in_recovery_records_recovery_not_releasing() {
+        let harness = Harness::new(None);
+        harness.prepare().expect("prepare reaches Active");
+        assert_eq!(harness.phase(), Some(Phase::Active));
+
+        // Certificate cleanup is the step that mints an unpersisted
+        // RecoveryRequired, and it runs after the rebind has committed.
+        harness.state.lock().unwrap().recovery_at = Some("trust:cleanup#1".to_owned());
+
+        let err = harness.release().expect_err("release cannot verify");
+        assert!(
+            matches!(err, TransactionError::RecoveryRequired(_)),
+            "{err:?}"
+        );
+        assert_eq!(
+            harness.phase(),
+            Some(Phase::RecoveryRequired),
+            "the receipt must record where the transaction ended; `Releasing` is \
+             neither success nor recovery and the backend reports it as a generic failure"
+        );
+        let reason = harness
+            .state
+            .lock()
+            .unwrap()
+            .receipt
+            .as_ref()
+            .and_then(|r| r.recovery_reason.clone())
+            .expect("a persisted recovery carries its reason");
+        assert!(reason.contains("trust:cleanup#1"), "{reason}");
     }
 
     #[test]

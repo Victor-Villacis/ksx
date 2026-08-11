@@ -178,6 +178,31 @@ mod windows_provider {
         }
     }
 
+    /// The exact device shape `wdi_prepare_driver` accepts.
+    ///
+    /// Every identity pointer is NULL, and that is a REQUIREMENT, not tidiness.
+    /// With `external_inf` the provider refuses a device carrying `driver`,
+    /// `device_id`, `hardware_id`, `compatible_id`, `upper_filter` or a
+    /// `driver_version` -- KSX writes the INF itself, so libwdi is handed
+    /// nothing it could build a competing package from. It derives the hardware
+    /// id it needs from `vid`/`pid`/`mi`.
+    fn device_info(request: &PrepareRequest, desc: *mut c_char) -> WdiDeviceInfo {
+        WdiDeviceInfo {
+            next: std::ptr::null_mut(),
+            vid: request.vendor_id,
+            pid: request.product_id,
+            is_composite: i32::from(request.interface_number.is_some()),
+            mi: request.interface_number.unwrap_or(0),
+            desc,
+            driver: std::ptr::null_mut(),
+            device_id: std::ptr::null_mut(),
+            hardware_id: std::ptr::null_mut(),
+            compatible_id: std::ptr::null_mut(),
+            upper_filter: std::ptr::null_mut(),
+            driver_version: 0,
+        }
+    }
+
     fn cstring(value: &str) -> Result<CString, PrepareError> {
         CString::new(value).map_err(|_| PrepareError::EmbeddedNul)
     }
@@ -274,28 +299,13 @@ mod windows_provider {
             }
 
             let desc = cstring(super::super::SAFE_INF_DEVICE_NAME)?;
-            let instance = cstring(&request.instance_id)?;
-            let hardware = cstring(&request.hardware_id)?;
             let vendor = cstring("KSX")?;
             let guid = cstring(super::super::KSX_DEVICE_INTERFACE_GUID)?;
             let subject = cstring(&request.certificate_subject)?;
             let output = path_cstring(&request.output_dir)?;
             let inf = path_cstring(&request.inf_path)?;
 
-            let mut device = WdiDeviceInfo {
-                next: std::ptr::null_mut(),
-                vid: request.vendor_id,
-                pid: request.product_id,
-                is_composite: i32::from(request.interface_number.is_some()),
-                mi: request.interface_number.unwrap_or(0),
-                desc: desc.as_ptr() as *mut _,
-                driver: std::ptr::null_mut(),
-                device_id: instance.as_ptr() as *mut _,
-                hardware_id: hardware.as_ptr() as *mut _,
-                compatible_id: std::ptr::null_mut(),
-                upper_filter: std::ptr::null_mut(),
-                driver_version: 0,
-            };
+            let mut device = device_info(request, desc.as_ptr() as *mut _);
             let mut options = WdiPrepareOptions {
                 driver_type: WDI_WINUSB,
                 vendor_name: vendor.as_ptr() as *mut _,
@@ -354,6 +364,72 @@ mod windows_provider {
             assert_eq!(std::mem::offset_of!(WdiPrepareOptions, vendor_name), 8);
             assert_eq!(std::mem::offset_of!(WdiPrepareOptions, cert_subject), 32);
             assert_eq!(std::mem::offset_of!(WdiPrepareOptions, external_inf), 44);
+        }
+    }
+
+    #[cfg(test)]
+    mod contract_tests {
+        use super::*;
+
+        fn request() -> PrepareRequest {
+            PrepareRequest {
+                output_dir: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\transactions\abc"),
+                inf_path: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\transactions\abc\x.inf"),
+                instance_id: r"USB\VID_D209&PID_0430&MI_00\7&TESTDEV&0&0000".to_owned(),
+                hardware_id: r"USB\VID_D209&PID_0430&MI_00".to_owned(),
+                vendor_id: 0xd209,
+                product_id: 0x0430,
+                interface_number: Some(0),
+                certificate_subject: "CN=KSX WinUSB 0123456789abcdef0123456789abcdef".to_owned(),
+            }
+        }
+
+        /// The provider rejects a device carrying ANY identity string when an
+        /// external INF is used, with one message covering a dozen conditions:
+        ///
+        /// ```text
+        /// KSX accepts only signed external-INF WinUSB preparation with an
+        /// explicit GUID and unique certificate subject
+        /// ```
+        ///
+        /// `device_id` and `hardware_id` were populated from the request, so
+        /// every preparation on every machine failed there -- before an INF or
+        /// certificate existed, leaving a journal receipt full of nulls. CI
+        /// never saw it: the provider smoke builds its device struct in
+        /// PowerShell, which zero-initializes exactly these fields.
+        #[test]
+        fn the_device_info_leaves_every_identity_field_the_provider_forbids_null() {
+            let mut desc = *b"KSX WinUSB Keyboard Interface\0";
+            let device = device_info(&request(), desc.as_mut_ptr().cast());
+
+            assert!(device.driver.is_null(), "driver must be NULL");
+            assert!(device.device_id.is_null(), "device_id must be NULL");
+            assert!(device.hardware_id.is_null(), "hardware_id must be NULL");
+            assert!(device.compatible_id.is_null(), "compatible_id must be NULL");
+            assert!(device.upper_filter.is_null(), "upper_filter must be NULL");
+            assert_eq!(device.driver_version, 0, "driver_version must be 0");
+            assert!(
+                device.next.is_null(),
+                "the provider accepts exactly one device"
+            );
+
+            assert_eq!(device.vid, 0xd209);
+            assert_eq!(device.pid, 0x0430);
+            assert_eq!(device.is_composite, 1);
+            assert_eq!(device.mi, 0);
+            assert!(!device.desc.is_null());
+        }
+
+        /// A non-composite device must report interface 0: the provider refuses
+        /// `!is_composite && mi != 0`.
+        #[test]
+        fn a_non_composite_device_reports_interface_zero() {
+            let mut plain = request();
+            plain.interface_number = None;
+            let mut desc = *b"KSX WinUSB Keyboard Interface\0";
+            let device = device_info(&plain, desc.as_mut_ptr().cast());
+            assert_eq!(device.is_composite, 0);
+            assert_eq!(device.mi, 0);
         }
     }
 }

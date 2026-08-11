@@ -38,15 +38,19 @@ pub trait HelperElevator: Send + Sync {
     fn run(&self, action: HelperMutation, instance_id: &str) -> Result<u32, ApiRefusal>;
 }
 
-fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
-    let mut args = vec![
-        match action {
+impl HelperMutation {
+    /// The helper verb this mutation invokes. One spelling, used for the
+    /// argument and for the log line that reports its exit code.
+    pub const fn verb(self) -> &'static str {
+        match self {
             HelperMutation::Prepare => "prepare-exact",
             HelperMutation::Release => "release-exact",
         }
-        .to_owned(),
-        instance_id.to_owned(),
-    ];
+    }
+}
+
+fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
+    let mut args = vec![action.verb().to_owned(), instance_id.to_owned()];
     match action {
         HelperMutation::Prepare => args.extend([
             "--confirm-spare-keyboard".to_owned(),
@@ -86,6 +90,18 @@ pub trait MutationObserver: Send + Sync {
 
 pub struct SystemHelperElevator;
 
+/// What the helper's exit codes mean, so a log line is readable without going
+/// to `crates/ksx-winusb-helper/src/main.rs` to look them up.
+fn helper_exit_meaning(code: u32) -> &'static str {
+    match code {
+        0 => "success",
+        2 => "refused: a precondition the helper will not override",
+        3 => "internal: the helper could not complete the transaction",
+        4 => "recovery-required: durable state needs inspection before retry",
+        _ => "unrecognised",
+    }
+}
+
 impl HelperElevator for SystemHelperElevator {
     fn run(&self, action: HelperMutation, instance_id: &str) -> Result<u32, ApiRefusal> {
         let current = std::env::current_exe().map_err(|err| {
@@ -113,8 +129,39 @@ impl HelperElevator for SystemHelperElevator {
             )
         })?;
         let args = helper_arguments(action, instance_id);
+        // The helper is launched through ShellExecuteEx for the UAC prompt,
+        // which cannot redirect its stdout — so the JSON it prints, including
+        // the one sentence naming the refusal, is discarded by Windows before
+        // anything here can read it. The exit code is all that survives, and it
+        // used to be discarded too: a user saw "Windows could not prepare this
+        // keyboard" and the log file held not one line about it, which cost
+        // three round trips and a hand-written diagnostic script to recover.
+        //
+        // At minimum, record what crossed the boundary.
+        tracing::info!(
+            operation = action.verb(),
+            instance = instance_id,
+            "running the elevated WinUSB helper"
+        );
         ksx_platform::process::run_elevated_and_wait(&helper, &args)
-            .map(|exit| exit.code)
+            .map(|exit| {
+                if exit.code == 0 {
+                    tracing::info!(
+                        operation = action.verb(),
+                        instance = instance_id,
+                        "the elevated WinUSB helper succeeded"
+                    );
+                } else {
+                    tracing::warn!(
+                        operation = action.verb(),
+                        instance = instance_id,
+                        exit = exit.code,
+                        meaning = helper_exit_meaning(exit.code),
+                        "the elevated WinUSB helper refused. Its own message goes to a                          stdout Windows does not hand back through the UAC prompt; run the                          same verb from an elevated prompt with output redirected to read it"
+                    );
+                }
+                exit.code
+            })
             .map_err(|err| match err {
                 ksx_platform::process::ElevationError::Cancelled => ApiRefusal::with_remedy(
                     "elevation-cancelled",
@@ -124,7 +171,7 @@ impl HelperElevator for SystemHelperElevator {
                 ksx_platform::process::ElevationError::Timeout => ApiRefusal::with_remedy(
                     "winusb-helper-timeout",
                     "the elevated driver helper did not finish within five minutes; it was left running",
-                    "do not launch it again; wait, then open Driver recovery so KSX can inspect the durable receipt",
+                    "do not launch it again; wait, then run `ksx winusb status` to read the durable receipt",
                 ),
                 other => ApiRefusal::with_remedy(
                     "winusb-helper-failed",
@@ -209,6 +256,50 @@ fn selector_targets_against(
     }
 }
 
+/// May this action run against a device in this binding?
+///
+/// Three answers, not two. "It is already in the state you asked for" is not
+/// the same refusal as "it is in some other state", and collapsing them was
+/// defect 3 of the 2026-08-11 hardware session: preparing a keyboard twice
+/// reported *"Windows could not prepare this keyboard"* — an error about the
+/// machine, for the most ordinary thing a user can do, on a machine where
+/// nothing was wrong. It gets its own code so a surface can name the state and
+/// offer the action that actually follows from it.
+///
+/// Pure, and separate from the observer, so the three answers are pinned in CI
+/// rather than only on a desk with an I-PAC on it.
+fn binding_gate(
+    action: HelperMutation,
+    instance_id: &str,
+    observed: ObservedBinding,
+) -> Result<(), ApiRefusal> {
+    let (needs, already) = match action {
+        HelperMutation::Prepare => (ObservedBinding::HidUsb, ObservedBinding::WinUsb),
+        HelperMutation::Release => (ObservedBinding::WinUsb, ObservedBinding::HidUsb),
+    };
+    if observed == needs {
+        return Ok(());
+    }
+    if observed == already {
+        return Err(match action {
+            HelperMutation::Prepare => ApiRefusal::with_remedy(
+                "winusb-already-prepared",
+                format!("{instance_id} is already prepared and bound to winusb.sys"),
+                "nothing to do; use Release to give this keyboard back to Windows",
+            ),
+            HelperMutation::Release => ApiRefusal::with_remedy(
+                "winusb-already-released",
+                format!("{instance_id} is already a normal keyboard on hidusb.sys"),
+                "nothing to do; use Prepare if you want ksx to take this keyboard",
+            ),
+        });
+    }
+    Err(ApiRefusal::new(
+        "winusb-live-state-changed",
+        format!("{instance_id} is {observed:?}, not the state required for {action:?}"),
+    ))
+}
+
 impl MutationObserver for SystemMutationObserver {
     fn preflight(
         &self,
@@ -218,19 +309,7 @@ impl MutationObserver for SystemMutationObserver {
     ) -> Result<ObservedMutation, ApiRefusal> {
         Self::selector_targets(expected_selector, instance_id)?;
         let observed = Self::live(instance_id)?;
-        let expected = match action {
-            HelperMutation::Prepare => ObservedBinding::HidUsb,
-            HelperMutation::Release => ObservedBinding::WinUsb,
-        };
-        if observed.binding != expected {
-            return Err(ApiRefusal::new(
-                "winusb-live-state-changed",
-                format!(
-                    "{} is {:?}, not the state required for {:?}",
-                    instance_id, observed.binding, action
-                ),
-            ));
-        }
+        binding_gate(action, instance_id, observed.binding)?;
         Ok(observed)
     }
 
@@ -291,7 +370,7 @@ pub fn prepare_machine_with(
         format!(
             "the elevated helper exited {exit}, but a fresh survey did not verify the requested WinUSB binding"
         ),
-        "do not retry blindly; open Driver recovery in KSX",
+        "do not retry blindly; run `ksx winusb status` to read the receipt, then `ksx winusb release <device> --force --yes` from an elevated prompt",
     ))
 }
 
@@ -346,7 +425,7 @@ pub fn release_machine_with(
         format!(
             "the elevated helper exited {exit}, but a fresh survey did not verify the HID keyboard binding"
         ),
-        "do not rescan or reinstall blindly; open Driver recovery in KSX",
+        "do not rescan or reinstall blindly; run `ksx winusb status` to read the receipt, then `ksx winusb release <device> --force --yes` from an elevated prompt",
     ))
 }
 
@@ -715,6 +794,9 @@ mod tests {
     use ksx_platform::winusb::DeviceNode;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    /// The keyboard interface of the board every one of these tests is about.
+    const IPAC: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
 
     struct FakeElevator {
         exit: u32,
@@ -1095,5 +1177,46 @@ mod tests {
         assert_eq!(refusal.code(), "last-keyboard");
         assert_eq!(EXIT_REFUSED, 2);
         assert!(refusal.advice().contains("second keyboard"), "{refusal}");
+    }
+
+    /// Preparing an already-prepared keyboard is a redundant request, not a
+    /// broken machine, and it has to SAY so.
+    ///
+    /// Fails against the version that had one refusal for every wrong binding:
+    /// the code below was `winusb-live-state-changed`, which Studio flattened
+    /// into "Windows could not prepare this keyboard. Nothing in Setup was
+    /// changed; keep the spare keyboard connected and try again" — three
+    /// pieces of advice, none of which applies.
+    #[test]
+    fn a_second_prepare_says_already_prepared_and_offers_release() {
+        let refusal = binding_gate(HelperMutation::Prepare, IPAC, ObservedBinding::WinUsb)
+            .expect_err("nothing to do");
+        assert_eq!(refusal.code, "winusb-already-prepared");
+        assert!(refusal.message.contains(IPAC), "{}", refusal.message);
+        let remedy = refusal.remedy.unwrap_or_default();
+        assert!(remedy.contains("Release"), "{remedy}");
+    }
+
+    #[test]
+    fn a_second_release_says_already_released_and_offers_prepare() {
+        let refusal = binding_gate(HelperMutation::Release, IPAC, ObservedBinding::HidUsb)
+            .expect_err("nothing to do");
+        assert_eq!(refusal.code, "winusb-already-released");
+        let remedy = refusal.remedy.unwrap_or_default();
+        assert!(remedy.contains("Prepare"), "{remedy}");
+    }
+
+    /// The state each action needs is still simply allowed, and a binding that
+    /// is NEITHER end of the rebind is still the generic refusal — a board on
+    /// libusbK is a machine problem and must not be reported as "already done".
+    #[test]
+    fn the_gate_still_separates_ready_from_a_foreign_driver() {
+        assert!(binding_gate(HelperMutation::Prepare, IPAC, ObservedBinding::HidUsb).is_ok());
+        assert!(binding_gate(HelperMutation::Release, IPAC, ObservedBinding::WinUsb).is_ok());
+        for action in [HelperMutation::Prepare, HelperMutation::Release] {
+            let refusal = binding_gate(action, IPAC, ObservedBinding::Other)
+                .expect_err("a foreign driver is not a state ksx can act on");
+            assert_eq!(refusal.code, "winusb-live-state-changed");
+        }
     }
 }

@@ -2093,6 +2093,10 @@ const START_CAPTURE_RELEASE_CONSENT: &str =
     "error: Confirm that you want to release this keyboard. Nothing was changed.";
 const START_CAPTURE_TARGET_CHANGED: &str =
     "error: The selected keyboard changed or could not be verified. Nothing was changed; Rescan and choose it again.";
+const START_CAPTURE_ALREADY_PREPARED: &str =
+    "This keyboard is already prepared. Nothing was changed — use Release if you want it to type normally again.";
+const START_CAPTURE_ALREADY_RELEASED: &str =
+    "This keyboard is already a normal keyboard. Nothing was changed — use Prepare if you want ksx to take it.";
 const START_CAPTURE_PREPARE_ERROR: &str =
     "error: Windows could not prepare this keyboard. Nothing in Setup was changed; keep the spare keyboard connected and try again.";
 const START_CAPTURE_RELEASE_ERROR: &str =
@@ -2106,7 +2110,7 @@ const START_CAPTURE_PREPARED_STAGE_CHANGED: &str =
 const START_CAPTURE_RELEASED_STAGE_CHANGED: &str =
     "error: Windows released the keyboard, but your Setup selection changed while permission was open. Choose the keyboard again before Play.";
 
-const START_FLASH_ALLOWLIST: [&str; 23] = [
+const START_FLASH_ALLOWLIST: [&str; 25] = [
     START_EDIT_OK,
     START_DISCARD_OK,
     START_SAVE_OK,
@@ -2124,6 +2128,8 @@ const START_FLASH_ALLOWLIST: [&str; 23] = [
     START_CAPTURE_PREPARE_CONSENT,
     START_CAPTURE_RELEASE_CONSENT,
     START_CAPTURE_TARGET_CHANGED,
+    START_CAPTURE_ALREADY_PREPARED,
+    START_CAPTURE_ALREADY_RELEASED,
     START_CAPTURE_PREPARE_ERROR,
     START_CAPTURE_RELEASE_ERROR,
     START_CAPTURE_PREPARE_RECOVERY,
@@ -2246,8 +2252,24 @@ enum StartCaptureResult {
     ConsentMissing,
     TargetChanged,
     MutationFailed,
+    /// The keyboard is already in the state that was asked for. Not a failure:
+    /// the machine is fine, the request was simply redundant, and the useful
+    /// answer names the state and offers the action that follows from it.
+    AlreadyInState,
     RecoveryRequired,
     StageChanged,
+}
+
+/// Which refusals mean "already in that state".
+///
+/// Matched on the stable code, never on the sentence: refusal text is written
+/// for an operator and can name paths and commands, so it is used to SELECT a
+/// safe answer and is never reflected to the browser.
+fn already_in_state(refusal: &ksx_api::Refusal) -> bool {
+    matches!(
+        refusal.code.as_str(),
+        "winusb-already-prepared" | "winusb-already-released"
+    )
 }
 
 fn start_capture_redirect(action: StartCaptureMutation, result: StartCaptureResult) -> Response {
@@ -2261,6 +2283,12 @@ fn start_capture_redirect(action: StartCaptureMutation, result: StartCaptureResu
             START_CAPTURE_RELEASE_CONSENT
         }
         (_, StartCaptureResult::TargetChanged) => START_CAPTURE_TARGET_CHANGED,
+        (StartCaptureMutation::Prepare, StartCaptureResult::AlreadyInState) => {
+            START_CAPTURE_ALREADY_PREPARED
+        }
+        (StartCaptureMutation::Release, StartCaptureResult::AlreadyInState) => {
+            START_CAPTURE_ALREADY_RELEASED
+        }
         (StartCaptureMutation::Prepare, StartCaptureResult::MutationFailed) => {
             START_CAPTURE_PREPARE_ERROR
         }
@@ -2382,10 +2410,13 @@ async fn start_form_capture_prepare(
             confirm_rebind: true,
             confirm_machine_certificate: true,
         };
-        let mutation = state
-            .machine
-            .winusb_prepare(&spec)
-            .map_err(|_| StartCaptureResult::MutationFailed)?;
+        let mutation = state.machine.winusb_prepare(&spec).map_err(|refusal| {
+            if already_in_state(&refusal) {
+                StartCaptureResult::AlreadyInState
+            } else {
+                StartCaptureResult::MutationFailed
+            }
+        })?;
         if mutation.state == "recovery-required"
             && mutation.instance_id.eq_ignore_ascii_case(&instance_id)
         {
@@ -2439,10 +2470,13 @@ async fn start_form_capture_release(
             instance_id: instance_id.clone(),
             confirm_release: true,
         };
-        let mutation = state
-            .machine
-            .winusb_release(&spec)
-            .map_err(|_| StartCaptureResult::MutationFailed)?;
+        let mutation = state.machine.winusb_release(&spec).map_err(|refusal| {
+            if already_in_state(&refusal) {
+                StartCaptureResult::AlreadyInState
+            } else {
+                StartCaptureResult::MutationFailed
+            }
+        })?;
         if mutation.state == "recovery-required"
             && mutation.instance_id.eq_ignore_ascii_case(&instance_id)
         {

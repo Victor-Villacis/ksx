@@ -170,7 +170,76 @@ on a clean physical machine, a clean install produced a real pad, the app opened
 with no console flash under the original user, or Windows displayed Game Bar.
 `docs/GATES.md`'s release-product gate is the authority.
 
-### 3. LAN access + pairing token + QR (task #23)
+**Four defects found by installing it, 2026-08-10 — all fixed, all invisible to
+CI, and the pattern is worth more than the list.** Each was guarded by a green
+check that could only ever be green:
+
+| defect | why CI could not see it |
+|---|---|
+| `PrepareToInstall` ran `initialize-store` from `{tmp}`, which the helper refuses because the invoking user owns it — **every install died at exit code 3** | the hostile-junction smoke asserts setup exits nonzero and copies no files, which was true for every input while the install died at step one |
+| `STORE_DIRECTORY_SDDL` granted `GRGX`; Windows maps generic rights and splits the ACE, so the byte-for-byte `verify_exact_dacl` could never match — even on a directory the helper had just created | that smoke also asserts `C:\ProgramData\KSX` does not exist first, so a successful `initialize-store` had never executed anywhere |
+| the provider was handed `\\?\` verbatim paths; it accepts drive-letter paths only | the provider smoke hand-builds a plain `C:\Program Files\...` path |
+| `device_id`/`hardware_id` were populated; with `external_inf` the provider refuses any identity field | the smoke builds its device struct in PowerShell, which zero-initializes exactly those fields |
+
+Every one has a regression test that asserts *the other side's* rule and fails
+against the shipped version. The lesson is the second column: a smoke that
+exercises only the shape that works proves nothing about the shape the product
+sends.
+
+**Six more found by using it, 2026-08-11 — the day preparation first worked.**
+Getting past the install revealed the next layer, and it is the same pattern one
+step further in: code that had never executed, because the thing before it had
+never succeeded.
+
+| defect | why nothing caught it |
+|---|---|
+| the mapper went deaf on a prepared board: `learn-key` observed Raw Input, which a claimed interface has structurally left | no test ever learned a key from a claimed device; `rawinput.rs` and `CONTROL-SURFACE.md` both already SAID this would happen, filed as a follow-up |
+| release ended on `Releasing`, so a rebind that committed was reported as a failure | `rollback_installed` passed a `RecoveryRequired` through assuming it was persisted — true for `set_recovery`, false for the two callers that construct it directly, and no test drove that pair |
+| "Split this keyboard" was bit-for-bit "Freeze" on a claimed board: the `Take` was read for its device list and dropped | no coverage of `bound-keys` on a claimed board; the end-to-end split test drives the mock/Interception path |
+| preparing twice reported "Windows could not prepare this keyboard" | one refusal code covered every wrong binding, including the two that mean "already done" |
+| Setup restarted ksx into its own install, racing `initialize-store` | Inno's default; only reproducible on a machine that already had ksx running, which CI never is |
+| every refusal named "Driver recovery in KSX", a surface that does not exist | `cleanup-owned` has no caller outside the uninstaller, and nothing checks that advice names something real |
+
+One reported symptom was **not** a defect and is worth recording as such: no
+`config.toml` after a session of exploring. Play-without-Save writes nothing, on
+purpose (`FIRST-RUN.md` §2, pinned by `stage.rs playing_leaves_the_config_untouched`).
+It looked wrong for a real reason, though — `StagedSetupView::ready` is false
+while any slot binds nothing, so with the mapper deaf, **Save was never
+clickable all session**. Defect 4 was a consequence of defect 1 wearing a
+correct-behaviour disguise. When a "not a bug" is reported, check what made the
+user look.
+
+The recurring lesson, now three sessions deep: **a check that has only ever run
+against the passing shape proves nothing.** Every green check that hid one of
+these was structurally incapable of failing — asserting a nonzero exit that was
+nonzero for every input, or building its own inputs in a language whose defaults
+happened to be correct. The counter-measure is a control case: prove the check
+fails when it should, in the check itself.
+
+### 3. Diagnosing an elevated helper refusal
+
+The helper is launched through `ShellExecuteEx` for the UAC prompt, which
+**cannot redirect stdout**, so the JSON naming the refusal is discarded by
+Windows. The backend now logs the operation, instance and exit code with its
+meaning (`crates/ksx-backend/src/winusb.rs`), which is enough to tell a refusal
+from an internal fault — but not enough to name it.
+
+To read the actual message, run the same verb from an elevated prompt with
+output redirected:
+
+```powershell
+Start-Process 'C:\Program Files\ksx\ksx-winusb-helper.exe' -Wait -PassThru `
+  -ArgumentList @('prepare-exact', '<instance-id>',
+                  '--confirm-spare-keyboard','--confirm-rebind','--confirm-machine-certificate') `
+  -RedirectStandardOutput out.json -RedirectStandardError err.txt
+```
+
+`err.txt` carries libwdi's own trace, which is what identified two of the four
+defects above. **If this is still necessary, the next improvement is the helper
+writing its final JSON into the protected store** so the backend can read and
+log it without a hand-run script.
+
+### 4. LAN access + pairing token + QR (task #23)
 
 Studio binds `127.0.0.1` and refuses otherwise. The intent is recorded in `ksx
 studio --help`. **It needs its own security review, and the live feed changed
@@ -179,7 +248,7 @@ is a different problem than an unauthenticated config page. Note `guard.rs`
 deliberately allows a request with no `Origin` header — correct on loopback,
 insufficient on a LAN, because `curl` sends none either.
 
-### 4. Smaller, tracked
+### 5. Smaller, tracked
 
 Remaining mapper polish in `docs/MAPPER-UX.md`; the any-HID-as-input easter
 egg; code signing (an unsigned installer throws

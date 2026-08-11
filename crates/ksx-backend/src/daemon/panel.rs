@@ -197,6 +197,36 @@ impl Panel {
         self.typethrough_ctl.set_emulating(emulating);
     }
 
+    /// Emulation owns exactly what these takes name — the split mode.
+    ///
+    /// An empty list means emulation owns nothing here, which is the same
+    /// answer `set_emulating(false)` gives: a session capturing somebody else's
+    /// keyboard leaves this panel typing.
+    pub fn set_owning(&self, takes: Vec<(ksx_core::DeviceId, ksx_capture::Take)>) {
+        self.typethrough_ctl.set_owning(takes);
+    }
+
+    /// Listen in on the claim for one observation, and stop typing while it
+    /// lasts.
+    ///
+    /// This is how the mapper hears a claimed board. It cannot use Raw Input:
+    /// a claimed interface has left the keyboard stack, which is the whole
+    /// point of the claim, so `WM_INPUT` never carries a key from it. And it
+    /// cannot claim the board a second time — the daemon already holds it. The
+    /// only place those keys exist is the stream this panel is already pumping,
+    /// so a learn borrows it exactly the way a session does.
+    ///
+    /// Returns a guard: dropping it stops the forwarding and puts the panel
+    /// back to typing. Independent of an attached session — but note that
+    /// [`super::pipe`] refuses a learn while a session is running, so in
+    /// practice the two do not overlap.
+    pub fn observe(self: &Arc<Self>, events: Sender<KeyEvent>) -> PanelTap {
+        self.typethrough_ctl.observe(events);
+        PanelTap {
+            ctl: self.typethrough_ctl.clone(),
+        }
+    }
+
     /// A [`CaptureBackend`] the supervisor can run for one session. It claims
     /// nothing — running it attaches this panel's event stream to that session,
     /// and shutting it down detaches it again with the claim untouched.
@@ -231,6 +261,22 @@ impl Panel {
                 );
             }
         }
+    }
+}
+
+/// A live observation of the panel, from [`Panel::observe`].
+///
+/// Exists so that every exit path of a learn — hit, timeout, cancel, supersede,
+/// panic — puts the panel back to typing. A learn that returned early and left
+/// the panel muted would be indistinguishable, from the user's chair, from a
+/// dead keyboard.
+pub struct PanelTap {
+    ctl: TypethroughCtl,
+}
+
+impl Drop for PanelTap {
+    fn drop(&mut self) {
+        self.ctl.unobserve();
     }
 }
 
@@ -368,12 +414,24 @@ fn session_loop(panel: &Panel, ctl: &Receiver<CaptureCtl>) -> ExitReason {
                 // and an absent board emits nothing to mute or type.
                 panel.set_emulating(ids.iter().any(|id| panel.covers(id)));
             }
-            // A WinUSB-claimed panel is already off the input stack, so a
-            // per-key `Take` has nothing to act on here — a partial take is
-            // meaningless for a board Windows cannot see at all. The question
-            // is the same one: is this panel bound to a slot.
+            // A per-key `Take` DOES have something to act on here, and reading
+            // it as a device list was defect 5 of the 2026-08-11 session. The
+            // reasoning that produced the old code — "a claimed board is off
+            // the stack, so there is nothing to suppress" — is true and
+            // incomplete: nothing is suppressed, but nothing is *re-injected*
+            // either while the typethrough is muted, so collapsing a
+            // `BoundKeys` take to "mute the panel" made Split behave exactly
+            // like Freeze on every prepared board while the card promised
+            // "mapped keys drive the pad; everything else still types".
+            //
+            // Forwarded per device, not unioned: one panel can hold several
+            // boards, and board A's bindings must not silence board B.
             Ok(CaptureCtl::SetCapturedWith(takes)) => {
-                panel.set_emulating(takes.iter().any(|(id, _)| panel.covers(id)));
+                let mine: Vec<_> = takes
+                    .into_iter()
+                    .filter(|(id, _)| panel.covers(id))
+                    .collect();
+                panel.set_owning(mine);
             }
             Ok(CaptureCtl::SetPassthrough) => panel.set_emulating(false),
             Ok(CaptureCtl::Shutdown) => return ExitReason::Shutdown,

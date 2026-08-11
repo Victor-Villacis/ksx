@@ -39,6 +39,16 @@
 //! [`crate::decision::should_resend`] predicate still decides, unchanged, so
 //! there is exactly one place in the codebase that answers the question.
 //!
+//! A [`crate::decision::Take`] means the same thing here as everywhere else,
+//! and for the same reason: it names the keys emulation owns, and the
+//! per-key answer feeds the same predicate. On a `Take::BoundKeys` this backend
+//! keeps synthesizing the keys the preset does not bind, so "Split this
+//! keyboard" means what it says on a claimed board. Reading the take as a plain
+//! device list — which this used to do, on the reasoning that a board off the
+//! stack has nothing to suppress — made Split identical to Freeze: nothing is
+//! suppressed, true, but nothing is re-injected either, and this backend is the
+//! only thing that can put a keystroke back.
+//!
 //! The last row of that table is the one to internalise: **crash-only recovery
 //! does not apply to the blocking**. Killing ksx frees an Interception-captured
 //! keyboard; it does not un-bind a WinUSB interface. What crash-only still buys
@@ -76,7 +86,7 @@ use nusb::{Endpoint, Interface, MaybeFuture as _};
 use crate::backend::{
     CaptureBackend, CaptureCtl, CaptureError, DeviceInfo, DeviceKind, ExitReason, Handles,
 };
-use crate::decision::{key_event, should_resend};
+use crate::decision::{key_event, should_resend, Take};
 use crate::escape::{EscapeHandle, EscapeWatch};
 use crate::health::HealthHandle;
 use crate::hid::{self, KeyboardFormat, ReportReader, UsageSet};
@@ -457,6 +467,33 @@ fn without(set: &UsageSet, usage: u8) -> UsageSet {
     out
 }
 
+/// Does emulation own this usage — i.e. must this backend NOT type it?
+///
+/// The whole board, the bound keys only, or nothing. A usage with no keyboard
+/// wire form is never owned: there is nothing to type for it either way, and
+/// calling it owned would be claiming a key the preset cannot name.
+fn owns_usage(take: Option<&Take>, usage: u8) -> bool {
+    match take {
+        None => false,
+        Some(Take::Whole) => true,
+        Some(Take::BoundKeys(keys)) => key_for_usage(usage).is_some_and(|key| keys.contains(key)),
+    }
+}
+
+/// Change what emulation owns, letting go of anything that stops being ours.
+///
+/// The release is the point. A key this backend typed *down* under the old take
+/// and that the new take owns would never have its release synthesized —
+/// Windows would believe it held forever, on a board it cannot even see. Same
+/// hazard `Typethrough::set_emulating` exists to prevent, same answer.
+fn set_take(current: &mut Option<Take>, next: Option<Take>, state: &mut LoopState<'_>) {
+    if *current == next {
+        return;
+    }
+    *current = next;
+    state.release_injected();
+}
+
 fn capture_loop(
     info: &DeviceInfo,
     state: &mut LoopState<'_>,
@@ -473,7 +510,9 @@ fn capture_loop(
     // leaves the panel typing exactly as it was.
     let mut ctl_passthrough = true;
     let mut watchdog_passthrough = false;
-    let mut captured = false;
+    // What emulation owns on THIS board. `None` = nothing; the `Take` says
+    // whether that is the whole board or only the keys a preset binds.
+    let mut take: Option<Take> = None;
 
     // One buffer, allocated once, resubmitted forever. `submit` requires a
     // requested length that is a nonzero multiple of the max packet size.
@@ -485,13 +524,16 @@ fn capture_loop(
     loop {
         loop {
             match ctl.try_recv() {
-                // A WinUSB-claimed board is already OFF the input stack, so
-                // there is nothing to suppress and `Take` has no meaning here:
-                // "captured" means "stop typethrough re-injecting its
-                // keystrokes". Both spellings answer the same question —
-                // is this board bound to a slot.
+                // A WinUSB-claimed board is OFF the input stack, so nothing here
+                // *suppresses*: the question is the inverse one, which
+                // keystrokes this backend still SYNTHESIZES. "Captured" means
+                // "stop putting it back". A `Take` therefore has exactly as
+                // much meaning as it does anywhere else — it names the keys
+                // emulation owns — and this used to drop it, which turned
+                // "Split this keyboard" into "Freeze" on every prepared board.
                 Ok(CaptureCtl::SetCaptured(ids)) => {
-                    captured = ids.iter().any(|id| id == &info.id);
+                    let now = ids.iter().any(|id| id == &info.id).then_some(Take::Whole);
+                    set_take(&mut take, now, state);
                     ctl_passthrough = false;
                     watchdog_passthrough = false;
                     if wd.tripped() {
@@ -503,7 +545,11 @@ fn capture_loop(
                     // `LeftCtrl x5` just freed.
                 }
                 Ok(CaptureCtl::SetCapturedWith(takes)) => {
-                    captured = takes.iter().any(|(id, _)| id == &info.id);
+                    let now = takes
+                        .iter()
+                        .find(|(id, _)| id == &info.id)
+                        .map(|(_, take)| take.clone());
+                    set_take(&mut take, now, state);
                     ctl_passthrough = false;
                     watchdog_passthrough = false;
                     if wd.tripped() {
@@ -553,9 +599,13 @@ fn capture_loop(
                     // The SAME predicate the Interception backend uses. Only
                     // the verb changes: there it means "re-send", here it means
                     // "synthesize", because there is nothing to re-send to.
+                    // And the same per-key answer: on a `BoundKeys` take, an
+                    // unbound key is still typed while emulation runs, which is
+                    // what "Mapped keys drive the pad; everything else still
+                    // types" promises.
                     if should_resend(
                         may_reach_windows(ctl_passthrough, watchdog_passthrough, &escapes),
-                        captured,
+                        owns_usage(take.as_ref(), usage),
                     ) {
                         state.inject(usage, down);
                     }
@@ -899,6 +949,38 @@ mod tests {
                 Some(reported.key),
                 "usage {usage:#04x} injects as a different key than it reports"
             );
+        }
+    }
+
+    /// The defect Split had on every prepared board: a `BoundKeys` take was
+    /// read for its device list and then dropped, so a claimed board answered
+    /// "emulation owns this" for every key. On a board Windows cannot see,
+    /// that is not blocking — it is silence, because this backend is the only
+    /// thing that can put a keystroke back.
+    ///
+    /// `A` is bound and `B` is not: exactly one of them still types.
+    #[test]
+    fn a_bound_keys_take_owns_only_the_keys_it_names() {
+        // 0x04 = A, 0x05 = B (HID keyboard usage page).
+        let bound: crate::decision::KeySet = std::iter::once(Key::A).collect();
+        let take = Take::BoundKeys(bound);
+
+        assert!(owns_usage(Some(&take), 0x04), "a bound key drives the pad");
+        assert!(!owns_usage(Some(&take), 0x05), "an unbound key still types");
+        // And the two ends of the range are unchanged.
+        assert!(owns_usage(Some(&Take::Whole), 0x05));
+        assert!(!owns_usage(None, 0x04));
+    }
+
+    /// A usage with no keyboard wire form is never owned. There is nothing to
+    /// type for it either way, and calling it owned would be claiming a key no
+    /// preset can name.
+    #[test]
+    fn a_usage_with_no_key_is_never_owned_by_a_split() {
+        let take = Take::BoundKeys(std::iter::once(Key::A).collect());
+        // 0x00 is "no event"; 0x01-0x03 are the error rollover codes.
+        for usage in [0x00u8, 0x01, 0x02, 0x03] {
+            assert!(!owns_usage(Some(&take), usage), "usage {usage:#04x}");
         }
     }
 }

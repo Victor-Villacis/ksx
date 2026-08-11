@@ -662,7 +662,7 @@ jobs:
             $cat = "ksx-winusb-$id.cat"
             Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
             Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
-            $verbatim = '\\\\?\\' + $tx
+            $verbatim = '\\?\' + $tx   # literal: PowerShell does not collapse these
             $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
             $receipt = [ordered]@{
               schema = 1

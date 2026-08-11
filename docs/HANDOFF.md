@@ -170,7 +170,46 @@ on a clean physical machine, a clean install produced a real pad, the app opened
 with no console flash under the original user, or Windows displayed Game Bar.
 `docs/GATES.md`'s release-product gate is the authority.
 
-### 3. LAN access + pairing token + QR (task #23)
+**Four defects found by installing it, 2026-08-10 — all fixed, all invisible to
+CI, and the pattern is worth more than the list.** Each was guarded by a green
+check that could only ever be green:
+
+| defect | why CI could not see it |
+|---|---|
+| `PrepareToInstall` ran `initialize-store` from `{tmp}`, which the helper refuses because the invoking user owns it — **every install died at exit code 3** | the hostile-junction smoke asserts setup exits nonzero and copies no files, which was true for every input while the install died at step one |
+| `STORE_DIRECTORY_SDDL` granted `GRGX`; Windows maps generic rights and splits the ACE, so the byte-for-byte `verify_exact_dacl` could never match — even on a directory the helper had just created | that smoke also asserts `C:\ProgramData\KSX` does not exist first, so a successful `initialize-store` had never executed anywhere |
+| the provider was handed `\\?\` verbatim paths; it accepts drive-letter paths only | the provider smoke hand-builds a plain `C:\Program Files\...` path |
+| `device_id`/`hardware_id` were populated; with `external_inf` the provider refuses any identity field | the smoke builds its device struct in PowerShell, which zero-initializes exactly those fields |
+
+Every one has a regression test that asserts *the other side's* rule and fails
+against the shipped version. The lesson is the second column: a smoke that
+exercises only the shape that works proves nothing about the shape the product
+sends.
+
+### 3. Diagnosing an elevated helper refusal
+
+The helper is launched through `ShellExecuteEx` for the UAC prompt, which
+**cannot redirect stdout**, so the JSON naming the refusal is discarded by
+Windows. The backend now logs the operation, instance and exit code with its
+meaning (`crates/ksx-backend/src/winusb.rs`), which is enough to tell a refusal
+from an internal fault — but not enough to name it.
+
+To read the actual message, run the same verb from an elevated prompt with
+output redirected:
+
+```powershell
+Start-Process 'C:\Program Files\ksx\ksx-winusb-helper.exe' -Wait -PassThru `
+  -ArgumentList @('prepare-exact', '<instance-id>',
+                  '--confirm-spare-keyboard','--confirm-rebind','--confirm-machine-certificate') `
+  -RedirectStandardOutput out.json -RedirectStandardError err.txt
+```
+
+`err.txt` carries libwdi's own trace, which is what identified two of the four
+defects above. **If this is still necessary, the next improvement is the helper
+writing its final JSON into the protected store** so the backend can read and
+log it without a hand-run script.
+
+### 4. LAN access + pairing token + QR (task #23)
 
 Studio binds `127.0.0.1` and refuses otherwise. The intent is recorded in `ksx
 studio --help`. **It needs its own security review, and the live feed changed
@@ -179,7 +218,7 @@ is a different problem than an unauthenticated config page. Note `guard.rs`
 deliberately allows a request with no `Origin` header — correct on loopback,
 insufficient on a LAN, because `curl` sends none either.
 
-### 4. Smaller, tracked
+### 5. Smaller, tracked
 
 Remaining mapper polish in `docs/MAPPER-UX.md`; the any-HID-as-input easter
 egg; code signing (an unsigned installer throws

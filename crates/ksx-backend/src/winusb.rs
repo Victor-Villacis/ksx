@@ -38,15 +38,19 @@ pub trait HelperElevator: Send + Sync {
     fn run(&self, action: HelperMutation, instance_id: &str) -> Result<u32, ApiRefusal>;
 }
 
-fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
-    let mut args = vec![
-        match action {
+impl HelperMutation {
+    /// The helper verb this mutation invokes. One spelling, used for the
+    /// argument and for the log line that reports its exit code.
+    pub const fn verb(self) -> &'static str {
+        match self {
             HelperMutation::Prepare => "prepare-exact",
             HelperMutation::Release => "release-exact",
         }
-        .to_owned(),
-        instance_id.to_owned(),
-    ];
+    }
+}
+
+fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
+    let mut args = vec![action.verb().to_owned(), instance_id.to_owned()];
     match action {
         HelperMutation::Prepare => args.extend([
             "--confirm-spare-keyboard".to_owned(),
@@ -86,6 +90,18 @@ pub trait MutationObserver: Send + Sync {
 
 pub struct SystemHelperElevator;
 
+/// What the helper's exit codes mean, so a log line is readable without going
+/// to `crates/ksx-winusb-helper/src/main.rs` to look them up.
+fn helper_exit_meaning(code: u32) -> &'static str {
+    match code {
+        0 => "success",
+        2 => "refused: a precondition the helper will not override",
+        3 => "internal: the helper could not complete the transaction",
+        4 => "recovery-required: durable state needs inspection before retry",
+        _ => "unrecognised",
+    }
+}
+
 impl HelperElevator for SystemHelperElevator {
     fn run(&self, action: HelperMutation, instance_id: &str) -> Result<u32, ApiRefusal> {
         let current = std::env::current_exe().map_err(|err| {
@@ -113,8 +129,39 @@ impl HelperElevator for SystemHelperElevator {
             )
         })?;
         let args = helper_arguments(action, instance_id);
+        // The helper is launched through ShellExecuteEx for the UAC prompt,
+        // which cannot redirect its stdout — so the JSON it prints, including
+        // the one sentence naming the refusal, is discarded by Windows before
+        // anything here can read it. The exit code is all that survives, and it
+        // used to be discarded too: a user saw "Windows could not prepare this
+        // keyboard" and the log file held not one line about it, which cost
+        // three round trips and a hand-written diagnostic script to recover.
+        //
+        // At minimum, record what crossed the boundary.
+        tracing::info!(
+            operation = action.verb(),
+            instance = instance_id,
+            "running the elevated WinUSB helper"
+        );
         ksx_platform::process::run_elevated_and_wait(&helper, &args)
-            .map(|exit| exit.code)
+            .map(|exit| {
+                if exit.code == 0 {
+                    tracing::info!(
+                        operation = action.verb(),
+                        instance = instance_id,
+                        "the elevated WinUSB helper succeeded"
+                    );
+                } else {
+                    tracing::warn!(
+                        operation = action.verb(),
+                        instance = instance_id,
+                        exit = exit.code,
+                        meaning = helper_exit_meaning(exit.code),
+                        "the elevated WinUSB helper refused. Its own message goes to a                          stdout Windows does not hand back through the UAC prompt; run the                          same verb from an elevated prompt with output redirected to read it"
+                    );
+                }
+                exit.code
+            })
             .map_err(|err| match err {
                 ksx_platform::process::ElevationError::Cancelled => ApiRefusal::with_remedy(
                     "elevation-cancelled",

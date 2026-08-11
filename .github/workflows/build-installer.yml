@@ -584,28 +584,33 @@ jobs:
             }
           }
 
-      # `initialize-store` had only ever run against a store that DOES NOT
-      # EXIST, because a runner is a fresh machine every time. Every branch
-      # that runs only for an EXISTING store was therefore unreachable here
-      # and reachable on every customer machine that had once prepared a
-      # keyboard. One of them was wrong -- the per-receipt path validation --
-      # and it took every upgrade down with 'initializer exit code 3'.
+      # The upgrade path, over a store that already has receipts in it.
       #
-      # So seed a store that looks like a used one, receipt included, and
-      # require the initializer to accept it. The receipt carries the
-      # verbatim (\\?\C:...) artifact paths that ProgramDataStore::open
-      # really writes, which is the exact spelling that used to be refused.
-      - name: Initialize a store that already has receipts in it
+      # Every branch of `initialize-store` that runs only for an EXISTING
+      # store was unreachable in CI -- a runner is a fresh machine, so the
+      # store never exists -- and reachable on every customer machine that
+      # had once prepared a keyboard. One of them was wrong: the per-receipt
+      # path check compared a canonicalized receipt path against a
+      # non-canonicalized one and judged every receipt to have escaped its
+      # own directory. Every upgrade died on it with 'initializer exit
+      # code 3'; nothing here could see it.
+      #
+      # Driving Setup rather than the helper is deliberate. The helper
+      # refuses to initialize from a directory the calling user owns, which
+      # a runner's target/release always is, so calling it directly tests
+      # the refusal instead of the path. Installing puts it in Program
+      # Files, where the rule is satisfied honestly -- and 'the customer
+      # runs Setup over their own receipts' is the thing that broke.
+      - name: Install over a store that already has receipts in it
         shell: pwsh
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: |
           $root = 'C:\ProgramData\KSX'
           if (Test-Path -LiteralPath $root) {
             throw "$root exists before this step; refusing to touch it"
           }
           $id = '0a468347dd47c74246cebd18d3830285'
-          $txRel = 'WinUSB\transactions'
-          $tx = Join-Path $root (Join-Path $txRel $id)
+          $tx = Join-Path $root ('WinUSB\transactions\' + $id)
           $journal = Join-Path $root 'WinUSB\journal'
           New-Item -ItemType Directory -Path $tx -Force | Out-Null
           New-Item -ItemType Directory -Path $journal -Force | Out-Null
@@ -615,7 +620,8 @@ jobs:
           Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
           Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
 
-          # The verbatim prefix is the entire point of this fixture.
+          # The verbatim prefix is the entire point of the fixture: it is
+          # what ProgramDataStore::open really writes into a receipt.
           $verbatim = '\\\\?\\' + $tx
           $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
           $receipt = [ordered]@{
@@ -645,24 +651,44 @@ jobs:
           $receipt | ConvertTo-Json -Depth 5 |
             Set-Content -LiteralPath (Join-Path $journal "$id.json") -Encoding utf8
 
-          $out = Join-Path $env:RUNNER_TEMP 'ksx-init-seeded.json'
-          $helper = 'target\release\ksx-winusb-helper.exe'
-          $p = Start-Process -FilePath $helper -ArgumentList 'initialize-store' -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $out
-          $said = Get-Content -LiteralPath $out -Raw
-          Write-Host "DIAG: initialize-store over a seeded store exit = $($p.ExitCode)"
-          Write-Host "DIAG: said = $said"
-          if ($p.ExitCode -ne 0) {
-            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-            throw ("initialize-store refused a store holding an ordinary receipt " +
-                   "(exit $($p.ExitCode)). This is what every customer upgrade hit: $said")
-          }
+          $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'no setup.exe to install' }
+          $install = Join-Path $env:ProgramFiles 'ksx-ci-upgrade'
+          $log = Join-Path $env:RUNNER_TEMP 'ksx-seeded-setup.log'
+          $args = @(
+            '/VERYSILENT'
+            '/SUPPRESSMSGBOXES'
+            '/NORESTART'
+            '/MERGETASKS=!vigembus,!desktopicon'
+            "/DIR=$install"
+            "/LOG=$log"
+          )
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList $args -Wait -PassThru
+          Write-Host "DIAG: setup over a seeded store exit = $($p.ExitCode)"
+          $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
 
-          # It normalizes; it must not prune.
-          if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
-            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-            throw 'initialize-store removed a receipt it was only asked to verify'
+          try {
+            if ($p.ExitCode -ne 0) {
+              Write-Host "--- setup log ---"; Write-Host $text
+              throw ("Setup failed over a store holding an ordinary receipt " +
+                     "(exit $($p.ExitCode)). This is the upgrade every customer hit.")
+            }
+            # Exit 0 is not enough on its own: the initializer raises from
+            # CurStepChanged, and Inno reports that without failing the run.
+            # The log is the only place it is recorded.
+            if ($text -match 'initializer exit code') {
+              Write-Host "--- setup log ---"; Write-Host $text
+              throw 'the store initializer refused during an upgrade over existing receipts'
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
+              throw 'the install removed a receipt it was only asked to verify'
+            }
+            Write-Host "upgrade over an existing store: clean"
           }
-          Remove-Item -LiteralPath $root -Recurse -Force
+          finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - uses: actions/upload-artifact@v4
         with:

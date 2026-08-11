@@ -584,106 +584,108 @@ jobs:
             }
           }
 
-      # The upgrade path, over a store that already has receipts in it.
+      # The upgrade path: a SECOND install on a machine that has already
+      # prepared a keyboard.
       #
       # Every branch of `initialize-store` that runs only for an EXISTING
-      # store was unreachable in CI -- a runner is a fresh machine, so the
+      # store was unreachable here -- a runner is a fresh machine, so the
       # store never exists -- and reachable on every customer machine that
       # had once prepared a keyboard. One of them was wrong: the per-receipt
       # path check compared a canonicalized receipt path against a
       # non-canonicalized one and judged every receipt to have escaped its
-      # own directory. Every upgrade died on it with 'initializer exit
-      # code 3'; nothing here could see it.
+      # own transaction directory. Every upgrade died on it; nothing in CI
+      # could see it.
       #
-      # Driving Setup rather than the helper is deliberate. The helper
-      # refuses to initialize from a directory the calling user owns, which
-      # a runner's target/release always is, so calling it directly tests
-      # the refusal instead of the path. Installing puts it in Program
-      # Files, where the rule is satisfied honestly -- and 'the customer
-      # runs Setup over their own receipts' is the thing that broke.
-      - name: Install over a store that already has receipts in it
+      # ksx creates the store itself rather than this step hand-building
+      # one, because the store must be owned by
+      # SYSTEM/Administrators/TrustedInstaller and a directory this step
+      # creates is owned by the runner -- which would reproduce exit 3 for a
+      # reason unrelated to the defect. Install once, seed, install again.
+      - name: Install twice, with a receipt in between
         shell: pwsh
-        timeout-minutes: 6
+        timeout-minutes: 8
         run: |
           $root = 'C:\ProgramData\KSX'
           if (Test-Path -LiteralPath $root) {
             throw "$root exists before this step; refusing to touch it"
           }
-          $id = '0a468347dd47c74246cebd18d3830285'
-          $tx = Join-Path $root ('WinUSB\transactions\' + $id)
-          $journal = Join-Path $root 'WinUSB\journal'
-          New-Item -ItemType Directory -Path $tx -Force | Out-Null
-          New-Item -ItemType Directory -Path $journal -Force | Out-Null
-
-          $inf = "ksx-winusb-$id.inf"
-          $cat = "ksx-winusb-$id.cat"
-          Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
-          Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
-
-          # The verbatim prefix is the entire point of the fixture: it is
-          # what ProgramDataStore::open really writes into a receipt.
-          $verbatim = '\\\\?\\' + $tx
-          $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
-          $receipt = [ordered]@{
-            schema = 1
-            phase = 'released'
-            transaction_id = $id
-            target_instance_id = $device
-            hardware_id = 'USB\VID_D209&PID_0430&MI_00'
-            original_service = 'HidUsb'
-            original_inf = $null
-            original_inf_name = $inf
-            published_oem_inf = $null
-            inf_path = (Join-Path $verbatim $inf)
-            catalog_path = (Join-Path $verbatim $cat)
-            inf_sha256 = $null
-            catalog_sha256 = $null
-            certificate_subject = "CN=KSX WinUSB $id"
-            certificate_thumbprint_sha1 = $null
-            certificate_der_sha256 = $null
-            affected_instance_ids = @($device)
-            keyboards_before = 2
-            created_unix_seconds = 0
-            recovery_reason = $null
-            driver_mutation_attempted = $false
-            reboot_reported = $false
-          }
-          $receipt | ConvertTo-Json -Depth 5 |
-            Set-Content -LiteralPath (Join-Path $journal "$id.json") -Encoding utf8
-
           $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
           if (-not $setup) { throw 'no setup.exe to install' }
           $install = Join-Path $env:ProgramFiles 'ksx-ci-upgrade'
-          $log = Join-Path $env:RUNNER_TEMP 'ksx-seeded-setup.log'
-          $args = @(
-            '/VERYSILENT'
-            '/SUPPRESSMSGBOXES'
-            '/NORESTART'
-            '/MERGETASKS=!vigembus,!desktopicon'
-            "/DIR=$install"
-            "/LOG=$log"
-          )
-          $p = Start-Process -FilePath $setup.FullName -ArgumentList $args -Wait -PassThru
-          Write-Host "DIAG: setup over a seeded store exit = $($p.ExitCode)"
-          $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
+
+          function Invoke-Setup([string] $Tag) {
+            $log = Join-Path $env:RUNNER_TEMP "ksx-upgrade-$Tag.log"
+            $a = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+                   '/MERGETASKS=!vigembus,!desktopicon',
+                   "/DIR=$install", "/LOG=$log")
+            $p = Start-Process -FilePath $setup.FullName -ArgumentList $a -Wait -PassThru
+            $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
+            Write-Host "DIAG: install $Tag exit = $($p.ExitCode)"
+            # Exit 0 is not the assertion. The store initializer raises from
+            # CurStepChanged, which Inno reports and then carries on from, so
+            # a broken upgrade still exits 0 with a dialog the customer has
+            # to interpret. The log is the only place it is recorded.
+            if ($p.ExitCode -ne 0 -or $text -match 'initializer exit code') {
+              Write-Host "--- setup log ($Tag) ---"
+              Write-Host $text
+              throw "install $Tag did not complete cleanly (exit $($p.ExitCode))"
+            }
+          }
 
           try {
-            if ($p.ExitCode -ne 0) {
-              Write-Host "--- setup log ---"; Write-Host $text
-              throw ("Setup failed over a store holding an ordinary receipt " +
-                     "(exit $($p.ExitCode)). This is the upgrade every customer hit.")
+            # 1. First install. ksx creates the store, correctly owned.
+            Invoke-Setup 'first'
+            $journal = Join-Path $root 'WinUSB\journal'
+            $txRoot = Join-Path $root 'WinUSB\transactions'
+            if (-not (Test-Path -LiteralPath $journal)) {
+              throw 'the first install did not create the recovery store'
             }
-            # Exit 0 is not enough on its own: the initializer raises from
-            # CurStepChanged, and Inno reports that without failing the run.
-            # The log is the only place it is recorded.
-            if ($text -match 'initializer exit code') {
-              Write-Host "--- setup log ---"; Write-Host $text
-              throw 'the store initializer refused during an upgrade over existing receipts'
+
+            # 2. A receipt, shaped exactly as a prepare writes one -- above
+            #    all with the VERBATIM artifact paths that
+            #    ProgramDataStore::open really records.
+            $id = '0a468347dd47c74246cebd18d3830285'
+            $tx = Join-Path $txRoot $id
+            New-Item -ItemType Directory -Path $tx -Force | Out-Null
+            $inf = "ksx-winusb-$id.inf"
+            $cat = "ksx-winusb-$id.cat"
+            Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
+            Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
+            $verbatim = '\\\\?\\' + $tx
+            $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
+            $receipt = [ordered]@{
+              schema = 1
+              phase = 'released'
+              transaction_id = $id
+              target_instance_id = $device
+              hardware_id = 'USB\VID_D209&PID_0430&MI_00'
+              original_service = 'HidUsb'
+              original_inf = $null
+              original_inf_name = $inf
+              published_oem_inf = $null
+              inf_path = (Join-Path $verbatim $inf)
+              catalog_path = (Join-Path $verbatim $cat)
+              inf_sha256 = $null
+              catalog_sha256 = $null
+              certificate_subject = "CN=KSX WinUSB $id"
+              certificate_thumbprint_sha1 = $null
+              certificate_der_sha256 = $null
+              affected_instance_ids = @($device)
+              keyboards_before = 2
+              created_unix_seconds = 0
+              recovery_reason = $null
+              driver_mutation_attempted = $false
+              reboot_reported = $false
             }
+            $receipt | ConvertTo-Json -Depth 5 |
+              Set-Content -LiteralPath (Join-Path $journal "$id.json") -Encoding utf8
+
+            # 3. The upgrade. This is the install every customer hit.
+            Invoke-Setup 'second'
             if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
-              throw 'the install removed a receipt it was only asked to verify'
+              throw 'the upgrade removed a receipt it was only asked to verify'
             }
-            Write-Host "upgrade over an existing store: clean"
+            Write-Host "upgrade over an existing receipt: clean"
           }
           finally {
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

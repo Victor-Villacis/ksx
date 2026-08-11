@@ -197,6 +197,27 @@ impl Panel {
         self.typethrough_ctl.set_emulating(emulating);
     }
 
+    /// Listen in on the claim for one observation, and stop typing while it
+    /// lasts.
+    ///
+    /// This is how the mapper hears a claimed board. It cannot use Raw Input:
+    /// a claimed interface has left the keyboard stack, which is the whole
+    /// point of the claim, so `WM_INPUT` never carries a key from it. And it
+    /// cannot claim the board a second time — the daemon already holds it. The
+    /// only place those keys exist is the stream this panel is already pumping,
+    /// so a learn borrows it exactly the way a session does.
+    ///
+    /// Returns a guard: dropping it stops the forwarding and puts the panel
+    /// back to typing. Independent of an attached session — but note that
+    /// [`super::pipe`] refuses a learn while a session is running, so in
+    /// practice the two do not overlap.
+    pub fn observe(self: &Arc<Self>, events: Sender<KeyEvent>) -> PanelTap {
+        self.typethrough_ctl.observe(events);
+        PanelTap {
+            ctl: self.typethrough_ctl.clone(),
+        }
+    }
+
     /// A [`CaptureBackend`] the supervisor can run for one session. It claims
     /// nothing — running it attaches this panel's event stream to that session,
     /// and shutting it down detaches it again with the claim untouched.
@@ -231,6 +252,22 @@ impl Panel {
                 );
             }
         }
+    }
+}
+
+/// A live observation of the panel, from [`Panel::observe`].
+///
+/// Exists so that every exit path of a learn — hit, timeout, cancel, supersede,
+/// panic — puts the panel back to typing. A learn that returned early and left
+/// the panel muted would be indistinguishable, from the user's chair, from a
+/// dead keyboard.
+pub struct PanelTap {
+    ctl: TypethroughCtl,
+}
+
+impl Drop for PanelTap {
+    fn drop(&mut self) {
+        self.ctl.unobserve();
     }
 }
 

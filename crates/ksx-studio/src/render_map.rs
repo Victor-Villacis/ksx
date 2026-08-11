@@ -874,7 +874,7 @@ fn input_label(input: &str) -> &str {
 }
 
 /// Can the mapper actually record right now? Needs a reachable daemon, no
-/// running session (captured keys never reach the observer), and a daemon
+/// running session (the key would also fire its current binding), and a daemon
 /// that knows the learn verbs at all.
 fn learnable(payload: &MapPayload) -> bool {
     payload.mapper.generated_at != "(unavailable)"

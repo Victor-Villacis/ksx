@@ -577,10 +577,13 @@ fn handle_request_with_shutdown(
         // Learn needs an IDLE daemon, and this refusal is deliberate — it was
         // re-examined in full on 2026-08-05 and kept.
         //
-        // The mechanical reason: a running session's bound keyboards are
-        // captured below win32k, so a Raw Input observer never sees them and
-        // the learn would sit there for 10 s hearing nothing. Refusing is the
-        // honest answer.
+        // The mechanical reason USED to be that a running session's bound
+        // keyboards are captured below win32k, so a Raw Input observer never
+        // saw them. That reason is gone: `daemon::observe` listens on the
+        // claim as well, and a claimed panel keeps producing events while a
+        // session runs. Reasons 2-4 below are why the refusal stays anyway —
+        // they were always the load-bearing ones, and they are about what
+        // learning mid-session would DO, not about what it could hear.
         //
         // The reason we did NOT "fix" it by tapping our own capture stream —
         // which we demonstrably could, since the pipeline is holding those very
@@ -612,8 +615,8 @@ fn handle_request_with_shutdown(
                 RunState::Running { .. } | RunState::Starting
             ) {
                 return err_msg(
-                    "learn-key is unavailable while a session is running — captured \
-                     keys never reach the observer; stop the session first \
+                    "learn-key is unavailable while a session is running — the key you \
+                     press to bind would also fire its current binding; stop the session first \
                      (`ksx session stop`, or Studio's \"Pause emulation & map\"), \
                      or bind directly with `ksx map`",
                 );

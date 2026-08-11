@@ -65,6 +65,7 @@ pub mod live;
 /// two unrelated meanings of "live", named apart so a reader does not have to
 /// guess.
 pub mod live_pipe;
+pub mod observe;
 pub mod panel;
 pub mod pipe;
 #[cfg(windows)]
@@ -1306,7 +1307,10 @@ pub fn run(
                 // the same crate::mapping::apply the CLI verb uses (with the
                 // once-per-lifetime session backup); `map-restore` pulls the
                 // defaults / session-backup safety nets; learn-key observes
-                // idle keyboards over Raw Input.
+                // idle keyboards on every source at once (`daemon::observe`) —
+                // Raw Input for the ordinary ones, the daemon's own claim for a
+                // configured panel, and a claim taken for the observation for a
+                // board that is prepared but held by nobody.
                 map: map_writer,
                 // `map-macro` writes a whole [macros.<name>] table through the
                 // same crate::mapping writer the `ksx macro` CLI uses, behind
@@ -1326,7 +1330,13 @@ pub fn run(
                 // (docs/FIRST-RUN.md §2).
                 stage_commit: pipe::stage_commit_fn(map_root),
                 stage_capture_preflight: Box::new(crate::stage::preflight_capture),
-                learn: learn::LearnService::with_rawinput(),
+                // The panel goes in by CLONE, not by moving it into
+                // `PipeDeps`: the daemon still owns the claim, and the pipe
+                // thread still cannot reach the factory or any pipeline thread
+                // (the invariant above). What it gains is the ability to LISTEN
+                // to a board the daemon holds, which is the only way a mapper
+                // can hear a prepared keyboard at all.
+                learn: learn::LearnService::new(observe::observer(claimed.clone())),
             },
             shutdown.clone(),
         );

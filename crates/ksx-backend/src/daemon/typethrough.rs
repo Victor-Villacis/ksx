@@ -82,6 +82,14 @@ pub enum Command {
     Attach(Sender<KeyEvent>),
     /// The session is gone; stop forwarding.
     Detach,
+    /// Also forward every event to a learn observer, and stop typing while it
+    /// listens. A SECOND slot beside `Attach`, not a replacement for it: the
+    /// two have different owners (the supervisor, the pipe's learn service) and
+    /// different lifetimes, and a learn that stole the session's slot would
+    /// take the pad down mid-game.
+    Observe(Sender<KeyEvent>),
+    /// The observation is over; type again.
+    Unobserve,
     Shutdown,
 }
 
@@ -147,6 +155,22 @@ impl TypethroughCtl {
     /// Stop forwarding: the session is over.
     pub fn detach(&self) {
         self.send(Command::Detach);
+    }
+
+    /// Start forwarding to a learn observer, and stop typing until
+    /// [`Self::unobserve`].
+    ///
+    /// The muting is the point as much as the forwarding: the key a user
+    /// presses to bind "P1 · A" must land in the mapper, not in the browser's
+    /// address bar behind it. Acknowledged like every other mode change, so the
+    /// mute is in effect before a learn is reported as listening.
+    pub fn observe(&self, events: Sender<KeyEvent>) {
+        self.send(Command::Observe(events));
+    }
+
+    /// The observation is over: the panel types again.
+    pub fn unobserve(&self) {
+        self.send(Command::Unobserve);
     }
 
     /// Send and wait for the thread to say it has applied it.
@@ -254,15 +278,24 @@ fn pump<I: KeyInjector>(
     // `Typethrough::is_emulating`.
     let mut emulating = false;
     let mut session: Option<Sender<KeyEvent>> = None;
+    // The learn slot. Independent of `session` in both directions: a learn can
+    // run with no session, and a session is never interrupted by one.
+    let mut observer: Option<Sender<KeyEvent>> = None;
 
     /// Apply the asked-for mode, overridden by a latched emergency escape.
+    ///
+    /// A live observation counts as "somebody else owns the panel" for exactly
+    /// the same reason emulation does: whatever is pressed is meant for ksx,
+    /// not for whatever has focus. An escape still wins over both — `LeftCtrl
+    /// ×5` must free the board even if a learn is somehow stuck listening.
     fn apply<I: KeyInjector>(
         typethrough: &mut Typethrough<I>,
         emulating: bool,
+        observing: bool,
         escapes: Option<&EscapeHandle>,
     ) {
         let freed = escapes.is_some_and(EscapeHandle::passthrough);
-        typethrough.set_emulating(emulating && !freed);
+        typethrough.set_emulating((emulating || observing) && !freed);
     }
 
     loop {
@@ -274,9 +307,11 @@ fn pump<I: KeyInjector>(
                         Command::Typing => emulating = false,
                         Command::Attach(tx) => session = Some(tx),
                         Command::Detach => session = None,
+                        Command::Observe(tx) => observer = Some(tx),
+                        Command::Unobserve => observer = None,
                         Command::Shutdown => break,
                     }
-                    apply(&mut typethrough, emulating, escapes.as_ref());
+                    apply(&mut typethrough, emulating, observer.is_some(), escapes.as_ref());
                     // Acknowledge only after the change is actually in effect —
                     // that is the whole guarantee (see `Message`).
                     if let Some(ack) = ack {
@@ -301,9 +336,20 @@ fn pump<I: KeyInjector>(
                             Err(TrySendError::Disconnected(_)) => session = None,
                         }
                     }
+                    // The learn slot, on the same terms. A learn that has hung
+                    // up (timed out, cancelled, superseded) drops its receiver;
+                    // clearing the slot here is what puts the panel back to
+                    // typing even if nobody ever sends `Unobserve`.
+                    if let Some(tx) = &observer {
+                        match tx.try_send(event.clone()) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => health.add_dropped(1),
+                            Err(TrySendError::Disconnected(_)) => observer = None,
+                        }
+                    }
                     // Live escape-latch read, per event, before the decision —
                     // a `LeftCtrl x5` frees the panel with nothing in the way.
-                    apply(&mut typethrough, emulating, escapes.as_ref());
+                    apply(&mut typethrough, emulating, observer.is_some(), escapes.as_ref());
                     typethrough.on_event(&event);
                 }
                 // The capture side is gone. Nothing left to type.

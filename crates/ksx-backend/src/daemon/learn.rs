@@ -9,18 +9,24 @@
 //! `learn-key` supersedes the first (its generation goes stale and its result
 //! is discarded); `learn-cancel` stops listening within one observer slice.
 //!
-//! The observation itself is `ksx_capture::observe_next_key` — a Raw Input
-//! sink, injected via [`ObserveFn`] so the whole protocol is testable without
-//! a keyboard. Constants follow PadForge's recorder (the earned numbers,
+//! The observation itself is injected via [`ObserveFn`], so the whole protocol
+//! is testable without a keyboard and this file has no opinion about where a
+//! key comes from. The daemon supplies [`super::observe::observer`], which
+//! listens on every source at once — Raw Input, the daemon's own claim, and a
+//! claim taken for the observation. It has to: a WinUSB-claimed board is off
+//! the keyboard stack, so a Raw-Input-only learner goes deaf on exactly the
+//! boards ksx was told to take.
+//!
+//! Constants follow PadForge's recorder (the earned numbers,
 //! docs/research/padforge-code-audit.md §1.2): 10 s timeout, 33 ms observer
 //! slices, wait-for-release re-baselining inside the observer. What PadForge
 //! never had — a visible countdown — is why `learn-poll` reports
 //! `remaining_ms` on every answer.
 //!
-//! **When it can hear anything at all** is gated by the caller (pipe.rs):
-//! only while NO session is running — a running session's captured keyboards
-//! are suppressed below win32k, where a Raw Input sink hears nothing. That
-//! gate lives in the pipe handler so this service stays a dumb recorder.
+//! **When it may run at all** is gated by the caller (pipe.rs): only while NO
+//! session is running, because a learn mid-session would fan the bound key into
+//! live gameplay and could strand a virtual button across the rebind. That gate
+//! lives in the pipe handler so this service stays a dumb recorder.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -127,17 +133,6 @@ impl LearnService {
             "device": serde_json::Value::Null,
             "key": serde_json::Value::Null,
             "error": reason,
-        }))
-    }
-
-    /// The real observer: `ksx_capture::observe_next_key`, key reported by its
-    /// preset spelling.
-    #[cfg(windows)]
-    pub fn with_rawinput() -> Self {
-        Self::new(Arc::new(|timeout, cancel| {
-            ksx_capture::observe_next_key(timeout, &cancel)
-                .map(|hit| hit.map(|k| (k.instance_path, k.key.name().to_owned())))
-                .map_err(|e| e.to_string())
         }))
     }
 

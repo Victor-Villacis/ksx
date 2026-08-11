@@ -1252,3 +1252,94 @@ fn a_device_the_daemon_never_claimed_is_refused_not_claimed() {
     assert!(text.contains("Restart the daemon"), "{text}");
     assert!(text.contains(other.as_str()), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// Learning a key off a claimed board (2026-08-11)
+// ---------------------------------------------------------------------------
+
+/// The mapper hears a claimed board — through the panel tap, with no Raw Input
+/// anywhere in the picture.
+///
+/// This is the defect a hardware session found: prepare a keyboard and the
+/// mapper goes deaf on it, because `learn-key` observed Raw Input only and a
+/// WinUSB-claimed interface has left the keyboard stack. The whole point of the
+/// claim is that Windows cannot see the board, so the ONE place its keys exist
+/// is the stream the daemon is already pumping. `Panel::observe` is that seam,
+/// and this drives it end to end: a keystroke on the wire, through the claim,
+/// through the typethrough thread, into a `LearnService` built on it.
+///
+/// Fails against the shipped version, where `Panel::observe` did not exist and
+/// the learn service was constructed with `with_rawinput()`: no keystroke sent
+/// on this wire can reach a Raw Input sink, so the learn times out.
+#[cfg(windows)]
+#[test]
+fn a_learn_hears_a_claimed_panel_with_no_raw_input_at_all() {
+    let rig = rig();
+    let (hits, hit_rx) = crossbeam_channel::unbounded::<KeyEvent>();
+    // Exactly what `observe::Sources` does with the panel, minus the two
+    // sources this test is proving are not needed.
+    let tap = rig.panel.observe(hits);
+
+    let learn = super::learn::LearnService::new(Arc::new(move |timeout, cancel| {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline && !cancel.load(Ordering::SeqCst) {
+            if let Ok(event) = hit_rx.recv_timeout(Duration::from_millis(5)) {
+                if event.down {
+                    return Ok(Some((
+                        event.device.as_str().to_owned(),
+                        event.key.name().to_owned(),
+                    )));
+                }
+            }
+        }
+        Ok(None)
+    }));
+
+    assert_eq!(learn.start()["state"], "listening");
+    press(&rig.wire, Key::G);
+
+    eventually("the learn to hear the panel", || {
+        learn.poll()["state"] == "hit"
+    });
+    let snap = learn.poll();
+    assert_eq!(snap["device"], PANEL, "{snap}");
+    assert_eq!(snap["key"], "G", "{snap}");
+    drop(tap);
+}
+
+/// A live observation mutes the panel, and dropping the tap un-mutes it.
+///
+/// Without the mute, the key a user presses to bind "P1 · A" also types a `G`
+/// into whatever has focus behind the mapper — and since Studio runs in a
+/// browser, that is an address bar. Without the un-mute, a learn that timed out
+/// would leave the panel dead with nothing to say so, which from the user's
+/// chair is indistinguishable from an unplugged keyboard.
+#[cfg(windows)]
+#[test]
+fn an_observation_mutes_the_panel_and_dropping_it_types_again() {
+    let rig = rig();
+    press_and_drain(&rig.wire, &rig.typed, Key::F1);
+
+    let (hits, hit_rx) = crossbeam_channel::unbounded::<KeyEvent>();
+    let tap = rig.panel.observe(hits);
+    press(&rig.wire, Key::G);
+
+    // The fence is the OBSERVER's own copy, not a mode change. "Nothing was
+    // typed" is only an assertion if the panel has already handled the key,
+    // and the tap sees each event on the same thread that decides whether to
+    // type it — so a `G-` here proves the decision was made and was "no".
+    // Un-muting first and fencing on a later key would race: `select!` is free
+    // to take the un-mute ahead of a keystroke already in the channel.
+    eventually(
+        "the observer to receive the whole press",
+        || matches!(hit_rx.recv_timeout(Duration::from_millis(5)), Ok(e) if !e.down),
+    );
+    assert_eq!(
+        rig.typed.trace(),
+        "",
+        "a key being bound typed into the desktop"
+    );
+
+    drop(tap);
+    press_and_drain(&rig.wire, &rig.typed, Key::F3);
+}

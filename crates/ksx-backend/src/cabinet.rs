@@ -153,7 +153,7 @@ fn daemon_sink(
             stage_capture_preflight: Box::new(crate::stage::preflight_capture),
             // Learning a key is AUTHORING — it exists to fill in a binding —
             // so it is refused here like the other four. The first pass wired
-            // the real `with_rawinput()` learner with a comment saying learn
+            // the real learner with a comment saying learn
             // is authoring, which left the one door in this table that the
             // comment above claims is locked standing open. Nothing in
             // `ksx-cabinet` asks for it today; "no caller today" is not a

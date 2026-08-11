@@ -795,7 +795,29 @@ fn rollback_installed(
 ) -> Result<(), TransactionError> {
     match rollback_installed_inner(env, receipt, trigger) {
         Ok(()) => Ok(()),
-        Err(err @ TransactionError::RecoveryRequired(_)) => Err(err),
+        // A `RecoveryRequired` may arrive already persisted — that is what
+        // `set_recovery` does, and its reason is more specific than anything
+        // this wrapper could add, so pass it through untouched.
+        //
+        // But it may also be minted directly, without the store ever being
+        // told: `delete_matching` and `delete_owned_private_keys` construct it
+        // that way. Those used to propagate here and return, leaving the
+        // receipt exactly as `release_with` wrote it — `Releasing`. The
+        // backend reports success only on `Released` and recovery only on
+        // `RecoveryRequired`, so a stuck `Releasing` matched neither and every
+        // such release told the user it had failed AFTER the driver was
+        // already rebound. Four receipts on the reporting machine, all with a
+        // keyboard that types fine.
+        //
+        // The phase, not the error type, is the record. Persist it here when
+        // nobody else has.
+        Err(TransactionError::RecoveryRequired(reason)) => {
+            if receipt.phase == Phase::RecoveryRequired {
+                Err(TransactionError::RecoveryRequired(reason))
+            } else {
+                Err(set_recovery(env.store, receipt, reason))
+            }
+        }
         Err(err) => Err(set_recovery(
             env.store,
             receipt,
@@ -3295,6 +3317,11 @@ mod tests {
         events: Vec<String>,
         counts: HashMap<String, usize>,
         fail_at: Option<String>,
+        /// Like `fail_at`, but mints `RecoveryRequired` WITHOUT persisting a
+        /// phase — the shape `delete_matching` and `delete_owned_private_keys`
+        /// produce, and the one that used to leave a receipt stranded in
+        /// `Releasing`.
+        recovery_at: Option<String>,
         receipt: Option<Receipt>,
         installed: bool,
         bound: bool,
@@ -3315,6 +3342,12 @@ mod tests {
                 self.fail_at = None;
                 return Err(TransactionError::Windows(format!(
                     "injected failure at {event}"
+                )));
+            }
+            if self.recovery_at.as_deref() == Some(&event) {
+                self.recovery_at = None;
+                return Err(TransactionError::RecoveryRequired(format!(
+                    "injected unpersisted recovery at {event}"
                 )));
             }
             Ok(())
@@ -3614,6 +3647,63 @@ mod tests {
                 ),
             )
         }
+
+        fn release(&self) -> Result<MutationResult, TransactionError> {
+            release_with(
+                &self.environment(),
+                &ReleaseSpec {
+                    instance_id: TARGET.to_owned(),
+                    confirm_release: true,
+                },
+            )
+        }
+
+        fn phase(&self) -> Option<Phase> {
+            self.state.lock().unwrap().receipt.as_ref().map(|r| r.phase)
+        }
+    }
+
+    /// A release that ends in recovery must SAY so in the receipt.
+    ///
+    /// `set_recovery` persists the phase; `delete_matching` and
+    /// `delete_owned_private_keys` mint `RecoveryRequired` directly and do
+    /// not. Those used to pass through `rollback_installed` untouched, leaving
+    /// the receipt on `Releasing` — a phase the backend treats as neither
+    /// success nor recovery, so the user was told the release failed after the
+    /// driver had already been rebound. Four such receipts were found on the
+    /// machine that reported it, each beside a keyboard that typed perfectly.
+    ///
+    /// Fails against that version: the assertion below reads `Releasing`.
+    #[test]
+    fn a_release_that_ends_in_recovery_records_recovery_not_releasing() {
+        let harness = Harness::new(None);
+        harness.prepare().expect("prepare reaches Active");
+        assert_eq!(harness.phase(), Some(Phase::Active));
+
+        // Certificate cleanup is the step that mints an unpersisted
+        // RecoveryRequired, and it runs after the rebind has committed.
+        harness.state.lock().unwrap().recovery_at = Some("trust:cleanup#1".to_owned());
+
+        let err = harness.release().expect_err("release cannot verify");
+        assert!(
+            matches!(err, TransactionError::RecoveryRequired(_)),
+            "{err:?}"
+        );
+        assert_eq!(
+            harness.phase(),
+            Some(Phase::RecoveryRequired),
+            "the receipt must record where the transaction ended; `Releasing` is \
+             neither success nor recovery and the backend reports it as a generic failure"
+        );
+        let reason = harness
+            .state
+            .lock()
+            .unwrap()
+            .receipt
+            .as_ref()
+            .and_then(|r| r.recovery_reason.clone())
+            .expect("a persisted recovery carries its reason");
+        assert!(reason.contains("trust:cleanup#1"), "{reason}");
     }
 
     #[test]

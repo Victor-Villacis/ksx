@@ -182,10 +182,46 @@ mod windows_provider {
         CString::new(value).map_err(|_| PrepareError::EmbeddedNul)
     }
 
+    /// A path as the provider requires it: beginning with a drive letter.
+    ///
+    /// `ksx_is_existing_output_directory` rejects anything whose first
+    /// character is not alphabetic, whose second is not `:`, and whose third is
+    /// not a separator. Rust's `Path::canonicalize` returns EXTENDED-LENGTH
+    /// verbatim paths — `\\?\C:\ProgramData\KSX\WinUSB\transactions\...` — and
+    /// the store's paths come from exactly there, so every real preparation
+    /// failed that test on its first character: `WDI_ERROR_INVALID_PARAM`,
+    /// before an INF or a certificate existed, leaving a rolled-back receipt
+    /// with `driver_mutation_attempted: false` and nothing to explain it.
+    ///
+    /// CI never saw it because the provider smoke passes a hand-built
+    /// `C:\Program Files\ksx-libwdi-smoke-<id>` path, which is already in the
+    /// only form the provider accepts.
+    ///
+    /// Only the verbatim DISK prefix is removed. `\\?\UNC\server\share` is left
+    /// alone so the provider still rejects it — the recovery store is local by
+    /// construction, and quietly turning a UNC path into something that looks
+    /// local would be a worse answer than a refusal.
+    /// Test-visible alias: the mapping above is the provider's entire path
+    /// contract, and it is worth asserting from outside this module.
+    #[cfg(test)]
+    pub(super) fn path_cstring_for_tests(path: &Path) -> Result<CString, PrepareError> {
+        path_cstring(path)
+    }
+
     fn path_cstring(path: &Path) -> Result<CString, PrepareError> {
         let text = path
             .to_str()
             .ok_or_else(|| PrepareError::NonUnicodePath(path.display().to_string()))?;
+        let text = match text.strip_prefix(r"\\?\") {
+            Some(rest)
+                if rest.len() > 2
+                    && rest.as_bytes()[0].is_ascii_alphabetic()
+                    && rest.as_bytes()[1] == b':' =>
+            {
+                rest
+            }
+            _ => text,
+        };
         cstring(text)
     }
 
@@ -342,5 +378,60 @@ mod tests {
         for forbidden in ["CopyFiles", "CoInstallers", "ServiceBinary", "libusb"] {
             assert!(!normalized.contains(forbidden), "{forbidden} in template");
         }
+    }
+
+    /// The provider is handed drive-letter paths, never verbatim ones.
+    ///
+    /// `ksx_is_existing_output_directory` requires `path[0]` alphabetic,
+    /// `path[1] == ':'` and `path[2]` a separator. The transaction directory
+    /// comes from the store, whose paths are produced by `canonicalize` and so
+    /// begin `\\?\`. Every real preparation was therefore rejected on the first
+    /// character, before an INF or certificate existed, while the CI smoke
+    /// passed because it hand-builds a plain `C:\...` path.
+    ///
+    /// This asserts the provider's own rule, so it fails against the version
+    /// that forwarded the prefix.
+    #[cfg(windows)]
+    #[test]
+    fn the_provider_is_given_a_drive_letter_path_not_a_verbatim_one() {
+        use super::windows_provider::path_cstring_for_tests as path_cstring;
+
+        let text = path_cstring(Path::new(
+            r"\\?\C:\ProgramData\KSX\WinUSB\transactions\0123456789abcdef0123456789abcdef",
+        ))
+        .expect("a representable path")
+        .into_string()
+        .expect("ASCII");
+        assert_eq!(
+            text,
+            r"C:\ProgramData\KSX\WinUSB\transactions\0123456789abcdef0123456789abcdef"
+        );
+        let bytes = text.as_bytes();
+        assert!(
+            bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\',
+            "the provider rejects anything that is not <drive>:<sep>...: {text}"
+        );
+
+        // A plain path is already in the accepted form and must be untouched.
+        let plain = r"C:\Program Files\ksx-libwdi-smoke-abc";
+        assert_eq!(
+            path_cstring(Path::new(plain))
+                .expect("a representable path")
+                .into_string()
+                .expect("ASCII"),
+            plain
+        );
+
+        // A verbatim UNC path keeps its prefix, so the provider still refuses
+        // it. The store is local by construction; making a remote path look
+        // local would be worse than a refusal.
+        let unc = r"\\?\UNC\server\share\ksx";
+        assert_eq!(
+            path_cstring(Path::new(unc))
+                .expect("a representable path")
+                .into_string()
+                .expect("ASCII"),
+            unc
+        );
     }
 }

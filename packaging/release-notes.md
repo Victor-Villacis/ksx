@@ -14,29 +14,31 @@
 
 **ksx {{VERSION}}** - Windows 11, 64-bit.
 
+## New in this release
+
+- **ksx can start when you sign in.** The first-run screen has a last step:
+  turn it on and the machine comes up ready on its own - no keyboard, no
+  mouse, nobody standing at it. This was possible before only by typing a
+  command, which is a strange thing to require of the one setting up a cabinet
+  that is supposed to run unattended. It also notices when the registration
+  has gone out of date - if ksx was reinstalled somewhere else, the old entry
+  would quietly start nothing at all - and offers to point it back here.
+
 ## Fixed in this release
 
-Two ways ksx could leave you stuck. In both, the only way out was a command
-prompt - which is exactly the thing this product is supposed to make
-unnecessary.
+- **A four-player panel can be set up.** Adding controllers used to work twice
+  and then refuse, with no useful explanation. Each controller starts from a
+  layout, and most layouts describe two players; the screen kept offering one
+  of those for player 3 and player 4, where it cannot work. The menu now
+  offers a layout that fits the controller being added. Layouts that do not
+  fit are still listed - sharing one player's keys across two controllers is a
+  real thing to want - they are simply no longer the suggestion.
 
-- **Resume brings back what you were actually playing.** In Controls,
-  "Pause & edit" disconnects your controllers so you can teach them keys by
-  pressing them. "Resume Play" afterwards used to start whatever was saved on
-  disk. If you were playing a setup you had not saved yet, that meant it
-  started something else, or nothing at all - and said it had resumed either
-  way. Resume now puts back the session you paused, unsaved setups included,
-  along with any changes you made while it was paused.
-
-- **A keyboard ksx is holding can always be handed back.** Preparing a keyboard
-  for the built-in Windows USB mode takes it off the Windows keyboard stack: it
-  stops typing until you Release it. But Release only ever appeared on the
-  keyboard currently selected on the first-run screen - so if nothing was
-  selected, or a different keyboard was, or even when that same keyboard was,
-  no Release button was drawn anywhere. A keyboard that has stopped typing is a
-  poor thing to need a command prompt to recover. The first-run screen now
-  lists every keyboard ksx is holding, whatever is selected, each with its own
-  Release and the same confirmation and UAC steps as before.
+- **The screen says what went wrong.** Every failure while building a setup
+  reported the same sentence: "Setup could not be updated. Reopen ksx and try
+  again." That was wrong often enough to matter - the app usually knew exactly
+  what the problem was and what would fix it, and threw that away. It now says
+  it.
 
 ## Get it
 

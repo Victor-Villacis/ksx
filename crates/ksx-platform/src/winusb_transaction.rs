@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::wdi::{DriverPreparer, PrepareRequest, PreparedPaths, CANONICAL_INF_TEMPLATE};
 use super::{
-    parse_enum_drivers, ClaimState, PlannedCommand, StoreDriver, Survey, KSX_DEVICE_INTERFACE_GUID,
-    SAFE_INF_DEVICE_NAME,
+    parse_enum_drivers, CertificateResidue, ClaimState, PlannedCommand, StoreDriver, Survey,
+    SweepBlock, KSX_DEVICE_INTERFACE_GUID, SAFE_INF_DEVICE_NAME,
 };
 
 pub const JOURNAL_SCHEMA: u32 = 1;
@@ -3005,13 +3005,15 @@ mod windows_trust {
     }
 
     #[derive(Clone)]
-    struct OwnedCertificate {
-        subject: String,
+    pub(super) struct OwnedCertificate {
+        pub(super) subject: String,
         thumbprint: String,
         der_hash: String,
     }
 
-    fn owned_certificates(name: &str) -> Result<Vec<OwnedCertificate>, TransactionError> {
+    pub(super) fn owned_certificates(
+        name: &str,
+    ) -> Result<Vec<OwnedCertificate>, TransactionError> {
         let store = open_machine_store(name)?;
         let mut previous = None;
         let mut owned = Vec::new();
@@ -3429,6 +3431,33 @@ pub fn reconcile_report() -> Result<(Vec<Finding>, Vec<String>), TransactionErro
     Err(TransactionError::Unsupported)
 }
 
+/// **Every KSX-owned certificate on this machine, and whether it is still
+/// holding a driver package up.**
+///
+/// A READ. It opens the machine stores for enumeration only, which needs no
+/// elevation — writing does. So a person can be TOLD what is left behind
+/// without being asked to approve anything, which is the difference between
+/// a product that reports its own residue and one that only mentions it
+/// while asking for a UAC prompt.
+#[cfg(windows)]
+pub fn certificate_report() -> Result<(Vec<CertificateResidue>, Vec<SweepBlock>), TransactionError>
+{
+    let mut owned = Vec::new();
+    for store in ["Root", "TrustedPublisher"] {
+        for cert in windows_trust::owned_certificates(store)? {
+            owned.push((store.to_owned(), cert.subject));
+        }
+    }
+    let runner = PnPUtilRunner;
+    let packages = PnPUtilInventory { runner: &runner }.enumerate()?;
+    Ok(crate::winusb::classify_certificates(&owned, &packages))
+}
+
+#[cfg(not(windows))]
+pub fn certificate_report() -> Result<(Vec<CertificateResidue>, Vec<SweepBlock>), TransactionError>
+{
+    Err(TransactionError::Unsupported)
+}
 /// Real repair. The installed elevated helper is the only intended caller.
 #[cfg(windows)]
 pub fn repair() -> Result<RepairResult, TransactionError> {
@@ -3964,12 +3993,14 @@ mod tests {
             published_name: OEM.to_owned(),
             original_name: INF.to_owned(),
             provider: "KSX".to_owned(),
+            signer_subject: None,
         }];
         if state.duplicate_package {
             drivers.push(StoreDriver {
                 published_name: "oem43.inf".to_owned(),
                 original_name: INF.to_owned(),
                 provider: "KSX".to_owned(),
+                signer_subject: None,
             });
         }
         drivers
@@ -4312,6 +4343,7 @@ mod tests {
             published_name: "oem42.inf".to_owned(),
             original_name: format!("ksx-winusb-{id}.inf"),
             provider: "KSX".to_owned(),
+            signer_subject: None,
         }
     }
 
@@ -4453,6 +4485,7 @@ mod tests {
             published_name: "oem99.inf".to_owned(),
             original_name: "some-other-tool.inf".to_owned(),
             provider: "Somebody Else".to_owned(),
+            signer_subject: None,
         };
         assert!(orphan_packages(&[], &[foreign]).is_empty());
     }
@@ -4502,6 +4535,7 @@ mod tests {
                 published_name: oem.to_owned(),
                 original_name: format!("ksx-winusb-{id}.inf"),
                 provider: "KSX".to_owned(),
+                signer_subject: None,
             }
         }
     }
@@ -4642,6 +4676,7 @@ mod tests {
             published_name: "oem99.inf".to_owned(),
             original_name: "some-other-tool.inf".to_owned(),
             provider: "Somebody Else".to_owned(),
+            signer_subject: None,
         };
         let bare = Bare::new(
             vec![
@@ -4696,6 +4731,7 @@ mod tests {
             published_name: "oem1.inf".to_owned(),
             original_name: name.to_owned(),
             provider: "KSX".to_owned(),
+            signer_subject: None,
         };
         assert!(is_ksx_package(&named(
             "ksx-winusb-0a468347dd47c74246cebd18d3830285.inf"

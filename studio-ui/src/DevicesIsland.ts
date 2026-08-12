@@ -186,6 +186,10 @@ export interface WinusbResidueView {
   line: string;
   detail: string;
   rows: ResidueTile[];
+  /** Certificates left in the machine's trust stores, in one sentence.
+   *  SERVED rather than derived here: the SSR render and this island must
+   *  never disagree about the words. Empty when there is nothing to say. */
+  certificates_line?: string;
 }
 
 export interface ResidueTile {
@@ -289,6 +293,10 @@ const [noteRows, setNoteRows] = createSignal<NoteTile[]>([]);
 const [residueRows, setResidueRows] = createSignal<ResidueTile[]>([]);
 const [residueLine, setResidueLine] = createSignal("");
 const [residueDetail, setResidueDetail] = createSignal("");
+/** Certificates left in the machine's trust stores — separate residue from
+ *  receipts, with a separate lifetime, so it gets its own line. Empty when
+ *  there is nothing to say. */
+const [residueCertificates, setResidueCertificates] = createSignal("");
 const [residueError, setResidueError] = createSignal("");
 const [showResidue, setShowResidue] = createSignal(false);
 const [residueUnreadable, setResidueUnreadable] = createSignal(false);
@@ -403,6 +411,7 @@ export function applyDevices(p: DevicesPayload): void {
   setResidueRows(residue.rows);
   setResidueLine(residue.line);
   setResidueDetail(residue.detail);
+  setResidueCertificates(residue.certificates_line ?? "");
   setResidueError(residue.error);
   setResidueUnreadable(!residue.readable);
   // Shown when there is something to say: a disagreement, or the fact that
@@ -792,6 +801,7 @@ export function DevicesIsland() {
             h("h2", null, "What ksx has left behind"),
             h("p", { class: "cardline" }, () => residueLine()),
             h("p", { class: "dv-note" }, () => residueDetail()),
+            h("p", { class: "dv-note" }, () => residueCertificates()),
             createShow(
               () => residueUnreadable(),
               () => h("p", { class: "dv-note warn" }, () => residueError()),

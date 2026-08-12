@@ -125,6 +125,10 @@ fn scalar_slots(payload: &DevicesPayload, flash: Option<&str>) -> serde_json::Va
         "residueLine": payload.residue.line,
         "residueDetail": payload.residue.detail,
         "residueError": payload.residue.error,
+        // Certificates are separate residue from receipts, with a separate
+        // lifetime: a receipt is ksx's own paperwork, a certificate is a
+        // change to the machine's trust stores that outlives every config.
+        "residueCertificates": payload.residue.certificates_line,
     })
 }
 
@@ -523,7 +527,10 @@ fn show_values(
         // gets no card, not a row of reassurance nobody asked for.
         (
             "show:showResidue",
-            !payload.residue.readable || payload.residue.drifted > 0,
+            !payload.residue.readable
+                || payload.residue.drifted > 0
+                || payload.residue.leftover_certificates > 0
+                || !payload.residue.certificates_unknown.is_empty(),
         ),
         ("show:residueUnreadable", !payload.residue.readable),
     ]
@@ -784,6 +791,13 @@ mod tests {
             // each list to be non-empty: an empty list binds nothing and
             // therefore proves nothing about the bindings.
             residue: ksx_api::WinusbResidueView {
+                // The reporting machine's real numbers: eight subjects in two
+                // stores, one of them signing the installed package.
+                leftover_certificates: 14,
+                certificates_in_use: 2,
+                certificates_unknown: String::new(),
+                certificates_line: "14 signing certificates are left over from earlier setups.                                     2 more are still signing an installed driver, and are left                                     alone."
+                    .to_owned(),
                 readable: true,
                 error: String::new(),
                 receipts: 2,

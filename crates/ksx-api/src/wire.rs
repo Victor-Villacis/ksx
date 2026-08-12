@@ -646,9 +646,7 @@ impl Response {
             | Request::Stop
             | Request::Resume
             | Request::Reload
-            | Request::Quit => {
-                Self::Action(serde_json::from_value(value).map_err(read(verb))?)
-            }
+            | Request::Quit => Self::Action(serde_json::from_value(value).map_err(read(verb))?),
             Request::Map(_) => Self::Map(serde_json::from_value(value).map_err(read(verb))?),
             Request::StageBind(_) => Self::Map(serde_json::from_value(value).map_err(read(verb))?),
             Request::MapMacro(_) => Self::Macro(serde_json::from_value(value).map_err(read(verb))?),

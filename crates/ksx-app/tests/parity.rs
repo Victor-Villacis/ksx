@@ -1096,10 +1096,21 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
     ConfigSurface {
         field: "starting_user_index",
         row: None,
-        why: "NO FACE, and the least defensible of the four: it decides which \
-              XInput slot player 1 lands on, which is exactly what somebody \
-              debugging \"player 2's controller is player 1 in the game\" \
-              would reach for.",
+        why: "NO FACE, AND CORRECTLY SO - this setting is INERT. Nothing reads it. \
+              Its definition, a 1..=4 range check in `validate`, serialization \
+              fixtures and this ledger are every reference in the workspace; no \
+              engine, no run plan, no output backend consults it. \
+              It is dead for a reason rather than by oversight: `ksx-output`'s \
+              module docs record that on real hardware BOTH `get_user_index()` \
+              and the LED notification channel report wrong or missing slots \
+              (docs/research/m2-xinput-findings.md), so ksx establishes slot \
+              identity by ACTIVE CORRELATION - pulse LT below the game-visible \
+              threshold, watch which XInput slot echoes. Windows assigns the \
+              index and ksx discovers which one it got, so a preferred index \
+              has nowhere to be applied. \
+              A control here would promise something the platform does not \
+              offer, which is worse than no control. If this ever gets a face, \
+              the face is a READ of where each pad actually landed.",
     },
     ConfigSurface {
         field: "number",

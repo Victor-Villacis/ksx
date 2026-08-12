@@ -572,6 +572,21 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/pads/spawn", "/pads/prune"],
     },
     Anchors {
+        capability: "Start ksx at sign-in",
+        // The CLI keeps every option (--mode, --game, --delay-secs,
+        // --task-name); Studio takes the one a first run needs and the
+        // defaults for the rest. That is not a gap, it is the split: a person
+        // finishing their first setup wants a cabinet that comes up, not four
+        // knobs to get wrong.
+        cli: &["autostart"],
+        // The name a cabinet toggle would take. It does not exist, which is
+        // what makes the egui cell's "planned" honest — and the cabinet is
+        // where this belongs next, since the machine it commissions is the one
+        // the window is running on.
+        egui: &["Ask::Autostart"],
+        studio: &["/start/autostart"],
+    },
+    Anchors {
         capability: "Record / replay a session",
         // One capability, both halves: `ksx monitor --record` writes the
         // timeline and `ksx play` drives the pipeline from it. `monitor` is
@@ -649,14 +664,6 @@ const EXEMPT: &[Exempt] = &[
               What the surfaces carry is the STATE: `MachineSource::pad_bus` is read by \
               /start and said before the Play button, which is the row §3 already gives \
               them (\"Is it working: pads, drivers\").",
-    },
-    Exempt {
-        verb: "autostart",
-        gate: None,
-        why: "Its STATE is already on both other surfaces (`StatusSnapshot::autostart`); \
-              what is CLI-only is the write, which registers a per-user Task Scheduler \
-              task once, when a cabinet is commissioned. A machine-lifecycle step, not \
-              something anyone performs while ksx runs.",
     },
     Exempt {
         verb: "studio",

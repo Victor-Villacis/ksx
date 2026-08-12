@@ -441,6 +441,93 @@ fn autostart_line() -> String {
     }
 }
 
+/// The logon task as a VIEW - status, plus the staleness question
+/// `autostart_line` never asked.
+///
+/// Staleness is not a detail here. The failure it names is the one a cabinet
+/// cannot see coming: ksx is reinstalled, the scheduled task keeps pointing at
+/// the path that used to exist, and the machine cold-boots to a desktop. Nobody
+/// watches a console at logon, so the first symptom is a dead panel weeks
+/// later. A surface that showed only "registered" would be telling the truth
+/// and still be wrong.
+///
+/// The remedy sentences are composed HERE rather than taken from
+/// `Staleness::message`, whose wording ends in "re-run `ksx autostart
+/// --enable`". That is the right remedy for the CLI and the wrong one for a
+/// page with the button on it (`FIRST-RUN.md` §6).
+/// How long the registered task waits after logon before starting ksx.
+///
+/// The CLI's `--delay-secs` default, spelled here so the button and the flag
+/// cannot drift apart. It exists because logon is the busiest moment of a
+/// Windows boot: the USB tree is still settling, and a ksx that enumerates
+/// devices into that finds a panel that is not there yet.
+const DEFAULT_AUTOSTART_DELAY_SECS: u32 = 10;
+
+/// A scheduler failure, as a refusal a surface can show.
+///
+/// `AutostartError`'s Display names `schtasks.exe`, exit codes and XML paths -
+/// right for a terminal, and not something to put in front of somebody who
+/// just wanted their cabinet to turn on. The message is kept (a log and a
+/// support report both want it) and the REMEDY is the product's.
+fn autostart_refusal(err: autostart::AutostartError) -> Refusal {
+    Refusal::with_remedy(
+        ksx_api::codes::REFUSED,
+        format!("the logon task could not be changed: {err}"),
+        "Windows would not accept the change. Try again; if it keeps failing, sign out and back \
+         in first.",
+    )
+}
+
+fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
+    let status = autostart::query(autostart::DEFAULT_TASK_NAME).map_err(|err| {
+        Refusal::new(
+            ksx_api::codes::REFUSED,
+            format!("the logon task could not be read: {err}"),
+        )
+    })?;
+    let line = autostart::render_status(autostart::DEFAULT_TASK_NAME, &status);
+    let autostart::Status::Registered(task) = &status else {
+        return Ok(ksx_api::AutostartView {
+            registered: false,
+            line,
+            ..ksx_api::AutostartView::default()
+        });
+    };
+
+    // Best effort: a process that cannot name its own exe has nothing to
+    // compare against, and "could not check" must never render as "stale".
+    let staleness = std::env::current_exe()
+        .ok()
+        .map(|exe| autostart::check_staleness(task, &exe, |path| path.exists()));
+    let stale_detail = match &staleness {
+        None | Some(autostart::Staleness::Current) => None,
+        Some(autostart::Staleness::MissingExe { .. }) => Some(
+            "The registered task points at a copy of ksx that is no longer there, so this \
+             machine would start up to nothing. Turn it on again here to point it at this copy."
+                .to_owned(),
+        ),
+        Some(autostart::Staleness::DifferentExe { .. }) => Some(
+            "The registered task starts a DIFFERENT copy of ksx than this one. That may be \
+             deliberate; if it is not, turn it on again here to point it at this copy."
+                .to_owned(),
+        ),
+        Some(autostart::Staleness::NoCommand) => Some(
+            "The registered task has nothing to run - something edited it outside ksx. Turn it \
+             on again here to rewrite it."
+                .to_owned(),
+        ),
+    };
+
+    Ok(ksx_api::AutostartView {
+        registered: true,
+        line,
+        mode: task.mode().map(|m| m.describe().to_owned()),
+        profile: task.game().map(str::to_owned),
+        stale: stale_detail.is_some(),
+        stale_detail,
+    })
+}
+
 /// One `[[game]]` entry, preflighted into something a surface can branch on.
 ///
 /// The verdicts are the honest three, and the middle one is the one worth
@@ -648,6 +735,62 @@ fn refusal_of(code: &'static str, message: String, remedy: Option<String>) -> Re
 pub struct LocalMachine;
 
 impl ksx_api::MachineSource for LocalMachine {
+    /// The logon registration, read.
+    fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
+        autostart_view()
+    }
+
+    /// **Register or remove the logon task** - the commissioning step that
+    /// used to exist only as `ksx autostart --enable`.
+    ///
+    /// Per-user, so no elevation and no service: the whole write is one
+    /// `schtasks /Create /XML` under the signed-in account, which is why this
+    /// verb needs a tick box and not the three-confirmation-plus-UAC ceremony
+    /// the WinUSB verbs carry. Nothing outside this account changes, and
+    /// nothing about the keyboard stack does.
+    ///
+    /// ENABLING AN ALREADY-REGISTERED TASK REWRITES IT, deliberately: that is
+    /// also the repair for a stale registration, and a surface that refused
+    /// here would leave "points at a ksx that no longer exists" with no way out
+    /// but a shell.
+    ///
+    /// Returns the view read back AFTER the change, never a prediction of it -
+    /// the same rule `winusb_prepare` follows. A caller that trusts the request
+    /// rather than the re-read is a caller that will eventually report a
+    /// registration that is not there.
+    fn set_autostart(
+        &self,
+        spec: &ksx_api::AutostartSpec,
+    ) -> Result<ksx_api::AutostartView, Refusal> {
+        if !spec.confirm {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "changing what happens at sign-in was not confirmed".to_owned(),
+                "tick the box, then try again",
+            ));
+        }
+        if spec.enable {
+            // The DEFAULTS, spelled once: the tray daemon, so the cabinet comes
+            // up ready for any game rather than locked to one; the default
+            // delay, so ksx is not racing the shell for the USB tree; the
+            // default task name, so `ksx autostart --status` and this button
+            // are talking about the same task.
+            let task = autostart::spec_for_current_exe(
+                autostart::TaskMode::Daemon,
+                None,
+                Vec::new(),
+                DEFAULT_AUTOSTART_DELAY_SECS,
+                None,
+            )
+            .map_err(autostart_refusal)?;
+            let plan = autostart::enable_plan(task).map_err(autostart_refusal)?;
+            autostart::apply(&plan).map_err(autostart_refusal)?;
+        } else {
+            autostart::remove_verified(autostart::DEFAULT_TASK_NAME).map_err(autostart_refusal)?;
+        }
+        autostart_view()
+    }
+
     /// The one thing the cabinet could not previously ask for.
     ///
     /// Until now this fell through to the trait's default, which REFUSES with

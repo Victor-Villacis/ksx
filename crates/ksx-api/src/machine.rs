@@ -168,6 +168,25 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Register or remove the logon task.**
+    ///
+    /// The one machine-lifecycle write that belongs on a surface other than
+    /// the CLI, and the reason is `FIRST-RUN.md`: a cabinet that does not come
+    /// up on its own is not commissioned, and the flow that commissions it
+    /// promises no terminal. `parity.rs` used to exempt this verb as "not
+    /// something anyone performs while ksx runs" - true of a running ksx,
+    /// false of the ten minutes in which somebody is setting one up.
+    ///
+    /// Registers a PER-USER task. No elevation, no service, nothing outside
+    /// the signed-in account - which is what makes it safe to reach from the
+    /// same page that staged the controllers, unlike the WinUSB verbs above.
+    fn set_autostart(&self, _spec: &AutostartSpec) -> Result<AutostartView, Refusal> {
+        Err(Refusal::not_here(
+            "changing the autostart registration",
+            "run `ksx autostart --enable`",
+        ))
+    }
+
     /// `ksx doctor` — driver health plus advice, with the stable codes.
     fn doctor(&self) -> Result<DoctorView, Refusal> {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
@@ -1722,6 +1741,38 @@ pub struct AutostartView {
     pub mode: Option<String>,
     /// The games.toml profile it is pointed at, if any.
     pub profile: Option<String>,
+    /// **The registration exists but will not do what it says** -
+    /// `ksx_platform::autostart::Staleness`, flattened to the one question a
+    /// surface asks. The failure it catches is silent: ksx is reinstalled, the
+    /// task keeps the old path, and the cabinet cold-boots to a desktop weeks
+    /// later with nothing on screen to say why.
+    #[serde(default)]
+    pub stale: bool,
+    /// Why, when it is. Composed here rather than reflected from
+    /// `Staleness::message`, whose remedy sentence names a CLI command - the
+    /// exact thing `FIRST-RUN.md` §6 says a surface must never be reduced to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_detail: Option<String>,
+}
+
+/// What a first-run surface may ask of the logon task: on, or off.
+///
+/// Deliberately NOT the CLI's option set. `ksx autostart` carries `--mode`,
+/// `--game`, `--delay-secs` and `--task-name` because somebody scripting a
+/// cabinet build needs them. Somebody finishing their first setup does not,
+/// and each knob offered here is one more that can be set wrong on the single
+/// screen whose whole promise is that it cannot be. Enabling registers the
+/// tray daemon at the default delay under the default task name - what
+/// `ksx autostart --enable` does with no flags.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutostartSpec {
+    /// On or off. Re-enabling an already-registered task REWRITES it, which is
+    /// also how a stale registration is repaired.
+    pub enable: bool,
+    /// The user ticked the box. Mirrors the WinUSB specs' consent fields for
+    /// the same reason: a bare POST is not consent.
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// `ksx doctor`, presentation-shaped: the rows, plus the advice with its

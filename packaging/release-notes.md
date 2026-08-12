@@ -16,29 +16,28 @@
 
 ## New in this release
 
-- **ksx can start when you sign in.** The first-run screen has a last step:
-  turn it on and the machine comes up ready on its own - no keyboard, no
-  mouse, nobody standing at it. This was possible before only by typing a
-  command, which is a strange thing to require of the one setting up a cabinet
-  that is supposed to run unattended. It also notices when the registration
-  has gone out of date - if ksx was reinstalled somewhere else, the old entry
-  would quietly start nothing at all - and offers to point it back here.
+- **Your keyboard settings can be changed after you set them up.** Two answers
+  used to be permanent once first run was over. Whether a keyboard is frozen
+  for play or split between the game and typing can now be changed on the
+  Setup screen. And what a stick does when it is pushed left and right at the
+  same time - which decides whether a fighting-game motion comes out as a jump
+  or a crouch - can be set per player, where before it could only be reached by
+  editing a file by hand.
+
+- **ksx shows what it has left behind.** Preparing a keyboard writes a note to
+  itself so it can undo the change later. Those notes were never shown
+  anywhere, so a computer could be carrying nine finished jobs it had never
+  tidied up while every screen reported everything was fine. The Devices screen
+  now says so, and says plainly whether it matters - stale notes about
+  keyboards that are working are housekeeping, and a keyboard that was never
+  given back is not.
 
 ## Fixed in this release
 
-- **A four-player panel can be set up.** Adding controllers used to work twice
-  and then refuse, with no useful explanation. Each controller starts from a
-  layout, and most layouts describe two players; the screen kept offering one
-  of those for player 3 and player 4, where it cannot work. The menu now
-  offers a layout that fits the controller being added. Layouts that do not
-  fit are still listed - sharing one player's keys across two controllers is a
-  real thing to want - they are simply no longer the suggestion.
-
-- **The screen says what went wrong.** Every failure while building a setup
-  reported the same sentence: "Setup could not be updated. Reopen ksx and try
-  again." That was wrong often enough to matter - the app usually knew exactly
-  what the problem was and what would fix it, and threw that away. It now says
-  it.
+- **A keyboard ksx is holding no longer says "Ready to use".** The banner at
+  the top of the first-run screen would say a keyboard was being held and could
+  not type, and the list ten lines below would call the same keyboard ready.
+  One keyboard, one screen, two answers.
 
 ## Get it
 

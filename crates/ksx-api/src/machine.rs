@@ -208,6 +208,18 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **What ksx left behind**, compared against what Windows reports.
+    ///
+    /// Read-only: reads the receipt store, the device tree and the driver
+    /// store, and changes none of them. `ksx winusb repair --dry-run` is the
+    /// same read; this exists so it is not the only way to see it.
+    fn winusb_residue(&self) -> Result<WinusbResidueView, Refusal> {
+        Err(Refusal::not_here(
+            "what ksx left behind on this machine",
+            "run `ksx winusb repair --dry-run`",
+        ))
+    }
+
     /// `ksx doctor` — driver health plus advice, with the stable codes.
     fn doctor(&self) -> Result<DoctorView, Refusal> {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
@@ -1335,6 +1347,58 @@ pub struct BlockingView {
     /// different claims and a page that conflates them is lying at exactly the
     /// moment somebody is testing whether the change worked.
     pub session_running: bool,
+}
+
+/// **What ksx left behind on this machine, and whether it matters.**
+///
+/// Every WinUSB preparation writes a receipt to `%ProgramData%\KSX\WinUSB`.
+/// `ksx winusb repair` has always been able to compare those receipts against
+/// the device tree; NOTHING has ever shown the result on a screen. So a machine
+/// could carry ten receipts, nine of them describing jobs that finished long
+/// ago, and every surface would report a clean bill of health - because every
+/// surface reads the device tree, and the device tree is genuinely fine.
+///
+/// The distinction that decides the wording is the domain's own
+/// (`Drift::is_bookkeeping`): a stale RECORD is housekeeping and a keyboard
+/// nobody gave back is not. Conflating them would either alarm somebody whose
+/// cabinet works, or reassure somebody whose keyboard does not type.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WinusbResidueView {
+    /// The receipt store could be read. `false` renders the reason, never
+    /// "nothing to clean up" - an unreadable store is not an empty one.
+    pub readable: bool,
+    /// Why not, when it could not be read.
+    pub error: String,
+    /// Receipts on this machine, in total.
+    pub receipts: usize,
+    /// How many disagree with what Windows reports.
+    pub drifted: usize,
+    /// **Every disagreement is a stale record.** True means no keyboard is
+    /// affected and this is tidying; false means at least one board is still
+    /// holding a driver package that a person can feel.
+    pub bookkeeping_only: bool,
+    /// The state in one sentence.
+    pub line: String,
+    /// What it means for the person reading, and what would change it.
+    pub detail: String,
+    /// One row per disagreement. Empty when everything agrees.
+    pub rows: Vec<WinusbResidueRow>,
+}
+
+/// One receipt that disagrees with the machine.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WinusbResidueRow {
+    /// The board it was about, named the way `/devices` names boards - never
+    /// the raw instance path, which is support detail (`FIRST-RUN.md` §5).
+    pub board: String,
+    /// What the receipt says, in the user's words.
+    pub says: String,
+    /// What the machine says.
+    pub machine: String,
+    /// Settling this one needs only a journal write.
+    pub bookkeeping: bool,
+    /// Short id, for a support conversation.
+    pub reference: String,
 }
 
 /// Consent and identity for an exact-device WinUSB preparation.

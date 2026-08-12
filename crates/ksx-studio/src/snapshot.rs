@@ -131,6 +131,13 @@ pub struct PadsPayload {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicesPayload {
     pub scan: ksx_api::DeviceScanView,
+    /// **What ksx left behind**, from `MachineSource::winusb_residue`. A
+    /// SEPARATE read from the scan and deliberately so: the device tree is the
+    /// thing that looks healthy while the receipt store disagrees with it, and
+    /// a page that only ever read the tree is why nine stale receipts sat
+    /// unreported on the reporting machine.
+    #[serde(default)]
+    pub residue: ksx_api::WinusbResidueView,
     /// Session state, for the header pill and for the one caution this page
     /// owes a running cabinet: a `[[device]]` edit lands in `config.toml`, and
     /// the session already running keeps the devices it opened until it is

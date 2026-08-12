@@ -2118,6 +2118,10 @@ pub struct SetupView {
     /// ways.
     #[serde(default)]
     pub blocking_options: Vec<crate::stage::BlockingOption>,
+    /// What opposite directions can be made to do, per slot. Served for the
+    /// same reason the blocking answers are: the wording is the domain's.
+    #[serde(default)]
+    pub socd_options: Vec<crate::stage::SocdOption>,
     /// **Support detail, never an interface.** A person setting a cabinet up
     /// does not operate on a directory — they import, export, and follow the
     /// steps. This is here so a bug report can quote it, and it belongs in
@@ -2170,6 +2174,7 @@ impl Default for SetupView {
             // would render the question as unanswerable rather than unread.
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
+            socd_options: crate::stage::SocdOption::roster(),
             config_root: String::new(),
             config_exists: false,
             devices: Vec::new(),
@@ -2203,6 +2208,10 @@ pub struct SetupSlotRow {
     pub device: String,
     pub preset: String,
     pub persona: String,
+    /// What opposite directions do on this slot - a `ksx_core::Socd` name.
+    /// Shown so a row states its own policy instead of leaving it invisible.
+    #[serde(default)]
+    pub socd: String,
     /// `config.toml`, or the games.toml profile title this slot lives in.
     pub source: String,
 }

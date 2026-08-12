@@ -3003,6 +3003,10 @@ struct SetupSlotForm {
     /// no profile, so `config.toml`'s `[[slot]]` list.
     #[serde(default)]
     profile: Option<String>,
+    /// The SOCD `<select>`. Blank means "not asked about", which is what the
+    /// form posts when the row is left alone.
+    #[serde(default)]
+    socd: Option<String>,
     /// The persona `<select>`, whose "(leave it as it is)" sentinel is the
     /// empty string. Blank never means `xbox360`: it means the form was not
     /// asked about the persona, and the slot keeps whatever it presents itself
@@ -3106,6 +3110,14 @@ async fn setup_form_slot(
             .as_deref()
             .map(str::trim)
             .filter(|p| !p.is_empty())
+            .map(str::to_owned),
+        // Same rule, same reason: verbatim, blank dropped, parsed and refused
+        // by the backend. `Socd::FromStr` is ksx-core's and stays there.
+        socd: form
+            .socd
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .map(str::to_owned),
         reload: true,
     };

@@ -1092,6 +1092,9 @@ pub struct SetupRows {
     /// The split-or-freeze answers, current one marked. Composed here so the
     /// browser never decides which of the three is chosen.
     pub blocking: Vec<SetupBlockingRowView>,
+    /// The SOCD `<select>`'s options, served. The blank "leave it as it is"
+    /// entry is the FORM's, not a policy, so it is not in here.
+    pub socd_options: Vec<SetupOptionRowView>,
 }
 
 impl SetupRows {
@@ -1123,7 +1126,18 @@ impl SetupRows {
                 .iter()
                 .map(|slot| SetupPairRowView {
                     title: format!("Slot {} — {}", slot.number, slot.preset),
-                    detail: format!("{} · {} · {}", slot.device, slot.persona, slot.source),
+                    // The SOCD is named ONLY when it is doing something.
+                    // "off" is the default and the overwhelming majority of
+                    // rows, and a detail line that repeated it on every slot
+                    // would bury the one row where it matters.
+                    detail: if slot.socd.is_empty() || slot.socd == "off" {
+                        format!("{} · {} · {}", slot.device, slot.persona, slot.source)
+                    } else {
+                        format!(
+                            "{} · {} · {} · {}",
+                            slot.device, slot.persona, slot.socd, slot.source
+                        )
+                    },
                 })
                 .collect(),
             slot_options: (1..=view.max_slots)
@@ -1148,6 +1162,14 @@ impl SetupRows {
                 .notes
                 .iter()
                 .map(|note| SetupTextRowView { text: note.clone() })
+                .collect(),
+            socd_options: view
+                .socd_options
+                .iter()
+                .map(|option| SetupOptionRowView {
+                    value: option.name.clone(),
+                    label: option.title.clone(),
+                })
                 .collect(),
             blocking: view
                 .blocking_options
@@ -3377,6 +3399,7 @@ mod tests {
                 device: "P1 board".to_owned(),
                 preset: "Panel P1".to_owned(),
                 persona: "Xbox 360 pad".to_owned(),
+                socd: String::new(),
                 source: "config.toml".to_owned(),
             }],
             presets: vec!["Panel P1".to_owned()],

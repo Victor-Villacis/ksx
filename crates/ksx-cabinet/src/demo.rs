@@ -292,6 +292,7 @@ mod tests {
             preset: Some("Panel P2".into()),
             profile: None,
             persona: None,
+            socd: None,
             reload: true,
         });
         assert!(!assigned.ok);

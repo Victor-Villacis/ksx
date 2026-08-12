@@ -35,6 +35,9 @@ pub enum Action {
         /// `None` = leave the slot's persona exactly as it is. Never
         /// `Persona::default()`: see [`crate::slots::SlotSpec::persona`].
         persona: Option<ksx_core::Persona>,
+        /// `None` = leave the slot's SOCD exactly as it is. Never
+        /// `Socd::default()`, which is `off`: see [`crate::slots::SlotSpec::socd`].
+        socd: Option<ksx_core::Socd>,
         profile: Option<String>,
         /// Ask a RUNNING daemon to take the new wiring now. A bounce: the pads
         /// replug. With nothing running there is nothing to do.
@@ -55,6 +58,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             slot,
             preset,
             persona,
+            socd,
             profile,
             reload,
         } => assign(
@@ -63,6 +67,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 slot,
                 preset,
                 persona,
+                socd,
                 profile,
             },
             reload,

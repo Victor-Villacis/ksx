@@ -93,6 +93,7 @@ const LIST_SLOT_DEVICES: &str = "list:deviceRows:array";
 const LIST_SLOT_SLOTS: &str = "list:slotRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
 const LIST_SLOT_BLOCKING: &str = "list:blockingRows:array";
+const LIST_SLOT_SOCD_OPTIONS: &str = "list:socdOptions:array";
 
 /// How many `createShow` pairs this page has; pinned by the layout test
 /// alongside every name.
@@ -156,7 +157,7 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
 /// which is docs/SURFACES.md §1 drift with a runtime cost: the two copies
 /// could disagree between the SSR paint and the first poll. Now both read the
 /// rows `SetupPayload::composed` filled, so they cannot.
-fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 8] {
+fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
     let rows = &payload.rows;
 
     let steps = SlotValue::array(
@@ -194,6 +195,17 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 8] {
                 .collect(),
         )
     };
+    let socd_options = SlotValue::array(
+        rows.socd_options
+            .iter()
+            .map(|option| {
+                SlotValue::object(vec![
+                    ("value".to_owned(), SlotValue::Text(option.value.clone())),
+                    ("label".to_owned(), SlotValue::Text(option.label.clone())),
+                ])
+            })
+            .collect(),
+    );
     let presets = text_rows(&rows.preset_options);
     let profiles = text_rows(&rows.profile_options);
     let notes = text_rows(&rows.notes);
@@ -240,6 +252,7 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 8] {
         (LIST_SLOT_SLOTS, slots),
         (LIST_SLOT_NOTES, notes),
         (LIST_SLOT_BLOCKING, blocking),
+        (LIST_SLOT_SOCD_OPTIONS, socd_options),
     ]
 }
 
@@ -400,6 +413,7 @@ mod tests {
                 device: "P1 board".into(),
                 preset: "Panel P1".into(),
                 persona: "Xbox 360 pad".into(),
+                socd: String::new(),
                 source: "config.toml".into(),
             }],
             presets: vec!["Panel P1".into(), "default".into()],
@@ -533,6 +547,7 @@ mod tests {
                 LIST_SLOT_STEPS,
                 LIST_SLOT_SLOT_OPTIONS,
                 LIST_SLOT_PRESET_OPTIONS,
+                LIST_SLOT_SOCD_OPTIONS,
                 LIST_SLOT_PROFILE_OPTIONS,
                 LIST_SLOT_DEVICES,
                 LIST_SLOT_SLOTS,

@@ -532,6 +532,20 @@ pub struct SlotAssignRequest {
     /// It exists now; §10 records the decision that was re-taken to add it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
+    /// **What opposite directions on this slot's stick do** - a
+    /// [`ksx_core::Socd`] name (`off`, `neutral`, `up-priority`).
+    ///
+    /// ABSENT means "not asked about", the same three-state rule
+    /// [`Self::persona`] follows and for the same reason: `Socd::default()` is
+    /// `off`, so a defaulted field would switch a fighting cabinet's SOCD off
+    /// the first time somebody re-pointed a preset.
+    ///
+    /// A **string**, not a parsed `Socd`, for the reason [`Self::persona`] is
+    /// one: ksx-core carries no serde and owns the one lenient `FromStr`. The
+    /// backend parses it and refuses an unknown name in words that list the
+    /// valid ones (`unknown-socd`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socd: Option<String>,
     /// Apply it to a RUNNING session.
     ///
     /// Unlike every other `reload` on this protocol this one is a **bounce**,
@@ -563,9 +577,10 @@ impl SlotAssignRequest {
         };
         let preset = field(request, "preset");
         let persona = field(request, "persona");
-        if preset.is_none() && persona.is_none() {
+        let socd = field(request, "socd");
+        if preset.is_none() && persona.is_none() && socd.is_none() {
             return Err(bad_request(
-                r#"slot-assign needs a "preset" (which preset this slot uses), a "persona" (which controller it presents itself as), or both — with neither there is nothing to change"#,
+                r#"slot-assign needs a "preset" (which preset this slot uses), a "persona" (which controller it presents itself as), or a "socd" (what opposite directions do) — with none of them there is nothing to change"#,
             ));
         }
         Ok(Self {
@@ -580,6 +595,7 @@ impl SlotAssignRequest {
             // copy of the alias table that field's doc comment exists to
             // prevent.
             persona,
+            socd,
             reload: flag(request, "reload"),
         })
     }
@@ -1452,12 +1468,13 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 3, allow_sh
     ///
     /// Breaks against: any further field on the request, in either direction.
     #[test]
-    fn slot_assign_carries_slot_preset_profile_persona_and_reload() {
+    fn slot_assign_carries_slot_preset_profile_persona_socd_and_reload() {
         let full = SlotAssignRequest {
             slot: 1,
             preset: Some("P1".into()),
             profile: Some("Four-player Example".into()),
             persona: Some("playstation".into()),
+            socd: Some("up-priority".into()),
             reload: true,
         };
         let mut fields: Vec<String> = serde_json::to_value(&full)
@@ -1470,7 +1487,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 3, allow_sh
         fields.sort();
         assert_eq!(
             fields,
-            vec!["persona", "preset", "profile", "reload", "slot"],
+            vec!["persona", "preset", "profile", "reload", "slot", "socd"],
             "the config-writing wire's field set — see docs/SURFACES.md §10"
         );
 

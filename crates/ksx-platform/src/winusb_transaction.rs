@@ -2969,12 +2969,28 @@ mod windows_trust {
             }
             duplicate = Some(CertificateContext(context));
         }
-        drop(store);
+        // Deleted while the store is STILL OPEN, and closed afterwards.
+        //
+        // The enumeration above is finished by here, so nothing is
+        // invalidated by deleting -- which is the only reason the duplicate
+        // context exists at all. Closing first looked harmless and was not:
+        // the delete reported success and never committed, so compensation
+        // found the certificate still present, called itself a failed
+        // rollback, and left the transaction recovery-required with one
+        // certificate per attempt in LocalMachine Root and TrustedPublisher.
+        // Six of each on the reporting machine.
+        //
+        // The measurement behind the write-access flag above was a .NET
+        // `X509Store.Open(ReadWrite)` + `Remove()` on that same machine,
+        // which commits -- and which holds the store open across the delete.
+        // Only the write-access half of what it proved was ported. This is
+        // the other half.
         if let Some(duplicate) = duplicate {
             unsafe { CertDeleteCertificateFromStore(duplicate.into_raw()) }.map_err(|err| {
                 TransactionError::Windows(format!("delete LM\\{name} certificate: {err}"))
             })?;
         }
+        drop(store);
         let verify = open_machine_store(name)?;
         let mut previous = None;
         while let Some(cert) = (unsafe { next_certificate(verify.0, previous) })? {
@@ -4702,6 +4718,35 @@ mod tests {
                 !is_ksx_package(&named(near_miss)),
                 "{near_miss} is not a ksx package name"
             );
+        }
+    }
+
+    /// The REAL certificate residue on the machine this runs on, removed by
+    /// the real code.
+    ///
+    /// Ignored: it needs elevation and it deletes certificates. It only ever
+    /// touches subjects beginning `CN=KSX WinUSB `, which nothing but ksx
+    /// mints.
+    ///
+    /// It exists because certificate deletion is the one step in a release
+    /// whose failure is invisible until afterwards -- the API reports success
+    /// and the verification, a fresh store read, is the only thing that
+    /// notices. Two separate mistakes hid there: a store opened without write
+    /// access, and then a store closed before the delete. Both were found on a
+    /// real machine and neither could be, in CI, because a runner has no
+    /// certificates to delete.
+    ///
+    /// ```text
+    /// cargo test -p ksx-platform --lib the_real_certificate -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs an elevated prompt; deletes CN=KSX WinUSB certificates"]
+    fn the_real_certificate_residue_on_this_machine_is_removable() {
+        match WindowsTrustVerifier.cleanup_owned_residue() {
+            Ok(()) => println!("every KSX-owned certificate and key container is gone"),
+            Err(err) => panic!(
+                "KSX-owned trust residue could not be removed, which is what turns a                  successful rebind into \"RECOVERY REQUIRED\": {err}"
+            ),
         }
     }
 

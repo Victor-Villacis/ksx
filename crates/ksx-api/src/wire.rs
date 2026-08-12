@@ -50,6 +50,11 @@ pub enum Request {
         profile: Option<String>,
     },
     Stop,
+    /// **Put back what [`Self::Stop`] stopped.** No argument: the daemon knows
+    /// what it started (`crate::SessionOrigin`) and a surface does not — see
+    /// [`crate::ControlSource::resume`] for why this is not `Start` with a
+    /// profile.
+    Resume,
     Reload,
     /// Stop the daemon process itself. Unlike [`Self::Stop`], success means
     /// the daemon has finished its teardown handshake and is closing the
@@ -95,6 +100,7 @@ impl Request {
             Self::Status => "status",
             Self::Start { .. } => "start",
             Self::Stop => "stop",
+            Self::Resume => "resume",
             Self::Reload => "reload",
             Self::Quit => "quit",
             Self::Map(_) => "map",
@@ -636,7 +642,11 @@ impl Response {
         };
         Ok(match request {
             Request::Status => Self::Status(serde_json::from_value(value).map_err(read(verb))?),
-            Request::Start { .. } | Request::Stop | Request::Reload | Request::Quit => {
+            Request::Start { .. }
+            | Request::Stop
+            | Request::Resume
+            | Request::Reload
+            | Request::Quit => {
                 Self::Action(serde_json::from_value(value).map_err(read(verb))?)
             }
             Request::Map(_) => Self::Map(serde_json::from_value(value).map_err(read(verb))?),
@@ -716,6 +726,13 @@ pub struct StatusResponse {
     /// The games.toml profile the daemon is pointed at.
     #[serde(default)]
     pub game: Option<String>,
+    /// What the running — or most recently started — session was built FROM:
+    /// `config` or `staged` (`crate::SessionOrigin`). A daemon older than this
+    /// field sends none, and the reader turns that into `Unknown` rather than
+    /// into "the config on disk", because the difference decides whether a
+    /// resume puts an unsaved setup back or replaces it.
+    #[serde(default)]
+    pub origin: Option<String>,
     /// The daemon's own one-line self-description — the tray tooltip.
     #[serde(default)]
     pub tooltip: Option<String>,
@@ -1113,6 +1130,10 @@ mod tests {
     fn every_verb_serializes_to_the_documented_request_line() {
         assert_eq!(Request::Status.to_line(), r#"{"verb":"status"}"#);
         assert_eq!(Request::Stop.to_line(), r#"{"verb":"stop"}"#);
+        // Resume carries NOTHING — no profile, no flag. The daemon answers it
+        // from what it started, and a field here would be a surface's guess
+        // travelling in place of the daemon's fact.
+        assert_eq!(Request::Resume.to_line(), r#"{"verb":"resume"}"#);
         assert_eq!(Request::Reload.to_line(), r#"{"verb":"reload"}"#);
         assert_eq!(Request::Quit.to_line(), r#"{"verb":"quit"}"#);
         assert_eq!(Request::LearnKey.to_line(), r#"{"verb":"learn-key"}"#);
@@ -1142,6 +1163,7 @@ mod tests {
                 profile: Some("Example Launcher".into()),
             },
             Request::Stop,
+            Request::Resume,
             Request::Reload,
             Request::Quit,
             Request::Map(MapRequest {

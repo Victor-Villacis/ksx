@@ -48,6 +48,34 @@ pub trait ControlSource: Send + Sync {
     fn stop(&self) -> Result<String, Refusal>;
     fn reload(&self) -> Result<String, Refusal>;
 
+    /// **Put back the session that was stopped** — the other half of
+    /// [`Self::stop`], and deliberately not [`Self::start`] with an argument.
+    ///
+    /// Start means *the config on disk*: it is what the tray sends, and it
+    /// clears any staged override so that a Start after somebody played an
+    /// unsaved setup runs what is saved. That rule is right, and it is exactly
+    /// why it is the wrong verb for coming back from a pause — a session
+    /// started from a staged setup (`docs/FIRST-RUN.md` §2) has no profile and
+    /// no file, so "start again" both fails to find it and drops the daemon's
+    /// pointer at it on the way past.
+    ///
+    /// So the daemon answers this one from what it actually ran
+    /// ([`SessionOrigin`]): a staged session resumes staged — re-committed
+    /// from the setup as it stands NOW, so edits made while paused are in it —
+    /// and a config/profile session resumes that. A surface sends no argument,
+    /// because a surface cannot know which of the two it paused.
+    ///
+    /// A resume that cannot happen refuses **without destroying anything**:
+    /// a staged setup that is no longer complete stays staged and the sentence
+    /// says which part is missing.
+    fn resume(&self) -> Result<String, Refusal> {
+        Err(Refusal::new(
+            codes::NOT_HERE,
+            "this control source cannot resume a session — a daemon holds what was \
+             running (`ksx daemon`)",
+        ))
+    }
+
     /// Ask the daemon to listen for the next panel key (pipe `learn-key`).
     fn learn_start(&self) -> LearnView {
         LearnView::unavailable("this control source has no learner")
@@ -880,6 +908,59 @@ impl BindConflict {
     }
 }
 
+/// **What the session the daemon last started was built FROM** — the answer to
+/// "what would putting it back mean".
+///
+/// It exists because "start" and "resume" are not the same act and one of them
+/// was standing in for the other. A session started from a STAGED setup
+/// (`docs/FIRST-RUN.md` §2) has no profile and no file behind it, so a surface
+/// that remembered "which profile was running" remembered `None` and asked for
+/// a plain start — which is defined as *the config on disk* and deliberately
+/// drops the staged override on the way. The paused session never came back.
+///
+/// The daemon knows which it started; nothing else can. So it says so, and
+/// [`ControlSource::resume`] is the verb that reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionOrigin {
+    /// **The daemon did not say.** An older daemon, a control source with no
+    /// session at all, or a word this build does not know.
+    ///
+    /// Never to be read as [`Self::Config`]: "I was not told" and "it came off
+    /// disk" are different facts, and the second one decides whether a resume
+    /// puts back an unsaved setup or throws it over.
+    #[default]
+    Unknown,
+    /// `config.toml`, optionally under a games.toml profile — the ordinary
+    /// session, and what a tray Start always means.
+    Config,
+    /// A **staged** setup that was never written (`docs/FIRST-RUN.md` §2).
+    /// There is no file to re-read: putting this back means playing the setup
+    /// the daemon is still holding.
+    Staged,
+}
+
+impl SessionOrigin {
+    /// The wire word, and the one [`Self::parse`] reads back.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Config => "config",
+            Self::Staged => "staged",
+        }
+    }
+
+    /// A wire word → an origin. Anything else is [`Self::Unknown`], because a
+    /// word this build cannot read is not evidence about which session ran.
+    pub fn parse(word: &str) -> Self {
+        match word.trim() {
+            "config" => Self::Config,
+            "staged" => Self::Staged,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// What the session panel needs to know, presentation-shaped like
 /// [`crate::StatusSnapshot`]: the provider composes the line, a surface only
 /// places it and picks which controls to render.
@@ -896,13 +977,21 @@ pub struct SessionView {
     pub line: String,
     /// The games.toml profile the daemon is pointed at, if any.
     ///
-    /// Two jobs, both about not losing the user's place: the mapper's
-    /// "Pause emulation & map" remembers it so "Resume emulation" starts the
-    /// SAME thing back up, and the no-daemon banner prints the exact command
-    /// (`ksx daemon --game "Example Launcher"`) rather than a generic one that would
-    /// start the wrong profile.
+    /// Two jobs, both about not losing the user's place: the no-daemon banner
+    /// prints the exact command (`ksx daemon --game "Example Launcher"`) rather
+    /// than a generic one that would start the wrong profile, and the mapper
+    /// names what it paused in the sentence it shows while paused.
+    ///
+    /// It is **not** how emulation comes back. That is
+    /// [`ControlSource::resume`], because a staged session has no profile to
+    /// remember and remembering `None` is indistinguishable from remembering
+    /// "the config on disk" — see [`SessionOrigin`].
     #[serde(default)]
     pub profile: Option<String>,
+    /// What the running (or last) session was built from, so a surface can say
+    /// what Resume will put back instead of guessing.
+    #[serde(default)]
+    pub origin: SessionOrigin,
 }
 
 impl SessionView {
@@ -913,6 +1002,9 @@ impl SessionView {
             running: false,
             line: reason.into(),
             profile: None,
+            // Nothing answered, so nothing is known about what ran. `Unknown`
+            // is the whole point of the variant.
+            origin: SessionOrigin::Unknown,
         }
     }
 }
@@ -949,6 +1041,9 @@ impl From<crate::wire::StatusResponse> for SessionView {
             running,
             line,
             profile: status.game,
+            // A daemon that does not send the field said nothing, and
+            // `parse` turns "nothing" into `Unknown` rather than into a guess.
+            origin: SessionOrigin::parse(status.origin.as_deref().unwrap_or_default()),
         }
     }
 }

@@ -81,7 +81,7 @@ pub use ksx_core::MAX_SLOTS;
 pub use client::{Client, VerbSink};
 pub use control::{
     map_request, multi_key_refusal, with_key, without_key, BindConflict, BindOutcome, BindRequest,
-    ControlSource, LearnView, MacroOutcome, MacroWrite, SessionView, SlotOutcome,
+    ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin, SessionView, SlotOutcome,
 };
 pub use live::{
     KeyHit, LiveEnvelope, LiveFeed, LiveFrame, LiveSource, LiveStream, NoFeed, NoLiveSource,

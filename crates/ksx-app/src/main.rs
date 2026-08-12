@@ -1354,6 +1354,43 @@ enum WinusbCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Give EVERY ksx-claimed keyboard back to Windows (DRY RUN unless --yes)
+    ///
+    /// The recovery for a damaged installation. Every other release starts
+    /// from a receipt in C:\ProgramData\KSX; this one asks Windows what is
+    /// bound and removes the driver packages ksx published, so it still works
+    /// when that folder has been deleted, emptied, or corrupted.
+    ///
+    /// It only ever gives keyboards back, never takes one, so there is no
+    /// device to name and no consent to collect beyond --yes.
+    ReleaseAll {
+        /// Print what would run; change nothing (the default)
+        #[arg(long)]
+        dry_run: bool,
+        /// Actually run it (needs administrator)
+        #[arg(long)]
+        yes: bool,
+        /// JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Say what the journal and the machine disagree about, and settle it
+    ///
+    /// Reporting needs no administrator; only --yes does. Drift is ordinary:
+    /// Windows Update replaces a driver, a board moves port, a transaction dies
+    /// between the rebind and the write recording it. A product that can only
+    /// say "recovery required" about that is asking you to do the reasoning.
+    Repair {
+        /// Report only; change nothing (the default)
+        #[arg(long)]
+        dry_run: bool,
+        /// Settle what it found (needs administrator)
+        #[arg(long)]
+        yes: bool,
+        /// JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Give an interface back to the keyboard driver (DRY RUN unless --yes)
     ///
     /// The rollback: pnputil /remove-device, delete the ksx INF from the driver
@@ -1905,6 +1942,18 @@ fn main() -> anyhow::Result<()> {
                 json,
             } => winusb::run(winusb::Options {
                 action: winusb::Action::Release { device, force },
+                dry_run,
+                yes,
+                json,
+            }),
+            WinusbCommand::ReleaseAll { dry_run, yes, json } => winusb::run(winusb::Options {
+                action: winusb::Action::ReleaseAll,
+                dry_run,
+                yes,
+                json,
+            }),
+            WinusbCommand::Repair { dry_run, yes, json } => winusb::run(winusb::Options {
+                action: winusb::Action::Repair,
                 dry_run,
                 yes,
                 json,

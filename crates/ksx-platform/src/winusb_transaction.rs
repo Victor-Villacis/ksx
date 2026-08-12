@@ -1809,6 +1809,31 @@ fn audit_existing_leaf_entries(
     Ok(())
 }
 
+/// A path with the Windows verbatim disk prefix removed, for COMPARING two
+/// spellings of the same location.
+///
+/// `Path::canonicalize` returns `\\?\C:\...`; `SHGetKnownFolderPath` returns
+/// `C:\...`; and `PathBuf` compares the prefix as a component, so the two are
+/// unequal as values while naming one directory. Every place that compares a
+/// path READ FROM DISK against a path BUILT NOW has to agree about this, which
+/// is why the mapping lives in one function.
+///
+/// Only the disk prefix is stripped. `\\?\UNC\server\share` is left alone: it
+/// names something genuinely different from a local path, and quietly making a
+/// remote path look local is a worse answer than an inequality.
+fn comparable(path: &str) -> PathBuf {
+    match path.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.len() > 2
+                && rest.as_bytes()[0].is_ascii_alphabetic()
+                && rest.as_bytes()[1] == b':' =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
 #[cfg(windows)]
 fn verify_protected_directory(path: &Path) -> Result<(), TransactionError> {
     verify_protected_object(path, true)
@@ -1923,9 +1948,19 @@ impl ProgramDataStore {
         audit_known_children(&root_path, &["journal", "transactions"])?;
         audit_existing_leaf_entries(&journal_path, &transactions_path)?;
 
+        // Canonicalized, so this constructor and `open` agree about what the
+        // store's path IS rather than merely about where it points. They did
+        // not: `open` canonicalizes and this one did not, so a receipt written
+        // through one was unreadable through the other, and the comparison in
+        // `validate_receipt_paths` is only the site where that surfaced. The
+        // directories exist by now -- `secure_or_create` above made them -- so
+        // canonicalizing here cannot fail for a store this call just built.
         let store = Self {
-            journal: journal_path,
-            transactions: transactions_path,
+            journal: journal_path.canonicalize().unwrap_or(journal_path),
+            transactions: transactions_path
+                .clone()
+                .canonicalize()
+                .unwrap_or(transactions_path),
         };
         // Parse every receipt and audit every child now, while all ancestor
         // handles still prevent swaps. Unknown, orphaned, malformed, or unsafe
@@ -1988,18 +2023,35 @@ impl ProgramDataStore {
             ));
         }
         let tx = self.transaction_dir(&receipt.transaction_id);
-        if Path::new(&receipt.inf_path).parent() != Some(tx.as_path())
-            || Path::new(&receipt.catalog_path).parent() != Some(tx.as_path())
-            || Path::new(&receipt.inf_path).file_name()
-                != Some(std::ffi::OsStr::new(&receipt.original_inf_name))
-            || Path::new(&receipt.catalog_path).file_name()
+        // Compared with the verbatim prefix removed from BOTH sides, because
+        // the two constructors of this store spell the same directory
+        // differently and a receipt outlives the one that wrote it:
+        // `open` canonicalizes (so every receipt on disk records
+        // `\\?\C:\ProgramData\...`) and `initialize` did not. `PathBuf` treats
+        // the prefix as a component, so this comparison answered "escaped" for
+        // every receipt ksx has ever written — and since `initialize` is the
+        // installer's post-copy step, every install on a machine that had once
+        // prepared a keyboard died on it.
+        //
+        // The traversal check this performs is unchanged: after the prefix is
+        // gone the parent must still be exactly this transaction's directory,
+        // so a `..` or an absolute path elsewhere is refused exactly as before.
+        let inf = comparable(&receipt.inf_path);
+        let catalog = comparable(&receipt.catalog_path);
+        let want = comparable(&tx.to_string_lossy());
+        if inf.parent() != Some(want.as_path())
+            || catalog.parent() != Some(want.as_path())
+            || inf.file_name() != Some(std::ffi::OsStr::new(&receipt.original_inf_name))
+            || catalog.file_name()
                 != Some(std::ffi::OsStr::new(
                     &receipt.original_inf_name.replace(".inf", ".cat"),
                 ))
         {
-            return Err(TransactionError::Journal(
-                "receipt artifact paths escaped their transaction directory".to_owned(),
-            ));
+            return Err(TransactionError::Journal(format!(
+                "receipt artifact paths escaped their transaction directory: {} is not in {}",
+                receipt.inf_path,
+                tx.display()
+            )));
         }
         Ok(tx)
     }
@@ -2917,12 +2969,28 @@ mod windows_trust {
             }
             duplicate = Some(CertificateContext(context));
         }
-        drop(store);
+        // Deleted while the store is STILL OPEN, and closed afterwards.
+        //
+        // The enumeration above is finished by here, so nothing is
+        // invalidated by deleting -- which is the only reason the duplicate
+        // context exists at all. Closing first looked harmless and was not:
+        // the delete reported success and never committed, so compensation
+        // found the certificate still present, called itself a failed
+        // rollback, and left the transaction recovery-required with one
+        // certificate per attempt in LocalMachine Root and TrustedPublisher.
+        // Six of each on the reporting machine.
+        //
+        // The measurement behind the write-access flag above was a .NET
+        // `X509Store.Open(ReadWrite)` + `Remove()` on that same machine,
+        // which commits -- and which holds the store open across the delete.
+        // Only the write-access half of what it proved was ported. This is
+        // the other half.
         if let Some(duplicate) = duplicate {
             unsafe { CertDeleteCertificateFromStore(duplicate.into_raw()) }.map_err(|err| {
                 TransactionError::Windows(format!("delete LM\\{name} certificate: {err}"))
             })?;
         }
+        drop(store);
         let verify = open_machine_store(name)?;
         let mut previous = None;
         while let Some(cert) = (unsafe { next_certificate(verify.0, previous) })? {
@@ -3116,6 +3184,492 @@ pub fn check_store() -> Result<(), TransactionError> {
 
 #[cfg(not(windows))]
 pub fn check_store() -> Result<(), TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
+/// How one receipt disagrees with the machine.
+///
+/// A receipt is a claim about hardware, and hardware changes underneath it:
+/// Windows Update replaces a driver, someone runs `pnputil` by hand, a board is
+/// moved to another port, a transaction dies between the rebind and the write
+/// that records it. None of that is exotic and none of it is corruption -- it is
+/// just a claim that has gone out of date, and a product that can only say
+/// "recovery required" about it is asking the user to do the reasoning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drift {
+    /// The receipt and the machine agree.
+    Consistent,
+    /// The receipt claims this board and the machine says it is an ordinary
+    /// keyboard again. Somebody else gave it back; the receipt is stale, not
+    /// wrong about anything that still matters.
+    StaleClaim,
+    /// The receipt stopped part-way through a release and the machine shows the
+    /// release finished. This is the shape four receipts on the reporting
+    /// machine were in: the keyboard typed perfectly and the journal said
+    /// `releasing`.
+    ReleaseFinished,
+    /// The receipt says this is over and the machine still shows a binding or a
+    /// package. The only drift that leaves a keyboard unusable, and the only
+    /// one that needs a driver operation rather than a journal write.
+    ReleaseIncomplete,
+}
+
+impl Drift {
+    /// Can this be settled by correcting the journal alone?
+    pub const fn is_bookkeeping(self) -> bool {
+        matches!(self, Self::StaleClaim | Self::ReleaseFinished)
+    }
+
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Consistent => "consistent",
+            Self::StaleClaim => "stale-claim",
+            Self::ReleaseFinished => "release-finished",
+            Self::ReleaseIncomplete => "release-incomplete",
+        }
+    }
+}
+
+/// One receipt, judged against the machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Finding {
+    pub transaction_id: String,
+    pub instance_id: String,
+    pub phase: Phase,
+    pub drift: Drift,
+}
+
+/// Compare what the journal claims against what Windows reports.
+///
+/// Pure: no clock, no registry, no pnputil. `bound` is the set of interfaces
+/// currently on `winusb.sys` and `packages` is the driver store, both read by
+/// the caller -- which is what lets every rule below be decided in CI instead of
+/// on a desk with an I-PAC on it.
+pub fn reconcile(receipts: &[Receipt], bound: &[String], packages: &[StoreDriver]) -> Vec<Finding> {
+    let bound: std::collections::BTreeSet<String> =
+        bound.iter().map(|id| id.to_uppercase()).collect();
+
+    receipts
+        .iter()
+        .map(|receipt| {
+            let is_bound = bound.contains(&receipt.target_instance_id.to_uppercase());
+            // Its OWN package, by the unique INF name minted for this
+            // transaction. This is the only residue that belongs to this
+            // receipt: a BINDING is device-level, and on a machine where the
+            // same board has been prepared more than once the live claim's
+            // binding would otherwise make every older receipt look
+            // unfinished. Acting on that would release a keyboard the user has
+            // prepared right now -- measured on the reporting machine, where
+            // two spent receipts and one live claim all name the I-PAC.
+            let residue = packages.iter().any(|p| {
+                p.original_name
+                    .eq_ignore_ascii_case(&receipt.original_inf_name)
+            });
+
+            let drift = match receipt.phase {
+                // A live claim the machine no longer honours. Nothing is
+                // broken -- the board types -- so this is bookkeeping.
+                Phase::Active if !is_bound => Drift::StaleClaim,
+                Phase::Active => Drift::Consistent,
+
+                // Stopped mid-release. If nothing is left, the release did in
+                // fact finish and only the record is behind.
+                Phase::Releasing | Phase::RecoveryRequired if !residue => Drift::ReleaseFinished,
+                Phase::Releasing | Phase::RecoveryRequired => Drift::ReleaseIncomplete,
+
+                // Terminal, or never got as far as a rebind. Either way the
+                // machine should show nothing.
+                _ if residue => Drift::ReleaseIncomplete,
+                _ => Drift::Consistent,
+            };
+
+            Finding {
+                transaction_id: receipt.transaction_id.clone(),
+                instance_id: receipt.target_instance_id.clone(),
+                phase: receipt.phase,
+                drift,
+            }
+        })
+        .collect()
+}
+
+/// ksx driver packages with no receipt to account for them.
+///
+/// The other half of the same question. A package with no receipt is what a
+/// deleted journal leaves behind, and it is invisible to [`reconcile`] because
+/// there is nothing left to reconcile it against.
+pub fn orphan_packages(receipts: &[Receipt], packages: &[StoreDriver]) -> Vec<String> {
+    packages
+        .iter()
+        .filter(|p| is_ksx_package(p))
+        .filter(|p| {
+            !receipts
+                .iter()
+                .any(|r| r.original_inf_name.eq_ignore_ascii_case(&p.original_name))
+        })
+        .map(|p| p.published_name.clone())
+        .collect()
+}
+
+/// What a repair found and what it did about it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RepairResult {
+    pub findings: Vec<Finding>,
+    /// Transactions whose recorded phase was corrected to match the machine.
+    pub corrected: Vec<String>,
+    /// Transactions whose own driver package is still installed. REPORTED,
+    /// not removed -- see the note in [`repair_with`].
+    pub released: Vec<String>,
+    /// ksx packages with no receipt at all.
+    pub orphan_packages: Vec<String>,
+    pub message: String,
+}
+
+/// Bring the journal and the machine back into agreement.
+///
+/// Three kinds of work, in increasing order of consequence, and it is worth
+/// keeping them apart:
+///
+/// 1. **Bookkeeping.** A claim the machine no longer honours, or a release that
+///    finished after the process recording it died. Nothing is wrong with the
+///    hardware; the record is behind. Corrected with a journal write.
+/// 2. **Leftovers.** A receipt says the transaction is over and its own driver
+///    package is still installed. Reported.
+/// 3. **Orphans.** A ksx package with no receipt at all. Reported.
+///
+/// **Repair never touches a driver.** It corrects the record and says what it
+/// cannot correct. That line is not timidity: deciding which of several
+/// receipts naming one board owns its current binding is exactly the reasoning
+/// that must not happen behind a user's back, and getting it wrong means
+/// releasing a keyboard somebody is using. `ksx winusb release <device>
+/// --force --yes` and [`release_all_with`] are where driver operations live,
+/// and both say what they will do before they do it.
+pub fn repair_with(env: &Environment<'_>) -> Result<RepairResult, TransactionError> {
+    let mut receipts = env.store.owned_receipts()?;
+    let survey = env.surveys.survey()?;
+    let bound = winusb_bound(&survey);
+    let packages = env.inventory.enumerate()?;
+
+    let findings = reconcile(&receipts, &bound, &packages);
+    let orphans = orphan_packages(&receipts, &packages);
+
+    let mut corrected = Vec::new();
+    let mut released = Vec::new();
+    for receipt in &mut receipts {
+        let Some(finding) = findings
+            .iter()
+            .find(|f| f.transaction_id == receipt.transaction_id)
+        else {
+            continue;
+        };
+        match finding.drift {
+            Drift::Consistent => {}
+            Drift::StaleClaim | Drift::ReleaseFinished => {
+                receipt.phase = Phase::Released;
+                receipt.recovery_reason = None;
+                env.store.update(receipt)?;
+                corrected.push(receipt.transaction_id.clone());
+            }
+            // Reported, never performed. Repair's whole job is to make the
+            // record true; a verb that also quietly ran pnputil would be a
+            // verb nobody could predict, and the device-level ambiguity above
+            // is exactly the kind of reasoning that must not happen behind a
+            // user's back. `ksx winusb release <device> --force --yes` and
+            // `release-all` are where driver operations live, and both say so
+            // before they run.
+            Drift::ReleaseIncomplete => released.push(receipt.transaction_id.clone()),
+        }
+    }
+
+    let message = format!(
+        "{} receipt(s) examined; {} corrected, {} still hold a driver package{}",
+        findings.len(),
+        corrected.len(),
+        released.len(),
+        if orphans.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} ksx package(s) have no receipt — `ksx winusb release-all` removes those",
+                orphans.len()
+            )
+        }
+    );
+    Ok(RepairResult {
+        findings,
+        corrected,
+        released,
+        orphan_packages: orphans,
+        message,
+    })
+}
+
+/// A read-only reconcile, for a surface that wants to SAY something is wrong
+/// without being the thing that fixes it.
+///
+/// The daemon runs this at startup. Before it existed, drift was discovered by
+/// a prepare failing -- which is the worst moment to learn it, because the user
+/// is mid-task and the message is about the prepare rather than about the
+/// state that made it impossible.
+#[cfg(windows)]
+pub fn reconcile_report() -> Result<(Vec<Finding>, Vec<String>), TransactionError> {
+    let store = ProgramDataStore::open()?;
+    let receipts = store.owned_receipts()?;
+    let survey = SystemSurvey.survey()?;
+    let runner = PnPUtilRunner;
+    let packages = PnPUtilInventory { runner: &runner }.enumerate()?;
+    Ok((
+        reconcile(&receipts, &winusb_bound(&survey), &packages),
+        orphan_packages(&receipts, &packages),
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn reconcile_report() -> Result<(Vec<Finding>, Vec<String>), TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
+/// Real repair. The installed elevated helper is the only intended caller.
+#[cfg(windows)]
+pub fn repair() -> Result<RepairResult, TransactionError> {
+    if crate::process::is_elevated() != Some(true) {
+        return Err(TransactionError::Windows(
+            "the WinUSB helper is not elevated".to_owned(),
+        ));
+    }
+    let _lock = MutationGuard::acquire()?;
+    ProgramDataStore::initialize()?;
+    let store = ProgramDataStore::open()?;
+    let runner = PnPUtilRunner;
+    let inventory = PnPUtilInventory { runner: &runner };
+    let provider = super::wdi::WdiProvider::installed_sibling()?;
+    let trust = WindowsTrustVerifier;
+    let surveys = SystemSurvey;
+    let environment = Environment {
+        surveys: &surveys,
+        inventory: &inventory,
+        preparer: &provider,
+        trust: &trust,
+        runner: &runner,
+        store: &store,
+    };
+    repair_with(&environment)
+}
+
+#[cfg(not(windows))]
+pub fn repair() -> Result<RepairResult, TransactionError> {
+    Err(TransactionError::Unsupported)
+}
+
+/// What a store-free release found and did.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ReleaseAllResult {
+    /// `oemNN.inf` packages removed from the driver store.
+    pub packages_removed: Vec<String>,
+    /// Interfaces that were bound to `winusb.sys` before and are not after.
+    pub interfaces_released: Vec<String>,
+    /// Interfaces still bound to `winusb.sys` afterwards. Not necessarily
+    /// ksx's -- another program may legitimately own a WinUSB device -- which
+    /// is exactly why they are reported rather than removed.
+    pub still_bound: Vec<String>,
+    pub message: String,
+}
+
+/// Everything a release needs EXCEPT the journal.
+///
+/// Deliberately not [`Environment`]: the whole point is that this works when
+/// `C:\ProgramData\KSX` has been deleted, emptied, or corrupted, so it cannot
+/// be allowed to depend on a `TransactionStore` even accidentally.
+pub struct Machine<'a> {
+    pub surveys: &'a dyn SurveySource,
+    pub inventory: &'a dyn DriverInventory,
+    pub trust: &'a dyn TrustVerifier,
+    pub runner: &'a dyn CommandRunner,
+}
+
+/// Is this driver package one ksx published?
+///
+/// Decided by the INF's ORIGINAL name, which is the one identifier ksx controls
+/// end to end: the provider refuses to prepare a package under any name but
+/// `ksx-winusb-<32 lowercase hex>.inf` (`ksx_is_safe_inf_name` in
+/// `third_party/libwdi/src/libwdi.c`), so a package carrying that shape was
+/// published by ksx and nothing else on the machine can be mistaken for one.
+///
+/// The provider string is checked too, but only as a second opinion: it is a
+/// display field, and a rule that depended on it alone would be a rule about
+/// presentation.
+pub fn is_ksx_package(driver: &StoreDriver) -> bool {
+    let name = driver.original_name.to_ascii_lowercase();
+    let Some(stem) = name
+        .strip_prefix("ksx-winusb-")
+        .and_then(|rest| rest.strip_suffix(".inf"))
+    else {
+        return false;
+    };
+    stem.len() == 32
+        && stem
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+}
+
+/// Give every ksx-claimed keyboard back to Windows, using only what the MACHINE
+/// says.
+///
+/// # Why this exists
+///
+/// Every other release path starts from a receipt. That is right when there is
+/// one, and useless in the case that actually strands somebody: the recovery
+/// store deleted by a disk cleaner, emptied by a well-meaning uninstall, or
+/// corrupted. `cleanup_owned` enumerates receipts, so with the journal gone it
+/// finds nothing to do while a keyboard stays bound to `winusb.sys` -- invisible
+/// to Windows, with no record on the machine that ksx ever touched it.
+///
+/// libwdi -- the library ksx vendors, and the one Zadig is built on -- has no
+/// answer to this at all; its documented recovery is for the user to open
+/// Device Manager. This is ksx's answer.
+///
+/// # How a package is attributed
+///
+/// By [`is_ksx_package`], and then by letting Windows do the attribution for
+/// the devices: `/delete-driver <oem> /uninstall /force` removes the package
+/// *and* unbinds every device using it, so ksx never has to decide which
+/// devnodes were its own. A WinUSB device belonging to some other program is
+/// therefore never touched -- it is reported in `still_bound` and left exactly
+/// where it is.
+///
+/// # What it does not do
+///
+/// It does not write a receipt, read one, or need the store to exist. A caller
+/// that has a healthy store should still prefer [`release_exact`], which is
+/// journaled; this is the recovery, not the routine.
+pub fn release_all_with(machine: &Machine<'_>) -> Result<ReleaseAllResult, TransactionError> {
+    let before = machine.surveys.survey()?;
+    let bound_before = winusb_bound(&before);
+
+    let inventory = machine.inventory.enumerate()?;
+    let ours: Vec<_> = inventory.iter().filter(|d| is_ksx_package(d)).collect();
+
+    if ours.is_empty() && bound_before.is_empty() {
+        return Ok(ReleaseAllResult {
+            message: "no ksx driver package and no claimed interface: nothing to release"
+                .to_owned(),
+            ..ReleaseAllResult::default()
+        });
+    }
+
+    let mut removed = Vec::new();
+    for driver in &ours {
+        // `/uninstall` takes the package off every device using it; `/force`
+        // proceeds even while a device holds it. Together they are what makes
+        // this work without knowing which devnodes were ours.
+        let delete = command(
+            &[
+                "/delete-driver",
+                &driver.published_name,
+                "/uninstall",
+                "/force",
+            ],
+            "remove a ksx-published WinUSB package and unbind every device using it",
+        )?;
+        run_required(machine.runner, &delete)?;
+        removed.push(driver.published_name.clone());
+    }
+
+    if !removed.is_empty() {
+        // Only after the packages are gone can a rescan be trusted: until then
+        // Windows could re-select one of them for the very device being freed.
+        let scan = command(
+            &["/scan-devices"],
+            "let Windows rebind the freed interfaces",
+        )?;
+        run_required(machine.runner, &scan)?;
+    }
+
+    // Absence, proved rather than assumed -- the same rule the journaled path
+    // applies to its own package.
+    let after_inventory = machine.inventory.enumerate()?;
+    let remaining: Vec<_> = after_inventory
+        .iter()
+        .filter(|d| is_ksx_package(d))
+        .map(|d| d.published_name.clone())
+        .collect();
+    if !remaining.is_empty() {
+        return Err(TransactionError::RecoveryRequired(format!(
+            "ksx driver packages survived their own removal: {remaining:?}"
+        )));
+    }
+
+    let after = machine.surveys.survey()?;
+    let bound_after = winusb_bound(&after);
+    let released: Vec<_> = bound_before
+        .iter()
+        .filter(|id| !bound_after.contains(id))
+        .cloned()
+        .collect();
+
+    // Certificates and key containers, by their fixed namespaces rather than by
+    // any receipt -- the same reason the rest of this function exists.
+    machine.trust.cleanup_owned_residue()?;
+
+    let message = format!(
+        "removed {} ksx driver package(s); {} interface(s) returned to Windows{}",
+        removed.len(),
+        released.len(),
+        if bound_after.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} WinUSB interface(s) remain and are not ksx's to remove",
+                bound_after.len()
+            )
+        }
+    );
+    Ok(ReleaseAllResult {
+        packages_removed: removed,
+        interfaces_released: released,
+        still_bound: bound_after,
+        message,
+    })
+}
+
+/// Present USB interfaces currently bound to `winusb.sys`, uppercased.
+fn winusb_bound(survey: &Survey) -> Vec<String> {
+    let mut bound: Vec<_> = survey
+        .present_usb
+        .iter()
+        .filter(|node| node.service_is(super::WINUSB_SERVICE))
+        .map(|node| node.instance_id.to_uppercase())
+        .collect();
+    bound.sort();
+    bound.dedup();
+    bound
+}
+
+/// Real store-free release. The installed elevated helper is the only intended
+/// caller.
+#[cfg(windows)]
+pub fn release_all() -> Result<ReleaseAllResult, TransactionError> {
+    if crate::process::is_elevated() != Some(true) {
+        return Err(TransactionError::Windows(
+            "the WinUSB helper is not elevated".to_owned(),
+        ));
+    }
+    let _lock = MutationGuard::acquire()?;
+    let runner = PnPUtilRunner;
+    let inventory = PnPUtilInventory { runner: &runner };
+    let trust = WindowsTrustVerifier;
+    let surveys = SystemSurvey;
+    let machine = Machine {
+        surveys: &surveys,
+        inventory: &inventory,
+        trust: &trust,
+        runner: &runner,
+    };
+    release_all_with(&machine)
+}
+
+#[cfg(not(windows))]
+pub fn release_all() -> Result<ReleaseAllResult, TransactionError> {
     Err(TransactionError::Unsupported)
 }
 
@@ -3660,6 +4214,564 @@ mod tests {
 
         fn phase(&self) -> Option<Phase> {
             self.state.lock().unwrap().receipt.as_ref().map(|r| r.phase)
+        }
+    }
+
+    /// A receipt written by `prepare_exact` belongs to its own transaction
+    /// directory, even though the two constructors spell that directory
+    /// differently.
+    ///
+    /// `ProgramDataStore::open` canonicalizes, so every receipt on disk records
+    /// `\?\C:\ProgramData\KSX\WinUSB\transactions\<id>\...`.
+    /// `ProgramDataStore::initialize` did not, so it rebuilt the same directory
+    /// as plain `C:\ProgramData\...` and then asked whether each receipt's
+    /// artifacts lived inside it. They never did: `PathBuf` compares the
+    /// verbatim prefix as a component, so the answer was always "escaped".
+    ///
+    /// The consequence was total and invisible. `initialize-store` is the
+    /// installer's post-copy step, so **every install on a machine that had
+    /// ever prepared a keyboard died with "initializer exit code 3"** — while
+    /// CI stayed green, because a runner's store is always brand new and holds
+    /// no receipts to validate.
+    ///
+    /// Fails against that version: the receipt below is refused.
+    #[test]
+    fn a_receipt_belongs_to_its_transaction_however_the_store_spells_the_path() {
+        const ID: &str = "0a468347dd47c74246cebd18d3830285";
+        // Exactly what `initialize` builds: no verbatim prefix.
+        let store = ProgramDataStore {
+            journal: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\journal"),
+            transactions: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\transactions"),
+        };
+        // Exactly what was read off the reporting machine.
+        let verbatim = format!(r"\\?\C:\ProgramData\KSX\WinUSB\transactions\{ID}\ksx-winusb-{ID}");
+        let receipt = Receipt {
+            schema: JOURNAL_SCHEMA,
+            phase: Phase::Active,
+            transaction_id: ID.to_owned(),
+            target_instance_id: TARGET.to_owned(),
+            hardware_id: r"USB\VID_D209&PID_0430&MI_00".to_owned(),
+            original_service: Some("HidUsb".to_owned()),
+            original_inf: None,
+            original_inf_name: format!("ksx-winusb-{ID}.inf"),
+            published_oem_inf: None,
+            inf_path: format!("{verbatim}.inf"),
+            catalog_path: format!("{verbatim}.cat"),
+            inf_sha256: None,
+            catalog_sha256: None,
+            certificate_subject: format!("CN=KSX WinUSB {ID}"),
+            certificate_thumbprint_sha1: None,
+            certificate_der_sha256: None,
+            affected_instance_ids: vec![TARGET.to_owned()],
+            keyboards_before: 2,
+            created_unix_seconds: 0,
+            recovery_reason: None,
+            driver_mutation_attempted: false,
+            reboot_reported: false,
+        };
+
+        let tx = store
+            .validate_receipt_paths(&receipt)
+            .expect("a receipt this store wrote is a receipt this store can read");
+        assert!(tx.ends_with(ID), "{}", tx.display());
+    }
+
+    // -----------------------------------------------------------------
+    // Reconcile: what the journal claims vs what the machine shows
+    // -----------------------------------------------------------------
+
+    fn receipt_in(phase: Phase, id: &str) -> Receipt {
+        Receipt {
+            schema: JOURNAL_SCHEMA,
+            phase,
+            transaction_id: id.to_owned(),
+            target_instance_id: DEVICE.to_owned(),
+            hardware_id: r"USB\VID_D209&PID_0430&MI_00".to_owned(),
+            original_service: Some("HidUsb".to_owned()),
+            original_inf: None,
+            original_inf_name: format!("ksx-winusb-{id}.inf"),
+            published_oem_inf: None,
+            inf_path: String::new(),
+            catalog_path: String::new(),
+            inf_sha256: None,
+            catalog_sha256: None,
+            certificate_subject: format!("CN=KSX WinUSB {id}"),
+            certificate_thumbprint_sha1: None,
+            certificate_der_sha256: None,
+            affected_instance_ids: vec![DEVICE.to_owned()],
+            keyboards_before: 2,
+            created_unix_seconds: 0,
+            recovery_reason: None,
+            driver_mutation_attempted: false,
+            reboot_reported: false,
+        }
+    }
+
+    fn package_for(id: &str) -> StoreDriver {
+        StoreDriver {
+            published_name: "oem42.inf".to_owned(),
+            original_name: format!("ksx-winusb-{id}.inf"),
+            provider: "KSX".to_owned(),
+        }
+    }
+
+    const ID: &str = "0a468347dd47c74246cebd18d3830285";
+    const DEVICE: &str = r"USB\VID_D209&PID_0430&MI_00\7&IPAC&0&0000";
+
+    fn drift_of(phase: Phase, bound: bool, package: bool) -> Drift {
+        let receipts = vec![receipt_in(phase, ID)];
+        let bound: Vec<String> = if bound {
+            vec![DEVICE.to_owned()]
+        } else {
+            Vec::new()
+        };
+        let packages = if package {
+            vec![package_for(ID)]
+        } else {
+            Vec::new()
+        };
+        reconcile(&receipts, &bound, &packages)[0].drift
+    }
+
+    /// **The four receipts on the reporting machine.** Stuck at `releasing`
+    /// beside a keyboard that typed perfectly: the rebind had committed, the
+    /// process recording it died, and every surface afterwards read the journal
+    /// and called it a failure.
+    ///
+    /// Nothing is wrong with that machine. The record is behind, and saying so
+    /// is a journal write.
+    #[test]
+    fn a_release_that_finished_after_its_receipt_stopped_is_bookkeeping() {
+        assert_eq!(
+            drift_of(Phase::Releasing, false, false),
+            Drift::ReleaseFinished
+        );
+        assert_eq!(
+            drift_of(Phase::RecoveryRequired, false, false),
+            Drift::ReleaseFinished
+        );
+        assert!(Drift::ReleaseFinished.is_bookkeeping());
+    }
+
+    /// A claim the machine no longer honours -- Windows Update replaced the
+    /// driver, or somebody ran pnputil by hand. The board types; only the
+    /// journal disagrees.
+    #[test]
+    fn a_claim_the_machine_gave_back_is_stale_not_broken() {
+        assert_eq!(drift_of(Phase::Active, false, false), Drift::StaleClaim);
+        assert!(Drift::StaleClaim.is_bookkeeping());
+        // Still claimed and still bound is simply correct.
+        assert_eq!(drift_of(Phase::Active, true, false), Drift::Consistent);
+    }
+
+    /// The one drift that leaves a keyboard unusable: the journal says the
+    /// transaction is over and this receipt's OWN driver package is still
+    /// installed. It needs a driver operation, not a journal write, and the
+    /// distinction is why `Drift` has four values rather than a bool.
+    #[test]
+    fn a_receipts_own_package_left_behind_needs_a_driver_operation() {
+        for phase in [Phase::Released, Phase::RolledBack] {
+            assert_eq!(drift_of(phase, false, true), Drift::ReleaseIncomplete);
+            assert_eq!(drift_of(phase, false, false), Drift::Consistent);
+        }
+        // A prepare that died before it finished leaves the same shape.
+        for phase in [Phase::Preparing, Phase::Prepared, Phase::Installed] {
+            assert_eq!(drift_of(phase, false, true), Drift::ReleaseIncomplete);
+            assert_eq!(drift_of(phase, false, false), Drift::Consistent);
+        }
+        assert!(!Drift::ReleaseIncomplete.is_bookkeeping());
+    }
+
+    /// A release that stopped is judged by its OWN package, never by whether
+    /// the board is bound.
+    #[test]
+    fn a_release_that_stopped_is_judged_by_its_own_package() {
+        assert_eq!(
+            drift_of(Phase::Releasing, false, true),
+            Drift::ReleaseIncomplete
+        );
+        assert_eq!(
+            drift_of(Phase::Releasing, false, false),
+            Drift::ReleaseFinished
+        );
+    }
+
+    /// **A spent receipt must not be blamed for a live claim's binding.**
+    ///
+    /// A board prepared more than once leaves several receipts naming it, and
+    /// only the newest owns the binding. Judging residue by "is this device
+    /// bound" would mark every older receipt unfinished -- and a repair that
+    /// acted on that would release a keyboard the user has prepared right now.
+    ///
+    /// Measured on the reporting machine, which is exactly this shape: one
+    /// live `active` claim on the I-PAC and several spent receipts naming the
+    /// same board.
+    ///
+    /// Fails against the version that treated a binding as residue: the spent
+    /// receipt below reads `release-incomplete`.
+    #[test]
+    fn a_spent_receipt_is_not_blamed_for_the_live_claims_binding() {
+        let live = receipt_in(Phase::Active, "1111111111111111111111111111aaaa");
+        let spent = receipt_in(Phase::Releasing, "2222222222222222222222222222bbbb");
+        // The board is bound, and the live claim's package is the one installed.
+        let bound = vec![DEVICE.to_owned()];
+        let packages = vec![package_for(&live.transaction_id)];
+
+        let findings = reconcile(&[live, spent], &bound, &packages);
+        assert_eq!(
+            findings[0].drift,
+            Drift::Consistent,
+            "the live claim is right"
+        );
+        assert_eq!(
+            findings[1].drift,
+            Drift::ReleaseFinished,
+            "a spent receipt owns no binding, so it has nothing left to finish"
+        );
+        assert!(
+            findings[1].drift.is_bookkeeping(),
+            "and settling it must never involve a driver"
+        );
+    }
+
+    /// A ksx package with no receipt is what a deleted journal leaves behind,
+    /// and `reconcile` cannot see it -- there is nothing left to reconcile it
+    /// against. It is reported rather than removed: removing a package no
+    /// receipt describes is `release-all`'s job, and a bigger hammer than
+    /// repair should swing on its own.
+    #[test]
+    fn a_package_with_no_receipt_is_reported_as_an_orphan() {
+        let orphans = orphan_packages(&[], &[package_for(ID)]);
+        assert_eq!(orphans, vec!["oem42.inf".to_owned()]);
+
+        // With its receipt present it is not an orphan.
+        let owned = orphan_packages(&[receipt_in(Phase::Active, ID)], &[package_for(ID)]);
+        assert!(owned.is_empty());
+
+        // Somebody else's package is never ksx's orphan.
+        let foreign = StoreDriver {
+            published_name: "oem99.inf".to_owned(),
+            original_name: "some-other-tool.inf".to_owned(),
+            provider: "Somebody Else".to_owned(),
+        };
+        assert!(orphan_packages(&[], &[foreign]).is_empty());
+    }
+
+    /// Instance paths are case-insensitive on Windows, and the two sides of
+    /// this comparison come from different APIs -- a receipt written once and a
+    /// survey read now. A reconcile that missed on case would report every live
+    /// claim as stale and "correct" a working claim into a lie.
+    #[test]
+    fn a_bound_interface_is_recognised_whatever_its_case() {
+        let receipts = vec![receipt_in(Phase::Active, ID)];
+        let shouted = vec![DEVICE.to_ascii_uppercase()];
+        let whispered = vec![DEVICE.to_ascii_lowercase()];
+        assert_eq!(
+            reconcile(&receipts, &shouted, &[])[0].drift,
+            Drift::Consistent
+        );
+        assert_eq!(
+            reconcile(&receipts, &whispered, &[])[0].drift,
+            Drift::Consistent
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // The store-free release: the rung that stops anyone being stranded
+    // -----------------------------------------------------------------
+
+    /// A machine with no journal at all, driven entirely from what Windows
+    /// reports. Nothing here can reach a `TransactionStore`, which is the
+    /// property under test.
+    struct Bare {
+        packages: Mutex<Vec<StoreDriver>>,
+        bound: Mutex<Vec<String>>,
+        commands: Mutex<Vec<String>>,
+    }
+
+    impl Bare {
+        fn new(packages: Vec<StoreDriver>, bound: &[&str]) -> Self {
+            Self {
+                packages: Mutex::new(packages),
+                bound: Mutex::new(bound.iter().map(|id| (*id).to_owned()).collect()),
+                commands: Mutex::new(Vec::new()),
+            }
+        }
+        fn ksx_package(id: &str, oem: &str) -> StoreDriver {
+            StoreDriver {
+                published_name: oem.to_owned(),
+                original_name: format!("ksx-winusb-{id}.inf"),
+                provider: "KSX".to_owned(),
+            }
+        }
+    }
+
+    impl SurveySource for &Bare {
+        fn survey(&self) -> Result<Survey, TransactionError> {
+            let bound = self.bound.lock().unwrap();
+            let mut nodes = Vec::new();
+            for id in bound.iter() {
+                nodes.push(node(id, HID_CLASS, "WinUSB", Some("8&x&0")));
+            }
+            // One keyboard that is always an ordinary keyboard, so a survey is
+            // never a machine with no way to type.
+            nodes.push(node(
+                r"USB\VID_A11A&PID_B22B&MI_00\SPARE",
+                HID_CLASS,
+                "HidUsb",
+                Some("8&spare&0"),
+            ));
+            nodes.push(node(
+                r"HID\VID_A11A&PID_B22B&MI_00\8&spare&0&0000",
+                super::super::KEYBOARD_CLASS_GUID,
+                "kbdhid",
+                None,
+            ));
+            Ok(Survey::from_nodes(&nodes))
+        }
+    }
+
+    impl DriverInventory for &Bare {
+        fn enumerate(&self) -> Result<Vec<StoreDriver>, TransactionError> {
+            Ok(self.packages.lock().unwrap().clone())
+        }
+    }
+
+    impl TrustVerifier for &Bare {
+        fn owned_private_keys(&self) -> Result<Vec<String>, TransactionError> {
+            Ok(Vec::new())
+        }
+        fn verify(&self, _: &ExpectedArtifacts) -> Result<TrustEvidence, TransactionError> {
+            Err(TransactionError::Unsupported)
+        }
+        fn cleanup(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<(), TransactionError> {
+            Ok(())
+        }
+    }
+
+    impl CommandRunner for &Bare {
+        fn run(&self, command: &PlannedCommand) -> Result<CommandResult, TransactionError> {
+            self.commands.lock().unwrap().push(command.args.join(" "));
+            if command.args.first().is_some_and(|a| a == "/delete-driver") {
+                let oem = command.args[1].clone();
+                // `/uninstall` takes the package off the devices using it, which
+                // is precisely why this path never has to identify them itself.
+                let mut packages = self.packages.lock().unwrap();
+                let ours: Vec<String> = packages
+                    .iter()
+                    .filter(|d| d.published_name == oem)
+                    .map(|d| d.original_name.clone())
+                    .collect();
+                packages.retain(|d| d.published_name != oem);
+                if ours.iter().any(|name| name.starts_with("ksx-winusb-")) {
+                    self.bound.lock().unwrap().retain(|id| !id.contains("IPAC"));
+                }
+            }
+            Ok(CommandResult {
+                code: 0,
+                output: String::new(),
+            })
+        }
+    }
+
+    fn release_bare(bare: &Bare) -> Result<ReleaseAllResult, TransactionError> {
+        let machine = Machine {
+            surveys: &bare,
+            inventory: &bare,
+            trust: &bare,
+            runner: &bare,
+        };
+        release_all_with(&machine)
+    }
+
+    const IPAC: &str = r"USB\VID_D209&PID_0430&MI_00\7&IPAC&0&0000";
+    const OTHER: &str = r"USB\VID_1234&PID_5678&MI_00\7&OTHER&0&0000";
+
+    /// **The rung that stops anyone being stranded.** A keyboard claimed by ksx
+    /// is given back with the journal gone entirely.
+    ///
+    /// `cleanup_owned` -- the uninstaller's path -- starts from
+    /// `store.owned_receipts()`, so a recovery store deleted by a disk cleaner
+    /// or corrupted by hand leaves it with nothing to do while the board stays
+    /// bound to `winusb.sys`, invisible to Windows and with no record on the
+    /// machine that ksx ever touched it. libwdi, which ksx vendors, has no
+    /// answer to this at all: its documented recovery is "open Device Manager".
+    #[test]
+    fn a_keyboard_is_released_with_no_journal_anywhere() {
+        let bare = Bare::new(
+            vec![Bare::ksx_package(
+                "0a468347dd47c74246cebd18d3830285",
+                "oem42.inf",
+            )],
+            &[IPAC],
+        );
+
+        let result = release_bare(&bare).expect("a machine can always be given back");
+
+        assert_eq!(result.packages_removed, vec!["oem42.inf".to_owned()]);
+        assert_eq!(result.interfaces_released.len(), 1, "{result:?}");
+        assert!(result.still_bound.is_empty(), "{result:?}");
+
+        let commands = bare.commands.lock().unwrap().clone();
+        assert!(
+            commands.iter().any(|c| c.contains("/delete-driver")
+                && c.contains("/uninstall")
+                && c.contains("/force")),
+            "the package must be removed FROM THE DEVICES USING IT: {commands:?}"
+        );
+        assert!(
+            commands.iter().any(|c| c.contains("/scan-devices")),
+            "Windows must be given the chance to rebind: {commands:?}"
+        );
+    }
+
+    /// Another program's WinUSB device is reported, never removed.
+    ///
+    /// This is the safety property that lets the release run without knowing
+    /// which devnodes were ksx's: Windows performs the attribution, through
+    /// `/delete-driver /uninstall`, and anything still bound afterwards is by
+    /// definition not ours to touch.
+    #[test]
+    fn a_foreign_winusb_device_is_reported_and_left_alone() {
+        let foreign = StoreDriver {
+            published_name: "oem99.inf".to_owned(),
+            original_name: "some-other-tool.inf".to_owned(),
+            provider: "Somebody Else".to_owned(),
+        };
+        let bare = Bare::new(
+            vec![
+                Bare::ksx_package("0a468347dd47c74246cebd18d3830285", "oem42.inf"),
+                foreign,
+            ],
+            &[IPAC, OTHER],
+        );
+
+        let result = release_bare(&bare).expect("release");
+
+        assert_eq!(result.packages_removed, vec!["oem42.inf".to_owned()]);
+        assert_eq!(result.still_bound.len(), 1, "{result:?}");
+        assert!(
+            bare.packages
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|d| d.published_name == "oem99.inf"),
+            "somebody else's driver package must survive ksx's recovery"
+        );
+        assert!(
+            result.message.contains("not ksx's to remove"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// A clean machine is not an error, and does not run a single command.
+    #[test]
+    fn nothing_to_release_is_not_a_failure() {
+        let bare = Bare::new(Vec::new(), &[]);
+        let result = release_bare(&bare).expect("a clean machine is fine");
+        assert!(result.packages_removed.is_empty());
+        assert!(
+            result.message.contains("nothing to release"),
+            "{}",
+            result.message
+        );
+        assert!(
+            bare.commands.lock().unwrap().is_empty(),
+            "nothing to do, nothing run"
+        );
+    }
+
+    /// Attribution is by the one name ksx controls end to end. The provider
+    /// refuses to prepare a package under any other spelling, so this shape is
+    /// proof of origin -- and a near miss is not.
+    #[test]
+    fn only_the_canonical_ksx_package_name_counts_as_ours() {
+        let named = |name: &str| StoreDriver {
+            published_name: "oem1.inf".to_owned(),
+            original_name: name.to_owned(),
+            provider: "KSX".to_owned(),
+        };
+        assert!(is_ksx_package(&named(
+            "ksx-winusb-0a468347dd47c74246cebd18d3830285.inf"
+        )));
+        // Uppercase published names are normal on Windows; the ID is not.
+        assert!(is_ksx_package(&named(
+            "KSX-WinUSB-0a468347dd47c74246cebd18d3830285.INF"
+        )));
+
+        for near_miss in [
+            "ksx-winusb.inf",
+            "ksx-winusb-.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d383028.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d38302855.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d383028z.inf",
+            "notksx-winusb-0a468347dd47c74246cebd18d3830285.inf",
+            "ksx-winusb-0a468347dd47c74246cebd18d3830285.cat",
+        ] {
+            assert!(
+                !is_ksx_package(&named(near_miss)),
+                "{near_miss} is not a ksx package name"
+            );
+        }
+    }
+
+    /// The REAL certificate residue on the machine this runs on, removed by
+    /// the real code.
+    ///
+    /// Ignored: it needs elevation and it deletes certificates. It only ever
+    /// touches subjects beginning `CN=KSX WinUSB `, which nothing but ksx
+    /// mints.
+    ///
+    /// It exists because certificate deletion is the one step in a release
+    /// whose failure is invisible until afterwards -- the API reports success
+    /// and the verification, a fresh store read, is the only thing that
+    /// notices. Two separate mistakes hid there: a store opened without write
+    /// access, and then a store closed before the delete. Both were found on a
+    /// real machine and neither could be, in CI, because a runner has no
+    /// certificates to delete.
+    ///
+    /// ```text
+    /// cargo test -p ksx-platform --lib the_real_certificate -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs an elevated prompt; deletes CN=KSX WinUSB certificates"]
+    fn the_real_certificate_residue_on_this_machine_is_removable() {
+        match WindowsTrustVerifier.cleanup_owned_residue() {
+            Ok(()) => println!("every KSX-owned certificate and key container is gone"),
+            Err(err) => panic!(
+                "KSX-owned trust residue could not be removed, which is what turns a                  successful rebind into \"RECOVERY REQUIRED\": {err}"
+            ),
+        }
+    }
+
+    /// The REAL store on the machine this runs on, initialized by the real
+    /// code. Ignored, because it needs elevation and mutates the store's DACLs
+    /// -- which is exactly what the installer's post-copy step does, on every
+    /// install, so running it costs nothing a reinstall would not.
+    ///
+    /// It exists because the fixtures above can only assert what someone
+    /// thought to build. A machine that has actually prepared a keyboard has
+    /// receipts nobody designed, in shapes nobody predicted, and this defect
+    /// was invisible until one of those was read. Run it from an elevated
+    /// prompt when an install refuses the recovery directory:
+    ///
+    /// ```text
+    /// cargo test -p ksx-platform --lib the_real_store -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs an elevated prompt; normalizes the real store's DACLs"]
+    fn the_real_store_on_this_machine_initializes() {
+        match initialize_store() {
+            Ok(()) => println!("the store on this machine initializes cleanly"),
+            Err(err) => panic!(
+                "initialize-store refused this machine's real store, which is what                  Setup shows as \"initializer exit code 3\": {err}"
+            ),
         }
     }
 

@@ -32,6 +32,12 @@ use ksx_api::{Refusal as ApiRefusal, WinusbMutationView, WinusbPrepareSpec, Winu
 pub enum HelperMutation {
     Prepare,
     Release,
+    /// Give back every keyboard ksx claimed, using only what the machine
+    /// reports. Takes no device, because the case it exists for is the one
+    /// where nothing on disk can say which devices those were.
+    ReleaseAll,
+    /// Bring the journal and the machine back into agreement.
+    Repair,
 }
 
 pub trait HelperElevator: Send + Sync {
@@ -45,11 +51,18 @@ impl HelperMutation {
         match self {
             HelperMutation::Prepare => "prepare-exact",
             HelperMutation::Release => "release-exact",
+            HelperMutation::ReleaseAll => "release-all",
+            HelperMutation::Repair => "repair",
         }
     }
 }
 
 fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
+    // `release-all` names no device, and must not: the machine is the only
+    // source of truth left in the situation it recovers from.
+    if matches!(action, HelperMutation::ReleaseAll | HelperMutation::Repair) {
+        return vec![action.verb().to_owned()];
+    }
     let mut args = vec![action.verb().to_owned(), instance_id.to_owned()];
     match action {
         HelperMutation::Prepare => args.extend([
@@ -58,6 +71,7 @@ fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
             "--confirm-machine-certificate".to_owned(),
         ]),
         HelperMutation::Release => args.push("--confirm-release".to_owned()),
+        HelperMutation::ReleaseAll | HelperMutation::Repair => unreachable!("handled above"),
     }
     args
 }
@@ -276,12 +290,25 @@ fn binding_gate(
     let (needs, already) = match action {
         HelperMutation::Prepare => (ObservedBinding::HidUsb, ObservedBinding::WinUsb),
         HelperMutation::Release => (ObservedBinding::WinUsb, ObservedBinding::HidUsb),
+        // Store-free release names no device, so no per-device gate applies to
+        // it. Reaching here means a caller asked whether one binding is right
+        // for an action that is about all of them.
+        HelperMutation::ReleaseAll | HelperMutation::Repair => {
+            return Err(ApiRefusal::new(
+                "winusb-live-state-changed",
+                "this action is about the whole machine, not one device",
+            ))
+        }
     };
     if observed == needs {
         return Ok(());
     }
     if observed == already {
         return Err(match action {
+            HelperMutation::ReleaseAll | HelperMutation::Repair => ApiRefusal::new(
+                "winusb-live-state-changed",
+                "this action is about the whole machine, not one device",
+            ),
             HelperMutation::Prepare => ApiRefusal::with_remedy(
                 "winusb-already-prepared",
                 format!("{instance_id} is already prepared and bound to winusb.sys"),
@@ -316,6 +343,64 @@ impl MutationObserver for SystemMutationObserver {
     fn observe(&self, instance_id: &str) -> Result<ObservedMutation, ApiRefusal> {
         Self::live(instance_id)
     }
+}
+
+/// What the machine looks like after a store-free release.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleaseAllView {
+    pub helper_exit: u32,
+    /// USB interfaces still bound to winusb.sys, read fresh afterwards.
+    pub still_bound: Vec<String>,
+    pub message: String,
+}
+
+/// Run the elevated store-free release and then say what is TRUE, rather than
+/// what the helper claimed.
+///
+/// The helper is launched through `ShellExecuteEx` for its UAC prompt, which
+/// cannot redirect stdout, so its JSON never comes back. Every other mutating
+/// verb here answers that the same way and so does this one: ignore the words,
+/// re-survey the machine, and report the state.
+pub fn release_all_machine_with(
+    elevator: &dyn HelperElevator,
+    survey: &dyn Fn() -> Result<Vec<String>, ApiRefusal>,
+) -> Result<ReleaseAllView, ApiRefusal> {
+    let exit = elevator.run(HelperMutation::ReleaseAll, "")?;
+    let still_bound = survey()?;
+    let message = if still_bound.is_empty() {
+        "no USB interface on this machine is bound to winusb.sys".to_owned()
+    } else {
+        format!(
+            "{} USB interface(s) are still bound to winusb.sys; ksx removed every package it \
+             published, so these belong to something else",
+            still_bound.len()
+        )
+    };
+    Ok(ReleaseAllView {
+        helper_exit: exit,
+        still_bound,
+        message,
+    })
+}
+
+/// Interfaces currently bound to winusb.sys, as a fresh read of the machine.
+pub fn winusb_bound_now() -> Result<Vec<String>, ApiRefusal> {
+    let candidates = ksx_capture::usb_candidates().map_err(|err| {
+        ApiRefusal::with_remedy(
+            "usb-enumeration-unavailable",
+            err.to_string(),
+            "keep the keyboard connected and try again",
+        )
+    })?;
+    Ok(candidates
+        .iter()
+        .filter(|c| c.binding.is_winusb())
+        .map(|c| c.id.as_str().to_owned())
+        .collect())
+}
+
+pub fn release_all_machine() -> Result<ReleaseAllView, ApiRefusal> {
+    release_all_machine_with(&SystemHelperElevator, &winusb_bound_now)
 }
 
 pub fn prepare_machine_with(
@@ -447,8 +532,17 @@ pub const EXIT_RECOVERY_REQUIRED: i32 = 4;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Status,
-    Claim { device: String },
-    Release { device: String, force: bool },
+    Claim {
+        device: String,
+    },
+    Release {
+        device: String,
+        force: bool,
+    },
+    /// Every ksx-claimed keyboard, without consulting the journal.
+    ReleaseAll,
+    /// Reconcile the journal against the machine.
+    Repair,
 }
 
 pub struct Options {
@@ -466,6 +560,8 @@ pub fn run(opts: Options) -> anyhow::Result<()> {
         Action::Status => status(&survey, opts.json),
         Action::Claim { device } => claim(&survey, device, &opts),
         Action::Release { device, force } => release(&survey, device, *force, &opts),
+        Action::ReleaseAll => release_all(&opts),
+        Action::Repair => repair(&opts),
     }
 }
 
@@ -656,6 +752,184 @@ fn report_claim(plan: &ClaimPlan, opts: &Options, will_apply: bool) -> anyhow::R
 // ---------------------------------------------------------------------------
 // release
 // ---------------------------------------------------------------------------
+
+/// `ksx winusb repair`: say what disagrees, then settle it.
+///
+/// The read-only half runs without elevation, which is the point: a user who
+/// wants to know whether anything is wrong should not have to approve a UAC
+/// prompt to be told "nothing is". Only `--yes` crosses into the helper.
+fn repair(opts: &Options) -> anyhow::Result<()> {
+    let (findings, orphans) = match ksx_platform::winusb::transaction::reconcile_report() {
+        Ok(pair) => pair,
+        Err(err) => {
+            if opts.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "ok": false, "error": err.to_string() })
+                );
+            } else {
+                println!("The recovery store could not be read: {err}");
+                println!();
+                println!("  If it has been deleted or damaged, `ksx winusb release-all --yes`");
+                println!("  gives every ksx-claimed keyboard back without reading it.");
+            }
+            std::process::exit(EXIT_REFUSED);
+        }
+    };
+
+    let drifted: Vec<_> = findings
+        .iter()
+        .filter(|f| f.drift != ksx_platform::winusb::transaction::Drift::Consistent)
+        .collect();
+    let will_apply = opts.yes && !opts.dry_run;
+
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "action": "repair",
+                "receipts": findings.len(),
+                "drifted": drifted.len(),
+                "orphan_packages": orphans,
+                "will_apply": will_apply,
+            }))?
+        );
+    } else {
+        println!("{} receipt(s) on this machine.", findings.len());
+        if drifted.is_empty() && orphans.is_empty() {
+            println!("  Nothing disagrees with the machine.");
+        }
+        for finding in &drifted {
+            println!(
+                "  {}  says {:?}, machine says {}",
+                &finding.transaction_id[..8.min(finding.transaction_id.len())],
+                finding.phase,
+                finding.drift.word()
+            );
+        }
+        for orphan in &orphans {
+            println!("  {orphan}  a ksx driver package with no receipt");
+        }
+        if !orphans.is_empty() {
+            println!();
+            println!("  Repair reports orphans and does not remove them.");
+            println!(
+                "  `ksx winusb release-all --yes` is what removes a package no receipt describes."
+            );
+        }
+        if !will_apply && !drifted.is_empty() {
+            println!();
+            println!("Nothing was changed. Re-run with --yes to settle it.");
+        }
+    }
+
+    if !will_apply || drifted.is_empty() {
+        return Ok(());
+    }
+
+    let exit = match SystemHelperElevator.run(HelperMutation::Repair, "") {
+        Ok(exit) => exit,
+        Err(err) => mutation_refused(&err, opts.json),
+    };
+    // The helper's own JSON never comes back through the UAC prompt, so the
+    // answer is a fresh read rather than its word -- the same rule every other
+    // mutating verb here follows.
+    let after = ksx_platform::winusb::transaction::reconcile_report()
+        .map(|(findings, orphans)| {
+            (
+                findings
+                    .iter()
+                    .filter(|f| f.drift != ksx_platform::winusb::transaction::Drift::Consistent)
+                    .count(),
+                orphans.len(),
+            )
+        })
+        .unwrap_or((usize::MAX, usize::MAX));
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::json!({ "helper_exit": exit, "drifted_after": after.0 })
+        );
+    } else if after.0 == 0 {
+        println!();
+        println!("Settled: the journal and the machine agree.");
+    } else {
+        println!();
+        println!(
+            "{} receipt(s) still disagree. `ksx winusb status` has the detail.",
+            after.0
+        );
+    }
+    Ok(())
+}
+
+/// `ksx winusb release-all`: the recovery that needs no journal.
+///
+/// Prints what it will do and stops, like every other mutating verb, unless
+/// `--yes`. There is no device to name and no dry-run plan to render from a
+/// receipt, because the situation this exists for is the one where no receipt
+/// can be trusted -- so the "plan" is simply the truthful current state.
+fn release_all(opts: &Options) -> anyhow::Result<()> {
+    let bound = match winusb_bound_now() {
+        Ok(bound) => bound,
+        Err(err) => mutation_refused(&err, opts.json),
+    };
+    let will_apply = opts.yes && !opts.dry_run;
+
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "action": "release-all",
+                "winusb_bound_now": bound,
+                "will_apply": will_apply,
+            }))?
+        );
+    } else {
+        println!("Give every ksx-claimed keyboard back to Windows.\n");
+        if bound.is_empty() {
+            println!("  Nothing on this machine is bound to winusb.sys right now.");
+        } else {
+            println!("  Bound to winusb.sys right now:");
+            for id in &bound {
+                println!("    {id}");
+            }
+        }
+        println!();
+        println!("  This removes every driver package ksx published and lets Windows");
+        println!("  rebind the interfaces. It reads no receipt, so it works even if");
+        println!("  C:\\ProgramData\\KSX has been deleted or damaged.");
+        println!();
+        println!("  A WinUSB device belonging to another program is left alone.");
+        if !will_apply {
+            println!("\nNothing was run. Re-run with --yes to apply.");
+        }
+    }
+    if !will_apply {
+        return Ok(());
+    }
+
+    let view = match release_all_machine() {
+        Ok(view) => view,
+        Err(err) => mutation_refused(&err, opts.json),
+    };
+    if opts.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "helper_exit": view.helper_exit,
+                "still_bound": view.still_bound,
+                "message": view.message,
+            }))?
+        );
+    } else {
+        println!("\n{}", view.message);
+        for id in &view.still_bound {
+            println!("  still bound (not ksx's): {id}");
+        }
+    }
+    Ok(())
+}
 
 fn release(survey: &Survey, device: &str, force: bool, opts: &Options) -> anyhow::Result<()> {
     let plan = match winusb::plan_release(survey, device, force) {

@@ -584,6 +584,144 @@ jobs:
             }
           }
 
+      # The upgrade path: a SECOND install on a machine that has already
+      # prepared a keyboard.
+      #
+      # Every branch of `initialize-store` that runs only for an EXISTING
+      # store was unreachable here -- a runner is a fresh machine, so the
+      # store never exists -- and reachable on every customer machine that
+      # had once prepared a keyboard. One of them was wrong: the per-receipt
+      # path check compared a canonicalized receipt path against a
+      # non-canonicalized one and judged every receipt to have escaped its
+      # own transaction directory. Every upgrade died on it; nothing in CI
+      # could see it.
+      #
+      # ksx creates the store itself rather than this step hand-building
+      # one, because the store must be owned by
+      # SYSTEM/Administrators/TrustedInstaller and a directory this step
+      # creates is owned by the runner -- which would reproduce exit 3 for a
+      # reason unrelated to the defect. Install once, seed, install again.
+      - name: Install twice, with a receipt in between
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $root = 'C:\ProgramData\KSX'
+          if (Test-Path -LiteralPath $root) {
+            throw "$root exists before this step; refusing to touch it"
+          }
+          $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'no setup.exe to install' }
+          $install = Join-Path $env:ProgramFiles 'ksx-ci-upgrade'
+
+          function Invoke-Setup([string] $Tag) {
+            $log = Join-Path $env:RUNNER_TEMP "ksx-upgrade-$Tag.log"
+            # QUOTED. Program Files has a space in it, and an unquoted
+            # /DIR= made Inno install to C:\Program -- which is not a
+            # protected directory, so the store initializer refused and the
+            # step reported a product failure that was entirely its own.
+            $a = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+                   '/MERGETASKS=!vigembus,!desktopicon',
+                   "/DIR=""$install""", "/LOG=""$log""")
+            $p = Start-Process -FilePath $setup.FullName -ArgumentList $a -Wait -PassThru
+            $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
+            Write-Host "DIAG: install $Tag exit = $($p.ExitCode)"
+            # Exit 0 is not the assertion. The store initializer raises from
+            # CurStepChanged, which Inno reports and then carries on from, so
+            # a broken upgrade still exits 0 with a dialog the customer has
+            # to interpret. The log is the only place it is recorded.
+            if ($p.ExitCode -ne 0 -or $text -match 'initializer exit code') {
+              Write-Host "--- setup log ($Tag) ---"
+              Write-Host $text
+              throw "install $Tag did not complete cleanly (exit $($p.ExitCode))"
+            }
+            # Where it landed, checked -- because an argument Inno silently
+            # truncates produces a working install of the wrong thing in the
+            # wrong place, and every assertion after it is then about a
+            # directory nobody meant.
+            if (-not (Test-Path -LiteralPath (Join-Path $install 'ksx.exe'))) {
+              throw "install $Tag did not put ksx.exe in $install"
+            }
+          }
+
+          try {
+            # 1. First install. ksx creates the store, correctly owned.
+            Invoke-Setup 'first'
+            $journal = Join-Path $root 'WinUSB\journal'
+            $txRoot = Join-Path $root 'WinUSB\transactions'
+            if (-not (Test-Path -LiteralPath $journal)) {
+              throw 'the first install did not create the recovery store'
+            }
+
+            # 2. A receipt, shaped exactly as a prepare writes one -- above
+            #    all with the VERBATIM artifact paths that
+            #    ProgramDataStore::open really records.
+            $id = '0a468347dd47c74246cebd18d3830285'
+            $tx = Join-Path $txRoot $id
+            New-Item -ItemType Directory -Path $tx -Force | Out-Null
+            $inf = "ksx-winusb-$id.inf"
+            $cat = "ksx-winusb-$id.cat"
+            Set-Content -LiteralPath (Join-Path $tx $inf) -Value '; synthetic' -NoNewline
+            Set-Content -LiteralPath (Join-Path $tx $cat) -Value 'synthetic' -NoNewline
+            $verbatim = '\\?\' + $tx   # literal: PowerShell does not collapse these
+            $device = 'USB\VID_D209&PID_0430&MI_00\7&CI&0&0000'
+            $receipt = [ordered]@{
+              schema = 1
+              phase = 'released'
+              transaction_id = $id
+              target_instance_id = $device
+              hardware_id = 'USB\VID_D209&PID_0430&MI_00'
+              original_service = 'HidUsb'
+              original_inf = $null
+              original_inf_name = $inf
+              published_oem_inf = $null
+              inf_path = (Join-Path $verbatim $inf)
+              catalog_path = (Join-Path $verbatim $cat)
+              inf_sha256 = $null
+              catalog_sha256 = $null
+              certificate_subject = "CN=KSX WinUSB $id"
+              certificate_thumbprint_sha1 = $null
+              certificate_der_sha256 = $null
+              affected_instance_ids = @($device)
+              keyboards_before = 2
+              created_unix_seconds = 0
+              recovery_reason = $null
+              driver_mutation_attempted = $false
+              reboot_reported = $false
+            }
+            $receipt | ConvertTo-Json -Depth 5 |
+              Set-Content -LiteralPath (Join-Path $journal "$id.json") -Encoding utf8
+
+            # 3. Ask the INSTALLED helper directly first, with its stdout
+            #    captured. Setup launches it through ShellExecuteEx for the UAC
+            #    prompt, which cannot redirect stdout, so the one sentence
+            #    naming any refusal is discarded -- and "initializer exit code
+            #    3" with no message has now cost several rounds of guessing.
+            #    After install #1 the helper is in Program Files, so it passes
+            #    its own protected-directory rule and this is a fair question.
+            $probe = Join-Path $env:RUNNER_TEMP 'ksx-init-probe.json'
+            $ph = Start-Process -FilePath (Join-Path $install 'ksx-winusb-helper.exe') `
+              -ArgumentList 'initialize-store' -Wait -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput $probe
+            $said = Get-Content -LiteralPath $probe -Raw
+            Write-Host "DIAG: initialize-store over a seeded receipt exit = $($ph.ExitCode)"
+            Write-Host "DIAG: said = $said"
+            if ($ph.ExitCode -ne 0) {
+              throw ("initialize-store refused a store holding an ordinary receipt " +
+                     "(exit $($ph.ExitCode)): $said")
+            }
+
+            # 4. The upgrade. This is the install every customer hit.
+            Invoke-Setup 'second'
+            if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
+              throw 'the upgrade removed a receipt it was only asked to verify'
+            }
+            Write-Host "upgrade over an existing receipt: clean"
+          }
+          finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ksx-windows-installer

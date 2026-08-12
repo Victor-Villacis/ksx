@@ -1169,6 +1169,7 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 device: "P1 board".into(),
                 preset: "Panel P1".into(),
                 persona: "Xbox 360 pad".into(),
+                socd: String::new(),
                 source: "config.toml".into(),
             }],
             presets: vec!["Panel P1".into()],

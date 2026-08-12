@@ -28,7 +28,7 @@
 use std::path::PathBuf;
 
 use ksx_config::{ConfigError, GameSlotEntry, SlotEntry, Store};
-use ksx_core::{Persona, MAX_SLOTS, MAX_XINPUT_SLOTS};
+use ksx_core::{Persona, Socd, MAX_SLOTS, MAX_XINPUT_SLOTS};
 
 /// One slot assignment, as any surface spells it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +67,19 @@ pub struct SlotSpec {
     /// `[[slot]]` with no `persona` key means and therefore the only answer
     /// that keeps the two spellings of "a new slot" identical.
     pub persona: Option<Persona>,
+    /// **What opposite directions do**, or `None` for "leave it exactly as it
+    /// is" - the same three-state rule [`Self::persona`] follows, for the same
+    /// reason: [`Socd::default`] is `Off`, so a spec that could not say "not
+    /// asked about" would quietly switch a fighting cabinet back off every
+    /// time somebody re-pointed a preset.
+    ///
+    /// Until 2026-08-12 nothing anywhere could write this. `Socd` has been in
+    /// the config model and the engine since the start, `profile_edit` copied
+    /// it between profiles, and every code path that CREATED a slot wrote
+    /// `Default::default()` - so on an arcade cabinet the one setting that
+    /// decides whether down-back into up-back jumps or crouches was reachable
+    /// only by hand-editing TOML.
+    pub socd: Option<Socd>,
 }
 
 /// What a successful [`assign`] did.
@@ -285,10 +298,15 @@ pub fn assign(store: &Store, spec: &SlotSpec) -> Result<AppliedSlot, SlotError> 
     };
 
     match &spec.profile {
-        None => assign_in_config(store, spec.slot, preset.as_deref(), spec.persona),
-        Some(profile) => {
-            assign_in_profile(store, spec.slot, preset.as_deref(), spec.persona, profile)
-        }
+        None => assign_in_config(store, spec.slot, preset.as_deref(), spec.persona, spec.socd),
+        Some(profile) => assign_in_profile(
+            store,
+            spec.slot,
+            preset.as_deref(),
+            spec.persona,
+            spec.socd,
+            profile,
+        ),
     }
 }
 
@@ -370,6 +388,7 @@ fn assign_in_config(
     slot: u8,
     preset: Option<&str>,
     persona: Option<Persona>,
+    socd: Option<Socd>,
 ) -> Result<AppliedSlot, SlotError> {
     let mut config = store.load_config()?.value;
     let before_xinput = xinput_count(config.slots.iter().map(|s| s.persona));
@@ -383,7 +402,10 @@ fn assign_in_config(
             // `None` means "not asked about", so it can never make a write
             // necessary — the slot's own persona is the answer.
             let wanted = persona.unwrap_or(entry.persona);
-            if same_preset && wanted == entry.persona {
+            // Same three-state rule: unasked SOCD is the slot's own SOCD, so
+            // it can never be the thing that makes a write necessary.
+            let wanted_socd = socd.unwrap_or(entry.socd);
+            if same_preset && wanted == entry.persona && wanted_socd == entry.socd {
                 return Ok(AppliedSlot {
                     path: store.root().config_path(),
                     slot,
@@ -399,6 +421,7 @@ fn assign_in_config(
             }
             let previous = std::mem::replace(&mut entry.preset, preset.clone());
             let was = std::mem::replace(&mut entry.persona, wanted);
+            entry.socd = wanted_socd;
             (
                 Some(previous),
                 (was != wanted).then_some(was),
@@ -427,7 +450,7 @@ fn assign_in_config(
                 mouse: None,
                 preset: preset.to_owned(),
                 persona: wanted,
-                socd: Default::default(),
+                socd: socd.unwrap_or_default(),
                 macros: Default::default(),
             });
             config.slots.sort_by_key(|s| s.number);
@@ -481,6 +504,7 @@ fn assign_in_profile(
     slot: u8,
     preset: Option<&str>,
     persona: Option<Persona>,
+    socd: Option<Socd>,
     profile: &str,
 ) -> Result<AppliedSlot, SlotError> {
     let mut games = store.load_games()?.value;
@@ -509,7 +533,10 @@ fn assign_in_profile(
             let preset = preset.unwrap_or(&entry.preset).to_owned();
             let same_preset = entry.preset.eq_ignore_ascii_case(&preset);
             let wanted = persona.unwrap_or(entry.persona);
-            if same_preset && wanted == entry.persona {
+            // Same three-state rule: unasked SOCD is the slot's own SOCD, so
+            // it can never be the thing that makes a write necessary.
+            let wanted_socd = socd.unwrap_or(entry.socd);
+            if same_preset && wanted == entry.persona && wanted_socd == entry.socd {
                 return Ok(AppliedSlot {
                     path: store.root().games_path(),
                     slot,
@@ -525,6 +552,7 @@ fn assign_in_profile(
             }
             let previous = std::mem::replace(&mut entry.preset, preset.clone());
             let was = std::mem::replace(&mut entry.persona, wanted);
+            entry.socd = wanted_socd;
             (
                 Some(previous),
                 (was != wanted).then_some(was),
@@ -550,7 +578,7 @@ fn assign_in_profile(
                 mouse: None,
                 preset: preset.to_owned(),
                 persona: wanted,
-                socd: Default::default(),
+                socd: socd.unwrap_or_default(),
                 macros: Default::default(),
             });
             game.slots.sort_by_key(|s| s.number);
@@ -686,6 +714,66 @@ mod tests {
         }
     }
 
+    /// **A write that was not asked about SOCD must never turn it off.**
+    ///
+    /// The whole reason `SlotSpec::socd` is an `Option` rather than a `Socd`.
+    /// `Socd::default()` is `Off`, so a spec that could not say "not asked
+    /// about" would switch a fighting cabinet's handling off every time
+    /// somebody re-pointed a preset - the same trap `persona` documents, where
+    /// the default is `xbox360` and a defaulted field un-PlayStations slots
+    /// 5-8.
+    ///
+    /// Also pins the other half: a SOCD-only write leaves the preset alone, so
+    /// `--socd` needs no `--preset` and cannot clobber one.
+    #[test]
+    fn socd_survives_a_write_that_did_not_mention_it() {
+        let root = TempRoot::new("socd");
+        let store = root.store();
+
+        assign(&store, &spec(1, "Panel P1")).unwrap();
+        assign(
+            &store,
+            &SlotSpec {
+                slot: 1,
+                preset: None,
+                persona: None,
+                profile: None,
+                socd: Some(Socd::UpPriority),
+            },
+        )
+        .unwrap();
+        let after = store.load_config().unwrap().value;
+        assert_eq!(after.slots[0].socd, Socd::UpPriority);
+        assert_eq!(
+            after.slots[0].preset, "Panel P1",
+            "a SOCD-only write keeps the preset"
+        );
+
+        // The write that must NOT touch it: a plain preset re-point.
+        assign(&store, &spec(1, "Panel P2")).unwrap();
+        let after = store.load_config().unwrap().value;
+        assert_eq!(after.slots[0].preset, "Panel P2");
+        assert_eq!(
+            after.slots[0].socd,
+            Socd::UpPriority,
+            "re-pointing a preset silently disabled SOCD"
+        );
+
+        // And asking for the SOCD it already has changes nothing at all.
+        let applied = assign(
+            &store,
+            &SlotSpec {
+                slot: 1,
+                preset: None,
+                persona: None,
+                profile: None,
+                socd: Some(Socd::UpPriority),
+            },
+        )
+        .unwrap();
+        assert!(applied.unchanged, "an identical SOCD is not a write");
+    }
+
     fn one_profile(store: &Store) {
         let file: GamesFile =
             toml::from_str("[[game]]\ntitle = \"Example Launcher\"\npath = 'C:\\steam.exe'\n")
@@ -699,6 +787,7 @@ mod tests {
             preset: Some(preset.to_owned()),
             persona: None,
             profile: None,
+            socd: None,
         }
     }
 
@@ -710,6 +799,7 @@ mod tests {
             preset: None,
             persona: Some(persona),
             profile: None,
+            socd: None,
         }
     }
 
@@ -811,6 +901,7 @@ mod tests {
                 persona: None,
                 // Title matching is case-insensitive; the FILE's spelling wins.
                 profile: Some("example launcher".into()),
+                socd: None,
             },
         )
         .unwrap();
@@ -839,6 +930,7 @@ mod tests {
                 preset: Some("Panel P1".into()),
                 persona: None,
                 profile: Some("MAME".into()),
+                socd: None,
             },
         )
         .unwrap_err();
@@ -1036,6 +1128,7 @@ mod tests {
                 preset: Some("Panel P2".into()),
                 persona: Some(Persona::PlayStation),
                 profile: None,
+                socd: None,
             },
         )
         .unwrap();
@@ -1123,6 +1216,7 @@ mod tests {
                         preset: Some("Panel P1".into()),
                         persona: None,
                         profile: Some(title.to_owned()),
+                        socd: None,
                     },
                 )
                 .expect("four Xbox slots per profile is four at a time");
@@ -1138,6 +1232,7 @@ mod tests {
                 preset: Some("Panel P2".into()),
                 persona: None,
                 profile: Some("MAME".into()),
+                socd: None,
             },
         )
         .unwrap_err();
@@ -1158,6 +1253,7 @@ mod tests {
                 preset: Some("Panel P1".into()),
                 persona: Some(Persona::PlayStation),
                 profile: None,
+                socd: None,
             },
         )
         .unwrap();

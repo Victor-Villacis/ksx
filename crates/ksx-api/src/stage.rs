@@ -188,6 +188,58 @@ pub const BLOCKING_SCOPE_LINE: &str =
     "This applies to the keyboard you picked, for this session only. Stopping the session ends it, \
      and no other keyboard on this PC is affected either way.";
 
+/// One SOCD policy, in the words a player would use.
+///
+/// The wording lives HERE, once, for the reason [`BlockingOption`]'s does: two
+/// surfaces describing "up beats down" differently is how a cabinet builder
+/// ends up believing they are two settings.
+///
+/// The labels deliberately avoid the term SOCD itself in the TITLE. It is
+/// jargon from stick-building, and the person setting up a cabinet for their
+/// family has never met it; the detail line names it so somebody who HAS met
+/// it can tell that this is that.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SocdOption {
+    /// `off` | `neutral` | `up-priority` - a `ksx_core::Socd` name.
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+}
+
+impl SocdOption {
+    /// Every policy, in `ksx_core::Socd::ALL` order.
+    pub fn roster() -> Vec<Self> {
+        ksx_core::Socd::ALL
+            .iter()
+            .map(|&socd| Self {
+                name: socd.as_str().to_owned(),
+                title: match socd {
+                    ksx_core::Socd::Off => "Send both",
+                    ksx_core::Socd::Neutral => "Cancel to centre",
+                    ksx_core::Socd::UpPriority => "Up wins",
+                }
+                .to_owned(),
+                detail: match socd {
+                    ksx_core::Socd::Off => {
+                        "Left and right pressed together are reported as both. What the panel \
+                         says is what the game gets."
+                    }
+                    ksx_core::Socd::Neutral => {
+                        "Left and right together read as centre, and so do up and down. Known \
+                         as SOCD cleaning."
+                    }
+                    ksx_core::Socd::UpPriority => {
+                        "Left and right together read as centre, but up beats down - so \
+                         down-back rolled into up-back jumps instead of crouching. The \
+                         fighting-game standard."
+                    }
+                }
+                .to_owned(),
+            })
+            .collect()
+    }
+}
+
 impl BlockingOption {
     /// The two answers §3 asks about, plus the third the setting has always
     /// had. The wording lives HERE, once, so the browser and the cabinet cannot

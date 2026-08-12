@@ -105,8 +105,9 @@ pub use refusal::{codes, Refusal, Refused};
 pub use stage::{
     preset_name_for_slot, staged_bind_edit, staged_macro_edit, staged_macro_edit_for_setup,
     staged_macro_snapshot, staged_mapper_slot, staged_mapper_snapshot, staged_slot_bind_edit,
-    BlockingOption, PersonaOption, StageEdit, StageOutcome, StagedBindEdit, StagedBindRequest,
-    StagedDeviceView, StagedMacroEdit, StagedMacroRequest, StagedSetupView, StagedSlotView,
+    BlockingOption, PersonaOption, SocdOption, StageEdit, StageOutcome, StagedBindEdit,
+    StagedBindRequest, StagedDeviceView, StagedMacroEdit, StagedMacroRequest, StagedSetupView,
+    StagedSlotView,
 };
 pub use status::{
     MacroSnapshot, MacroStepView, MacroView, MapperSlot, MapperSnapshot, PadRow, ProfileRow,

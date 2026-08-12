@@ -1420,6 +1420,12 @@ fn parse_persona(s: &str) -> Result<ksx_core::Persona, ksx_core::UnknownPersona>
     s.parse()
 }
 
+/// Same shape, same reason: ksx-core owns the one `FromStr` and its refusal
+/// names every valid mode, so clap does not carry a second vocabulary.
+fn parse_socd(s: &str) -> Result<ksx_core::Socd, <ksx_core::Socd as std::str::FromStr>::Err> {
+    s.parse()
+}
+
 #[derive(Subcommand)]
 enum PresetCommand {
     /// What presets exist — on disk, or (--templates) in the box
@@ -1503,8 +1509,13 @@ enum SlotCommand {
         )]
         slot: u8,
         /// Preset name — `ksx preset list` names them (case-insensitive).
-        /// Omit it to keep the preset the slot already uses (with --persona)
-        #[arg(long, value_name = "NAME", required_unless_present = "persona")]
+        /// Omit it to keep the preset the slot already uses (with --persona
+        /// or --socd)
+        #[arg(
+            long,
+            value_name = "NAME",
+            required_unless_present_any = ["persona", "socd"],
+        )]
         preset: Option<String>,
         /// Which controller this slot presents itself as: xbox360,
         /// playstation, dualsense, switchpro, xboxseries
@@ -1521,6 +1532,20 @@ enum SlotCommand {
         /// this build with the reason attached.
         #[arg(long, value_name = "NAME", value_parser = parse_persona)]
         persona: Option<ksx_core::Persona>,
+        /// What opposite directions on this slot's stick do: off, neutral,
+        /// up-priority
+        ///
+        /// A joystick can report left and right at once; a game cannot act on
+        /// both. `neutral` cancels the pair to centre. `up-priority` cancels
+        /// left+right but lets up beat down, which is the fighting-game
+        /// standard - it turns down-back into up-back as a JUMP rather than a
+        /// crouch. `off` reports exactly what the keys say.
+        ///
+        /// Omit it to leave the slot's SOCD exactly as it is. This never
+        /// defaults to `off`, because that would quietly switch a fighting
+        /// cabinet's handling off every time its preset changed.
+        #[arg(long, value_name = "MODE", value_parser = parse_socd)]
+        socd: Option<ksx_core::Socd>,
         /// Write into this games.toml profile instead of config.toml
         #[arg(long, value_name = "TITLE")]
         profile: Option<String>,
@@ -1615,6 +1640,7 @@ fn main() -> anyhow::Result<()> {
                 slot,
                 preset,
                 persona,
+                socd,
                 profile,
                 reload,
                 json,
@@ -1623,6 +1649,7 @@ fn main() -> anyhow::Result<()> {
                     slot,
                     preset,
                     persona,
+                    socd,
                     profile,
                     reload,
                 },
@@ -3528,6 +3555,7 @@ mod tests {
                     slot,
                     preset,
                     persona,
+                    socd,
                     profile,
                     reload,
                     json,
@@ -3543,6 +3571,10 @@ mod tests {
             "no --persona means the slot keeps the one it has; it must NOT \
              parse as the xbox360 default"
         );
+        assert_eq!(
+            socd, None,
+            "no --socd means the slot keeps the policy it has; it must NOT              parse as the `off` default, which would switch a fighting              cabinet's handling off on every preset change"
+        );
         assert_eq!(profile, None, "config.toml unless a profile is named");
         assert!(!reload, "nothing is disturbed unless asked");
         assert!(!json);
@@ -3550,6 +3582,23 @@ mod tests {
         // A bare `--slot N` asks for nothing, and is refused. `--preset` with
         // no slot has no slot to point.
         assert!(Cli::try_parse_from(["ksx", "slot", "assign", "--slot", "3"]).is_err());
+        // ...but --socd alone IS something to ask for, so it needs no --preset.
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "slot",
+            "assign",
+            "--slot",
+            "3",
+            "--socd",
+            "up-priority"
+        ])
+        .is_ok());
+        // An unknown mode is refused by ksx-core's parser, not by a second
+        // vocabulary in clap.
+        assert!(Cli::try_parse_from([
+            "ksx", "slot", "assign", "--slot", "3", "--socd", "sideways"
+        ])
+        .is_err());
         assert!(Cli::try_parse_from(["ksx", "slot", "assign", "--preset", "P"]).is_err());
         // 1..=MAX_SLOTS, enforced by clap before anything reads a file.
         assert!(

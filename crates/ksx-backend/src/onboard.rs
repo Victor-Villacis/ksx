@@ -220,6 +220,7 @@ pub fn state() -> Result<SetupView, Refusal> {
             device: slot.keyboard.clone().unwrap_or_else(|| "(any)".to_owned()),
             preset: slot.preset.clone(),
             persona: slot.persona.label().to_owned(),
+            socd: slot.socd.as_str().to_owned(),
             source: "config.toml".to_owned(),
         })
         .collect();
@@ -229,6 +230,7 @@ pub fn state() -> Result<SetupView, Refusal> {
             device: slot.keyboard.clone().unwrap_or_else(|| "(any)".to_owned()),
             preset: slot.preset.clone(),
             persona: slot.persona.label().to_owned(),
+            socd: slot.socd.as_str().to_owned(),
             source: game.title.clone(),
         }));
     }
@@ -245,6 +247,7 @@ pub fn state() -> Result<SetupView, Refusal> {
         // answer shown next to the control is the answer a session would use.
         blocking: config.settings.block_keyboards.as_str().to_owned(),
         blocking_options: ksx_api::BlockingOption::roster(),
+        socd_options: ksx_api::SocdOption::roster(),
         config_root: root.dir().display().to_string(),
         config_exists: store.config_source().path.is_file(),
         devices,

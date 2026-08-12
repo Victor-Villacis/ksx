@@ -572,6 +572,21 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/pads/spawn", "/pads/prune"],
     },
     Anchors {
+        capability: "What opposite directions do (SOCD)",
+        // Not its own verb: SOCD is a property OF A SLOT, so it rides the verb
+        // that already writes slots rather than becoming a second way to edit
+        // one. `slot assign` is named by the config row too, which is correct
+        // - one verb can serve two capabilities, and this one does.
+        cli: &["slot assign"],
+        // NOTHING in the egui, checked rather than assumed: `git grep -i socd`
+        // over crates/ksx-cabinet finds one line, and it is the `socd: None`
+        // this change added to keep the cabinet's slot write "not asked
+        // about". The cabinet does not even DISPLAY a slot's policy, so the
+        // cell is "—" and not "view".
+        egui: &[],
+        studio: &["/setup/slot"],
+    },
+    Anchors {
         capability: "Split or freeze, after saving",
         // THE ROW WITH NO CLI VERB, and it is here on purpose. Until now this
         // capability had no verb on ANY surface: `stage::apply` wrote

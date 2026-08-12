@@ -943,11 +943,27 @@ fn handle_slot_assign(
             })
         }
     };
+    // Same rule, same reason as the persona above: `ksx-core` owns the one
+    // lenient parser, and an unknown name is refused in its own words rather
+    // than silently becoming the default (which is `off`, and would turn a
+    // fighting cabinet's SOCD off by typo).
+    let socd = match assign.socd.as_deref().map(str::parse::<ksx_core::Socd>) {
+        None => None,
+        Some(Ok(socd)) => Some(socd),
+        Some(Err(unknown)) => {
+            return serde_json::json!({
+                "ok": false,
+                "code": "unknown-socd",
+                "error": unknown.to_string(),
+            })
+        }
+    };
     let applied = match (deps.slot_assign)(&crate::slots::SlotSpec {
         slot: assign.slot,
         preset: assign.preset.clone(),
         profile: assign.profile.clone(),
         persona,
+        socd,
     }) {
         Ok(applied) => applied,
         Err(err) => {
@@ -2388,6 +2404,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 preset: Some("Panel P1".into()),
                 profile: None,
                 persona: None,
+                socd: None,
                 reload: false,
             }),
             // The staged setup, in the order a first-run visit walks it:

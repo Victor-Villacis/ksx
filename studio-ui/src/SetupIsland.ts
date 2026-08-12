@@ -193,6 +193,7 @@ export interface SetupRows {
   profile_options: TextRow[];
   notes: TextRow[];
   blocking: BlockingRow[];
+  socd_options: OptionRow[];
 }
 
 /** One split-or-freeze answer. Every string is composed in snapshot.rs. */
@@ -258,6 +259,7 @@ const [presetOptions, setPresetOptions] = createSignal<TextRow[]>([]);
 const [profileOptions, setProfileOptions] = createSignal<TextRow[]>([]);
 const [noteRows, setNoteRows] = createSignal<TextRow[]>([]);
 const [blockingRows, setBlockingRows] = createSignal<BlockingRow[]>([]);
+const [socdOptions, setSocdOptions] = createSignal<OptionRow[]>([]);
 const [blockingLine, setBlockingLine] = createSignal("");
 
 // ── Applying the payload. THERE ARE NO DERIVATIONS HERE ────────────────────
@@ -328,6 +330,7 @@ export function applySetup(p: SetupPayload): void {
   setProfileOptions(p.rows.profile_options);
   setNoteRows(p.rows.notes);
   setBlockingRows(p.rows.blocking);
+  setSocdOptions(p.rows.socd_options);
   setBlockingLine(p.lines.blocking_line);
 }
 
@@ -632,6 +635,22 @@ export function SetupIsland() {
                     () => presetOptions(),
                     (o) => o.text,
                     (o) => h("option", null, o.text),
+                  ),
+                ),
+                h("label", { for: "setup-socd" }, "opposite directions"),
+                h(
+                  "select",
+                  { id: "setup-socd", name: "socd" },
+                  // Blank FIRST and blank by default: an untouched form must
+                  // post "not asked about". The wire treats a blank as absent,
+                  // which leaves the slot's own policy alone — the same rule
+                  // the persona field follows, and the reason neither can be
+                  // switched off by somebody who only came to change a preset.
+                  h("option", { value: "" }, "(leave as it is)"),
+                  createList(
+                    () => socdOptions(),
+                    (o) => o.value + "|" + o.label,
+                    (o) => h("option", { value: o.value }, o.label),
                   ),
                 ),
                 h("label", { for: "setup-profile" }, "where"),

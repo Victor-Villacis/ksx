@@ -218,6 +218,9 @@ fn perform(
                 slot: *slot,
                 preset: Some(preset.clone()),
                 profile: profile.clone(),
+                // Absent for the same reason the persona below is, and it is
+                // the same §10 decision: this screen picks a PRESET.
+                socd: None,
                 // **Absent, and it stays absent.** docs/SURFACES.md §10 puts
                 // the persona MENU on Studio and leaves the egui a view: this
                 // screen picks a preset, and a `None` here is the wire's way

@@ -1035,7 +1035,7 @@ mod tests {
         // changed at forma-ir 0.2.0: props whose JSON exceeds
         // `INLINE_PROPS_MAX_BYTES` (1 KiB) spill from the inline
         // `data-forma-props` attribute into the shared `__forma_islands`
-        // block. That is upstream acting on ksx's own finding #22 — inline
+        // block. That is upstream acting on ksx's own finding #19 — inline
         // props were 32.5% of the /map response and could not be switched off.
         // This page's props are far over the ceiling, so it uses the block.
         //

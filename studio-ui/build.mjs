@@ -61,8 +61,13 @@ const outputDir = "../crates/ksx-studio/assets";
 const compilerWarnings = [];
 const realWarn = console.warn;
 console.warn = (...args) => {
-  compilerWarnings.push(args.map(String).join(" "));
-  realWarn(...args);
+  const line = args.map(String).join(" ");
+  compilerWarnings.push(line);
+  // Benign notes are counted and summarised below, not printed: twenty
+  // lines of known-benign output is where warning twenty-one hides.
+  if (!/is initialized with a \w+ the compiler cannot evaluate/.test(line)) {
+    realWarn(...args);
+  }
 };
 
 // @getforma/build 0.2.0 concatenates plain CSS byte-for-byte. A Windows
@@ -128,6 +133,49 @@ if (collisions.length) {
       "the page RENDERS, so the seam's injection would fill a dead slot and the " +
       "page would show compile-time defaults. Declare the signal once (in the " +
       `*Island.ts file) and delete the twin:\n${collisions.join("\n")}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EVERY OTHER COMPILER WARNING IS FATAL.
+//
+// The collision check above exists because one important warning was arriving
+// "as one console.warn line among the thirteen benign ArrayExpression notes
+// the ledger tells you not to chase". That is still the shape of the problem:
+// a normal build prints ~20 of those notes, and nobody reads twenty lines of
+// known-benign output, so warning number twenty-one arrives invisible.
+//
+// So the benign class is COUNTED, not printed, and anything unrecognised stops
+// the build. Adding a genuinely new benign class is a deliberate edit here.
+//
+// Why the ArrayExpression note is benign FOR THIS CODEBASE: it fires for every
+// signal initialised with `[]`, warning that bindings to it land in anonymous
+// slots that render empty server-side. True of a bare `() => rows()` binding —
+// and this codebase never writes one. Those signals are read only inside
+// `createList`, which compiles to a NAMED `list:<signal>:array` slot that
+// `render_*.rs` fills. Verified by fetching a page with the hydration JSON
+// stripped: the rows are in the server-rendered markup.
+// ---------------------------------------------------------------------------
+const BENIGN = [
+  /is initialized with a \w+ the compiler cannot evaluate/,
+];
+const benign = compilerWarnings.filter((line) => BENIGN.some((re) => re.test(line)));
+const unknown = compilerWarnings.filter(
+  (line) =>
+    !BENIGN.some((re) => re.test(line)) &&
+    !/is also declared in another scope on this page/.test(line),
+);
+if (unknown.length) {
+  throw new Error(
+    `${unknown.length} unrecognised compiler warning(s). Each one is either a ` +
+      "real defect or a new benign class that belongs in BENIGN above — decide " +
+      `which, deliberately:\n${unknown.join("\n")}`,
+  );
+}
+if (benign.length) {
+  console.log(
+    `note: ${benign.length} benign 'cannot evaluate initializer' notes for list ` +
+      "signals (they render through named list: slots; see build.mjs)",
   );
 }
 

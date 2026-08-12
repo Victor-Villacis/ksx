@@ -105,7 +105,7 @@ const ISLAND_COMPONENT: &str = "MapIsland";
 /// show, never insert one, or every boolean after it shifts" (ledger
 /// #4/#14, adopted 2026-08-06). [`show_values`] yields `(slot name, value)`
 /// pairs; the layout test pins the exact name set.
-const MAP_SHOW_COUNT: usize = 21;
+const MAP_SHOW_COUNT: usize = 22;
 
 /// Bare-named slots the mapper renders and the seam deliberately never fills.
 ///
@@ -926,6 +926,37 @@ fn reason_line(payload: &MapPayload) -> String {
             .to_owned();
     }
     String::new()
+}
+
+/// **What this page can and cannot change while an UNSAVED setup is the
+/// session** — empty in every other case.
+///
+/// A staged setup (`docs/FIRST-RUN.md` §2) carries its own bindings, in the
+/// daemon, and the session played from it is built from those: it reads no
+/// preset file and no `config.toml`. The mapper, meanwhile, always lists the
+/// slots on DISK and always writes preset files. So while a staged session is
+/// what is playing — or what Resume would put back — the two are about
+/// different controllers, and a page that said nothing would let somebody map
+/// a button, watch it save, and find the pad unchanged. That is `FIRST-RUN.md`
+/// §6's "a screen reports success while nothing works", which is the failure
+/// this project keeps having.
+///
+/// Two sentences rather than one, because the thing that has to be said first
+/// differs: while it RUNS, that mapping does not reach it; while it is
+/// stopped, that Resume brings the unsaved one back regardless of what was
+/// mapped here. The way out is the same either way — save it.
+///
+/// Mirrored word for word in `MapIsland.ts`'s `stagedNote`.
+fn staged_note(payload: &MapPayload) -> String {
+    if !payload.session.reachable || payload.session.origin != ksx_api::SessionOrigin::Staged {
+        return String::new();
+    }
+    if payload.session.running {
+        return "Emulation is playing an UNSAVED setup from ksx's first screen. Its buttons live in that setup, not in the presets on this page — mapping here writes preset files and does not change what is playing. Save the setup on the first screen to map it here."
+            .to_owned();
+    }
+    "The session Resume puts back is an UNSAVED setup from ksx's first screen. Its buttons live in that setup, not in the presets on this page — mapping here writes preset files, and Resume brings that setup back exactly as it is. Save it on the first screen to map it here."
+        .to_owned()
 }
 
 /// The third restore button's label — the timestamp is the whole point, so it
@@ -2838,6 +2869,8 @@ fn scalar_slots(
             "Saved layout — changes apply immediately".to_owned()
         },
         "reasonLine": reason_line(payload),
+        // What this page cannot change while an unsaved setup is the session.
+        "stagedNote": staged_note(payload),
         // FIX 1: the copyable remedy, carrying this machine's profile flag.
         "daemonCmd": daemon_command(&payload.session),
         "backupLine": backup_line(selected),
@@ -3036,6 +3069,10 @@ fn show_values(
         ("show:sessionRunning", running),
         // FIX 0: the road back — client-only, same flag as the pill.
         ("show:pausedBar", false),
+        // ...and, unlike the two above, NOT client-only: whether the session is
+        // an unsaved staged setup is a fact about the daemon, true on the very
+        // first paint, and true while it is stopped as well as while it runs.
+        ("show:stagedWarn", !staged_note(payload).is_empty()),
         ("show:readOnly", !live),
         ("show:canLearn", live),
         ("show:artXbox", art == Some(crate::render::ART_XBOX)),
@@ -4007,6 +4044,67 @@ mod tests {
         // no element, which is the honest amount of screen for "as usual".
         assert_eq!(slot_macros_line(sample().mapper.slots.first()), "");
         assert_eq!(slot_macros_line(None), "");
+    }
+
+    /// **The mapper says so when it is not what is playing.**
+    ///
+    /// A session played from an unsaved staged setup (docs/FIRST-RUN.md §2)
+    /// carries its bindings in the daemon and reads no preset file; this page
+    /// lists the slots on DISK and writes preset files. So mapping here while
+    /// that session is the one loaded changes files, not the pad — and the
+    /// page has to say it, or it is §6's "reports success while nothing
+    /// works".
+    ///
+    /// Breaks against the page as shipped, which drew no such note at all: a
+    /// user could pause a staged session, remap a button, watch the toast say
+    /// saved, resume, and find the button unchanged, with nothing anywhere
+    /// having said why.
+    ///
+    /// It is deliberately shown while the session is STOPPED as well, because
+    /// that is when the mapper is usable: pausing is how you get to map, and
+    /// Resume puts the unsaved setup back regardless of what was written here.
+    #[test]
+    fn the_mapper_says_when_the_session_is_an_unsaved_setup_it_cannot_change() {
+        // An ordinary config session: no note, at either run state.
+        let mut payload = sample();
+        payload.session.origin = ksx_api::SessionOrigin::Config;
+        assert_eq!(staged_note(&payload), "");
+        payload.session.running = true;
+        assert_eq!(staged_note(&payload), "");
+
+        // A daemon that did not say — never guessed at, in either direction.
+        payload.session.origin = ksx_api::SessionOrigin::Unknown;
+        assert_eq!(staged_note(&payload), "");
+
+        // The staged session, running: what mapping here does NOT do.
+        payload.session.origin = ksx_api::SessionOrigin::Staged;
+        let running = staged_note(&payload);
+        for part in [
+            "UNSAVED setup",
+            "not in the presets on this page",
+            "does not change what is playing",
+            "Save the setup",
+        ] {
+            assert!(running.contains(part), "{running}");
+        }
+
+        // ...and paused, which is when this page is actually usable.
+        payload.session.running = false;
+        let paused = staged_note(&payload);
+        assert!(paused.contains("Resume brings that setup back"), "{paused}");
+        assert_ne!(running, paused, "the two states need different first facts");
+
+        // It reaches the page as both a sentence and a switch.
+        let slots = scalar_slots(&payload, payload.mapper.slots.first(), None, None);
+        assert_eq!(slots["stagedNote"], paused);
+        assert!(show_values(&payload, payload.mapper.slots.first(), None)
+            .iter()
+            .any(|(name, on)| *name == "show:stagedWarn" && *on));
+
+        // No daemon: nothing is known about the session, so nothing is
+        // claimed about it (docs/SURFACES.md §1b).
+        payload.session.reachable = false;
+        assert_eq!(staged_note(&payload), "");
     }
 
     /// FIX 1, the headline case: the tray daemon exits and then the user clicks

@@ -163,6 +163,7 @@ have to re-implement.** Violating it is how Studio gets forked.
 |---|---|---|---|
 | Start emulation | `ksx run` (foreground session); daemon: tray "Start emulation" / headless stdin `start` / pipe `start` / `ksx session start [--game TITLE]` — all → `DaemonCommand::Start` | M9: enqueue `DaemonCommand::Start` on the control loop the UI hosts in-process. **M10: Studio's Start button POSTs `/session/start` → pipe `start` → the same command (live)** | exists — pipe + CLI + Studio live |
 | Stop emulation | tray "Stop emulation" / stdin `stop` / pipe `stop` / `ksx session stop` → `DaemonCommand::Stop`; Ctrl+Alt+Del is the capture-thread emergency stop. LeftCtrl ×5 only toggles keyboard capture off/on and deliberately leaves the session running | M9: `DaemonCommand::Stop`. **M10: Studio's Stop button POSTs `/session/stop` → pipe `stop` (live).** Escapes are deliberately NOT a GUI concern — see invariants | exists — pipe + CLI + Studio live |
+| **Resume emulation** (put back what `stop` stopped) | pipe `resume` / `ksx session resume`; Studio's mapper POSTs `/api/session/resume` after "Pause emulation & map". Takes NO argument: the daemon answers from what it started (`DaemonState::origin`), so a staged session resumes staged — re-committed from the setup as it stands, edits and all — and a profile session resumes that profile. A refusal names what is missing and says nothing staged was discarded | M9: the same verb in-process. No tray item: the tray never paused anything, and its Start is the config on disk by design | exists — pipe + CLI + Studio live |
 | Quit daemon | tray "Quit" / stdin `quit` / typed pipe `quit` / `ksx session quit` → `DaemonCommand::Quit`. Pipe success waits for session reap, tray/control-loop join, panel claim release, and closure of current + queued pipe instances; an already absent daemon is success only for this idempotent verb | No Studio route or authored control. The installed uninstaller uses hidden fixed `uninstall-quiesce`: verify protected Program Files self, remove and prove absence of `ksx\autostart`, then perform this bounded Quit handshake before WinUSB cleanup | exists — tray + headless + pipe + CLI; uninstall-internal composition |
 | Session status + live health | tray tooltip (`DaemonState::tooltip`: `RunState` + `LiveHealth` while running, `LastSession` after); stdin `status` → `DaemonCommand::Status`; pipe `status` / `ksx session status [--json]` (state + game + profiles + last/live health); `ksx run --latency` for the rolling latency summary | M9: poll the same `SharedState` snapshot (`DaemonState`) the tray polls — small, cloneable, no borrows of anything live. **M10: Studio's session panel renders the pipe `status` response (live)** | exists — pipe + CLI + Studio live |
 | Reload config | tray "Reload config" / stdin `reload` / pipe `reload` / `ksx session reload` → `DaemonCommand::Reload` — a clean stop and a clean start from disk. A mapper SAVE takes the narrower `DaemonCommand::ApplyBindings` instead: binding-only edits hot-swap into the live engine with the pads left plugged, structural changes fall back to the same bounce (see "the binding hot-swap") | M9: `DaemonCommand::Reload`. **M10: Studio's Reload button POSTs `/config/reload` → pipe `reload` (live)** | exists — pipe + CLI + Studio live |
@@ -261,6 +262,7 @@ connection; then the server disconnects. Kept deliberately dumb.
 ```
 → {"verb":"status"}
 ← {"ok":true,"run":"running","slots":4,"message":null,"game":"Example Game",
+   "origin":"config",
    "tooltip":"ksx — running, 4 pad(s)\ngame: Example Game",
    "profiles":[{"title":"Example Game","detail":"C:\\games\\example-game.exe — 2 slots"}],
    "last":null,"live":{"reboot_required":false,"watchdog_tripped":false,"dropped_events":0}}
@@ -272,9 +274,29 @@ connection; then the server disconnects. Kept deliberately dumb.
 → {"verb":"stop"}
 ← {"ok":true,"message":"stopped"}                  (or {"ok":false,"error":"not running"})
 
+→ {"verb":"resume"}                                (no argument — deliberately)
+← {"ok":true,"message":"running (4 slot(s))"}
+← {"ok":false,"error":"there is nothing to resume — …"}
+
 → {"verb":"reload"}
 ← {"ok":true,"message":"running (4 slot(s))"}
 ```
+
+**`resume` is not `start`, and the difference is `origin`.** `start` means the
+config on disk: it is what the tray sends, and its arm clears any staged
+override so that a Start after somebody played an unsaved setup runs what is
+SAVED. `resume` puts back the session that was stopped — which the daemon can
+answer and a surface cannot, because a session played from a staged setup
+(`docs/FIRST-RUN.md` §2) has no profile and no file. `status`'s `origin`
+(`config` | `staged`, absent on a daemon older than the field, and never to be
+read as `config` when absent) is that same fact, served for display.
+
+A staged resume re-commits the staged setup **as it stands now**, so an edit
+made while emulation was paused is in what comes back; a config resume is the
+ordinary start, which keeps the games.toml profile the daemon is already
+pointed at. A resume that cannot happen refuses in words and leaves the staged
+setup exactly where it was. The mapper's "Pause emulation & map" is the flow
+this exists for.
 
 The M7 mapper slice adds four verbs on the same channel:
 

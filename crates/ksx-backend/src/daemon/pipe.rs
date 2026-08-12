@@ -1477,14 +1477,19 @@ fn handle_resume(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
             let started = play_staged(deps, settle);
             match started.outcome {
                 Ok(message) => ok_msg(message),
-                // The setup is still staged — the refusal says which part of it
-                // is missing, and names the screen that holds it. A resume that
-                // cannot happen must not read like a resume that destroyed
-                // something.
+                // The refusal carries ksx-core's own sentence for what is
+                // missing — the words the staging screen was already showing —
+                // and then says what this verb did NOT do. It must not read
+                // like a resume that destroyed something; and it must not
+                // claim the setup is intact either, because "Start over" while
+                // paused is legal (§2) and after one there is nothing staged
+                // to be intact. What is always true is that THIS verb changed
+                // nothing.
                 Err(refusal) => err_msg(format!(
-                    "the setup that was playing could not be started again: {} — it is still \
-                     staged and nothing was written; finish it on ksx's first screen, or \
-                     `ksx session start` to run what is saved in config.toml instead",
+                    "the setup that was playing could not be started again: {} — this changed \
+                     nothing: no file was written and nothing staged was discarded. ksx's first \
+                     screen holds the setup exactly as it stands; `ksx session start` runs what \
+                     is saved in config.toml instead",
                     refusal.message
                 )),
             }
@@ -3576,9 +3581,17 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let refused = daemon.ask(r#"{"verb":"resume"}"#);
         assert_eq!(refused["ok"], false, "{refused}");
         let error = refused["error"].as_str().unwrap_or_default();
+        // ksx-core's own sentence for what is missing, in the words the
+        // staging screen shows — here `StageRefusal::NoDevice`, because "Start
+        // over" takes the keyboard with it.
+        assert!(error.contains("no keyboard has been chosen"), "{error}");
+        // ...and then what this verb did NOT do. Deliberately not "it is still
+        // staged": after a Start over there is nothing staged, and a resume
+        // that said otherwise would be inventing a fact. What is true in every
+        // case is that resuming destroyed nothing.
         assert!(
-            error.contains("still staged") && error.contains("nothing was written"),
-            "a refused resume must say the setup was not destroyed: {error}"
+            error.contains("no file was written") && error.contains("nothing staged was discarded"),
+            "a refused resume must say what it did not do: {error}"
         );
         assert!(
             error.contains("ksx session start"),

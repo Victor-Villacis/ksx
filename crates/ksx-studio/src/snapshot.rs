@@ -510,8 +510,7 @@ impl ProfilesDerived {
             profiles_unreadable: profiles_failed,
             can_make_profile: has_presets && !presets_failed && !profiles_failed,
             no_presets_yet: !has_presets && !presets_failed,
-            no_editable_presets: !presets_failed
-                && p.presets.presets.iter().all(|r| r.protected),
+            no_editable_presets: !presets_failed && p.presets.presets.iter().all(|r| r.protected),
             presets_unreadable: presets_failed,
             can_make_preset: !presets_failed,
             any_notes: !p.notes.is_empty(),
@@ -695,7 +694,6 @@ fn profile_verdict(p: &ksx_api::ProfileDetail) -> String {
         _ => "Ready to launch.".to_owned(),
     }
 }
-
 
 /// **One description of a controller layout, for both lists.**
 ///

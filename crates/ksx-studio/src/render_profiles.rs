@@ -83,7 +83,8 @@ const PROFILE_LAYOUT_RENAME_ERROR: &str = "error: Controller layout could not be
 // delete that fails is a delete something still uses, and "point those
 // controllers elsewhere" is the step that unblocks it.
 const PROFILE_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could not be deleted. Controllers still using it must be pointed at another layout first; nothing was changed.";
-const PROFILE_LAYOUT_UNCONFIRMED_ERROR: &str = "error: Tick the confirmation box before deleting a controller layout; nothing was changed.";
+const PROFILE_LAYOUT_UNCONFIRMED_ERROR: &str =
+    "error: Tick the confirmation box before deleting a controller layout; nothing was changed.";
 const PROFILE_PLAY_ERROR: &str =
     "error: That game could not be started. Open Edit and check its program and controllers.";
 const PROFILE_STOP_ERROR: &str = "error: Play could not be stopped. Reopen ksx and try again.";

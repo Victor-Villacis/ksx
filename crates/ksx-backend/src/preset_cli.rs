@@ -420,9 +420,7 @@ fn delete(store: &Store, name: &str, force: bool, dry_run: bool, json: bool) -> 
                 eprintln!("           LEAVING {place} pointing at nothing");
             }
             if !breaks.is_empty() && !force {
-                eprintln!(
-                    "           ...so it would be REFUSED. Repoint those first, or --force."
-                );
+                eprintln!("           ...so it would be REFUSED. Repoint those first, or --force.");
             }
         }
         return Ok(());

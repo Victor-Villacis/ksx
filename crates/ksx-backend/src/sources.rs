@@ -627,7 +627,6 @@ fn valid_layout_names(layouts: &[ksx_config::PresetFile]) -> Vec<String> {
         .collect()
 }
 
-
 /// The one store-open both preset writers need, refusing in the same words.
 fn preset_store() -> Result<ksx_config::Store, Refusal> {
     let root = ksx_config::ConfigRoot::discover().map_err(|_| {
@@ -1737,7 +1736,6 @@ impl ksx_api::MachineSource for LocalMachine {
             )
         })
     }
-
 
     /// Reuses the tray's own launcher, deliberately.
     ///

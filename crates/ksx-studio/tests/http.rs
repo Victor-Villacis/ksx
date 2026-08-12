@@ -1639,6 +1639,20 @@ fn post_form(addr: SocketAddr, path: &str, body: &str) -> String {
     )
 }
 
+/// Percent-encode one form VALUE. Only used to post a selector the SERVER
+/// served: a test that hand-spelled the encoding of a Bluetooth instance path
+/// would be asserting its own arithmetic rather than the page's behaviour.
+fn form_value(raw: &str) -> String {
+    raw.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn post_json(addr: SocketAddr, path: &str, body: &str) -> String {
     http(
         addr,
@@ -4968,6 +4982,126 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     assert_eq!(after["flags"]["capture_release"], false, "{after}");
     assert_eq!(after["flags"]["capture_blocked"], false, "{after}");
     assert_eq!(after["flags"]["ready"], true, "{after}");
+}
+
+/// **The way back does not go through the staged setup** — over real HTTP,
+/// against the real router, with the daemon holding nothing at all.
+///
+/// This is the 2026-08-11 QA report as a test: "the release button only comes
+/// up once I select a keyboard to bind... but the ipac was already bound and
+/// it was not showing the unrelease."
+///
+/// FAILS against that build in both halves. The page drew no release control
+/// with an empty stage, and `start_capture_target` refused the POST outright
+/// because it resolved its target from `staged.device` — so even a
+/// hand-written form could not reach the provider. A held keyboard does not
+/// type, so that was a state whose only documented exit was `docs/RECOVERY.md`
+/// and an elevated shell (`docs/FIRST-RUN.md` §6).
+#[test]
+fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    // The fixture's default: the I-PAC is already bound to winusb.sys. No
+    // `/start/device` is posted below, so the daemon holds no device at all —
+    // the fresh-install state, and the state a QA reset that moves config.toml
+    // aside also produces, because the binding is Windows's and not the
+    // config's.
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    assert!(payload["staged"]["device"].is_null(), "{payload}");
+    assert_eq!(payload["flags"]["has_prepared"], true, "{payload}");
+    let row = &payload["rows"]["prepared"][0];
+    assert_eq!(row["name"], "Ultimarc I-PAC 4X", "{payload}");
+    assert_eq!(row["selector"], "usb:d209:0430:00", "{payload}");
+
+    let page = rendered_body(&get(addr, "/start"));
+    assert!(page.contains("Keyboards ksx is holding"), "{page}");
+    assert!(
+        page.contains(r#"action="/start/capture/release""#),
+        "a held keyboard had no way back on a machine with nothing staged: {page}"
+    );
+
+    // Consent is still server-side, not an HTML `required` attribute, and a
+    // form without it never reaches the privileged provider.
+    let unconfirmed = post_form(
+        addr,
+        "/start/capture/release",
+        "expected_selector=usb%3Ad209%3A0430%3A00&         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000",
+    );
+    assert!(
+        unconfirmed.contains("Confirm%20that%20you%20want%20to%20release"),
+        "{unconfirmed}"
+    );
+    assert!(machine.released_with.lock().unwrap().is_empty());
+
+    // And identity is still re-resolved on the server: a selector this machine
+    // does not carry is refused before elevation, rather than retargeted onto
+    // the one board that happens to be held.
+    let wrong = post_form(
+        addr,
+        "/start/capture/release",
+        "expected_selector=usb%3A046d%3Ac31c%3A00&         instance_id=USB%5CVID_046D%26PID_C31C%26MI_00%5C7%26DEAD%260%260000&         confirm_release=yes",
+    );
+    assert!(wrong.contains("flash=error"), "{wrong}");
+    assert!(machine.released_with.lock().unwrap().is_empty());
+
+    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    assert!(!released.contains("flash=error"), "{released}");
+    let calls = machine.released_with.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].expected_selector, "usb:d209:0430:00");
+    assert!(calls[0].instance_id.eq_ignore_ascii_case(IPAC_KB));
+    assert!(calls[0].confirm_release);
+    drop(calls);
+    // Nothing was staged before and nothing is staged now: releasing a board
+    // is a machine action, not a setup edit.
+    assert!(control.staged().device.is_none());
+
+    let after: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("released payload");
+    assert_eq!(after["flags"]["has_prepared"], false, "{after}");
+    assert_eq!(after["rows"]["prepared"].as_array().unwrap().len(), 0);
+}
+
+/// The same way back while a DIFFERENT keyboard is the selection — the second
+/// state the QA build stranded, and the one where a stage-keyed control does
+/// not merely disappear but points at the wrong board.
+#[test]
+fn releasing_a_held_keyboard_leaves_a_different_selection_alone() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    // Select the Bluetooth keyboard: a real row in this scan, and one that can
+    // never be WinUSB-held.
+    let bt = form_value(BT_KEYBOARD);
+    post_form(
+        addr,
+        "/start/device",
+        &format!("selector={bt}&alias=desk&label=Bluetooth+Keyboard"),
+    );
+    let staged_selector = control.staged().device.expect("a staged device").selector;
+
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    assert_eq!(payload["flags"]["has_prepared"], true, "{payload}");
+    assert_eq!(
+        payload["rows"]["prepared"][0]["selector"], "usb:d209:0430:00",
+        "the list followed the selection instead of the machine: {payload}"
+    );
+
+    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    assert!(!released.contains("flash=error"), "{released}");
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+    // The selection is untouched: releasing another board is not a setup edit,
+    // and posting its backend would have refused and turned a release that
+    // happened into an error flash.
+    assert_eq!(
+        control.staged().device.expect("still staged").selector,
+        staged_selector
+    );
 }
 
 #[test]

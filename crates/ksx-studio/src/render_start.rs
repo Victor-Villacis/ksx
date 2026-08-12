@@ -1841,6 +1841,21 @@ mod tests {
             !chosen_html.contains(r#"action="/start/capture/prepare""#),
             "{chosen_html}"
         );
+        // The card sends the reader to the list BY NAME, so the two strings
+        // have to be the same string and both have to be on the page. A
+        // heading that drifted would leave a card pointing at nothing.
+        assert!(
+            chosen
+                .lines
+                .capture_detail
+                .contains(crate::snapshot::PREPARED_HEADING),
+            "{}",
+            chosen.lines.capture_detail
+        );
+        assert!(
+            chosen_html.contains(crate::snapshot::PREPARED_HEADING),
+            "{chosen_html}"
+        );
 
         // 4. And the one board the capture card IS already offering to release
         //    is not drawn a second time.

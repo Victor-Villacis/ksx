@@ -511,6 +511,19 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/map", "/map/bind"],
     },
     Anchors {
+        capability: "Rename / delete a controller layout",
+        // Separate from "Author presets" on purpose: that row is about a
+        // layout's CONTENTS, this one is about the file's existence and its
+        // name. They fail differently — a bad binding is a button that does
+        // the wrong thing, a bad rename is a cabinet that will not start.
+        cli: &["preset rename", "preset delete"],
+        // The names a cabinet layout manager would take. Neither exists, and
+        // that is what makes the egui cell honest: the cabinet is the surface
+        // somebody uses while PLAYING, and renaming files is not that moment.
+        egui: &["Screen::Layouts", "Ask::RenamePreset"],
+        studio: &["/profiles/preset/rename", "/profiles/preset/delete"],
+    },
+    Anchors {
         capability: "Edit configuration",
         cli: &["slot list", "slot assign", "config export", "config import"],
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen

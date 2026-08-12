@@ -43,6 +43,18 @@ pub enum Action {
         force: bool,
         dry_run: bool,
     },
+    /// Give a preset a different name, carrying every reference with it.
+    Rename {
+        from: String,
+        to: String,
+        dry_run: bool,
+    },
+    /// Remove a preset file. Refused while slots still name it.
+    Delete {
+        name: String,
+        force: bool,
+        dry_run: bool,
+    },
 }
 
 pub struct Options {
@@ -73,6 +85,12 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             dry_run,
             options.json,
         ),
+        Action::Rename { from, to, dry_run } => rename(&store, &from, &to, dry_run, options.json),
+        Action::Delete {
+            name,
+            force,
+            dry_run,
+        } => delete(&store, &name, force, dry_run, options.json),
     }
 }
 
@@ -257,6 +275,179 @@ fn new(
         println!("  preset = \"{name}\"");
         println!();
         println!("...or let the wizard do it: `ksx setup`.");
+    }
+    Ok(())
+}
+
+/// Where a reference lives, in the words the file uses.
+fn where_ref(reference: &preset_edit::PresetRef) -> String {
+    match &reference.profile {
+        None => format!("config.toml slot {}", reference.slot),
+        Some(title) => format!("profile \"{}\" slot {}", title, reference.slot),
+    }
+}
+
+/// `ksx preset rename <FROM> <TO>` — the file AND every slot that names it.
+///
+/// The reason this is not `mv`: a preset is named by `config.toml`'s slots and
+/// by every games.toml profile. Moving the file alone leaves a config that
+/// still parses and then refuses to start, at the next boot, in front of
+/// whoever is standing at the cabinet.
+fn rename(store: &Store, from: &str, to: &str, dry_run: bool, json: bool) -> anyhow::Result<()> {
+    let presets = store.load_presets()?.value;
+    let config = store.load_config()?.value;
+    let games = store.load_games()?.value;
+    let spec = preset_edit::RenameSpec {
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    let plan = match preset_edit::plan_rename(&presets, &config, &games, &spec) {
+        Ok(plan) => plan,
+        Err(error) => refuse(
+            json,
+            error.code(),
+            &error.to_string(),
+            error.advice().as_deref(),
+        ),
+    };
+
+    if dry_run {
+        let places: Vec<String> = plan.references.iter().map(where_ref).collect();
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "dry_run": true,
+                    "from": plan.from,
+                    "to": plan.to,
+                    "references": places,
+                })
+            );
+        } else {
+            eprintln!(
+                "--dry-run: would rename \"{}\" to \"{}\"",
+                plan.from, plan.to
+            );
+            if places.is_empty() {
+                eprintln!("           nothing points at it yet");
+            } else {
+                eprintln!(
+                    "           and repoint {} place{}:",
+                    places.len(),
+                    if places.len() == 1 { "" } else { "s" }
+                );
+                for place in &places {
+                    eprintln!("             {place}");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let outcome = preset_edit::apply_rename(store, &plan)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "from": plan.from,
+                "to": plan.to,
+                "path": outcome.written.display().to_string(),
+                "removed": outcome.removed.display().to_string(),
+                "references": plan.references.iter().map(where_ref).collect::<Vec<_>>(),
+                "backups": outcome.backups.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            })
+        );
+    } else {
+        for backup in &outcome.backups {
+            println!("backed up {}", backup.display());
+        }
+        println!("renamed \"{}\" to \"{}\"", plan.from, plan.to);
+        println!("  {}", outcome.written.display());
+        for reference in &plan.references {
+            println!("  repointed {}", where_ref(reference));
+        }
+    }
+    Ok(())
+}
+
+/// `ksx preset delete <NAME>` — refused while anything still names it.
+///
+/// `--force` goes through and leaves those slots pointing at a preset that is
+/// not there, which `ksx run` refuses in words. That is deliberate: a break
+/// you can see beats a silent repair, because nothing here can know which
+/// preset the person meant instead.
+fn delete(store: &Store, name: &str, force: bool, dry_run: bool, json: bool) -> anyhow::Result<()> {
+    let presets = store.load_presets()?.value;
+    let config = store.load_config()?.value;
+    let games = store.load_games()?.value;
+    let spec = preset_edit::DeleteSpec {
+        name: name.to_owned(),
+        // A dry run writes nothing, so the in-use guard has nothing to
+        // protect -- and being stopped by it is exactly backwards: the list of
+        // slots it would break is the thing the person ran --dry-run to read.
+        // The refusal is still reported below, with the list attached.
+        force: force || dry_run,
+    };
+    let plan = match preset_edit::plan_delete(&presets, &config, &games, store, &spec) {
+        Ok(plan) => plan,
+        Err(error) => refuse(
+            json,
+            error.code(),
+            &error.to_string(),
+            error.advice().as_deref(),
+        ),
+    };
+    let breaks: Vec<String> = plan.breaks.iter().map(where_ref).collect();
+
+    if dry_run {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "dry_run": true,
+                    "preset": plan.name,
+                    "path": plan.path.display().to_string(),
+                    "breaks": breaks,
+                    "would_refuse": !breaks.is_empty() && !force,
+                })
+            );
+        } else {
+            eprintln!("--dry-run: would delete {}", plan.path.display());
+            for place in &breaks {
+                eprintln!("           LEAVING {place} pointing at nothing");
+            }
+            if !breaks.is_empty() && !force {
+                eprintln!(
+                    "           ...so it would be REFUSED. Repoint those first, or --force."
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    let outcome = preset_edit::apply_delete(store, &plan)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "preset": plan.name,
+                "path": plan.path.display().to_string(),
+                "breaks": breaks,
+                "backup": outcome.backup.as_ref().map(|p| p.display().to_string()),
+            })
+        );
+    } else {
+        if let Some(backup) = &outcome.backup {
+            println!("copied it to {} first", backup.display());
+        }
+        println!("deleted \"{}\"", plan.name);
+        for place in &breaks {
+            println!("  {place} now points at nothing — repoint it before the next start");
+        }
     }
     Ok(())
 }

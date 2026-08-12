@@ -1039,6 +1039,7 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 name: "Arcade".into(),
                 bound: 25,
                 macros: 0,
+                used_by: 1,
                 protected: false,
                 usable: true,
                 problem: None,

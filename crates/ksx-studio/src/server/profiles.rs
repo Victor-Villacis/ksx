@@ -377,6 +377,76 @@ pub(super) async fn profiles_form_preset_new(
     .await
 }
 
+/// The two fields `/profiles/preset/rename` reads. Strings all the way in,
+/// for the reason [`NewProfileForm`] documents at length: an extraction
+/// failure is a 422 with no `Location`, which the island reads as no flash at
+/// all — the silent failure every route here is written to avoid.
+#[derive(Deserialize)]
+pub(super) struct RenamePresetForm {
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+}
+
+/// POST /profiles/preset/rename — `ksx preset rename`, through the same
+/// planner, so the file and every controller naming it move together.
+pub(super) async fn profiles_form_preset_rename(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<RenamePresetForm>,
+) -> Response {
+    machine_act(
+        state,
+        crate::render_profiles::ProfilesAction::RenameLayout,
+        move |machine| {
+            machine.preset_rename(&ksx_api::RenamePreset {
+                from: form.from,
+                to: form.to,
+            })
+        },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+pub(super) struct DeletePresetForm {
+    #[serde(default)]
+    name: String,
+    /// The checkbox. Absent means unchecked, which is a refusal here rather
+    /// than a delete — the same consent shape `/profiles/delete` uses.
+    #[serde(default)]
+    confirm_delete: String,
+}
+
+/// POST /profiles/preset/delete — `ksx preset delete`, WITHOUT `--force`.
+///
+/// The CLI has a force that deletes a layout controllers still use and leaves
+/// them pointing at nothing; a web form must not. A page that can strand a
+/// cabinet in one click is not a page, and the row already shows the use
+/// count next to the control, so the refusal is never the first time anybody
+/// hears about it.
+pub(super) async fn profiles_form_preset_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<DeletePresetForm>,
+) -> Response {
+    if form.confirm_delete != "yes" {
+        return profiles_redirect(
+            crate::render_profiles::ProfilesAction::DeleteLayoutUnconfirmed,
+            false,
+        );
+    }
+    machine_act(
+        state,
+        crate::render_profiles::ProfilesAction::DeleteLayout,
+        move |machine| {
+            machine.preset_delete(&ksx_api::DeletePreset {
+                name: form.name,
+                force: false,
+            })
+        },
+    )
+    .await
+}
 /// POST /profiles/switch — start a session under one profile.
 ///
 /// The SAME `ControlSource::start` the status page's forms post and the tray

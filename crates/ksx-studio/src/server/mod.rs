@@ -304,6 +304,8 @@ pub fn serve(
             .route("/profiles/switch", post(profiles_form_switch))
             .route("/profiles/stop", post(profiles_form_stop))
             .route("/profiles/preset/new", post(profiles_form_preset_new))
+            .route("/profiles/preset/rename", post(profiles_form_preset_rename))
+            .route("/profiles/preset/delete", post(profiles_form_preset_delete))
             // ── /setup — the CONFIG FIRST, and the first run ───────────────
             // Two verbs a person sees (Export, Import) and three steps, each
             // one backend verb. No route here takes a filesystem path, in or

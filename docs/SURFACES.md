@@ -157,6 +157,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | First run: stage a setup, save or play | planned (`ksx stage`) | — | **primary** |
 | Author presets / key mappings | owns | — | **primary** |
 | Edit configuration | owns | slot→preset only | **primary** |
+| Rename / delete a controller layout | owns | — | **primary** (`/profiles`) |
 | Create / update / delete profiles | planned | view | **primary** |
 | Device pick / remove | owns | planned | **primary** |
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |

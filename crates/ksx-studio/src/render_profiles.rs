@@ -37,13 +37,14 @@ const LIST_SLOT_PRESET_OPTIONS_LIVE: &str = "list:presetOptions:array";
 const LIST_SLOT_PRESET_OPTIONS_PLAIN: &str = "list:presetOptions#2:array";
 const LIST_SLOT_PRESET_OPTIONS_NEW: &str = "list:presetOptions#3:array";
 const LIST_SLOT_PRESETS: &str = "list:presetRows:array";
+const LIST_SLOT_PRESET_EDITS: &str = "list:presetEditRows:array";
 const LIST_SLOT_TEMPLATES: &str = "list:templateRows:array";
 const LIST_SLOT_TEMPLATE_OPTIONS: &str = "list:templateOptions:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
 
 /// How many `createShow` pairs this page has; the layout test pins both the
 /// count and every name.
-const SHOW_COUNT: usize = 16;
+const SHOW_COUNT: usize = 17;
 
 /// Actions whose outcomes can be presented on Saved Games. Provider and form
 /// text never crosses this boundary: every action maps to copy owned here.
@@ -53,6 +54,12 @@ pub(crate) enum ProfilesAction {
     UpdateGame,
     DeleteGame,
     CreateLayout,
+    RenameLayout,
+    DeleteLayout,
+    /// The tick box was not ticked. Its OWN outcome, not the delete error:
+    /// "controllers still using it" would be a specific reason that is not
+    /// the reason, which is worse than a vague one.
+    DeleteLayoutUnconfirmed,
     Play,
     Stop,
 }
@@ -61,6 +68,9 @@ const PROFILE_CREATE_OK: &str = "Saved game added.";
 const PROFILE_UPDATE_OK: &str = "Saved game updated.";
 const PROFILE_DELETE_OK: &str = "Saved game deleted.";
 const PROFILE_LAYOUT_OK: &str = "Controller layout created.";
+const PROFILE_LAYOUT_RENAME_OK: &str =
+    "Controller layout renamed. Every controller that used it now uses the new name.";
+const PROFILE_LAYOUT_DELETE_OK: &str = "Controller layout deleted.";
 const PROFILE_PLAY_OK: &str = "Play started.";
 const PROFILE_STOP_OK: &str = "Play stopped.";
 const PROFILE_CREATE_ERROR: &str = "error: Saved game could not be added. Check the game name, program location, players, and controller layout; nothing was changed.";
@@ -68,13 +78,24 @@ const PROFILE_UPDATE_ERROR: &str = "error: Saved game could not be updated. Refr
 const PROFILE_DELETE_ERROR: &str =
     "error: Saved game could not be deleted. Refresh the page and try again; nothing was changed.";
 const PROFILE_LAYOUT_ERROR: &str = "error: Controller layout could not be created. Choose a different name or starter layout; nothing was changed.";
+const PROFILE_LAYOUT_RENAME_ERROR: &str = "error: Controller layout could not be renamed. Choose a new name that is not already taken; nothing was changed.";
+// Names the guard, not a generic failure: with no force on this form, a
+// delete that fails is a delete something still uses, and "point those
+// controllers elsewhere" is the step that unblocks it.
+const PROFILE_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could not be deleted. Controllers still using it must be pointed at another layout first; nothing was changed.";
+const PROFILE_LAYOUT_UNCONFIRMED_ERROR: &str = "error: Tick the confirmation box before deleting a controller layout; nothing was changed.";
 const PROFILE_PLAY_ERROR: &str =
     "error: That game could not be started. Open Edit and check its program and controllers.";
 const PROFILE_STOP_ERROR: &str = "error: Play could not be stopped. Reopen ksx and try again.";
 const PROFILE_UNKNOWN_FLASH_ERROR: &str =
     "error: Saved Games could not finish that request. Reopen ksx and try again.";
 
-const PROFILE_FLASH_ALLOWLIST: [&str; 13] = [
+const PROFILE_FLASH_ALLOWLIST: [&str; 18] = [
+    PROFILE_LAYOUT_UNCONFIRMED_ERROR,
+    PROFILE_LAYOUT_RENAME_OK,
+    PROFILE_LAYOUT_DELETE_OK,
+    PROFILE_LAYOUT_RENAME_ERROR,
+    PROFILE_LAYOUT_DELETE_ERROR,
     PROFILE_CREATE_OK,
     PROFILE_UPDATE_OK,
     PROFILE_DELETE_OK,
@@ -112,12 +133,19 @@ pub(crate) fn profiles_action_flash(action: ProfilesAction, succeeded: bool) -> 
         (ProfilesAction::UpdateGame, true) => PROFILE_UPDATE_OK,
         (ProfilesAction::DeleteGame, true) => PROFILE_DELETE_OK,
         (ProfilesAction::CreateLayout, true) => PROFILE_LAYOUT_OK,
+        // Only ever reached with `false`; the arm is total so the enum can
+        // never grow a silently-unhandled case.
+        (ProfilesAction::DeleteLayoutUnconfirmed, _) => PROFILE_LAYOUT_UNCONFIRMED_ERROR,
+        (ProfilesAction::RenameLayout, true) => PROFILE_LAYOUT_RENAME_OK,
+        (ProfilesAction::DeleteLayout, true) => PROFILE_LAYOUT_DELETE_OK,
         (ProfilesAction::Play, true) => PROFILE_PLAY_OK,
         (ProfilesAction::Stop, true) => PROFILE_STOP_OK,
         (ProfilesAction::CreateGame, false) => PROFILE_CREATE_ERROR,
         (ProfilesAction::UpdateGame, false) => PROFILE_UPDATE_ERROR,
         (ProfilesAction::DeleteGame, false) => PROFILE_DELETE_ERROR,
         (ProfilesAction::CreateLayout, false) => PROFILE_LAYOUT_ERROR,
+        (ProfilesAction::RenameLayout, false) => PROFILE_LAYOUT_RENAME_ERROR,
+        (ProfilesAction::DeleteLayout, false) => PROFILE_LAYOUT_DELETE_ERROR,
         (ProfilesAction::Play, false) => PROFILE_PLAY_ERROR,
         (ProfilesAction::Stop, false) => PROFILE_STOP_ERROR,
     }
@@ -185,7 +213,7 @@ fn text(value: &str) -> SlotValue {
 ///
 /// Every row was already composed by [`ProfilesDerived`]; this is the
 /// `SlotValue` shim and nothing else.
-fn list_values(view: &ProfilesPayload) -> [(&'static str, SlotValue); 10] {
+fn list_values(view: &ProfilesPayload) -> [(&'static str, SlotValue); 11] {
     let d = &view.view;
     let broken_rows = SlotValue::array(
         d.broken_rows
@@ -245,6 +273,21 @@ fn list_values(view: &ProfilesPayload) -> [(&'static str, SlotValue); 10] {
             })
             .collect(),
     );
+    let preset_edit_rows = SlotValue::array(
+        d.preset_edit_rows
+            .iter()
+            .map(|r| {
+                SlotValue::object(vec![
+                    ("name".to_owned(), text(&r.name)),
+                    ("detail".to_owned(), text(&r.detail)),
+                    ("statecls".to_owned(), text(&r.statecls)),
+                    ("statelabel".to_owned(), text(&r.statelabel)),
+                    ("editable".to_owned(), SlotValue::Bool(r.editable)),
+                    ("used_line".to_owned(), text(&r.used_line)),
+                ])
+            })
+            .collect(),
+    );
     let preset_rows = SlotValue::array(
         d.preset_rows
             .iter()
@@ -254,6 +297,8 @@ fn list_values(view: &ProfilesPayload) -> [(&'static str, SlotValue); 10] {
                     ("detail".to_owned(), text(&r.detail)),
                     ("statecls".to_owned(), text(&r.statecls)),
                     ("statelabel".to_owned(), text(&r.statelabel)),
+                    ("editable".to_owned(), SlotValue::Bool(r.editable)),
+                    ("used_line".to_owned(), text(&r.used_line)),
                 ])
             })
             .collect(),
@@ -296,6 +341,7 @@ fn list_values(view: &ProfilesPayload) -> [(&'static str, SlotValue); 10] {
         (LIST_SLOT_PRESET_OPTIONS_PLAIN, preset_options.clone()),
         (LIST_SLOT_PRESET_OPTIONS_NEW, preset_options),
         (LIST_SLOT_PRESETS, preset_rows),
+        (LIST_SLOT_PRESET_EDITS, preset_edit_rows),
         (LIST_SLOT_TEMPLATES, template_rows),
         (LIST_SLOT_TEMPLATE_OPTIONS, template_options),
         (LIST_SLOT_NOTES, notes),
@@ -335,6 +381,7 @@ fn show_values(view: &ProfilesPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:profilesUnreadable", d.profiles_unreadable),
         ("show:canMakeProfile", d.can_make_profile),
         ("show:noPresetsYet", d.no_presets_yet),
+        ("show:noEditablePresets", d.no_editable_presets),
         ("show:presetsUnreadable", d.presets_unreadable),
         ("show:canMakePreset", d.can_make_preset),
         ("show:anyNotes", d.any_notes),
@@ -467,6 +514,7 @@ mod tests {
                         name: "Arcade".into(),
                         bound: 25,
                         macros: 1,
+                        used_by: 2,
                         protected: false,
                         usable: true,
                         problem: None,
@@ -476,6 +524,7 @@ mod tests {
                         name: "default".into(),
                         bound: 20,
                         macros: 0,
+                        used_by: 0,
                         protected: true,
                         usable: true,
                         problem: None,
@@ -566,6 +615,7 @@ mod tests {
                 LIST_SLOT_PRESET_OPTIONS_PLAIN,
                 LIST_SLOT_PRESET_OPTIONS_NEW,
                 LIST_SLOT_PRESETS,
+                LIST_SLOT_PRESET_EDITS,
                 LIST_SLOT_TEMPLATES,
                 LIST_SLOT_TEMPLATE_OPTIONS,
                 LIST_SLOT_NOTES,

@@ -651,6 +651,63 @@ mod tests {
         payload(stage(&[]))
     }
 
+    /// **One board, one story.** Victor, installing 0.3.0 on a machine whose
+    /// I-PAC was still held: "it showed I could release it and also select it
+    /// ... the rest said held by ksx ... [and the list said] Ready to use".
+    ///
+    /// Both halves of the page were reading the same board and describing it
+    /// differently. The banner is right - the board is off the Windows
+    /// keyboard stack and cannot type - and the list said it was fine.
+    ///
+    /// The cause is worth keeping in a test rather than a comment:
+    /// `cannot_type_line` is blanked for a claimed board on purpose, because
+    /// `/devices` renders `claimed` beside it. `StartBoardRow` has no such
+    /// field, so on THIS page the suppression left nothing but the fallback.
+    ///
+    /// Selecting a held board stays offered, and that is not the bug: a held
+    /// board is exactly the one somebody means to play on. What was wrong was
+    /// the verdict beside it.
+    #[test]
+    fn a_board_ksx_is_holding_never_reads_as_ready_to_use() {
+        let mut scan = scan();
+        let board = scan
+            .boards
+            .iter_mut()
+            .find(|b| b.selector.as_deref() == Some(SELECTOR))
+            .expect("the fixture carries the selected board");
+        board.claimed = true;
+        // Exactly the shape the provider produces for a held board: the alarm
+        // suppressed, because `/devices` would have rendered `claimed` itself.
+        board.cannot_type_line = String::new();
+
+        let payload = StartPayload {
+            scan,
+            ..payload(stage(&[]))
+        }
+        .composed();
+
+        let row = payload
+            .rows
+            .boards
+            .iter()
+            .find(|r| r.selector == SELECTOR)
+            .expect("the held board is still listed - it is selectable");
+        assert_eq!(row.verdict, "Held by ksx", "{:?}", row);
+        assert!(
+            !payload
+                .rows
+                .boards
+                .iter()
+                .any(|r| r.selector == SELECTOR && r.verdict.contains("Ready")),
+            "the banner calls this board held; the list must not call it ready"
+        );
+
+        // And the page really is saying both things at once, which is the
+        // whole point: the banner above is what makes the list's wording
+        // matter.
+        assert!(payload.flags.has_prepared, "the held banner is up");
+    }
+
     fn claimed_scan() -> DeviceScanView {
         let source = scan();
         let mut boards = source.boards;

@@ -2400,7 +2400,21 @@ impl StartRows {
                 name: b.name.clone(),
                 transport: b.transport_label.clone(),
                 backends: b.backends.clone(),
-                verdict: if b.cannot_type_line.trim().is_empty() {
+                // HELD FIRST, and it is not a nicety. `cannot_type_line` is
+                // deliberately blank for a claimed board (`machine.rs`: "the
+                // row already says `claimed`, the backends line already says
+                // why") — but that reasoning is `/devices`'s, where the row
+                // DOES say claimed. This row has no such field, so the
+                // suppression removed the only signal and left the fallback,
+                // and a board the banner above calls "held by ksx, so it
+                // cannot type to Windows" read "Ready to use" ten lines lower.
+                //
+                // The same words as the banner, on purpose: one board saying
+                // two things on one page is how somebody concludes the page
+                // does not know what it is talking about.
+                verdict: if b.claimed {
+                    "Held by ksx".to_owned()
+                } else if b.cannot_type_line.trim().is_empty() {
                     "Ready to use".to_owned()
                 } else {
                     "Detected — review the note below".to_owned()

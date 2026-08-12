@@ -1001,7 +1001,7 @@ async function pauseAndMap(): Promise<void> {
   const progress = pushToast("Pausing emulation…");
   const out = await verb("/api/session/stop");
   if (out.ok) {
-    markPaused(profile);
+    markPaused();
     replaceToast(
       progress,
       `Emulation is paused${profile ? ` ("${profile}")` : ""} — map away, then Resume emulation.`,

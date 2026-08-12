@@ -1147,7 +1147,6 @@ export function applyMap(p: MapPayload): void {
   // started back up, so drop the paused affordance.
   if (p.session.reachable && p.session.running) {
     paused = false;
-    pausedProfile = null;
   }
 
   setSlotTabs(
@@ -1248,19 +1247,19 @@ export function applyMap(p: MapPayload): void {
 
 /** Client-only: this PAGE paused emulation. To the daemon it is just idle. */
 let paused = false;
-/** What was playing when we paused, for the toast that says so. It is NOT how
- *  emulation comes back: a staged session has no profile, and a page that
- *  resumed by starting a remembered profile started the wrong thing (or
- *  nothing). Resume sends `/api/session/resume` and the daemon decides. */
-let pausedProfile: string | null = null;
+// There used to be a `pausedProfile` beside this: the games.toml profile the
+// page remembered at pause time, so Resume could start it again. It is gone,
+// and its absence is the fix. A session played from an unsaved staged setup
+// has no profile, so what it remembered was `null` — and a start with no
+// profile means THE CONFIG ON DISK, which is not what was paused. Resume
+// sends `/api/session/resume` and the daemon answers from what it started.
 
 /** The pause landed. Flip the affordances NOW rather than re-deriving from
  *  `lastPayload` — that payload still says "running" (it predates the stop by
  *  definition), and applyMap's own rule "running ⇒ not paused" would undo the
  *  pause the instant it was set. The next poll re-derives everything anyway. */
-export function markPaused(profile: string | null): void {
+export function markPaused(): void {
   paused = true;
-  pausedProfile = profile;
   setPillRunning(false);
   setPillIdle(false);
   setPillPaused(true);
@@ -1270,7 +1269,6 @@ export function markPaused(profile: string | null): void {
 
 export function clearPaused(): void {
   paused = false;
-  pausedProfile = null;
   setPillPaused(false);
   setPausedBar(false);
 }
@@ -1279,9 +1277,9 @@ export function isPaused(): boolean {
   return paused;
 }
 
-/** The games.toml profile running right now, if any — remembered at pause
- *  time so the pause toast can name what it stopped. Never an instruction to
- *  Resume: see [`pausedProfile`]. */
+/** The games.toml profile running right now, if any — read at pause time so
+ *  the toast can NAME what it stopped. Never an instruction to Resume; see the
+ *  note above [`markPaused`]. */
 export function liveProfile(): string | null {
   return lastPayload?.session.profile ?? null;
 }

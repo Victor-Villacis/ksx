@@ -286,6 +286,46 @@ before connecting another identical keyboard. If one is connected later,
 Studio refuses to guess between twins: unplug it, then Release removes the
 shared package so the twin returns to HidUsb when reconnected.
 
+**Prepare goes through the stage; Release does not, and that asymmetry is the
+point.** Corrected 2026-08-11 after QA: both directions used to resolve their
+target from `StagedSetup`, which is per-visit daemon memory that knows nothing
+about drivers. Preparing SHOULD be gated on it — it takes a keyboard off the
+keyboard stack and the only reason to do that is the setup being staged right
+now. Releasing is the undo, and the same gate made the undo unreachable in the
+three states that matter: a fresh install stages nothing, choosing another
+keyboard points the control elsewhere, and choosing the held keyboard itself
+still showed Prepare, because `StageEdit::ChooseDevice` always stages
+`interception` and the card keyed Release off that value rather than off the
+machine. A held board does not type, so the state with no exit was exactly the
+state where the customer's keyboard is dead — `FIRST-RUN.md` §6's "the only way
+out of a mistake is never a shell command", reached by a page obeying a rule
+about the stage.
+
+So `/start` carries a second, stage-independent control: **every board the
+live scan reports as claimed, each with its own consented Release**, banner-first
+above step 1. The question it answers — *which keyboards cannot type right
+now* — is a fact about the device tree, and §1 puts that read where the fact
+is. It is not on `/devices`, which is the CONFIG page: its two verbs write and
+delete `[[device]]` entries, and a held board need not have one at all (the
+binding is Windows's and the receipt is under ProgramData). `/devices` still
+states the binding and shows the elevated command; `/start` is where the
+no-terminal way back lives, because `/start` is where a stuck first-run
+customer is standing. Selecting a keyboard remains looking rather than a
+commitment (§5): release is never a side effect of a choice.
+
+The identity guards are unchanged for both directions — one board for this
+selector, one interface for this instance, WinUSB-eligible, and, for Release,
+actually claimed. What Release drops is a *stage* comparison, not a machine
+one. Its blast radius is a caller already past `guard.rs` putting a
+ksx-held keyboard back on the keyboard stack, which is the safe direction and
+which the provider still refuses unless ksx owns the receipt.
+
+The card for the state where the two disagree — machine says held, stage says
+`interception` — reads as blocked rather than ready, and says which two facts
+disagree. It must not read as ready: a session started on a stage that names
+Interception, over an interface that is off the keyboard stack, is the dead
+panel this project keeps rediscovering.
+
 Only an installed Program Files copy may elevate its fixed GUI-subsystem
 `ksx-winusb-helper.exe`; that helper may load only its fixed installed sibling
 `libwdi.dll`. Both canonicalize from Windows Known Folders and repeat live

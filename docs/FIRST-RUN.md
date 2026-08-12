@@ -192,6 +192,20 @@ be opened).
   A verified WinUSB device offers Release. Built-in preparation supports one
   exact USB keyboard; reconnect or choose a supported USB keyboard, then
   Rescan. Bluetooth keyboard capture is not available on a clean install.
+- **Say which keyboards ksx is already holding, and offer each one back —
+  whatever is selected.** A board bound to `winusb.sys` does not type, and that
+  survives closing ksx, restarting the machine and starting Setup over: it is a
+  Windows driver binding plus a machine-wide receipt, and neither of those is
+  this configuration. So the list is read from the DEVICE TREE and shown on its
+  own, above the steps — it appears with no config, with nothing staged, and
+  while a different keyboard is selected. The exit from "my keyboard stopped
+  working" must not require choosing that keyboard, or having chosen anything,
+  or having a configuration at all. Release stays an explicit, separately
+  confirmed act, and choosing a keyboard still releases nothing (§6). Added
+  2026-08-11: before it, the only Release control hung off the selected
+  keyboard's card, so in each of those states the way out was this repo's
+  recovery runbook and an elevated shell — §6's last line, live in the shipped
+  build.
 - **Say it if Play cannot work.** A machine with no ViGEmBus can walk every
   moment above and plug nothing at the end, so whether a pad can be created is
   read (`MachineSource::pad_bus`) and stated before the Play button. Three

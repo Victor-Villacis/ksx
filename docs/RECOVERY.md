@@ -63,6 +63,17 @@ panel types during that run and is dark before and after it.
 The rest of this section is for when you want the interface back on the normal
 keyboard driver.
 
+**Try the app first — there is now a way back that is not a command.** Open ksx
+and look at the top of Setup: **Keyboards ksx is holding** lists every board on
+this machine that is bound to `winusb.sys`, each with its own Release. It reads
+the live device tree, so it appears with no config, with nothing staged, on a
+fresh install, and while some other keyboard is selected — a held board does not
+have to be *chosen* to be given back, and choosing one never releases it either.
+Until 2026-08-11 that control existed only on the selected keyboard's card, so
+in every one of those states this runbook and an elevated shell were the only
+exit, which `docs/FIRST-RUN.md` §6 says must never be true. The subsections below
+stay, because they are what you need when ksx itself will not start.
+
 ### 2a. The exact device tree on this cabinet
 
 Verified read-only 2026-08-04 via `ksx winusb status --json`. **These paths are

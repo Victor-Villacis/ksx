@@ -74,7 +74,7 @@
 ; installed there. The first `iscc` run is the check.
 
 #define AppName        "ksx"
-#define AppVersion     "0.2.0"
+#define AppVersion     "0.2.1"
 #define AppPublisher   "Victor Villacis"
 #define AppURL         "https://github.com/Victor-Villacis/ksx"
 #define AppExe         "ksx.exe"

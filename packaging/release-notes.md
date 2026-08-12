@@ -14,6 +14,30 @@
 
 **ksx {{VERSION}}** - Windows 11, 64-bit.
 
+## Fixed in this release
+
+Two ways ksx could leave you stuck. In both, the only way out was a command
+prompt - which is exactly the thing this product is supposed to make
+unnecessary.
+
+- **Resume brings back what you were actually playing.** In Controls,
+  "Pause & edit" disconnects your controllers so you can teach them keys by
+  pressing them. "Resume Play" afterwards used to start whatever was saved on
+  disk. If you were playing a setup you had not saved yet, that meant it
+  started something else, or nothing at all - and said it had resumed either
+  way. Resume now puts back the session you paused, unsaved setups included,
+  along with any changes you made while it was paused.
+
+- **A keyboard ksx is holding can always be handed back.** Preparing a keyboard
+  for the built-in Windows USB mode takes it off the Windows keyboard stack: it
+  stops typing until you Release it. But Release only ever appeared on the
+  keyboard currently selected on the first-run screen - so if nothing was
+  selected, or a different keyboard was, or even when that same keyboard was,
+  no Release button was drawn anywhere. A keyboard that has stopped typing is a
+  poor thing to need a command prompt to recover. The first-run screen now
+  lists every keyboard ksx is holding, whatever is selected, each with its own
+  Release and the same confirmation and UAC steps as before.
+
 ## Get it
 
 Download **{{SETUP_NAME}}** from Assets below and double-click it. Click through

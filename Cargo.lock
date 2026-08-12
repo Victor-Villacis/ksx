@@ -1612,7 +1612,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "ksx-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-config",
  "ksx-core",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-backend"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1665,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-cabinet"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "eframe",
  "egui",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-capture"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "crossbeam-channel",
@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-config"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "directories",
  "insta",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bitflags 2.13.1",
  "proptest",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-fuzz"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-capture",
  "ksx-config",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-games"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-config",
  "ksx-core",
@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-hidmaestro"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-core",
  "thiserror 2.0.19",
@@ -1747,7 +1747,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-launcher"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "windows-sys 0.60.2",
  "winresource",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-output"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-core",
  "ksx-hidmaestro",
@@ -1768,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-platform"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-core",
  "serde",
@@ -1781,7 +1781,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-studio"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "forma-ir",
@@ -1801,7 +1801,7 @@ dependencies = [
 
 [[package]]
 name = "ksx-winusb-helper"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ksx-platform",
  "serde_json",

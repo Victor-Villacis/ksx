@@ -645,11 +645,19 @@ crossing is a design smell worth a second look.
   plan/apply pairs in `ksx-backend::profile_edit`; the CLI row is now honestly
   `planned` instead of hiding that absence inside configuration verbs. A future
   CLI is a thin driver over these same planners, not new profile logic.
-- **Cabinet slot list scrolling** — egui, operating surface, still broken above
-  four slots. The body *is* inside a `ScrollArea`; what is missing is any
-  scroll-to-focus call, so the joystick can move the cursor to a row that is
-  off-screen with no way to bring it into view (`nav.rs` moves the cursor with
-  wraparound and no page-up, deliberately).
+- **Cabinet slot list scrolling — DONE, and not the way this entry said.** It
+  read "still broken above four slots ... what is missing is any
+  scroll-to-focus call" long after `crates/ksx-cabinet/src/list.rs` shipped,
+  and it sent a reader (2026-08-12: me) off to rebuild something that was
+  already there. Worse, the remedy it named was the wrong one: a scroll-to-focus
+  is still a scroll bar underneath, and §4 says this surface has no mouse, no
+  wheel and no Page keys. The list PAGES instead — `per_page` and `window`, two
+  pure functions, no scroll offset and no animation — and anchors to a page
+  rather than following the cursor, so what moves when the joystick moves is
+  the cursor and not the world under it. Pinned by
+  `every_slot_is_drawn_inside_the_panel_when_the_cursor_is_on_it`, which puts
+  the cursor on each of the sixteen slots in turn and requires the row to be
+  inside the panel.
 - **LAN + token + QR** — one coherent change-set, not three (§7), and the guard
   has two checks in it, not one.
 - **Viewport meta tag** — one line, and the precondition for anything in §8.

@@ -162,7 +162,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
 | Is it working: pads, drivers | owns | **primary** | view |
-| Spawn test pads / prune the bus | owns | — | **primary** (§3a) |
+| Spawn test pads / prune the bus | owns | — | **primary** |
 | Start / stop / switch profile | owns | **primary** | convenience |
 | Record / replay a session | owns | planned (§3b) | planned (§3b) |
 | Start ksx at sign-in | owns (all options) | planned | **primary** (`/start`, one tick box) |

@@ -522,7 +522,7 @@ fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
         registered: true,
         line,
         mode: task.mode().map(|m| m.describe().to_owned()),
-        profile: task.game().map(str::to_owned),
+        profile: task.game(),
         stale: stale_detail.is_some(),
         stale_detail,
     })

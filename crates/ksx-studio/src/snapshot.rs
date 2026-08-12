@@ -1259,6 +1259,30 @@ enum StartCaptureMode {
     Prepare,
     PrepareOptional,
     Release,
+    /// **The machine says prepared; the stage says ordinary Windows path.**
+    ///
+    /// Reachable the instant a user picks a board ksx is already holding:
+    /// `StageEdit::ChooseDevice` always stages `Interception` (the stage is a
+    /// pure value and knows nothing about drivers), so choosing an
+    /// already-prepared keyboard leaves the two disagreeing.
+    ///
+    /// It is NOT `Prepare`, which is what this page used to show for it —
+    /// "Prepare this keyboard for play" over a keyboard Windows had already
+    /// prepared, whose only possible outcome was the provider's
+    /// `winusb-already-prepared` refusal telling the user to "use Release",
+    /// which the same page then did not draw. That is the 2026-08-11 QA
+    /// report, and `docs/FIRST-RUN.md` §6's "a screen reports success while
+    /// nothing works" turned inside out: a screen offering the one action that
+    /// cannot apply.
+    ///
+    /// It is not [`Self::Release`] either, because that one counts as READY
+    /// and this one must not: a session started on a stage that says
+    /// Interception, over an interface that is off the keyboard stack, is the
+    /// dead panel this project keeps rediscovering. So it reads as blocked,
+    /// says which two facts disagree, and the way out is the held-keyboard
+    /// list above it, which releases by identity rather than through the
+    /// stage.
+    Held,
     Blocked,
 }
 
@@ -1322,6 +1346,13 @@ impl StartCaptureView {
             StartCaptureMode::Ready
         } else if backend == winusb && board.winusb_eligible && board.claimed {
             StartCaptureMode::Release
+        } else if board.claimed {
+            // **The machine's answer wins over the stage's.** `claimed` is read
+            // from the live device tree; `backend` is what this visit's staged
+            // value happens to say. When they disagree the board is still off
+            // the keyboard stack, and a card that offered Prepare here would be
+            // offering the one action the provider refuses.
+            StartCaptureMode::Held
         } else if (backend == interception || backend == winusb) && board.winusb_eligible {
             StartCaptureMode::Prepare
         } else {
@@ -1360,8 +1391,15 @@ impl StartCaptureView {
         self.mode == StartCaptureMode::Release
     }
 
+    /// The warn card, which [`StartCaptureMode::Held`] shares with
+    /// [`StartCaptureMode::Blocked`]: both are "no action here", both are
+    /// not-ready, and the wording — not a second island branch — is what makes
+    /// them different sentences.
     fn blocked_state(&self) -> bool {
-        self.mode == StartCaptureMode::Blocked
+        matches!(
+            self.mode,
+            StartCaptureMode::Blocked | StartCaptureMode::Held
+        )
     }
 }
 
@@ -1386,6 +1424,14 @@ pub struct StartLines {
     /// `scan.boards_summary`, verbatim — the one line that distinguishes "no
     /// keyboard-capable board" from "nothing could be read".
     pub boards_line: String,
+    /// The held-keyboard banner's heading and sentence. Empty when nothing on
+    /// this machine is held — the banner is a fact about the DEVICE TREE, so
+    /// it appears on a fresh install with no config and no staged setup, which
+    /// is the state it exists for.
+    #[serde(default)]
+    pub prepared_heading: String,
+    #[serde(default)]
+    pub prepared_line: String,
     /// Customer copy for the scalar capture-preparation card. Exact instance
     /// ids and provider/helper messages never enter these fields.
     pub capture_heading: String,
@@ -1477,6 +1523,8 @@ impl StartLines {
                 None => String::new(),
             },
             boards_line: p.scan.boards_summary.clone(),
+            prepared_heading: PREPARED_HEADING.to_owned(),
+            prepared_line: prepared_line(p),
             capture_heading: capture_heading(&p.capture).to_owned(),
             capture_line: capture_line(&p.capture).to_owned(),
             capture_detail: capture_detail(&p.capture).to_owned(),
@@ -1565,11 +1613,133 @@ fn ready_line(payload: &StartPayload) -> String {
     "Ready. Save keeps this setup for later; Play starts it without saving.".to_owned()
 }
 
+/// **Every board this machine is holding that the capture card is not already
+/// offering to release** — the one list on this page that does not go through
+/// the staged setup.
+///
+/// The filter is `BoardRow::claimed`, read from the live device tree. It is
+/// therefore independent of `config.toml` (a board can be held with no
+/// `[[device]]` entry naming it: the binding is Windows's and the receipt is
+/// under ProgramData, and neither is the config root) and independent of the
+/// stage (a fresh visit stages nothing at all). Both of those are the bug: on
+/// the QA build the ONLY release control was the staged device's card, so a
+/// held keyboard was invisible on a fresh install, invisible after choosing a
+/// different keyboard, and invisible after choosing itself — because
+/// `ChooseDevice` stages the Interception backend and the card keyed Release
+/// off that.
+///
+/// The one exclusion is the board the capture card IS already offering to
+/// release, so the page never draws the same action twice.
+fn held_boards(p: &StartPayload) -> Vec<&ksx_api::BoardRow> {
+    // A refused scan is not a machine with nothing held (`SURFACES.md` §1b).
+    // The banner stays silent and the scan's own failure banner speaks.
+    if !p.scan_read() {
+        return Vec::new();
+    }
+    let offered = p
+        .capture
+        .release()
+        .then_some(p.capture.expected_selector.as_str());
+    p.scan
+        .boards
+        .iter()
+        .filter(|board| board.claimed)
+        .filter(|board| offered.is_none() || board.selector.as_deref() != offered)
+        .collect()
+}
+
+/// Compose one [`StartPreparedRow`].
+///
+/// The identity guards are the SAME two the capture card applies and the
+/// server re-applies before elevating: one board answering to this selector,
+/// one interface answering to this instance. A row that fails either is still
+/// DRAWN — a keyboard that cannot type must never be missing from the list of
+/// keyboards that cannot type — and loses only its button, with the sentence
+/// that says what to do instead.
+fn prepared_row(p: &StartPayload, board: &ksx_api::BoardRow) -> StartPreparedRow {
+    let selector = board.selector.clone().unwrap_or_default();
+    let instance_id = board.keyboard.clone().unwrap_or_default();
+    let twins = p
+        .scan
+        .boards
+        .iter()
+        .filter(|other| {
+            !selector.is_empty() && other.selector.as_deref() == Some(selector.as_str())
+        })
+        .count();
+    let interfaces = p
+        .scan
+        .boards
+        .iter()
+        .flat_map(|other| other.interfaces.iter())
+        .filter(|row| !instance_id.is_empty() && row.instance_id.eq_ignore_ascii_case(&instance_id))
+        .count();
+    let note = if selector.is_empty() || instance_id.is_empty() {
+        "ksx cannot identify one exact interface on this board right now, so it will not offer \
+         to release the wrong one. Reconnect it and Rescan."
+            .to_owned()
+    } else if twins != 1 || interfaces != 1 {
+        "Another connected device answers to the same identity, so ksx will not guess which one \
+         to give back. Unplug the other one, then Rescan."
+            .to_owned()
+    } else {
+        String::new()
+    };
+    StartPreparedRow {
+        name: board.name.clone(),
+        transport: board.transport_label.clone(),
+        detail: "It cannot type to Windows while ksx is holding it. Giving it back opens a \
+                 Windows permission prompt and changes nothing else in this setup."
+            .to_owned(),
+        path: instance_id.clone(),
+        selector,
+        instance_id,
+        note_cls: hidden_when_empty(&note, "dv-warn"),
+        form_cls: if note.is_empty() {
+            "capture-form".to_owned()
+        } else {
+            "capture-form dv-hide".to_owned()
+        },
+        note,
+    }
+}
+
+/// The held-keyboard banner's heading, named because three places have to
+/// agree on it: this banner, [`capture_detail`]'s `Held` sentence, which sends
+/// the reader here by name, and the layout test that proves both are on the
+/// page at once.
+pub const PREPARED_HEADING: &str = "Keyboards ksx is holding";
+
+/// **The sentence a user with a dead keyboard needs, before anything else.**
+///
+/// Composed from the count alone, and deliberately says the two things that
+/// are not guessable: that the state survives everything a user would try
+/// (closing ksx, rebooting, starting Setup over — it is a Windows driver
+/// binding plus a receipt under ProgramData, neither of which is this or any
+/// config), and that the button below undoes it. Before this existed the only
+/// documented way out of it was `docs/RECOVERY.md` and an elevated shell,
+/// which `docs/FIRST-RUN.md` §6 lists as a thing that must never happen.
+fn prepared_line(p: &StartPayload) -> String {
+    match held_boards(p).len() {
+        0 => String::new(),
+        1 => "One keyboard on this computer is currently held by ksx, so it cannot type to \
+              Windows. That lasts until it is given back — closing ksx, restarting the computer \
+              or starting Setup over does not undo it."
+            .to_owned(),
+        n => format!(
+            "{n} keyboards on this computer are currently held by ksx, so they cannot type to \
+             Windows. That lasts until they are given back — closing ksx, restarting the \
+             computer or starting Setup over does not undo it."
+        ),
+    }
+}
+
 fn capture_heading(capture: &StartCaptureView) -> &'static str {
     match capture.mode {
         StartCaptureMode::Prepare => "Prepare this keyboard for play",
         StartCaptureMode::PrepareOptional => "Use KSX’s built-in Windows USB mode",
         StartCaptureMode::Release => "This keyboard is prepared for ksx",
+        StartCaptureMode::Held => "ksx is already holding this keyboard",
         StartCaptureMode::Blocked => "This keyboard is not ready for capture",
         StartCaptureMode::None | StartCaptureMode::Ready => "",
     }
@@ -1588,6 +1758,11 @@ fn capture_line(capture: &StartCaptureView) -> &'static str {
         StartCaptureMode::Release => {
             "Windows has prepared this selected keyboard for ksx, and capture is ready. It will \
              not type as a normal keyboard while it stays prepared."
+        }
+        StartCaptureMode::Held => {
+            "Windows has already given this keyboard to ksx, so it cannot type. This setup is \
+             still set to use the ordinary Windows path, which cannot read a keyboard ksx is \
+             holding — so it is not ready to play as it stands."
         }
         StartCaptureMode::Blocked => {
             "ksx could not verify one exact, supported keyboard interface for the current \
@@ -1610,6 +1785,11 @@ fn capture_detail(capture: &StartCaptureView) -> &'static str {
              selection stays unambiguous. Release removes the shared Windows package and returns \
              this keyboard to ordinary typing; the twin returns when reconnected. Your unsaved \
              controller choices stay on this screen. ksx then rechecks capture before Play."
+        }
+        StartCaptureMode::Held => {
+            "Use “Give this keyboard back to Windows” in Keyboards ksx is holding, at the top of \
+             this page, to return it to ordinary typing. That works whichever keyboard is \
+             selected here, and it does not change your controller choices."
         }
         StartCaptureMode::Blocked => {
             "Built-in preparation supports one exact USB keyboard. Reconnect or choose a \
@@ -1795,6 +1975,12 @@ pub struct StartFlags {
     pub bus_warn: bool,
     /// A keyboard is staged.
     pub has_device: bool,
+    /// **This machine is holding at least one keyboard the capture card is not
+    /// already offering to release.** Read off the device tree, so it is true
+    /// on a machine with no config and an empty stage — which is exactly the
+    /// state where the only release control used to be unreachable.
+    #[serde(default)]
+    pub has_prepared: bool,
     /// The three mutually exclusive scalar branches of the capture card.
     pub capture_prepare: bool,
     pub capture_release: bool,
@@ -1861,6 +2047,7 @@ impl StartFlags {
             // favour on the user's behalf.
             bus_warn: !p.pad_bus.silent(),
             has_device: staged.device.is_some(),
+            has_prepared: !held_boards(p).is_empty(),
             capture_prepare: p.capture.prepare(),
             capture_release: p.capture.release(),
             capture_blocked: p.capture.blocked_state(),
@@ -1935,6 +2122,38 @@ pub struct StartBoardRow {
     /// Is this the board already staged?
     pub chosen_cls: String,
     pub button: String,
+}
+
+/// **One keyboard ksx is holding, and the form that gives it back.**
+///
+/// The two identifiers are FORM VALUES, exactly as the capture card's are: the
+/// row prints the human name and keeps the instance path in the support
+/// details, and the server re-resolves both before it asks the privileged
+/// provider for anything (`docs/FIRST-RUN.md` §5 — a user is never asked to
+/// read, type or paste a device path).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartPreparedRow {
+    /// The vendor table's name — the identifier on screen.
+    pub name: String,
+    /// `USB` | `Bluetooth`, as a human reads it.
+    pub transport: String,
+    /// What being held costs, for this row.
+    pub detail: String,
+    /// SMALL PRINT: the Windows instance path, for a support conversation.
+    pub path: String,
+    /// The served selector and exact interface the release form posts.
+    pub selector: String,
+    pub instance_id: String,
+    /// Why this row carries no button, when it does not — and it is a
+    /// sentence, never a command, because the remedy for the one case that
+    /// reaches it is physical (`docs/SURFACES.md` §3a: ksx refuses to guess
+    /// between twins; unplug one, then release). Empty when the form is live.
+    pub note: String,
+    pub note_cls: String,
+    /// The form's class: hidden when [`Self::note`] explains why there is no
+    /// action. A `createShow` inside a `createList` is not a shape this
+    /// compiler emits, so the row hides by class like every other row here.
+    pub form_cls: String,
 }
 
 /// One board that cannot be picked at all, and why.
@@ -2020,6 +2239,11 @@ pub struct StartTextRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartRows {
     pub boards: Vec<StartBoardRow>,
+    /// **Boards ksx is holding, each with its own way back.** Built from
+    /// [`held_boards`], so it answers "which keyboards cannot type right now"
+    /// from the device tree rather than from the stage or the config.
+    #[serde(default)]
+    pub prepared: Vec<StartPreparedRow>,
     /// Pickable arbitrary HID interfaces. Kept separate from [`Self::boards`]
     /// so mice, lighting controllers and unusual composite devices remain a
     /// useful opt-in playground without masquerading as ordinary keyboards.
@@ -2094,6 +2318,10 @@ impl StartRows {
                 .iter()
                 .filter(|b| b.pickable && b.looks_like_a_keyboard)
                 .map(&board_row)
+                .collect(),
+            prepared: held_boards(p)
+                .into_iter()
+                .map(|b| prepared_row(p, b))
                 .collect(),
             experimental: p
                 .scan

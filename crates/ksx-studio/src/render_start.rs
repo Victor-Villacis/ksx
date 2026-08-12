@@ -50,13 +50,14 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
     StartBlockingRow, StartBoardRow, StartGapRow, StartLayoutRow, StartOptionRow, StartOtherRow,
-    StartPayload, StartSlotRow, StartTextRow,
+    StartPayload, StartPreparedRow, StartSlotRow, StartTextRow,
 };
 
 /// List slot names, binding-derived (compiler 0.2.0): a `createList` reading
 /// `() => boardRows()` compiles to `list:boardRows:array`. Rename a list signal
 /// in `StartIsland.ts` and the layout test fails until these match again.
 const LIST_SLOT_BOARDS: &str = "list:boardRows:array";
+const LIST_SLOT_PREPARED: &str = "list:preparedRows:array";
 const LIST_SLOT_EXPERIMENTAL: &str = "list:experimentalRows:array";
 const LIST_SLOT_OTHER: &str = "list:otherRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
@@ -80,7 +81,7 @@ const ISLAND_COMPONENT: &str = "StartIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 28;
+const SHOW_COUNT: usize = 29;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -103,6 +104,8 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         "deviceLine": lines.device_line,
         "deviceDetail": lines.device_detail,
         "boardsLine": lines.boards_line,
+        "preparedHeading": lines.prepared_heading,
+        "preparedLine": lines.prepared_line,
         "captureHeading": lines.capture_heading,
         "captureLine": lines.capture_line,
         "captureDetail": lines.capture_detail,
@@ -177,6 +180,35 @@ fn board_row(board: &StartBoardRow) -> SlotValue {
             SlotValue::Text(board.chosen_cls.clone()),
         ),
         ("button".to_owned(), SlotValue::Text(board.button.clone())),
+    ])
+}
+
+fn prepared_row(board: &StartPreparedRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(board.name.clone())),
+        (
+            "transport".to_owned(),
+            SlotValue::Text(board.transport.clone()),
+        ),
+        ("detail".to_owned(), SlotValue::Text(board.detail.clone())),
+        ("path".to_owned(), SlotValue::Text(board.path.clone())),
+        (
+            "selector".to_owned(),
+            SlotValue::Text(board.selector.clone()),
+        ),
+        (
+            "instance_id".to_owned(),
+            SlotValue::Text(board.instance_id.clone()),
+        ),
+        ("note".to_owned(), SlotValue::Text(board.note.clone())),
+        (
+            "note_cls".to_owned(),
+            SlotValue::Text(board.note_cls.clone()),
+        ),
+        (
+            "form_cls".to_owned(),
+            SlotValue::Text(board.form_cls.clone()),
+        ),
     ])
 }
 
@@ -257,13 +289,17 @@ fn layout_row(layout: &StartLayoutRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &StartPayload) -> [(&'static str, SlotValue); 14] {
+fn list_values(payload: &StartPayload) -> [(&'static str, SlotValue); 15] {
     let rows = &payload.rows;
     let layouts = || SlotValue::array(rows.layouts.iter().map(option_row).collect());
     [
         (
             LIST_SLOT_BOARDS,
             SlotValue::array(rows.boards.iter().map(board_row).collect()),
+        ),
+        (
+            LIST_SLOT_PREPARED,
+            SlotValue::array(rows.prepared.iter().map(prepared_row).collect()),
         ),
         (
             LIST_SLOT_EXPERIMENTAL,
@@ -330,6 +366,7 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:presetsDown", f.presets_down),
         ("show:busWarn", f.bus_warn),
         ("show:hasDevice", f.has_device),
+        ("show:hasPrepared", f.has_prepared),
         ("show:capturePrepare", f.capture_prepare),
         ("show:captureRelease", f.capture_release),
         ("show:captureBlocked", f.capture_blocked),
@@ -745,14 +782,26 @@ mod tests {
             .filter_map(|e| module.strings.get(e.name_str_idx).ok())
             .collect();
 
-        // A payload that populates EVERY list, or this proves nothing.
-        let mut p = payload(stage(&[
-            choose(),
-            add("xbox360"),
-            ksx_api::StageEdit::SetBlocking {
-                blocking: "whole".into(),
-            },
-        ]));
+        // A payload that populates EVERY list, or this proves nothing. The
+        // scan is the CLAIMED one, and the stage chooses that same board
+        // WITHOUT `use_winusb()` — the state `ChooseDevice` leaves behind on a
+        // keyboard ksx is already holding, and the one that populates
+        // `preparedRows`.
+        let mut p = StartPayload {
+            scan: claimed_scan(),
+            ..payload(stage(&[
+                choose(),
+                add("xbox360"),
+                ksx_api::StageEdit::SetBlocking {
+                    blocking: "whole".into(),
+                },
+            ]))
+        }
+        .composed();
+        assert!(
+            !p.rows.prepared.is_empty(),
+            "the claimed fixture must reach the held-keyboard list"
+        );
         assert!(
             !p.rows.gaps.is_empty(),
             "the roster carries un-pluggable personas"
@@ -1700,6 +1749,127 @@ mod tests {
         );
         assert!(out.html.contains("Save will replace it"), "{}", out.html);
         assert!(out.html.contains("recovery copy"), "{}", out.html);
+    }
+
+    /// **A keyboard ksx is holding is listed, and releasable, with NOTHING
+    /// staged** — `docs/FIRST-RUN.md` §6's "the only way out of a mistake is
+    /// never a shell command", for the one mistake that leaves a user unable
+    /// to type.
+    ///
+    /// FAILS against the QA build in all three states below, because its only
+    /// release control was the staged device's card: an empty stage drew none,
+    /// a different selection pointed it elsewhere, and choosing the held board
+    /// itself still drew Prepare, since `ChooseDevice` stages `interception`
+    /// and the card keyed Release off that value rather than off the machine.
+    #[test]
+    fn a_held_keyboard_is_listed_and_releasable_whatever_is_staged() {
+        let page = EmbeddedPage::load("/start").unwrap();
+        let held = |staged: StagedSetupView| {
+            StartPayload {
+                scan: claimed_scan(),
+                ..payload(staged)
+            }
+            .composed()
+        };
+
+        // 1. THE FRESH INSTALL. No config, no staged setup, a keyboard that
+        //    Windows has already handed to ksx.
+        let fresh_install = held(stage(&[]));
+        assert!(
+            fresh_install.flags.has_prepared,
+            "a held keyboard vanished on a machine with nothing staged"
+        );
+        let row = fresh_install
+            .rows
+            .prepared
+            .first()
+            .expect("the held board is a row");
+        assert_eq!(row.name, "Ultimarc I-PAC 4X");
+        assert_eq!(row.selector, SELECTOR);
+        assert_eq!(row.instance_id, PANEL);
+        assert!(row.note.is_empty(), "an unambiguous board keeps its button");
+        let html = render_start(&page, &fresh_install, None).html;
+        assert!(
+            html.contains(r#"action="/start/capture/release""#),
+            "no way back from a held keyboard: {html}"
+        );
+        // The banner says the two things a user cannot guess: what it costs
+        // right now, and that nothing they would try on their own undoes it.
+        assert!(html.contains("Keyboards ksx is holding"), "{html}");
+        assert!(
+            html.contains("restarting the computer or starting Setup over does not undo it"),
+            "{html}"
+        );
+        // The name identifies it; the path stays support small print (§5).
+        let name_at = html.find("Ultimarc I-PAC 4X").unwrap();
+        let form_at = html.find(r#"action="/start/capture/release""#).unwrap();
+        assert!(name_at < form_at, "{html}");
+
+        // 2. A DIFFERENT keyboard selected — here a desk keyboard this scan
+        //    does not carry, which is the ordinary "I picked the wrong one and
+        //    then picked another" state. The held board is still listed and its
+        //    form still posts ITS identity, not the selection's.
+        let other = held(stage(&[ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:046d:c31c:00".into(),
+            alias: "desk".into(),
+            label: "Desk keyboard".into(),
+        }]));
+        assert_eq!(other.rows.prepared.len(), 1, "{:?}", other.rows.prepared);
+        assert_eq!(other.rows.prepared[0].selector, SELECTOR);
+
+        // 3. The held board IS the selection, staged the way `ChooseDevice`
+        //    leaves it. The capture card must not offer to prepare what is
+        //    already prepared, and the list still carries the way back.
+        let chosen = held(stage(&[choose(), add("xbox360"), answer()]));
+        assert!(!chosen.flags.capture_prepare, "offered a redundant prepare");
+        assert!(chosen.flags.capture_blocked);
+        assert!(
+            !chosen.flags.ready,
+            "a stage/machine disagreement read ready"
+        );
+        assert_eq!(
+            chosen.lines.capture_heading,
+            "ksx is already holding this keyboard"
+        );
+        assert!(chosen.flags.has_prepared);
+        let chosen_html = render_start(&page, &chosen, None).html;
+        assert!(
+            chosen_html.contains(r#"action="/start/capture/release""#),
+            "{chosen_html}"
+        );
+        assert!(
+            !chosen_html.contains(r#"action="/start/capture/prepare""#),
+            "{chosen_html}"
+        );
+        // The card sends the reader to the list BY NAME, so the two strings
+        // have to be the same string and both have to be on the page. A
+        // heading that drifted would leave a card pointing at nothing.
+        assert!(
+            chosen
+                .lines
+                .capture_detail
+                .contains(crate::snapshot::PREPARED_HEADING),
+            "{}",
+            chosen.lines.capture_detail
+        );
+        assert!(
+            chosen_html.contains(crate::snapshot::PREPARED_HEADING),
+            "{chosen_html}"
+        );
+
+        // 4. And the one board the capture card IS already offering to release
+        //    is not drawn a second time.
+        let staged_release = StartPayload {
+            scan: claimed_scan(),
+            ..payload(stage(&[choose(), use_winusb(), add("xbox360"), answer()]))
+        }
+        .composed();
+        assert!(staged_release.flags.capture_release);
+        assert!(
+            !staged_release.flags.has_prepared,
+            "the same release was offered twice: {:?}",
+            staged_release.rows.prepared
+        );
     }
 
     #[test]

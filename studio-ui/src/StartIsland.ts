@@ -222,11 +222,29 @@ export interface StartCaptureView {
 
 /** What GET /api/start serves and what the island props carry — one shape
  *  (`StartPayload` in snapshot.rs; parity unit-tested in render_start.rs). */
+/** The logon-task card. Every sentence is composed in snapshot.rs; this
+ *  screen places them and nothing else. */
+export interface StartAutostartView {
+  readable: boolean;
+  error: string;
+  registered: boolean;
+  line: string;
+  detail: string;
+  button: string;
+  /** The DIRECTION the button posts, served rather than inferred from
+   *  `registered`: a form submitted against a page that has gone stale must do
+   *  what its user read, or nothing. */
+  enable: boolean;
+  stale: boolean;
+  stale_detail: string;
+}
+
 export interface StartPayload {
   staged: StagedSetupView;
   session: SessionView;
   pad_bus: PadBusView;
   capture: StartCaptureView;
+  autostart: StartAutostartView;
   flash: string | null;
   lines: StartLines;
   flags: StartFlags;
@@ -241,6 +259,12 @@ const [deviceDetail, setDeviceDetail] = createSignal("");
 const [boardsLine, setBoardsLine] = createSignal("not collected");
 const [preparedHeading, setPreparedHeading] = createSignal("");
 const [preparedLine, setPreparedLine] = createSignal("");
+const [autostartLine, setAutostartLine] = createSignal("");
+const [autostartDetail, setAutostartDetail] = createSignal("");
+const [autostartButton, setAutostartButton] = createSignal("");
+const [autostartStaleDetail, setAutostartStaleDetail] = createSignal("");
+const [autostartError, setAutostartError] = createSignal("");
+const [autostartEnable, setAutostartEnable] = createSignal("");
 const [captureHeading, setCaptureHeading] = createSignal("");
 const [captureLine, setCaptureLine] = createSignal("");
 const [captureDetail, setCaptureDetail] = createSignal("");
@@ -281,6 +305,9 @@ const [hasPrepared, setHasPrepared] = createSignal(false);
 const [capturePrepare, setCapturePrepare] = createSignal(false);
 const [captureRelease, setCaptureRelease] = createSignal(false);
 const [captureBlocked, setCaptureBlocked] = createSignal(false);
+const [autostartReadable, setAutostartReadable] = createSignal(false);
+const [autostartUnreadable, setAutostartUnreadable] = createSignal(false);
+const [autostartStale, setAutostartStale] = createSignal(false);
 const [hasBoards, setHasBoards] = createSignal(false);
 const [hasExperimental, setHasExperimental] = createSignal(false);
 const [noBoards, setNoBoards] = createSignal(false);
@@ -328,6 +355,17 @@ export function applyStart(p: StartPayload): void {
   setBoardsLine(l.boards_line);
   setPreparedHeading(l.prepared_heading);
   setPreparedLine(l.prepared_line);
+  setAutostartLine(p.autostart.line);
+  setAutostartDetail(p.autostart.detail);
+  setAutostartButton(p.autostart.button);
+  setAutostartStaleDetail(p.autostart.stale_detail);
+  setAutostartError(p.autostart.error);
+  // "yes" is the only value the server's `checked()` accepts, so the OFF
+  // direction posts a value that can never be mistaken for consent.
+  setAutostartEnable(p.autostart.enable ? "yes" : "no");
+  setAutostartReadable(p.autostart.readable);
+  setAutostartUnreadable(!p.autostart.readable);
+  setAutostartStale(p.autostart.stale);
   setCaptureHeading(l.capture_heading);
   setCaptureLine(l.capture_line);
   setCaptureDetail(l.capture_detail);
@@ -1439,6 +1477,60 @@ export function StartIsland() {
                 "form",
                 { method: "post", action: "/start/discard" },
                 h("button", { class: "btn btn-ghost", type: "submit" }, "Start over"),
+              ),
+            ),
+        ),
+      ),
+      // ── STEP 4: COME UP ON ITS OWN ──────────────────────────────────────
+      // Last, because it is the step that only makes sense once the rest
+      // works: it makes moment 7 repeat with nobody standing at the cabinet.
+      // A per-user scheduled task, so one tick box and no UAC — the consent
+      // here is sized to what is actually at risk, unlike the capture card
+      // above it.
+      h(
+        "section",
+        { class: "card wide" },
+        h("h2", null, "4 · Start on its own"),
+        h("p", { class: "cardline" }, () => autostartLine()),
+        createShow(
+          () => autostartStale(),
+          () => h("p", { class: "alarmlead" }, () => autostartStaleDetail()),
+        ),
+        createShow(
+          () => autostartUnreadable(),
+          () => h("p", { class: "dv-note warn" }, () => autostartError()),
+        ),
+        createShow(
+          () => autostartReadable(),
+          () =>
+            h(
+              "div",
+              null,
+              h("p", { class: "dv-note" }, () => autostartDetail()),
+              h(
+                "form",
+                { class: "capture-form", method: "post", action: "/start/autostart" },
+                h("input", {
+                  type: "hidden",
+                  name: "enable",
+                  value: () => autostartEnable(),
+                }),
+                h(
+                  "label",
+                  { class: "capture-consent" },
+                  h("input", {
+                    type: "checkbox",
+                    name: "confirm_autostart",
+                    value: "yes",
+                    required: "",
+                  }),
+                  h("span", null, "I want to change what happens when I sign in."),
+                ),
+                h(
+                  "p",
+                  { class: "pactrow" },
+                  h("button", { class: "btn", type: "submit" }, () => autostartButton()),
+                ),
               ),
             ),
         ),

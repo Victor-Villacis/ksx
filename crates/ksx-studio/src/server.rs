@@ -336,6 +336,7 @@ pub fn serve(
             .route("/start/controller/layout", post(start_form_layout))
             .route("/start/controller/remove", post(start_form_remove))
             .route("/start/blocking", post(start_form_blocking))
+            .route("/start/autostart", post(start_form_autostart))
             .route("/start/discard", post(start_form_discard))
             .route("/start/save", post(start_form_save))
             .route("/start/play", post(start_form_play))
@@ -1940,6 +1941,12 @@ async fn collect_start(state: &Arc<AppState>) -> StartPayload {
             .machine
             .pad_bus()
             .unwrap_or_else(|refusal| ksx_api::PadBusView::unreadable(flash_of(refusal)));
+        // A refusal leaves the card UNREADABLE rather than "off": a scheduler
+        // nobody could ask has not told us the cabinet is unconfigured.
+        let (autostart_read, autostart_error) = match start_state.machine.autostart() {
+            Ok(view) => (Some(view), String::new()),
+            Err(refusal) => (None, flash_of(refusal)),
+        };
         StartPayload {
             staged,
             scan,
@@ -1948,6 +1955,8 @@ async fn collect_start(state: &Arc<AppState>) -> StartPayload {
             unavailable,
             presets,
             presets_error,
+            autostart_read,
+            autostart_error,
             flash: None,
             ..StartPayload::default()
         }
@@ -1963,6 +1972,7 @@ async fn collect_start(state: &Arc<AppState>) -> StartPayload {
             unavailable: "the device scan panicked — nothing below is a reading of this machine"
                 .to_owned(),
             presets_error: "the preset read panicked".to_owned(),
+            autostart_error: "the sign-in read panicked".to_owned(),
             ..StartPayload::default()
         }
         .composed()
@@ -2094,6 +2104,18 @@ const START_SAVE_OK: &str = "Setup saved for later. Play has not started.";
 const START_PLAY_OK: &str = "Play started. Use Stop to return the keyboard to normal.";
 const START_EDIT_ERROR: &str =
     "error: Setup could not be updated. Reopen ksx and try again; nothing was changed.";
+/// The one staging refusal whose remedy is an action on THIS page rather than
+/// "try again" - and the one a four-player panel hits every time.
+///
+/// A template's player block is chosen by slot number, so adding a third
+/// controller on a two-block layout is REFUSED, not merely a poor fit. The
+/// domain composes the exact list of layouts that would work
+/// (`ksx_api::stage::blocks_at_least`), and this page cannot reflect it: the
+/// flash is a query parameter, and `START_FLASH_ALLOWLIST` exists precisely so
+/// that nothing but this module's own copy can land there. So it points at the
+/// served list on the page that carries the same fact.
+const START_EDIT_NO_PLAYER_BLOCK: &str =
+    "error: That layout has no keys for this player, so the controller was not added. Pick a layout that covers more players - the list under 'What each layout expects' on this page says how many each one carries. Nothing was changed.";
 const START_DISCARD_ERROR: &str =
     "error: Setup could not be cleared. Reopen ksx and try again; nothing was changed.";
 const START_SAVE_NOT_READY: &str =
@@ -2135,12 +2157,31 @@ const START_CAPTURE_PREPARED_STAGE_CHANGED: &str =
 const START_CAPTURE_RELEASED_STAGE_CHANGED: &str =
     "error: Windows released the keyboard, but your Setup selection changed while permission was open. Choose the keyboard again before Play.";
 
-const START_FLASH_ALLOWLIST: [&str; 25] = [
+const START_AUTOSTART_ON: &str =
+    "ksx will now start when you sign in. Restart once to see it come up on its own.";
+const START_AUTOSTART_OFF: &str =
+    "ksx will no longer start on its own. Open it yourself after a restart.";
+const START_AUTOSTART_CONSENT: &str =
+    "error: Nothing was changed. Tick the box first to confirm what happens at sign-in.";
+/// Windows accepted the registration and it is STILL pointing somewhere else.
+/// Its own sentence, not folded into the error: the task now exists, so
+/// "nothing was changed" would be false, and so would "done".
+const START_AUTOSTART_STILL_STALE: &str =
+    "error: The sign-in task was written, but it is still out of date. Reload this page to see what it says now.";
+const START_AUTOSTART_ERROR: &str =
+    "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
+const START_FLASH_ALLOWLIST: [&str; 31] = [
     START_EDIT_OK,
+    START_AUTOSTART_ON,
+    START_AUTOSTART_OFF,
+    START_AUTOSTART_CONSENT,
+    START_AUTOSTART_STILL_STALE,
+    START_AUTOSTART_ERROR,
     START_DISCARD_OK,
     START_SAVE_OK,
     START_PLAY_OK,
     START_EDIT_ERROR,
+    START_EDIT_NO_PLAYER_BLOCK,
     START_DISCARD_ERROR,
     START_SAVE_NOT_READY,
     START_SAVE_ERROR,
@@ -2199,6 +2240,9 @@ fn start_action_flash(action: StartAction, outcome: &Result<String, String>) -> 
                 || lower.contains("no device")
                 || lower.contains("slot ");
             match action {
+                // "player block(s)" is this workspace's own wording, out of
+                // `TemplateError::NoSuchPlayer` - matched on, never reflected.
+                StartAction::Edit if lower.contains("player block") => START_EDIT_NO_PLAYER_BLOCK,
                 StartAction::Edit => START_EDIT_ERROR,
                 StartAction::Discard => START_DISCARD_ERROR,
                 StartAction::Save if not_ready => START_SAVE_NOT_READY,
@@ -2660,6 +2704,57 @@ async fn start_form_blocking(
         StartAction::Edit,
     )
     .await
+}
+
+/// What POST /start/autostart carries. `enable` is the DIRECTION, served on
+/// the card, never inferred here from the current state: a form submitted
+/// against a page that has since gone stale must do what its user read, or
+/// nothing.
+#[derive(Debug, Deserialize)]
+struct StartAutostartForm {
+    #[serde(default)]
+    enable: Option<String>,
+    #[serde(default)]
+    confirm_autostart: Option<String>,
+}
+
+/// POST /start/autostart - the commissioning step, and the only machine
+/// lifecycle write on this page that needs no elevation.
+///
+/// A per-user scheduled task: nothing outside the signed-in account changes,
+/// no driver moves, no keyboard leaves the stack. That is why it takes one
+/// tick box rather than the three-confirmation-plus-UAC ceremony
+/// `/start/capture/prepare` carries - the consent ceremonies here are sized to
+/// what is actually at risk, not applied uniformly.
+async fn start_form_autostart(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<StartAutostartForm>,
+) -> Response {
+    if !checked(form.confirm_autostart.as_deref()) {
+        return start_autostart_redirect(START_AUTOSTART_CONSENT);
+    }
+    let enable = checked(form.enable.as_deref());
+    let flash = tokio::task::spawn_blocking(move || {
+        match state.machine.set_autostart(&ksx_api::AutostartSpec {
+            enable,
+            confirm: true,
+        }) {
+            // Trust the RE-READ, not the request: `set_autostart` returns the
+            // view it read back after the change, so a task that did not
+            // actually land cannot report success.
+            Ok(view) if view.registered && !view.stale => START_AUTOSTART_ON,
+            Ok(view) if view.registered => START_AUTOSTART_STILL_STALE,
+            Ok(_) => START_AUTOSTART_OFF,
+            Err(_) => START_AUTOSTART_ERROR,
+        }
+    })
+    .await
+    .unwrap_or(START_AUTOSTART_ERROR);
+    start_autostart_redirect(flash)
+}
+
+fn start_autostart_redirect(flash: &'static str) -> Response {
+    Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
 }
 
 /// POST /start/discard — "Start over". §2 requires that it always works.
@@ -3939,6 +4034,50 @@ mod tests {
         assert_eq!(urlencode(&"x".repeat(1000)).len(), 300, "capped");
     }
 
+    /// The one Edit refusal that carries an action the user can take, end to
+    /// end: from the domain that writes it to the copy the page shows.
+    ///
+    /// The refusal is TAKEN FROM `StageEdit::apply`, never typed here. The
+    /// classifier matches on this workspace's own wording ("player block"),
+    /// so a reword upstream has to fail this test rather than quietly demote a
+    /// four-player user back to "Reopen ksx and try again" - which is what
+    /// shipped, and what made the third controller on a four-player panel
+    /// look like a broken app instead of a menu with a better answer in it.
+    #[test]
+    fn a_layout_with_no_block_for_this_player_says_so_instead_of_try_again() {
+        let setup = ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "panel".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+        }
+        .apply(&ksx_core::stage::StagedSetup::new())
+        .expect("staging the panel");
+
+        let refusal = ksx_api::StageEdit::AddSlot {
+            number: Some(3),
+            persona: "xbox360".to_owned(),
+            preset: "Player 3".to_owned(),
+            layout: Some("keyboard-2p".to_owned()),
+        }
+        .apply(&setup)
+        .expect_err("a two-block layout has nothing for player 3");
+
+        assert!(
+            refusal.message.contains("player block"),
+            "the classifier keys off this wording: {}",
+            refusal.message
+        );
+        assert_eq!(
+            start_action_flash(StartAction::Edit, &Err(refusal.message.clone())),
+            START_EDIT_NO_PLAYER_BLOCK,
+        );
+        // And it still survives the query-string round trip, which is the only
+        // way a flash ever reaches the page.
+        assert_eq!(
+            start_flash_from_query(Some(START_EDIT_NO_PLAYER_BLOCK)).as_deref(),
+            Some(START_EDIT_NO_PLAYER_BLOCK)
+        );
+    }
     #[test]
     fn start_action_feedback_never_reflects_provider_or_query_text() {
         let raw = r#"daemon pipe refused --preset C:\Users\TestUser\.ksx\claim.toml"#;

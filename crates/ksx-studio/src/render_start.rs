@@ -81,7 +81,7 @@ const ISLAND_COMPONENT: &str = "StartIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 29;
+const SHOW_COUNT: usize = 32;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -114,6 +114,15 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         "captureButton": lines.capture_button,
         "captureSelector": payload.capture.expected_selector,
         "captureInstance": payload.capture.instance_id,
+        // The logon card. Read straight off `payload.autostart` rather
+        // than `lines`, like `captureSelector` above it: these sentences
+        // are composed beside the state that decides them.
+        "autostartLine": payload.autostart.line,
+        "autostartDetail": payload.autostart.detail,
+        "autostartButton": payload.autostart.button,
+        "autostartStaleDetail": payload.autostart.stale_detail,
+        "autostartError": payload.autostart.error,
+        "autostartEnable": if payload.autostart.enable { "yes" } else { "no" },
         "controllerLine": lines.controller_line,
         "xinputLine": lines.xinput_line,
         "blockingLine": lines.blocking_line,
@@ -370,6 +379,9 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:capturePrepare", f.capture_prepare),
         ("show:captureRelease", f.capture_release),
         ("show:captureBlocked", f.capture_blocked),
+        ("show:autostartReadable", payload.autostart.readable),
+        ("show:autostartUnreadable", !payload.autostart.readable),
+        ("show:autostartStale", payload.autostart.stale),
         ("show:hasBoards", f.has_boards),
         ("show:hasExperimental", f.has_experimental),
         ("show:noBoards", f.no_boards),
@@ -618,6 +630,17 @@ mod tests {
                 ksx_api::pad_bus_codes::HEALTHY,
                 Some("1.22.0.0".into()),
             ),
+            // A machine whose scheduler ANSWERED, and said "nothing
+            // registered". Stated for the same reason `pad_bus` above is: the
+            // default is `None`, which is the read-REFUSED view, so every
+            // fixture would otherwise render "could not be read" and
+            // `a_read_that_failed_never_renders_as_an_absence` would be
+            // asserting against a page that is unreadable for a second reason.
+            autostart_read: Some(ksx_api::AutostartView {
+                registered: false,
+                line: "no logon task is registered".into(),
+                ..ksx_api::AutostartView::default()
+            }),
             ..StartPayload::default()
         }
         .composed()

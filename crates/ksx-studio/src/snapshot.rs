@@ -1201,6 +1201,17 @@ pub struct StartPayload {
     /// do anything privileged.
     #[serde(default)]
     pub capture: StartCaptureView,
+    /// **The logon task**, from `MachineSource::autostart` - `None` when the
+    /// read refused, which is NOT the same as "not registered" and must not
+    /// render as it.
+    #[serde(default)]
+    pub autostart_read: Option<ksx_api::AutostartView>,
+    /// Empty when the logon read answered; otherwise the refusal.
+    #[serde(default)]
+    pub autostart_error: String,
+    /// The logon card, composed from the two above.
+    #[serde(default)]
+    pub autostart: StartAutostartView,
     /// One-shot action feedback (the `?flash=` query). Always `None` from
     /// `/api/start` — a poll is not an action.
     pub flash: Option<String>,
@@ -1224,6 +1235,7 @@ impl StartPayload {
     #[must_use]
     pub fn composed(mut self) -> Self {
         self.capture = StartCaptureView::of(&self);
+        self.autostart = StartAutostartView::of(&self);
         self.lines = StartLines::of(&self);
         self.flags = StartFlags::of(&self);
         self.rows = StartRows::of(&self);
@@ -2449,15 +2461,127 @@ impl StartRows {
     }
 }
 
-/// The layout `<option>`s, served default first.
+/// **The logon-task card** - `FIRST-RUN.md`'s last moment, the one that makes
+/// moment 7 repeat with nobody present.
+///
+/// Every sentence is composed here, like the rest of this page: a cabinet that
+/// does not come up on its own is not commissioned, and the difference between
+/// "off", "on", "on but pointing at a ksx that is gone" and "I could not ask
+/// the scheduler" is four different things to say, not one boolean.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartAutostartView {
+    /// The scheduler answered. False renders the card DISABLED WITH THE
+    /// REASON, never as "off": "off" is a claim about a machine nobody could
+    /// read (`SURFACES.md` §1b, the same rule `reachable` follows).
+    pub readable: bool,
+    /// Why not, when it could not be read.
+    pub error: String,
+    pub registered: bool,
+    /// The state as one sentence.
+    pub line: String,
+    /// What the button would do, said before it is pressed.
+    pub detail: String,
+    /// The submit label.
+    pub button: String,
+    /// What the form posts - the inverse of the current state, except when the
+    /// registration is stale, where BOTH the repair and the removal are on.
+    pub enable: bool,
+    /// Registered, and it will not work.
+    pub stale: bool,
+    /// Why - composed by the provider, never `Staleness::message`, whose
+    /// remedy names a CLI command.
+    pub stale_detail: String,
+}
+
+impl StartAutostartView {
+    fn of(p: &StartPayload) -> Self {
+        let Some(view) = p.autostart_read.as_ref() else {
+            return Self {
+                readable: false,
+                error: if p.autostart_error.is_empty() {
+                    "Windows could not be asked what happens at sign-in.".to_owned()
+                } else {
+                    p.autostart_error.clone()
+                },
+                line: "Whether ksx starts at sign-in could not be read.".to_owned(),
+                detail: "This says nothing about whether it is on. Reload the page to ask again."
+                    .to_owned(),
+                button: "Start ksx when I sign in".to_owned(),
+                enable: true,
+                ..Self::default()
+            };
+        };
+
+        let stale = view.stale;
+        let stale_detail = view.stale_detail.clone().unwrap_or_default();
+        // A stale registration offers the REPAIR, not the removal: turning it
+        // on again rewrites the task to point here, which is the whole fix. An
+        // "off" button would leave the cabinet in the state it is already
+        // failing in.
+        let enable = !view.registered || stale;
+        Self {
+            readable: true,
+            error: String::new(),
+            registered: view.registered,
+            line: if !view.registered {
+                "ksx does not start on its own. After a restart, somebody has to open it before \
+                 the controllers work."
+                    .to_owned()
+            } else if stale {
+                "ksx is set to start at sign-in, but the registration is out of date.".to_owned()
+            } else {
+                "ksx starts by itself when you sign in.".to_owned()
+            },
+            detail: if enable && !view.registered {
+                "Turn this on and the cabinet comes up ready on its own - no keyboard, no mouse, \
+                 nobody standing at it."
+                    .to_owned()
+            } else if enable {
+                "Turning it on again points it back at this copy of ksx.".to_owned()
+            } else {
+                "Turning this off means somebody has to open ksx by hand after every restart."
+                    .to_owned()
+            },
+            button: if enable {
+                "Start ksx when I sign in".to_owned()
+            } else {
+                "Stop starting ksx at sign-in".to_owned()
+            },
+            enable,
+            stale,
+            stale_detail,
+        }
+    }
+}
+
+/// The layout `<option>`s, served **playable-for-the-next-controller first**.
 ///
 /// Sorted rather than trusted to arrive in a helpful order: the roster is
 /// `ksx_core::templates::TEMPLATES`, whose order exists for
 /// `ksx preset list --templates`, and "the first option is the recommended
 /// one" is a claim this page makes and must therefore make true.
+///
+/// **Why the next slot number is part of the sort.** A template's player
+/// block is chosen by slot number (`ksx_api::stage::instantiate`, `player =
+/// number`), so a layout with two blocks does not merely fit slot 3 badly —
+/// it REFUSES it (`ksx_core::templates::TemplateError::NoSuchPlayer`), and
+/// the whole `AddSlot` fails. Serving the served default unconditionally
+/// therefore made "Add this controller", menu untouched, fail on the third
+/// press of a four-player panel: every in-box layout except `arcade-4way`
+/// carries at most two blocks.
+///
+/// Layouts that cannot dress the next controller are still offered, never
+/// filtered: sharing one player's keys across two controllers is a real
+/// choice somebody may want. It is only never the RECOMMENDED one.
 fn layout_options(staged: &ksx_api::StagedSetupView) -> Vec<StartOptionRow> {
+    let next = staged.next_slot;
     let mut rows: Vec<&ksx_api::TemplateRow> = staged.layouts.iter().collect();
-    rows.sort_by_key(|layout| layout.id != staged.default_layout);
+    rows.sort_by_key(|layout| {
+        (
+            !next.is_none_or(|number| layout.players.contains(&number)),
+            layout.id != staged.default_layout,
+        )
+    });
     rows.into_iter()
         .map(|layout| StartOptionRow {
             value: layout.id.clone(),
@@ -2510,6 +2634,120 @@ fn hidden_when_empty(text: &str, class: &str) -> String {
 mod tests {
     use super::*;
 
+    /// **A stale registration offers the REPAIR, not the removal.**
+    ///
+    /// The subtle case, and the one a cabinet actually lands in: ksx is
+    /// reinstalled, the scheduled task keeps the old path, and the machine
+    /// would cold-boot to nothing. Deriving the button from `registered` alone
+    /// would offer "stop starting ksx at sign-in" - which is already what the
+    /// machine effectively does, and would leave the user in the broken state
+    /// with the fix nowhere on screen. Turning it ON again rewrites the task.
+    ///
+    /// Also pins the third state apart from the other two: a read that
+    /// REFUSED must not render as "off" (`SURFACES.md` §1b) - "nothing is
+    /// registered" and "nobody could ask" are different sentences.
+    #[test]
+    fn a_stale_logon_task_offers_the_repair_and_an_unreadable_one_claims_nothing() {
+        let card = |view: Option<ksx_api::AutostartView>| {
+            StartAutostartView::of(&StartPayload {
+                autostart_read: view,
+                ..StartPayload::default()
+            })
+        };
+
+        let stale = card(Some(ksx_api::AutostartView {
+            registered: true,
+            line: "registered".into(),
+            stale: true,
+            stale_detail: Some("points somewhere else".into()),
+            ..ksx_api::AutostartView::default()
+        }));
+        assert!(stale.enable, "a stale task must offer to be rewritten");
+        assert!(stale.stale && !stale.stale_detail.is_empty());
+        assert!(stale.button.contains("Start ksx"), "{}", stale.button);
+
+        let healthy = card(Some(ksx_api::AutostartView {
+            registered: true,
+            line: "registered".into(),
+            ..ksx_api::AutostartView::default()
+        }));
+        assert!(!healthy.enable, "a working task offers to be turned off");
+
+        let off = card(Some(ksx_api::AutostartView::default()));
+        assert!(off.enable && off.readable && !off.registered);
+
+        let unreadable = card(None);
+        assert!(!unreadable.readable, "a refused read is not an answer");
+        assert!(
+            !unreadable.registered,
+            "and it must never be reported as registered either"
+        );
+        assert!(
+            !unreadable.line.contains("does not start on its own"),
+            "an unreadable scheduler must not claim ksx is off: {}",
+            unreadable.line
+        );
+    }
+
+    /// **The four-player panel, layout menu untouched** - `FIRST-RUN.md` §1
+    /// moment 5, pressed four times.
+    ///
+    /// A template's player block is chosen by SLOT NUMBER (`ksx_api`'s
+    /// `instantiate`, `player = number`), so "Add this controller" with the
+    /// `<select>` left alone sends whatever `layout_options` put first. Every
+    /// in-box layout except `arcade-4way` carries at most two blocks, so
+    /// before the sort knew the next slot number the THIRD press was refused
+    /// outright with `TemplateError::NoSuchPlayer` - the wall a four-player
+    /// cabinet walks into, reported as "Reopen ksx and try again".
+    ///
+    /// Driven through the real `StageEdit::apply` rather than asserting an
+    /// order, and deliberately never naming `arcade-4way`: an assertion on
+    /// that id would keep passing if the sort broke and that template merely
+    /// happened to stay first.
+    #[test]
+    fn adding_four_controllers_without_touching_the_layout_menu_is_accepted() {
+        let mut setup = ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "panel".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+        }
+        .apply(&ksx_core::stage::StagedSetup::new())
+        .expect("staging the panel");
+
+        for expected in 1..=4u8 {
+            let view = ksx_api::StagedSetupView::of(&setup);
+            assert_eq!(view.next_slot, Some(expected), "slot order");
+
+            // Exactly what the untouched form posts: the first option, and the
+            // served preset name.
+            let offered = layout_options(&view);
+            let first = offered.first().expect("a layout to offer").value.clone();
+            let persona = view
+                .personas
+                .iter()
+                .find(|p| p.can_plug)
+                .expect("a persona this build can plug")
+                .name
+                .clone();
+
+            setup = ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona,
+                preset: view.next_preset.clone().expect("a served preset name"),
+                layout: Some(first.clone()),
+            }
+            .apply(&setup)
+            .unwrap_or_else(|refusal| {
+                panic!(
+                    "player {expected} refused the layout the menu offered first \
+                     ({first}): {}",
+                    refusal.message
+                )
+            });
+        }
+
+        assert_eq!(ksx_api::StagedSetupView::of(&setup).slots.len(), 4);
+    }
     #[test]
     fn saved_games_derivation_preserves_revisions_and_offers_only_valid_layouts() {
         let payload = ProfilesPayload {

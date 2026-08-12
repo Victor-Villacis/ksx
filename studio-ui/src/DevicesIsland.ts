@@ -407,17 +407,35 @@ export function applyDevices(p: DevicesPayload): void {
 
   setGeneratedAt(scan.generated_at);
   setSessionLine(session.line);
+  // A POLL DOES NOT LOOK AT THE RECEIPTS, so it must not overwrite them.
+  // `reconcile_report` shells out to `pnputil`, which measured 157 ms against
+  // 1 ms for a page with no machine reads; on a 2 s poller that is a process
+  // spawn every two seconds for data that only moves when somebody prepares
+  // or releases a board — an action that re-renders this page anyway.
+  //
+  // The server marks a skipped read as `readable` with no receipts, which is
+  // indistinguishable from a clean machine BY VALUE. So the client keeps what
+  // the page render gave it and only takes an update that actually looked:
+  // any receipts, or an unreadable store.
   const residue = p.residue;
-  setResidueRows(residue.rows);
-  setResidueLine(residue.line);
-  setResidueDetail(residue.detail);
-  setResidueCertificates(residue.certificates_line ?? "");
-  setResidueError(residue.error);
-  setResidueUnreadable(!residue.readable);
-  // Shown when there is something to say: a disagreement, or the fact that
-  // the store could not be read. A machine with nothing left behind gets no
-  // card at all rather than a row of reassurance nobody asked for.
-  setShowResidue(!residue.readable || residue.drifted > 0);
+  const looked = !residue.readable || residue.receipts > 0;
+  if (looked) {
+    setResidueRows(residue.rows);
+    setResidueLine(residue.line);
+    setResidueDetail(residue.detail);
+    setResidueCertificates(residue.certificates_line ?? "");
+    setResidueError(residue.error);
+    setResidueUnreadable(!residue.readable);
+    // Shown when there is something to say: a disagreement, certificates left
+    // in the machine's trust stores, or the fact that the store could not be
+    // read. A machine with nothing left behind gets no card at all rather than
+    // a row of reassurance nobody asked for.
+    setShowResidue(
+      !residue.readable ||
+        residue.drifted > 0 ||
+        (residue.certificates_line ?? "") !== "",
+    );
+  }
   setUnavailableLine(unavailable);
   setShowUnavailable(unavailable !== "");
 

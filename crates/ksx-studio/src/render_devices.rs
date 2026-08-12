@@ -527,10 +527,12 @@ fn show_values(
         // gets no card, not a row of reassurance nobody asked for.
         (
             "show:showResidue",
+            // The SAME three terms `DevicesIsland.ts` uses, in the same
+            // order: a card that appears on the server render and vanishes on
+            // hydration is worse than one that never appeared.
             !payload.residue.readable
                 || payload.residue.drifted > 0
-                || payload.residue.leftover_certificates > 0
-                || !payload.residue.certificates_unknown.is_empty(),
+                || !payload.residue.certificates_line.is_empty(),
         ),
         ("show:residueUnreadable", !payload.residue.readable),
     ]

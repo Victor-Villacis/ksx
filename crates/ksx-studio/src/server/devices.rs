@@ -25,24 +25,55 @@ pub(super) struct DevicesQuery {
 /// the same contract `collect` and `collect_map` keep: a dead-end error page
 /// stops the refresh loop, and the user is then looking at a browser error
 /// instead of at their cabinet.
-pub(super) async fn collect_devices(state: &Arc<AppState>) -> DevicesPayload {
+/// Whether this collection pays for the receipt reconcile.
+///
+/// `Reconcile::Skip` exists because the read is EXPENSIVE and SLOW-MOVING, a
+/// combination the 2 s poller turns into a process spawn every two seconds:
+/// `reconcile_report` shells out to `pnputil` to enumerate the driver store,
+/// which measured 157 ms on `/api/devices` against 1 ms on `/api/map`.
+///
+/// Receipts change when somebody prepares or releases a board — an action that
+/// goes through this very page and re-renders it. Nothing else moves them. So
+/// the page render pays, and the poll does not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reconcile {
+    /// Read it: a page render, where the card is about to be drawn from nothing.
+    Now,
+    /// Leave it alone: a poll, which has no new information about receipts and
+    /// should not spend a subprocess pretending otherwise.
+    Skip,
+}
+
+pub(super) async fn collect_devices(state: &Arc<AppState>, reconcile: Reconcile) -> DevicesPayload {
     let scan_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let session = scan_state.control.session();
         // Read whatever it will give: an unreadable receipt store is its own
         // sentence on the card, never silence, and never inherited from the
         // scan beside it.
-        let residue = scan_state
-            .machine
-            .winusb_residue()
-            .unwrap_or_else(|refusal| ksx_api::WinusbResidueView {
-                readable: false,
-                error: refusal.message,
-                line: "What ksx has left behind could not be read.".to_owned(),
-                detail: "This says nothing about whether anything is wrong. Reload to ask again."
-                    .to_owned(),
+        let residue = if reconcile == Reconcile::Skip {
+            // NOT the unreadable view — that would render "could not be read"
+            // on every poll. `readable: true` with no drift is the honest
+            // shape for "this poll did not look", and the island keeps the
+            // values the page render gave it (see `applyDevices`).
+            ksx_api::WinusbResidueView {
+                readable: true,
                 ..ksx_api::WinusbResidueView::default()
-            });
+            }
+        } else {
+            scan_state
+                .machine
+                .winusb_residue()
+                .unwrap_or_else(|refusal| ksx_api::WinusbResidueView {
+                    readable: false,
+                    error: refusal.message,
+                    line: "What ksx has left behind could not be read.".to_owned(),
+                    detail:
+                        "This says nothing about whether anything is wrong. Reload to ask again."
+                            .to_owned(),
+                    ..ksx_api::WinusbResidueView::default()
+                })
+        };
         match scan_state.machine.device_scan() {
             Ok(scan) => DevicesPayload {
                 scan,
@@ -89,7 +120,7 @@ pub(super) async fn devices_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DevicesQuery>,
 ) -> Response {
-    let mut payload = collect_devices(&state).await;
+    let mut payload = collect_devices(&state, Reconcile::Now).await;
     let flash = query
         .flash
         .as_deref()
@@ -119,7 +150,7 @@ pub(super) async fn devices_page(
 /// (parity unit-tested in render_devices.rs). `flash` is always null — a poll
 /// is not an action.
 pub(super) async fn api_devices(State(state): State<Arc<AppState>>) -> Response {
-    let payload = collect_devices(&state).await;
+    let payload = collect_devices(&state, Reconcile::Skip).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),

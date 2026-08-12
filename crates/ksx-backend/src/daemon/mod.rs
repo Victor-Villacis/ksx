@@ -1873,7 +1873,6 @@ mod tests {
         trace: Option<Trace>,
         health: Option<ksx_capture::HealthHandle>,
         game: Option<String>,
-        staged: Option<ksx_core::CommitSpec>,
         /// What `resolve_plan()` answers. `None` = "I cannot tell", which is
         /// the default and makes every factory in these tests bounce.
         plan: Option<crate::run::plan::RunPlan>,
@@ -1910,7 +1909,6 @@ mod tests {
                 trace: None,
                 health: None,
                 game: Some("Example Game".into()),
-                staged: None,
                 plan: None,
                 shape: None,
                 swap: crate::run::supervisor::HotSwapSlot::default(),
@@ -1951,11 +1949,6 @@ mod tests {
 
         fn set_game(&mut self, game: Option<String>) {
             self.game = game;
-        }
-
-        fn set_staged(&mut self, spec: Option<ksx_core::CommitSpec>) -> bool {
-            self.staged = spec;
-            true
         }
 
         fn resolve_plan(&self) -> anyhow::Result<crate::run::plan::RunPlan> {
@@ -2077,7 +2070,7 @@ mod tests {
             2,
             "the old pipeline must be reaped and one staged pipeline created: {text}"
         );
-        assert_eq!(factory.staged, Some(spec));
+        assert_eq!(*factory.staged.lock().unwrap(), Some(spec));
         assert!(text.contains("replacing the running session"), "{text}");
         assert!(!text.contains("already running"), "{text}");
     }
@@ -2096,6 +2089,7 @@ mod tests {
                 selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
                 alias: "panel".to_owned(),
                 label: "Ultimarc I-PAC 4".to_owned(),
+                backend: ksx_core::stage::StageCaptureBackend::Interception,
             })
             .unwrap()
             .add_slot(

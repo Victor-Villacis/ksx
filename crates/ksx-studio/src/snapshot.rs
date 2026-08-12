@@ -2323,6 +2323,10 @@ mod tests {
                 running: false,
                 line: "idle — daemon pipe reachable".to_owned(),
                 profile: None,
+                // Idle: nothing ran, so nothing is known about what it would
+                // have been built from. `Unknown` is that, not a guess at
+                // `Config`.
+                origin: ksx_api::SessionOrigin::Unknown,
             },
             ..ProfilesPayload::default()
         };

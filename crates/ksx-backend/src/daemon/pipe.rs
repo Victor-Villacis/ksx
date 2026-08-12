@@ -1327,7 +1327,7 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     };
 
     if let Err(refusal) = (deps.stage_capture_preflight)(&spec) {
-        return stage_json(&ksx_api::StageOutcome::refused(&staged, &refusal));
+        return refused(&staged, refusal);
     }
 
     // Build the plan HERE, before anything is enqueued: a setup that cannot

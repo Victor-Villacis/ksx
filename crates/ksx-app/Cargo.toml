@@ -65,4 +65,10 @@ cabinet = ["ksx-backend/cabinet"]
 # built exe's import table, `parity.rs` walks its clap tree, and `replay.rs`
 # drives ksx-core from a synthetic native event script.
 ksx-capture.workspace = true
+# TEST-ONLY: `parity.rs` walks from the FIELDS a user's config can hold to the
+# surface that lets somebody change one. A setting with no verb is invisible to
+# a guard that walks verbs, which is how `socd` and split-or-freeze-after-save
+# both shipped unreachable.
+ksx-config.workspace = true
+serde_json.workspace = true
 

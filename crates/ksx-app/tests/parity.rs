@@ -1042,3 +1042,198 @@ fn the_guard_is_still_bound_to_the_documents_and_the_tree_it_reads() {
         problems.join("\n\n")
     );
 }
+
+/// **A setting nobody can reach is invisible to every other test in this file.**
+///
+/// The guard above walks CLI VERBS and asks which surface performs each one. A
+/// capability that never got a verb is not missing from that walk — it was
+/// never in it. That is not a hypothetical: `socd` sat in the config model and
+/// the engine from the beginning, was copied between profiles by
+/// `profile_edit`, was acted on every frame by the engine, and could be set
+/// only by editing TOML by hand. So did `block_keyboards` after first run.
+/// Both shipped for months; both were found by reading the config struct, not
+/// by this file.
+///
+/// So this walks the other way round: from the FIELDS a user's config can
+/// hold, to the row that lets somebody change one.
+///
+/// The list is written out rather than derived, and the fixture below is
+/// constructed field by field with no `..Default::default()`, which is the
+/// tripwire: add a field to `Settings` or `SlotEntry` and this stops
+/// COMPILING until somebody says which surface reaches it, or says out loud
+/// that none does and why.
+struct ConfigSurface {
+    /// The field, as it is spelled in the file a user could open.
+    field: &'static str,
+    /// The §3 row that carries it, or `None` with a reason below.
+    row: Option<&'static str>,
+    /// Why nothing reaches it, when nothing does. An empty reason is a
+    /// failure: "no face" is a decision, and a decision owes a sentence.
+    why: &'static str,
+}
+
+const CONFIG_SURFACES: &[ConfigSurface] = &[
+    ConfigSurface {
+        field: "block_keyboards",
+        row: Some("Split or freeze, after saving"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "block_mice",
+        row: None,
+        why: "NO FACE. A mouse is blocked or not blocked with the keyboard it \
+              was configured beside, and nothing offers the choice separately. \
+              Reachable only by editing config.toml, which is the same hole \
+              `socd` was in until 2026-08-12.",
+    },
+    ConfigSurface {
+        field: "mouse_move_deadzone",
+        row: None,
+        why: "NO FACE. A tuning number for trackball feel with no control \
+              anywhere. Whoever wants it has an editor open already, but that \
+              is an explanation and not a defence.",
+    },
+    ConfigSurface {
+        field: "starting_user_index",
+        row: None,
+        why: "NO FACE, and the least defensible of the four: it decides which \
+              XInput slot player 1 lands on, which is exactly what somebody \
+              debugging \"player 2's controller is player 1 in the game\" \
+              would reach for.",
+    },
+    ConfigSurface {
+        field: "number",
+        row: Some("Edit configuration"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "keyboard",
+        row: Some("Device pick / remove"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "mouse",
+        row: None,
+        why: "NO FACE. `/devices` picks keyboards; a slot's mouse is set by \
+              hand. Same family as `block_mice`.",
+    },
+    ConfigSurface {
+        field: "preset",
+        row: Some("Edit configuration"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "persona",
+        row: Some("Edit configuration"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "socd",
+        row: Some("What opposite directions do (SOCD)"),
+        why: "",
+    },
+    ConfigSurface {
+        field: "macros",
+        row: None,
+        why: "NO FACE for the SWITCH. The macro EDITOR ships (`/map`'s macro \
+              tabs write `[macros.<name>]` into a preset); what has no control \
+              is this per-slot on/off, so a cabinet can carry macros it cannot \
+              turn off without an editor.",
+    },
+];
+
+/// Every config field is either carried by a §3 row that exists, or refused a
+/// face on purpose and in writing.
+#[test]
+fn every_setting_a_config_can_hold_is_reachable_or_says_why_not() {
+    let matrix = matrix();
+    let names: Vec<&str> = matrix.iter().map(|r| r.capability.as_str()).collect();
+
+    let mut unbound = Vec::new();
+    for entry in CONFIG_SURFACES {
+        match entry.row {
+            Some(row) => assert!(
+                names.contains(&row),
+                "config field `{}` claims §3 row {row:?}, which is not in the matrix. \
+                 Rows present: {names:?}",
+                entry.field
+            ),
+            None => {
+                assert!(
+                    !entry.why.trim().is_empty(),
+                    "config field `{}` has no face and no reason. \"No face\" is a \
+                     decision and a decision owes a sentence.",
+                    entry.field
+                );
+                unbound.push(entry.field);
+            }
+        }
+    }
+
+    // Not a failure — a LEDGER. Four of these were found by reading the config
+    // struct on 2026-08-12, months after they shipped, and the point of writing
+    // them down is that the next person meets the list instead of the surprise.
+    assert_eq!(
+        unbound,
+        [
+            "block_mice",
+            "mouse_move_deadzone",
+            "starting_user_index",
+            "mouse",
+            "macros"
+        ],
+        "the set of settings no surface can reach has CHANGED. If a face was \
+         added, move that field to its row. If a field was added with no face, \
+         add it here with the reason."
+    );
+}
+
+/// The list above describes the config this build actually writes.
+///
+/// Constructed field by field on purpose: no `..Default::default()`, so a new
+/// field on either struct fails to COMPILE here rather than quietly joining
+/// the set of things nobody can reach.
+#[test]
+fn the_config_surface_ledger_names_every_field_that_exists() {
+    // EVERY VALUE NON-DEFAULT, and that is the whole trick. Most of these
+    // fields carry `skip_serializing_if = "is_default"`, so a fixture built
+    // from defaults serializes to almost nothing and this walk passes
+    // VACUOUSLY — which is exactly what it did when first written: deleting
+    // `socd` from the ledger left the test green, because `socd` at its
+    // default is not in the document at all.
+    let settings = ksx_config::Settings {
+        block_keyboards: ksx_core::Blocking::Whole,
+        block_mice: true,
+        mouse_move_deadzone: 7,
+        starting_user_index: 2,
+    };
+    let slot = ksx_config::SlotEntry {
+        number: 3,
+        keyboard: Some("panel".to_owned()),
+        mouse: Some("trackball".to_owned()),
+        preset: "Player 3".to_owned(),
+        persona: ksx_core::Persona::PlayStation,
+        socd: ksx_core::Socd::UpPriority,
+        macros: ksx_core::MacroSwitch::On,
+    };
+
+    // Serialize with everything non-default where it matters, so
+    // `skip_serializing_if` cannot hide a field from this walk.
+    let mut fields: Vec<String> = Vec::new();
+    for value in [
+        serde_json::to_value(&settings).expect("settings serialize"),
+        serde_json::to_value(&slot).expect("slot serializes"),
+    ] {
+        if let Some(map) = value.as_object() {
+            fields.extend(map.keys().cloned());
+        }
+    }
+
+    for field in &fields {
+        assert!(
+            CONFIG_SURFACES.iter().any(|c| c.field == field),
+            "config field `{field}` is not in CONFIG_SURFACES. Say which §3 row \
+             reaches it, or that none does and why."
+        );
+    }
+}

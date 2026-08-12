@@ -1633,6 +1633,7 @@ dependencies = [
  "ksx-config",
  "ksx-core",
  "ksx-platform",
+ "serde_json",
  "winresource",
 ]
 

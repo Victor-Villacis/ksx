@@ -287,6 +287,7 @@ pub fn serve(
             // `ksx slot assign` performs. It BOUNCES the pads, which the page
             // says before the click, not after it.
             .route("/setup/slot", post(setup_form_slot))
+            .route("/setup/blocking", post(setup_form_blocking))
             // Step 3: the daemon's own learner, the two verbs the mapper
             // already uses. The page renders `learn_poll` per request, so this
             // step works with scripting switched off.
@@ -3016,6 +3017,62 @@ struct SetupSlotForm {
 /// `reload` is asked for, and unlike every other reload on this protocol it is
 /// a BOUNCE: the pads replug. The page says so above the button, because after
 /// the click is too late to be told.
+/// What POST /setup/blocking carries: one served answer name.
+#[derive(Debug, Deserialize)]
+struct SetupBlockingForm {
+    blocking: String,
+}
+
+/// POST /setup/blocking - change split-or-freeze on a config already on disk.
+///
+/// The question `FIRST-RUN.md` §3 asks once had exactly one writer in the whole
+/// product (`stage::apply`), so the answer given while commissioning a cabinet
+/// was permanent. It is not a one-time question: freeze suits a tournament
+/// night, split suits the same panel on a desk an hour later.
+///
+/// No confirm step. Every other write on this page has none either, and the
+/// reason holds here: this one changes a FILE, and the file is the thing the
+/// next session reads - nothing about the machine moves, no driver rebinds, and
+/// the keyboard in the user's hands keeps doing exactly what it was doing.
+async fn setup_form_blocking(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SetupBlockingForm>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        let session = state.control.session();
+        state
+            .machine
+            .set_blocking(
+                &ksx_api::BlockingSpec {
+                    blocking: form.blocking,
+                },
+                session.running,
+            )
+            .map(|view| {
+                // Composed here, from the view's own facts. "Saved" and "in
+                // effect" are different claims, and a running game is the one
+                // case where they come apart: the daemon reads settings at
+                // start, so it keeps the old answer until it is restarted.
+                if view.session_running {
+                    format!(
+                        "Saved: {}. The game running right now keeps the old setting until you \
+                         stop it and start it again.",
+                        view.title
+                    )
+                } else {
+                    format!(
+                        "Saved: {}. It takes effect the next time you play.",
+                        view.title
+                    )
+                }
+            })
+            .map_err(|refusal| refusal.message)
+    })
+    .await
+    .unwrap_or_else(|_| Err("the change did not complete".to_owned()));
+    setup_redirect(outcome)
+}
+
 async fn setup_form_slot(
     State(state): State<Arc<AppState>>,
     Form(form): Form<SetupSlotForm>,

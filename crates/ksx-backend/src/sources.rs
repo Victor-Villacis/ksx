@@ -735,6 +735,58 @@ fn refusal_of(code: &'static str, message: String, remedy: Option<String>) -> Re
 pub struct LocalMachine;
 
 impl ksx_api::MachineSource for LocalMachine {
+    /// **Change split-or-freeze on a config that is already saved.**
+    ///
+    /// The whole capability used to live inside first run: `stage::apply` was
+    /// the only writer of `settings.block_keyboards` anywhere in the product,
+    /// so the answer given while commissioning a cabinet could not be revised
+    /// without redoing first run or hand-editing TOML.
+    ///
+    /// One backup, one write, and the value re-read from the parsed document
+    /// rather than echoed from the request - a surface that reported what it
+    /// asked for would report a success the disk never got.
+    fn set_blocking(
+        &self,
+        spec: &ksx_api::BlockingSpec,
+        session_running: bool,
+    ) -> Result<ksx_api::BlockingView, Refusal> {
+        let wanted: ksx_core::Blocking = spec.blocking.trim().parse().map_err(|_| {
+            Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                format!(
+                    "'{}' is not a split-or-freeze answer ksx knows",
+                    spec.blocking
+                ),
+                "pick one of the answers on the page",
+            )
+        })?;
+
+        let store = crate::device_edit::store().map_err(config_refusal)?;
+        let mut config = store.load_config().map_err(config_refusal)?.value;
+        config.settings.block_keyboards = wanted;
+        // Same two lines `stage::apply` uses, and deliberately the same:
+        // `Store::backup` is the one place the .bak-<stamp> convention lives.
+        let path = store.root().config_path();
+        let backup = store.backup(&path).map_err(config_refusal)?;
+        store.save_config(&config).map_err(config_refusal)?;
+
+        // Re-read. `save_config` returning Ok says the bytes were written, not
+        // that they parse back to what was intended, and this is the setting
+        // whose wrong value nobody notices until they are mid-game.
+        let on_disk = store.load_config().map_err(config_refusal)?.value;
+        let blocking = on_disk.settings.block_keyboards;
+        Ok(ksx_api::BlockingView {
+            blocking: blocking.as_str().to_owned(),
+            title: ksx_api::BlockingOption::roster()
+                .into_iter()
+                .find(|option| option.name == blocking.as_str())
+                .map(|option| option.title)
+                .unwrap_or_default(),
+            backup: backup.map(|path| path.display().to_string()),
+            session_running,
+        })
+    }
+
     /// The logon registration, read.
     fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
         autostart_view()

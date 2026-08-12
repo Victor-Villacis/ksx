@@ -755,6 +755,9 @@ pub struct SetupLines {
     /// daemon — which the form is offered on, because `wireable` turns on
     /// `reachable`, not on `running`.
     pub wire_warning: String,
+    /// What this keyboard does while a game is running, in one sentence, with
+    /// the honest hedge when nothing is configured yet.
+    pub blocking_line: String,
 }
 
 impl SetupLines {
@@ -785,6 +788,8 @@ impl SetupLines {
                     .to_owned(),
                 prove_blocked: prove_blocked_line(session, learn),
                 wire_warning: wire_warning_line(session),
+                blocking_line: "What the keyboard does while you play could not be read."
+                    .to_owned(),
             };
         }
 
@@ -823,7 +828,40 @@ impl SetupLines {
             wire_blocked: wire_blocked_line(session, view),
             prove_blocked: prove_blocked_line(session, learn),
             wire_warning: wire_warning_line(session),
+            blocking_line: blocking_line(view),
         }
+    }
+}
+
+/// What the keyboard does while a game runs, as one sentence.
+///
+/// Composed from the SAVED value, and hedged when there is no config yet: an
+/// unconfigured machine has a default in memory, and printing that as though
+/// somebody had chosen it is the kind of small lie that sends a person looking
+/// for a setting they never set.
+fn blocking_line(view: &ksx_api::SetupView) -> String {
+    if !view.config_exists {
+        return "Nothing is configured yet, so there is no answer to this until you finish \
+                setting a keyboard up."
+            .to_owned();
+    }
+    match view
+        .blocking_options
+        .iter()
+        .find(|option| option.name == view.blocking)
+    {
+        Some(option) => format!("{} - {}", option.title, option.detail),
+        // A value the roster does not know: an older or hand-edited config.
+        // Named rather than smoothed over, because the next session will act
+        // on it and a page that showed nothing would leave that invisible.
+        None if view.blocking.is_empty() => {
+            "This machine's configuration does not say, so ksx will use its default.".to_owned()
+        }
+        None => format!(
+            "This machine's configuration says \"{}\", which this build does not recognise. \
+             Pick one below to replace it.",
+            view.blocking
+        ),
     }
 }
 
@@ -1026,6 +1064,20 @@ pub struct SetupTextRowView {
 /// again for the two-second poll. Two copies of a SENTENCE drift silently
 /// (the Profiles page's `ProfilesDerived` header tells the longer version of
 /// this story); now both seams read these rows verbatim and format nothing.
+/// One split-or-freeze answer, on the page that edits a SAVED config.
+///
+/// The same three answers `/start` asks with, from the same
+/// `BlockingOption::roster()` - deliberately not a second wording. What differs
+/// is only that here the chosen one is a fact about a file, not about a stage.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupBlockingRowView {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    pub chosen_cls: String,
+    pub button: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupRows {
     pub steps: Vec<SetupStepRowView>,
@@ -1037,6 +1089,9 @@ pub struct SetupRows {
     pub preset_options: Vec<SetupTextRowView>,
     pub profile_options: Vec<SetupTextRowView>,
     pub notes: Vec<SetupTextRowView>,
+    /// The split-or-freeze answers, current one marked. Composed here so the
+    /// browser never decides which of the three is chosen.
+    pub blocking: Vec<SetupBlockingRowView>,
 }
 
 impl SetupRows {
@@ -1093,6 +1148,30 @@ impl SetupRows {
                 .notes
                 .iter()
                 .map(|note| SetupTextRowView { text: note.clone() })
+                .collect(),
+            blocking: view
+                .blocking_options
+                .iter()
+                .map(|option| {
+                    let chosen = view.blocking == option.name;
+                    SetupBlockingRowView {
+                        name: option.name.clone(),
+                        title: option.title.clone(),
+                        detail: option.detail.clone(),
+                        chosen_cls: if chosen {
+                            "pill pill-ok".to_owned()
+                        } else {
+                            "pill pill-none".to_owned()
+                        },
+                        // The chosen row's button says so rather than inviting a
+                        // no-op write; the others say what picking them does.
+                        button: if chosen {
+                            "This is how it is set".to_owned()
+                        } else {
+                            option.title.clone()
+                        },
+                    }
+                })
                 .collect(),
         }
     }
@@ -2633,6 +2712,84 @@ fn hidden_when_empty(text: &str, class: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The saved answer is marked, and an unconfigured machine claims
+    /// nothing.**
+    ///
+    /// The three answers come from `BlockingOption::roster()` - the same list
+    /// `/start` asks with - so this pins the part that is genuinely this page's
+    /// own: which one is chosen, and what the line says when there is nothing
+    /// to choose from yet. An unconfigured machine has a default in MEMORY,
+    /// and printing that as though somebody had picked it sends a person
+    /// hunting for a setting they never set.
+    #[test]
+    fn the_saved_split_or_freeze_answer_is_the_marked_one() {
+        let configured = ksx_api::SetupView {
+            config_exists: true,
+            blocking: "whole".to_owned(),
+            blocking_options: ksx_api::BlockingOption::roster(),
+            ..ksx_api::SetupView::default()
+        };
+        let rows = SetupRows::of(&SetupSnapshot::ready(configured.clone())).blocking;
+        assert_eq!(
+            rows.len(),
+            3,
+            "every answer is offered, not just the others"
+        );
+        let chosen: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.chosen_cls.contains("pill-ok"))
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(chosen, ["whole"], "exactly the saved answer is marked");
+        assert!(
+            rows.iter()
+                .find(|r| r.name == "whole")
+                .is_some_and(|r| r.button.contains("how it is set")),
+            "the current answer does not invite a no-op write"
+        );
+
+        let line = blocking_line(&configured);
+        assert!(line.starts_with("Freeze this keyboard"), "{line}");
+
+        // Nothing configured: no answer to report, and none invented.
+        let fresh = ksx_api::SetupView {
+            config_exists: false,
+            blocking: String::new(),
+            blocking_options: ksx_api::BlockingOption::roster(),
+            ..ksx_api::SetupView::default()
+        };
+        let fresh_line = blocking_line(&fresh);
+        assert!(
+            fresh_line.contains("Nothing is configured yet"),
+            "{fresh_line}"
+        );
+        for option in ksx_api::BlockingOption::roster() {
+            assert!(
+                !fresh_line.contains(&option.title),
+                "an unset machine must not read as having chosen {}: {fresh_line}",
+                option.title
+            );
+        }
+
+        // A value this build does not know (an older or hand-edited config) is
+        // NAMED, not smoothed over - the next session will act on it.
+        let strange = ksx_api::SetupView {
+            config_exists: true,
+            blocking: "half-on".to_owned(),
+            blocking_options: ksx_api::BlockingOption::roster(),
+            ..ksx_api::SetupView::default()
+        };
+        let strange_line = blocking_line(&strange);
+        assert!(strange_line.contains("half-on"), "{strange_line}");
+        assert!(
+            SetupRows::of(&SetupSnapshot::ready(strange))
+                .blocking
+                .iter()
+                .all(|r| !r.chosen_cls.contains("pill-ok")),
+            "an unknown value marks none of the three as in use"
+        );
+    }
 
     /// **A stale registration offers the REPAIR, not the removal.**
     ///

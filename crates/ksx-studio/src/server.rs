@@ -1652,16 +1652,34 @@ async fn collect_devices(state: &Arc<AppState>) -> DevicesPayload {
     let scan_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let session = scan_state.control.session();
+        // Read whatever it will give: an unreadable receipt store is its own
+        // sentence on the card, never silence, and never inherited from the
+        // scan beside it.
+        let residue = scan_state
+            .machine
+            .winusb_residue()
+            .unwrap_or_else(|refusal| ksx_api::WinusbResidueView {
+                readable: false,
+                error: refusal.message,
+                line: "What ksx has left behind could not be read.".to_owned(),
+                detail: "This says nothing about whether anything is wrong. Reload to ask again."
+                    .to_owned(),
+                ..ksx_api::WinusbResidueView::default()
+            });
         match scan_state.machine.device_scan() {
             Ok(scan) => DevicesPayload {
                 scan,
                 session,
+                residue,
                 unavailable: String::new(),
                 flash: None,
             },
             Err(refusal) => DevicesPayload {
                 scan: ksx_api::DeviceScanView::default(),
                 session,
+                // The two reads are independent: a scan that refused says
+                // nothing about whether the receipt store could be read.
+                residue,
                 // The refusal's own sentence, plus its way out. This is the
                 // one place the remedy is NOT dropped: it is going onto a
                 // page, not into a 300-character flash, and "run `ksx
@@ -1678,6 +1696,12 @@ async fn collect_devices(state: &Arc<AppState>) -> DevicesPayload {
     .unwrap_or_else(|_| DevicesPayload {
         scan: ksx_api::DeviceScanView::default(),
         session: SessionView::unreachable("the device scan panicked"),
+        residue: ksx_api::WinusbResidueView {
+            readable: false,
+            error: "the device page panicked".to_owned(),
+            line: "What ksx has left behind could not be read.".to_owned(),
+            ..ksx_api::WinusbResidueView::default()
+        },
         unavailable: "the device scan panicked — nothing below is a reading of this machine"
             .to_owned(),
         flash: None,

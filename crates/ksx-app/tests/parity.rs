@@ -572,6 +572,16 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/pads/spawn", "/pads/prune"],
     },
     Anchors {
+        capability: "What ksx left behind (receipts vs machine)",
+        // The CLI owns it because settling a receipt needs the elevated
+        // helper. Studio only READS — the same read `--dry-run` performs —
+        // because the thing that was wrong was never that you could not fix
+        // it, it was that no screen would tell you there was anything to fix.
+        cli: &["winusb repair"],
+        egui: &[],
+        studio: &["/devices"],
+    },
+    Anchors {
         capability: "What opposite directions do (SOCD)",
         // Not its own verb: SOCD is a property OF A SLOT, so it rides the verb
         // that already writes slots rather than becoming a second way to edit

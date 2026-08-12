@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "build_hash": "337c675ecf87fa095510f31de41df3fd0704fd8bfa8bd5e7d60f2685b3c20bf6",
+  "build_hash": "b1b0a7e56909b8ce20d57eac299d2bc274cfcc35ac53f3acced9e59658b12e4c",
   "assets": {
     "check.ir": "check.d94030d6.ir",
     "check.js": "check.83278503.js",
-    "devices.ir": "devices.6f3ec2f5.ir",
-    "devices.js": "devices.000c34a6.js",
+    "devices.ir": "devices.08310479.ir",
+    "devices.js": "devices.41e26271.js",
     "map.ir": "map.a44e1152.ir",
     "map.js": "map.04c52443.js",
     "pads.ir": "pads.bc0593fd.ir",
@@ -83,15 +83,15 @@
     },
     "/devices": {
       "js": [
-        "devices.000c34a6.js"
+        "devices.41e26271.js"
       ],
       "css": [
         "studio.58f84d11.css"
       ],
       "fonts": [],
-      "total_size_br": 40324,
+      "total_size_br": 40442,
       "budget_warn_threshold": 200000,
-      "ir": "devices.6f3ec2f5.ir"
+      "ir": "devices.08310479.ir"
     },
     "/profiles": {
       "js": [

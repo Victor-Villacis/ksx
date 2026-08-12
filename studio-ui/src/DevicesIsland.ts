@@ -171,8 +171,29 @@ export interface SessionView {
 export interface DevicesPayload {
   scan: DeviceScanView;
   session: SessionView;
+  residue: WinusbResidueView;
   unavailable: string;
   flash: string | null;
+}
+
+/** What ksx left behind. Every sentence composed in ksx-backend. */
+export interface WinusbResidueView {
+  readable: boolean;
+  error: string;
+  receipts: number;
+  drifted: number;
+  bookkeeping_only: boolean;
+  line: string;
+  detail: string;
+  rows: ResidueTile[];
+}
+
+export interface ResidueTile {
+  board: string;
+  says: string;
+  machine: string;
+  bookkeeping: boolean;
+  reference: string;
 }
 
 // ── Row shapes: every string decided server-side, mirrored here ────────────
@@ -265,6 +286,12 @@ const [configuredRows, setConfiguredRows] = createSignal<ConfiguredTile[]>([]);
 const [boardRows, setBoardRows] = createSignal<BoardTile[]>([]);
 const [otherRows, setOtherRows] = createSignal<OtherTile[]>([]);
 const [noteRows, setNoteRows] = createSignal<NoteTile[]>([]);
+const [residueRows, setResidueRows] = createSignal<ResidueTile[]>([]);
+const [residueLine, setResidueLine] = createSignal("");
+const [residueDetail, setResidueDetail] = createSignal("");
+const [residueError, setResidueError] = createSignal("");
+const [showResidue, setShowResidue] = createSignal(false);
+const [residueUnreadable, setResidueUnreadable] = createSignal(false);
 
 // ── Row shaping (mirrors render_devices.rs; NOT deciding anything) ─────────
 //
@@ -372,6 +399,16 @@ export function applyDevices(p: DevicesPayload): void {
 
   setGeneratedAt(scan.generated_at);
   setSessionLine(session.line);
+  const residue = p.residue;
+  setResidueRows(residue.rows);
+  setResidueLine(residue.line);
+  setResidueDetail(residue.detail);
+  setResidueError(residue.error);
+  setResidueUnreadable(!residue.readable);
+  // Shown when there is something to say: a disagreement, or the fact that
+  // the store could not be read. A machine with nothing left behind gets no
+  // card at all rather than a row of reassurance nobody asked for.
+  setShowResidue(!residue.readable || residue.drifted > 0);
   setUnavailableLine(unavailable);
   setShowUnavailable(unavailable !== "");
 
@@ -740,6 +777,47 @@ export function DevicesIsland() {
               "capture. Anything else that enumerated is listed below.",
             ),
         ),
+      ),
+      // ── WHAT KSX LEFT BEHIND ──────────────────────────────────────────
+      // The device tree can be perfectly healthy while ksx's own receipt
+      // store disagrees with it, and every surface here reads the tree. So a
+      // machine carried nine finished-but-untidied jobs and nothing said so:
+      // `ksx winusb repair --dry-run` was the only way to find out.
+      createShow(
+        () => showResidue(),
+        () =>
+          h(
+            "section",
+            { class: "card dv-card" },
+            h("h2", null, "What ksx has left behind"),
+            h("p", { class: "cardline" }, () => residueLine()),
+            h("p", { class: "dv-note" }, () => residueDetail()),
+            createShow(
+              () => residueUnreadable(),
+              () => h("p", { class: "dv-note warn" }, () => residueError()),
+            ),
+            h(
+              "ul",
+              { class: "plist dv-list" },
+              createList(
+                () => residueRows(),
+                (r) => r.reference + "|" + r.board + "|" + r.says + "|" + r.machine,
+                (r) =>
+                  h(
+                    "li",
+                    { class: "dv-row" },
+                    h(
+                      "div",
+                      { class: "dv-head" },
+                      h("span", { class: "dv-name" }, r.board),
+                      h("span", { class: "mono smallprint" }, r.reference),
+                    ),
+                    h("p", { class: "dv-note" }, r.says),
+                    h("p", { class: "dv-note" }, r.machine),
+                  ),
+              ),
+            ),
+          ),
       ),
       // ── THE REST: listed, never hidden ────────────────────────────────
       createShow(

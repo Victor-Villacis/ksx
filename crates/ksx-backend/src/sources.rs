@@ -787,6 +787,126 @@ impl ksx_api::MachineSource for LocalMachine {
         })
     }
 
+    /// What ksx left behind, read and composed. See `WinusbResidueView`.
+    #[cfg(windows)]
+    fn winusb_residue(&self) -> Result<ksx_api::WinusbResidueView, Refusal> {
+        use ksx_platform::winusb::transaction::{Drift, Phase};
+
+        let (findings, _orphans) =
+            ksx_platform::winusb::transaction::reconcile_report().map_err(|err| {
+                Refusal::new(
+                    ksx_api::codes::REFUSED,
+                    format!("the recovery store could not be read: {err}"),
+                )
+            })?;
+
+        let receipts = findings.len();
+        let drifted: Vec<_> = findings
+            .iter()
+            .filter(|f| f.drift != Drift::Consistent)
+            .collect();
+        // The one distinction that decides every sentence below, and it is the
+        // domain's, not this function's.
+        let bookkeeping_only = drifted.iter().all(|f| f.drift.is_bookkeeping());
+
+        // Boards are named the way `/devices` names them; the instance path is
+        // support detail, never the identifier (`FIRST-RUN.md` §5).
+        // The same enumeration `/devices` renders, so a row here and a row
+        // there name one board the same way. A receipt can outlive the board
+        // it was about, which is why the miss has its own sentence rather than
+        // falling back to the instance path.
+        // The SAME read `/devices` renders, so one board is named one way on
+        // both. `.ok()` because a receipt is still worth reporting on a machine
+        // whose config will not load - the two reads are independent and this
+        // one must not inherit the other's failure.
+        let scan = self.device_scan().ok();
+        let name_of = |instance: &str| -> String {
+            scan.as_ref()
+                .and_then(|s| {
+                    s.boards
+                        .iter()
+                        .find(|b| {
+                            b.interfaces
+                                .iter()
+                                .any(|i| i.instance_id.eq_ignore_ascii_case(instance))
+                        })
+                        .map(|b| b.name.clone())
+                })
+                // A receipt can outlive the board it was about. Its own
+                // sentence, rather than falling back to the instance path,
+                // which is support detail and never an identifier (§5).
+                .unwrap_or_else(|| "a keyboard that is not plugged in now".to_owned())
+        };
+
+        let rows = drifted
+            .iter()
+            .map(|f| ksx_api::WinusbResidueRow {
+                board: name_of(&f.instance_id),
+                // From the PHASE, not the drift. Five of the nine receipts on
+                // the reporting machine were `RecoveryRequired` - ksx writing
+                // down that something had gone wrong - and every one of them
+                // has drift `ReleaseFinished`. Wording these off the drift gave
+                // all nine the same sentence and quietly dropped the fact that
+                // ksx had flagged a problem, which is exactly the half a person
+                // would want to know about their own machine.
+                says: match f.phase {
+                    Phase::Preparing | Phase::Prepared | Phase::Installed => {
+                        "ksx recorded that it was in the middle of preparing this keyboard"
+                    }
+                    Phase::Active => "ksx recorded that it was holding this keyboard",
+                    Phase::Releasing => {
+                        "ksx recorded that it was part-way through giving this keyboard back"
+                    }
+                    Phase::RecoveryRequired => {
+                        "ksx recorded that something went wrong here and it needed checking"
+                    }
+                    Phase::RolledBack | Phase::Released => {
+                        "ksx recorded that it had finished with this keyboard"
+                    }
+                }
+                .to_owned(),
+                machine: match f.drift {
+                    Drift::StaleClaim | Drift::ReleaseFinished => {
+                        "Windows says it is an ordinary keyboard again"
+                    }
+                    Drift::ReleaseIncomplete => "Windows says ksx is still holding it",
+                    Drift::Consistent => "Windows agrees",
+                }
+                .to_owned(),
+                bookkeeping: f.drift.is_bookkeeping(),
+                reference: f.transaction_id.chars().take(8).collect(),
+            })
+            .collect();
+
+        Ok(ksx_api::WinusbResidueView {
+            readable: true,
+            error: String::new(),
+            receipts,
+            drifted: drifted.len(),
+            bookkeeping_only,
+            line: match (drifted.len(), bookkeeping_only) {
+                (0, _) => "Everything ksx has ever prepared on this computer is accounted for."
+                    .to_owned(),
+                (1, true) => "There is one finished job ksx never tidied up.".to_owned(),
+                (n, true) => format!("There are {n} finished jobs ksx never tidied up."),
+                (1, false) => "One keyboard was never fully given back.".to_owned(),
+                (n, false) => format!("{n} records disagree with Windows, and at least one keyboard was never fully given back."),
+            },
+            detail: match (drifted.len(), bookkeeping_only) {
+                (0, _) => "Nothing to do.".to_owned(),
+                (_, true) => "Your keyboards are fine - Windows and ksx agree about every one of \
+                              them. What is left is ksx's own paperwork from earlier setups. \
+                              Tidying it up changes no keyboard and no driver."
+                    .to_owned(),
+                (_, false) => "At least one keyboard is still held by a driver ksx published, \
+                               which means it will not type until it is given back. This needs a \
+                               driver change and a Windows permission prompt, not just tidying."
+                    .to_owned(),
+            },
+            rows,
+        })
+    }
+
     /// The logon registration, read.
     fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
         autostart_view()
@@ -1648,6 +1768,36 @@ fn remove_view(outcome: &crate::device_edit::RemoveOutcome) -> ksx_api::DeviceRe
 
 #[cfg(test)]
 mod tests {
+    /// **The residue read, against whatever machine runs it.**
+    ///
+    /// Ignored by default: it reads `%ProgramData%\KSX` and the device tree, so
+    /// it says nothing on a machine that has never prepared a board and cannot
+    /// assert a count on one that has. Run it by name when changing the
+    /// composition, and read what it prints.
+    #[test]
+    #[ignore = "reads this machine's recovery store"]
+    fn residue_on_this_machine() {
+        let view = match ksx_api::MachineSource::winusb_residue(&LocalMachine) {
+            Ok(v) => v,
+            Err(refusal) => {
+                println!("refused: {}", refusal.message);
+                return;
+            }
+        };
+        println!(
+            "receipts={} drifted={} bookkeeping_only={}",
+            view.receipts, view.drifted, view.bookkeeping_only
+        );
+        println!("line:   {}", view.line);
+        println!("detail: {}", view.detail);
+        for row in &view.rows {
+            println!(
+                "  [{}] {} — {} / {}",
+                row.reference, row.board, row.says, row.machine
+            );
+        }
+        assert!(view.readable);
+    }
     use super::*;
     use ksx_api::MacroWrite;
 

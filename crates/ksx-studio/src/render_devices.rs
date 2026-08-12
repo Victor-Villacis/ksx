@@ -50,13 +50,14 @@ const LIST_SLOT_CONFIGURED: &str = "list:configuredRows:array";
 const LIST_SLOT_BOARDS: &str = "list:boardRows:array";
 const LIST_SLOT_OTHER: &str = "list:otherRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
+const LIST_SLOT_RESIDUE: &str = "list:residueRows:array";
 
 #[cfg(test)]
 const ISLAND_COMPONENT: &str = "DevicesIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 13;
+const SHOW_COUNT: usize = 15;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim: every signal `DevicesIsland.ts` binds to the
@@ -121,6 +122,9 @@ fn scalar_slots(payload: &DevicesPayload, flash: Option<&str>) -> serde_json::Va
         "configuredSummary": payload.scan.configured_summary,
         "boardsSummary": payload.scan.boards_summary,
         "otherSummary": payload.scan.other_summary,
+        "residueLine": payload.residue.line,
+        "residueDetail": payload.residue.detail,
+        "residueError": payload.residue.error,
     })
 }
 
@@ -413,7 +417,7 @@ fn other_row(board: &BoardRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &DevicesPayload) -> [(&'static str, SlotValue); 4] {
+fn list_values(payload: &DevicesPayload) -> [(&'static str, SlotValue); 5] {
     let configured = SlotValue::array(
         payload
             .scan
@@ -454,11 +458,30 @@ fn list_values(payload: &DevicesPayload) -> [(&'static str, SlotValue); 4] {
             .map(|note| SlotValue::object(vec![("note".to_owned(), SlotValue::Text(note.clone()))]))
             .collect(),
     );
+    let residue = SlotValue::array(
+        payload
+            .residue
+            .rows
+            .iter()
+            .map(|row| {
+                SlotValue::object(vec![
+                    ("board".to_owned(), SlotValue::Text(row.board.clone())),
+                    ("says".to_owned(), SlotValue::Text(row.says.clone())),
+                    ("machine".to_owned(), SlotValue::Text(row.machine.clone())),
+                    (
+                        "reference".to_owned(),
+                        SlotValue::Text(row.reference.clone()),
+                    ),
+                ])
+            })
+            .collect(),
+    );
     [
         (LIST_SLOT_CONFIGURED, configured),
         (LIST_SLOT_BOARDS, boards),
         (LIST_SLOT_OTHER, other),
         (LIST_SLOT_NOTES, notes),
+        (LIST_SLOT_RESIDUE, residue),
     ]
 }
 
@@ -495,6 +518,14 @@ fn show_values(
         ("show:noBoards", scan.no_pickable_board_found),
         ("show:hasOther", scan.other_boards > 0),
         ("show:hasNotes", !scan.notes.is_empty()),
+        // Shown when there is something to say — a disagreement, or the fact
+        // that the store could not be read. A machine with nothing left behind
+        // gets no card, not a row of reassurance nobody asked for.
+        (
+            "show:showResidue",
+            !payload.residue.readable || payload.residue.drifted > 0,
+        ),
+        ("show:residueUnreadable", !payload.residue.readable),
     ]
 }
 
@@ -738,6 +769,38 @@ mod tests {
     fn cabinet() -> DevicesPayload {
         DevicesPayload {
             scan: cabinet_scan(),
+            // A machine whose receipt store ANSWERED and had nothing to
+            // report. Stated rather than defaulted, for the reason the
+            // `pad_bus` fixtures give: the default is the UNREADABLE view, so
+            // every fixture here would otherwise be rendering the "could not
+            // be read" warning and the tests that care about it would prove
+            // nothing.
+            // A receipt store that ANSWERED and had one thing to report.
+            // Stated rather than defaulted for the reason the `pad_bus`
+            // fixtures give — the default is the UNREADABLE view, so every
+            // fixture would otherwise render the "could not be read" warning
+            // and the tests that care about it would prove nothing. One ROW
+            // rather than none because `every_row_field_is_bound` requires
+            // each list to be non-empty: an empty list binds nothing and
+            // therefore proves nothing about the bindings.
+            residue: ksx_api::WinusbResidueView {
+                readable: true,
+                error: String::new(),
+                receipts: 2,
+                drifted: 1,
+                bookkeeping_only: true,
+                line: "There is one finished job ksx never tidied up.".to_owned(),
+                detail: "Your keyboards are fine - Windows and ksx agree about every one of                          them."
+                    .to_owned(),
+                rows: vec![ksx_api::WinusbResidueRow {
+                    board: "Ultimarc I-PAC 4X".to_owned(),
+                    says: "ksx recorded that it was part-way through giving this keyboard back"
+                        .to_owned(),
+                    machine: "Windows says it is an ordinary keyboard again".to_owned(),
+                    bookkeeping: true,
+                    reference: "3bbc5a6f".to_owned(),
+                }],
+            },
             session: SessionView {
                 reachable: true,
                 running: false,
@@ -789,6 +852,7 @@ mod tests {
             [
                 LIST_SLOT_CONFIGURED,
                 LIST_SLOT_BOARDS,
+                LIST_SLOT_RESIDUE,
                 LIST_SLOT_OTHER,
                 LIST_SLOT_NOTES
             ],

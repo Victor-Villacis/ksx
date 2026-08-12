@@ -192,6 +192,16 @@ export interface SetupRows {
   preset_options: TextRow[];
   profile_options: TextRow[];
   notes: TextRow[];
+  blocking: BlockingRow[];
+}
+
+/** One split-or-freeze answer. Every string is composed in snapshot.rs. */
+export interface BlockingRow {
+  name: string;
+  title: string;
+  detail: string;
+  chosen_cls: string;
+  button: string;
 }
 
 // ── The live state store (module-level: one island, page lifetime) ─────────
@@ -247,6 +257,8 @@ const [slotOptions, setSlotOptions] = createSignal<OptionRow[]>([]);
 const [presetOptions, setPresetOptions] = createSignal<TextRow[]>([]);
 const [profileOptions, setProfileOptions] = createSignal<TextRow[]>([]);
 const [noteRows, setNoteRows] = createSignal<TextRow[]>([]);
+const [blockingRows, setBlockingRows] = createSignal<BlockingRow[]>([]);
+const [blockingLine, setBlockingLine] = createSignal("");
 
 // ── Applying the payload. THERE ARE NO DERIVATIONS HERE ────────────────────
 //
@@ -315,6 +327,8 @@ export function applySetup(p: SetupPayload): void {
   setPresetOptions(p.rows.preset_options);
   setProfileOptions(p.rows.profile_options);
   setNoteRows(p.rows.notes);
+  setBlockingRows(p.rows.blocking);
+  setBlockingLine(p.lines.blocking_line);
 }
 
 /** The studio server itself stopped answering /api/setup.
@@ -866,6 +880,43 @@ export function SetupIsland() {
                 (n) => h("li", null, h("span", { class: "pdetail" }, n.text)),
               ),
             ),
+        ),
+        // ── SPLIT OR FREEZE, on a config that is already saved ────────────
+        // FIRST-RUN.md §3 asks this once. It was answerable exactly once too:
+        // `stage::apply` was the only writer in the product, so the answer
+        // given while commissioning a cabinet could not be revised without
+        // redoing first run. Nothing about the question is one-time.
+        h(
+          "section",
+          { class: "card wide" },
+          h("h2", null, "What this keyboard does while you play"),
+          h("p", { class: "cardline" }, () => blockingLine()),
+          h(
+            "ul",
+            { class: "plist dv-list" },
+            createList(
+              () => blockingRows(),
+              (o) => o.name + "|" + o.title + "|" + o.detail + "|" + o.chosen_cls + "|" + o.button,
+              (o) =>
+                h(
+                  "li",
+                  { class: "dv-row" },
+                  h(
+                    "div",
+                    { class: "dv-head" },
+                    h("span", { class: "dv-name" }, o.title),
+                    h("span", { class: o.chosen_cls }, "in use"),
+                  ),
+                  h("p", { class: "dv-note" }, o.detail),
+                  h(
+                    "form",
+                    { class: "dv-form", method: "post", action: "/setup/blocking" },
+                    h("input", { type: "hidden", name: "blocking", value: o.name }),
+                    h("button", { class: "btn", type: "submit" }, o.button),
+                  ),
+                ),
+            ),
+          ),
         ),
         // The ONE place a path appears on this screen, and it is not an
         // interface: it is what a bug report quotes.

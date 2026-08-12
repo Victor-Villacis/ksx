@@ -92,6 +92,7 @@ const LIST_SLOT_PROFILE_OPTIONS: &str = "list:profileOptions:array";
 const LIST_SLOT_DEVICES: &str = "list:deviceRows:array";
 const LIST_SLOT_SLOTS: &str = "list:slotRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
+const LIST_SLOT_BLOCKING: &str = "list:blockingRows:array";
 
 /// How many `createShow` pairs this page has; pinned by the layout test
 /// alongside every name.
@@ -143,6 +144,7 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
         "wireBlocked": lines.wire_blocked,
         "proveBlocked": lines.prove_blocked,
         "wireWarning": lines.wire_warning,
+        "blockingLine": lines.blocking_line,
     })
 }
 
@@ -154,7 +156,7 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
 /// which is docs/SURFACES.md §1 drift with a runtime cost: the two copies
 /// could disagree between the SSR paint and the first poll. Now both read the
 /// rows `SetupPayload::composed` filled, so they cannot.
-fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 7] {
+fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 8] {
     let rows = &payload.rows;
 
     let steps = SlotValue::array(
@@ -211,6 +213,24 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 7] {
     let devices = pair_rows(&rows.devices);
     let slots = pair_rows(&rows.slots);
 
+    let blocking = SlotValue::array(
+        rows.blocking
+            .iter()
+            .map(|row| {
+                SlotValue::object(vec![
+                    ("name".to_owned(), SlotValue::Text(row.name.clone())),
+                    ("title".to_owned(), SlotValue::Text(row.title.clone())),
+                    ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+                    (
+                        "chosen_cls".to_owned(),
+                        SlotValue::Text(row.chosen_cls.clone()),
+                    ),
+                    ("button".to_owned(), SlotValue::Text(row.button.clone())),
+                ])
+            })
+            .collect(),
+    );
+
     [
         (LIST_SLOT_STEPS, steps),
         (LIST_SLOT_SLOT_OPTIONS, slot_options),
@@ -219,6 +239,7 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 7] {
         (LIST_SLOT_DEVICES, devices),
         (LIST_SLOT_SLOTS, slots),
         (LIST_SLOT_NOTES, notes),
+        (LIST_SLOT_BLOCKING, blocking),
     ]
 }
 
@@ -516,6 +537,7 @@ mod tests {
                 LIST_SLOT_DEVICES,
                 LIST_SLOT_SLOTS,
                 LIST_SLOT_NOTES,
+                LIST_SLOT_BLOCKING,
             ],
             "list slot names drifted between SetupIsland.ts and the LIST_SLOT_* \
              constants; slots: {names:?}"

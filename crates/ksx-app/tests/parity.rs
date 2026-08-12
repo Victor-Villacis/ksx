@@ -572,6 +572,20 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/pads/spawn", "/pads/prune"],
     },
     Anchors {
+        capability: "Split or freeze, after saving",
+        // THE ROW WITH NO CLI VERB, and it is here on purpose. Until now this
+        // capability had no verb on ANY surface: `stage::apply` wrote
+        // `settings.block_keyboards` during first run and nothing could ever
+        // write it again. `every_cli_verb_is_claimed_by_a_row_or_exempt` walks
+        // the CLI tree and asks which surface performs each verb, so a config
+        // concept nobody had given a verb to was invisible to this guard by
+        // construction. An empty `cli` is the honest cell, not an oversight -
+        // and it is what makes the gap visible if somebody adds the flag later.
+        cli: &[],
+        egui: &["Ask::Blocking"],
+        studio: &["/setup/blocking"],
+    },
+    Anchors {
         capability: "Start ksx at sign-in",
         // The CLI keeps every option (--mode, --game, --delay-secs,
         // --task-name); Studio takes the one a first run needs and the

@@ -241,6 +241,10 @@ pub fn state() -> Result<SetupView, Refusal> {
 
     Ok(SetupView {
         generated_at: now_utc(),
+        // Read from the SAME `config` this function already loaded, so the
+        // answer shown next to the control is the answer a session would use.
+        blocking: config.settings.block_keyboards.as_str().to_owned(),
+        blocking_options: ksx_api::BlockingOption::roster(),
         config_root: root.dir().display().to_string(),
         config_exists: store.config_source().path.is_file(),
         devices,

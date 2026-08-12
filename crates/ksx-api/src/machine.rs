@@ -187,6 +187,27 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Change split-or-freeze on a saved config.**
+    ///
+    /// A whole-config write, so it takes the same backup discipline every other
+    /// config writer here takes. Returns what is on disk AFTER the write, plus
+    /// whether a session is live - the daemon reads settings at start, so a
+    /// running game keeps the old answer until it is restarted.
+    /// `session_running` is a parameter rather than something this trait
+    /// reads, for the reason `pads_view` takes it: whether a game is live is a
+    /// `ControlSource` fact, and a machine provider that guessed at it would be
+    /// a second, quietly disagreeing answer.
+    fn set_blocking(
+        &self,
+        _spec: &BlockingSpec,
+        _session_running: bool,
+    ) -> Result<BlockingView, Refusal> {
+        Err(Refusal::not_here(
+            "changing split-or-freeze",
+            "answer it again on the first-run screen",
+        ))
+    }
+
     /// `ksx doctor` — driver health plus advice, with the stable codes.
     fn doctor(&self) -> Result<DoctorView, Refusal> {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
@@ -1279,6 +1300,43 @@ pub struct PresetRow {
     pub source: String,
 }
 
+/// Change the split-or-freeze answer on a config that is already saved.
+///
+/// `FIRST-RUN.md` §3 asks this question once, during first run, and
+/// `ksx-backend`'s `stage::apply` was the ONLY thing that had ever written it.
+/// So the answer given while setting a cabinet up was permanent: changing it
+/// meant redoing first run, hand-editing TOML, or importing a whole document.
+/// Nothing about the question is one-time - freeze suits a tournament night,
+/// split suits the same panel on a desk an hour later.
+///
+/// Worth noting for the parity guard: this capability had no verb on ANY
+/// surface, not even the CLI, which is why `parity.rs` never noticed it
+/// missing. That guard walks CLI verbs and asks which surface performs them;
+/// a config concept nobody had ever given a verb to is invisible to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockingSpec {
+    /// `whole` | `bound-keys` | `off` - a [`BlockingOption::name`], served.
+    pub blocking: String,
+}
+
+/// What changing it did, and what it did NOT do.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockingView {
+    /// The value now on disk.
+    pub blocking: String,
+    /// Its title, from the one roster both surfaces read.
+    pub title: String,
+    /// Where the previous config went.
+    pub backup: Option<String>,
+    /// **A session was running when this was written.** The daemon reads
+    /// settings from disk at start (`Reload` is stop, re-read, start - never a
+    /// hot-patch), so a live game keeps the old answer until it is restarted.
+    /// Served rather than guessed at, because "saved" and "in effect" are
+    /// different claims and a page that conflates them is lying at exactly the
+    /// moment somebody is testing whether the change worked.
+    pub session_running: bool,
+}
+
 /// Consent and identity for an exact-device WinUSB preparation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WinusbPrepareSpec {
@@ -2049,6 +2107,17 @@ pub mod setup_states {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupView {
     pub generated_at: String,
+    /// **The split-or-freeze answer currently on disk** - a
+    /// [`BlockingOption::name`]. Served because it is the one setting whose
+    /// wrong value stays invisible until somebody is mid-game: a panel that was
+    /// meant to be frozen and is not types into the chat box.
+    #[serde(default)]
+    pub blocking: String,
+    /// The three answers, from `BlockingOption::roster()` - the same list
+    /// `/start` asks with, so the two screens cannot word one question two
+    /// ways.
+    #[serde(default)]
+    pub blocking_options: Vec<crate::stage::BlockingOption>,
     /// **Support detail, never an interface.** A person setting a cabinet up
     /// does not operate on a directory — they import, export, and follow the
     /// steps. This is here so a bug report can quote it, and it belongs in
@@ -2097,6 +2166,10 @@ impl Default for SetupView {
     fn default() -> Self {
         Self {
             generated_at: String::new(),
+            // The roster, not an empty list: a page that offered no answers
+            // would render the question as unanswerable rather than unread.
+            blocking: String::new(),
+            blocking_options: crate::stage::BlockingOption::roster(),
             config_root: String::new(),
             config_exists: false,
             devices: Vec::new(),

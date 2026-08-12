@@ -59,6 +59,39 @@ reads `packaging/ksx.iss` against the shipped version, `docs.rs` walks the whole
 repo's Markdown, and `replay.rs` drives `ksx-core` from a recorded session with
 no ksx-app or ksx-backend code in it at all.
 
+
+### The suffix rule in `ksx-backend/src/`
+
+52 files is where a convention has to carry the weight. Three families exist
+and are consistent; use them, and put a new file in one of them:
+
+| suffix | what it holds | examples |
+|---|---|---|
+| `*_cli` | a thin driver over a planner: parse, call, print. No rules of its own. | `macro_cli`, `preset_cli`, `slot_cli` |
+| `*_edit` | a pure plan/apply pair over one document. Refuses in its own words; touches disk only in `apply`. | `device_edit`, `preset_edit`, `profile_edit` |
+| bare noun | a READ that collects and reports, changing nothing. | `devices`, `device_scan`, `doctor` |
+
+Two names predate the rule and are the ones that cost people time —
+`map.rs` beside `mapping.rs`, and `devices.rs` beside `device_scan.rs` beside
+`device_edit.rs`. Renaming them is a separate change from writing the rule
+down; the rule comes first, or a rename just relocates the confusion.
+
+### `ksx-studio/src/server/` is one module per page
+
+`server.rs` reached 4,241 lines carrying 72 routes and 62 handlers before it
+was split by page in August 2026. The split mirrors `render_*.rs`, so one
+screen is one `render_<page>.rs` and one `server/<page>.rs`.
+
+`server/mod.rs` keeps what is genuinely shared — `AppState`, the router,
+`flash_of`, `act`, `urlencode`, the session verbs — and each child does
+`use super::*` to reach it. The router names handlers unqualified through glob
+re-exports, which is what made the split a move rather than a rewrite: no route
+changed and no test changed.
+
+**`parity.rs` reads that router by source text.** It is pointed at
+`server/mod.rs`; if the router ever moves again, the guard has to move with it,
+and it will tell you so by failing rather than by quietly finding no routes.
+
 ## Adding things — the shapes to copy
 
 **A CLI verb**: two files. The body goes in `ksx-backend/src/<verb>.rs` and is a

@@ -25,7 +25,7 @@
 //! |---|---|---|
 //! | CLI | the clap command tree | the built binary, walked with `--help` |
 //! | egui | `Screen::ALL` + every `Ask` variant | `ksx-cabinet/src/{nav,app}.rs`, by source text |
-//! | Studio | every `.route()` inside `Router::new()` | `ksx-studio/src/server.rs`, by source text |
+//! | Studio | every `.route()` inside `Router::new()` | `ksx-studio/src/server/mod.rs`, by source text |
 //!
 //! The two source-text readers work the way `ksx-backend/src/run/plan.rs`'s
 //! source-guard test does, and for the same reason: the fact being checked is a
@@ -229,7 +229,7 @@ fn subcommands(help: &str) -> Vec<String> {
 /// routes that follow it and report six missing faces.
 fn studio_routes() -> &'static BTreeSet<String> {
     static ROUTES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
-        const SERVER: &str = "crates/ksx-studio/src/server.rs";
+        const SERVER: &str = "crates/ksx-studio/src/server/mod.rs";
         let text = read_repo(SERVER);
         let start = text
             .find("Router::new()")
@@ -772,7 +772,7 @@ fn source_of(surface: &str) -> &'static str {
     match surface {
         "CLI" => "the clap tree (`ksx --help`, walked)",
         "egui" => "crates/ksx-cabinet/src/{nav,app}.rs (Screen::ALL, enum Ask)",
-        "Studio" => "crates/ksx-studio/src/server.rs (Router::new(), guard side)",
+        "Studio" => "crates/ksx-studio/src/server/mod.rs (Router::new(), guard side)",
         other => unreachable!("no evidence source for {other}"),
     }
 }

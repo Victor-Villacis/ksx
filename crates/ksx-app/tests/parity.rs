@@ -1109,10 +1109,21 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
     ConfigSurface {
         field: "starting_user_index",
         row: None,
-        why: "NO FACE, and the least defensible of the four: it decides which \
-              XInput slot player 1 lands on, which is exactly what somebody \
-              debugging \"player 2's controller is player 1 in the game\" \
-              would reach for.",
+        why: "NO FACE, AND CORRECTLY SO - this setting is INERT. Nothing reads it. \
+              Its definition, a 1..=4 range check in `validate`, serialization \
+              fixtures and this ledger are every reference in the workspace; no \
+              engine, no run plan, no output backend consults it. \
+              It is dead for a reason rather than by oversight: `ksx-output`'s \
+              module docs record that on real hardware BOTH `get_user_index()` \
+              and the LED notification channel report wrong or missing slots \
+              (docs/research/m2-xinput-findings.md), so ksx establishes slot \
+              identity by ACTIVE CORRELATION - pulse LT below the game-visible \
+              threshold, watch which XInput slot echoes. Windows assigns the \
+              index and ksx discovers which one it got, so a preferred index \
+              has nowhere to be applied. \
+              A control here would promise something the platform does not \
+              offer, which is worse than no control. If this ever gets a face, \
+              the face is a READ of where each pad actually landed.",
     },
     ConfigSurface {
         field: "number",
@@ -1249,4 +1260,118 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
              reaches it, or that none does and why."
         );
     }
+}
+
+/// **A `(§N)` in a matrix cell has to point somewhere, and somewhere RELEVANT.**
+///
+/// `classify` reads only the first word of a cell, so `**primary** (§3a)`
+/// classifies as Shipped and the parenthetical is never looked at. That is how
+/// the pads row came to cite §3a — a section titled "Why installed WinUSB
+/// preparation has a narrow Studio face", which says nothing about pads. §3's
+/// own prose confesses to having had exactly this bug before ("the
+/// cross-reference pointed at the wrong section"), and nothing caught the
+/// second one either.
+///
+/// EXISTENCE IS NOT ENOUGH, and testing that first is what showed it: every
+/// reference in the file names a section that exists, including the wrong one.
+/// So this also asks whether the section is ABOUT the row, by requiring two
+/// distinct content words from the capability to appear in it.
+///
+/// Two, not one, and that is the whole design: "Spawn test pads / prune the
+/// bus" shares exactly one word with §3a — "test" — which is the kind of
+/// coincidence a single-word rule accepts. The rows that are right share three
+/// each ("press, button, light"; "record, replay, session").
+#[test]
+fn every_section_cross_reference_points_at_a_section_about_that_row() {
+    let text = read_repo("docs/SURFACES.md");
+
+    // Section bodies, keyed by their § number.
+    let heads: Vec<(usize, String)> = text
+        .match_indices("\n#")
+        .filter_map(|(at, _)| {
+            let line = text[at + 1..].lines().next()?;
+            let rest = line.trim_start_matches('#').trim_start();
+            let name = rest.strip_prefix('§')?;
+            let id: String = name
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            (!id.is_empty()).then_some((at, id))
+        })
+        .collect();
+    let body_of = |id: &str| -> Option<String> {
+        let i = heads.iter().position(|(_, n)| n == id)?;
+        let start = heads[i].0;
+        let end = heads.get(i + 1).map_or(text.len(), |(at, _)| *at);
+        Some(text[start..end].to_lowercase())
+    };
+
+    // Words too common to carry meaning about which section a row belongs to.
+    const NOISE: &[&str] = &[
+        "this",
+        "that",
+        "with",
+        "from",
+        "into",
+        "what",
+        "they",
+        "them",
+        "after",
+        "saving",
+        "does",
+        "opposite",
+        "directions",
+        "left",
+        "behind",
+    ];
+
+    let mut wrong = Vec::new();
+    for row in matrix() {
+        let words: Vec<String> = row
+            .capability
+            .to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| w.len() >= 4 && !NOISE.contains(w))
+            .map(str::to_owned)
+            .collect();
+
+        for cell in [&row.cli, &row.egui, &row.studio] {
+            let mut rest = cell.as_str();
+            while let Some(at) = rest.find("(§") {
+                let tail = &rest[at + "(§".len()..];
+                let id: String = tail
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                rest = &tail[id.len()..];
+                if id.is_empty() {
+                    continue;
+                }
+                let Some(body) = body_of(&id) else {
+                    wrong.push(format!(
+                        "row {:?} cites §{id}, and docs/SURFACES.md has no such section",
+                        row.capability
+                    ));
+                    continue;
+                };
+                let hits: Vec<&String> = words.iter().filter(|w| body.contains(*w)).collect();
+                if hits.len() < 2 {
+                    wrong.push(format!(
+                        "row {:?} cites §{id}, which shares {} word(s) with it ({:?}). \
+                         Either the reference is stale, or that section is not about this row.",
+                        row.capability,
+                        hits.len(),
+                        hits
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "{} cross-reference(s) in docs/SURFACES.md §3 point somewhere they should not:\n  {}",
+        wrong.len(),
+        wrong.join("\n  ")
+    );
 }

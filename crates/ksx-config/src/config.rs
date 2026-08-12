@@ -45,6 +45,24 @@ pub struct Settings {
     /// Mouse-movement dead zone, 0..=12.
     pub mouse_move_deadzone: u8,
     /// First preferred virtual-controller user index, 1..=4.
+    ///
+    /// **INERT, and kept only so existing configs keep parsing.** Nothing
+    /// reads this: it is defined here, range-checked in `validate`, and never
+    /// consulted by the engine, the run plan or any output backend.
+    ///
+    /// It cannot be honoured. `ksx-output`'s module docs record the
+    /// measurement: on real hardware both `get_user_index()` and the LED
+    /// notification channel report wrong or missing slots
+    /// (`docs/research/m2-xinput-findings.md`), so ksx establishes slot
+    /// identity by ACTIVE CORRELATION — pulsing LT below the game-visible
+    /// threshold and watching which XInput slot echoes it. Windows assigns
+    /// the index; ksx discovers which one it got. A "preferred" index has
+    /// nowhere to be applied.
+    ///
+    /// Do not give this a control. A knob that promises to place player 1 on
+    /// a chosen slot would be promising something the platform does not offer.
+    /// The useful surface, if one is ever wanted, is a READ of where each pad
+    /// actually landed.
     pub starting_user_index: u8,
 }
 

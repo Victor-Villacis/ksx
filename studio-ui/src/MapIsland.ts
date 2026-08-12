@@ -89,6 +89,11 @@ export interface SessionView {
   line: string;
   /** games.toml profile the daemon is pointed at — what Resume restarts. */
   profile: string | null;
+  /** What the running — or most recently started — session was built FROM:
+   *  `"config"`, `"staged"`, or `"unknown"` when the daemon did not say
+   *  (`ksx_api::SessionOrigin`). Never read an absent value as "config": the
+   *  difference is whether Resume puts back an unsaved setup or the file. */
+  origin?: string;
 }
 
 export interface LearnView {
@@ -1209,7 +1214,10 @@ export function applyMap(p: MapPayload): void {
 
 /** Client-only: this PAGE paused emulation. To the daemon it is just idle. */
 let paused = false;
-/** The profile that was running when we paused, so Resume restores it. */
+/** What was playing when we paused, for the toast that says so. It is NOT how
+ *  emulation comes back: a staged session has no profile, and a page that
+ *  resumed by starting a remembered profile started the wrong thing (or
+ *  nothing). Resume sends `/api/session/resume` and the daemon decides. */
 let pausedProfile: string | null = null;
 
 /** The pause landed. Flip the affordances NOW rather than re-deriving from
@@ -1233,15 +1241,13 @@ export function clearPaused(): void {
   setPausedBar(false);
 }
 
-export function profileToResume(): string | null {
-  return pausedProfile;
-}
-
 export function isPaused(): boolean {
   return paused;
 }
 
-/** The profile running right now — remembered at pause time. */
+/** The games.toml profile running right now, if any — remembered at pause
+ *  time so the pause toast can name what it stopped. Never an instruction to
+ *  Resume: see [`pausedProfile`]. */
 export function liveProfile(): string | null {
   return lastPayload?.session.profile ?? null;
 }
@@ -3875,7 +3881,8 @@ export function MapIsland() {
               "p",
               { class: "alarmlead" },
               "Pause to teach controls by pressing keys. This temporarily disconnects the ",
-              "virtual controllers; Resume reconnects the same setup when you are done.",
+              "virtual controllers; Resume reconnects the same session when you are done ",
+              "— the profile that was running, or the unsaved setup that was playing.",
             ),
             h(
               "div",

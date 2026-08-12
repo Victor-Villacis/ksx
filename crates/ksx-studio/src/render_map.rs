@@ -3246,6 +3246,7 @@ mod tests {
                 running: false,
                 line: "idle".into(),
                 profile: None,
+                origin: ksx_api::SessionOrigin::Unknown,
             },
             learn: LearnView {
                 ok: true,

@@ -574,15 +574,25 @@ const ANCHORS: &[Anchors] = &[
     },
     Anchors {
         capability: "Start / stop / switch profile",
+        // `session resume` is named here rather than given a row of its own:
+        // it is the other half of stop, not a capability. It is a SEPARATE
+        // verb because start is defined as the config on disk and a paused
+        // staged session is not on disk — see `ksx_api::ControlSource::resume`.
         cli: &[
             "run",
             "session start",
             "session stop",
+            "session resume",
             "session reload",
             "session quit",
         ],
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
-        studio: &["/session/start", "/session/stop", "/profiles/switch"],
+        studio: &[
+            "/session/start",
+            "/session/stop",
+            "/api/session/resume",
+            "/profiles/switch",
+        ],
     },
 ];
 

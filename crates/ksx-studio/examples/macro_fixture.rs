@@ -171,6 +171,7 @@ fn fixture_session() -> SessionView {
             running: true,
             line: "running — Fixture — 1 pad(s)".into(),
             profile: Some("Fixture".into()),
+            origin: ksx_api::SessionOrigin::Config,
         },
         Ok("down") => SessionView::unreachable("no daemon control channel"),
         _ => SessionView {
@@ -178,6 +179,7 @@ fn fixture_session() -> SessionView {
             running: false,
             line: "idle".into(),
             profile: None,
+            origin: ksx_api::SessionOrigin::Unknown,
         },
     }
 }

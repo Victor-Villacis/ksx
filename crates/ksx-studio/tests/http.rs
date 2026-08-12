@@ -4,7 +4,7 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -143,6 +143,9 @@ struct ScriptedControl {
     /// Every ControlSource call fails the way an absent daemon fails.
     no_daemon: bool,
     started_with: std::sync::Mutex<Option<Option<String>>>,
+    /// How many times `resume` was asked for. The mapper's Resume must reach
+    /// THIS and not `start` — see `ksx_api::ControlSource::resume`.
+    resumes: AtomicUsize,
     /// The staged setup, held the way the daemon holds it — a real
     /// `ksx_core::StagedSetup` driven by real `StageEdit`s. A fake that stored
     /// the posted strings would let the page pass while the domain refused,
@@ -167,6 +170,7 @@ impl ScriptedControl {
             refuse_start,
             no_daemon: false,
             started_with: std::sync::Mutex::new(None),
+            resumes: AtomicUsize::new(0),
             staged: Mutex::new(ksx_core::stage::StagedSetup::new()),
             played: AtomicBool::new(false),
             committed: AtomicBool::new(false),
@@ -270,6 +274,7 @@ impl ControlSource for ScriptedControl {
                 running: true,
                 line: "running — 4 pad(s)".into(),
                 profile: Some("Example Game".into()),
+                origin: ksx_api::SessionOrigin::Config,
             }
         } else {
             SessionView {
@@ -277,6 +282,7 @@ impl ControlSource for ScriptedControl {
                 running: false,
                 line: "idle".into(),
                 profile: None,
+                origin: ksx_api::SessionOrigin::Unknown,
             }
         }
     }
@@ -297,6 +303,19 @@ impl ControlSource for ScriptedControl {
         }
         self.running.store(false, Ordering::SeqCst);
         Ok("stopped".into())
+    }
+
+    /// The daemon puts back whatever it was running, and takes no argument to
+    /// do it. Recorded rather than delegated to `start`, so a page that
+    /// "resumed" by starting something can be told apart from one that
+    /// resumed.
+    fn resume(&self) -> Result<String, Refusal> {
+        if self.no_daemon {
+            return Err(no_channel(NO_CHANNEL));
+        }
+        self.resumes.fetch_add(1, Ordering::SeqCst);
+        self.running.store(true, Ordering::SeqCst);
+        Ok("running (4 slot(s))".into())
     }
 
     fn reload(&self) -> Result<String, Refusal> {
@@ -1445,6 +1464,9 @@ fn start_server_with_sources(
         fn stop(&self) -> Result<String, Refusal> {
             self.0.stop()
         }
+        fn resume(&self) -> Result<String, Refusal> {
+            self.0.resume()
+        }
         fn reload(&self) -> Result<String, Refusal> {
             self.0.reload()
         }
@@ -2017,15 +2039,22 @@ fn the_mapper_can_pause_and_resume_emulation_over_json() {
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!(out["message"], "Play is paused. You can edit controls now.");
 
-    // Resume names the profile the page remembered.
-    let resumed = post_json(addr, "/api/session/start", r#"{"profile":"Example Game"}"#);
+    // Resume is its OWN verb and carries nothing. The page cannot know what it
+    // paused — a session played from an unsaved staged setup has no profile at
+    // all — and `start` means the config on disk, so resuming that way put back
+    // the wrong session or none. Breaks against the shipped page, which posted
+    // /api/session/start with the profile it had remembered.
+    *control.started_with.lock().unwrap() = None;
+    let resumed = post_json(addr, "/api/session/resume", "");
     let out: serde_json::Value = serde_json::from_str(body_of(&resumed)).expect("json");
     assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(control.resumes.load(Ordering::SeqCst), 1);
     assert_eq!(
         control.started_with.lock().unwrap().clone(),
-        Some(Some("Example Game".to_owned())),
-        "Resume must restart the SAME profile that was paused"
+        None,
+        "Resume must not reach `start` — that verb is defined as the config on disk"
     );
+    assert!(control.session().running, "and emulation really came back");
 }
 
 /// FIX 2 over HTTP: three destinations, and the label the third one wears.

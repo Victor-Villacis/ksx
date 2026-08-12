@@ -25,8 +25,14 @@ const SHUTDOWN_CLOSE_BUDGET: Duration = Duration::from_secs(3);
 
 pub enum Verb {
     Status,
-    Start { game: Option<String> },
+    Start {
+        game: Option<String>,
+    },
     Stop,
+    /// **Put back the session `stop` stopped.** Carries nothing: a staged
+    /// session has no profile to name and the daemon is the only thing that
+    /// knows which of its two starts ran (`ksx_api::SessionOrigin`).
+    Resume,
     Reload,
     Quit,
 }
@@ -40,6 +46,7 @@ impl Verb {
                 profile: game.clone(),
             },
             Self::Stop => Request::Stop,
+            Self::Resume => Request::Resume,
             Self::Reload => Request::Reload,
             Self::Quit => Request::Quit,
         }
@@ -214,7 +221,7 @@ fn print_status(response: &serde_json::Value) {
 mod tests {
     use super::*;
 
-    /// The five lines this CLI puts on the pipe, unchanged by the move to the
+    /// The lines this CLI puts on the pipe, unchanged by the move to the
     /// shared type — which is the point of pinning them here as well as in
     /// `ksx-api`: the two tests together say "the type serializes to this" and
     /// "this CLI sends that".
@@ -233,6 +240,10 @@ mod tests {
             serde_json::json!({ "verb": "start", "profile": "Example Game" })
         );
         assert_eq!(Verb::Stop.request().to_string(), r#"{"verb":"stop"}"#);
+        // Resume takes NO argument, and that is the fix: the shipped mapper
+        // resumed by sending `start` with the profile it had remembered, which
+        // is `None` for a staged session and means "the config on disk".
+        assert_eq!(Verb::Resume.request().to_string(), r#"{"verb":"resume"}"#);
         assert_eq!(Verb::Reload.request().to_string(), r#"{"verb":"reload"}"#);
         assert_eq!(Verb::Quit.request().to_string(), r#"{"verb":"quit"}"#);
     }

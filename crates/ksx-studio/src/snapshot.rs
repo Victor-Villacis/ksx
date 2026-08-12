@@ -2420,6 +2420,7 @@ mod tests {
                 running: false,
                 line: "idle — daemon reachable".into(),
                 profile: None,
+                origin: ksx_api::SessionOrigin::Unknown,
             },
             flash: None,
         };
@@ -2536,6 +2537,7 @@ mod tests {
             running: true,
             line: "running — 4 pad(s)".into(),
             profile: None,
+            origin: ksx_api::SessionOrigin::Config,
         }
     }
 

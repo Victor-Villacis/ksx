@@ -376,6 +376,11 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         "slots": slots,
         "message": message,
         "game": snap.game,
+        // What the running (or last) session was built FROM. Only the daemon
+        // can answer it — a config session and a staged one are
+        // indistinguishable from outside — and `resume` is the verb that acts
+        // on it.
+        "origin": snap.origin.as_str(),
         "tooltip": snap.tooltip(),
         "profiles": rows,
         "last": snap.last.as_ref().map(|l| serde_json::json!({
@@ -489,7 +494,7 @@ fn handle_request_with_shutdown(
     };
     let Some(verb) = request.get("verb").and_then(|v| v.as_str()) else {
         return err_msg(
-            r#"request has no "verb" (status | start | stop | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"#,
+            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"#,
         );
     };
     match verb {
@@ -500,15 +505,11 @@ fn handle_request_with_shutdown(
                 .and_then(|p| p.as_str())
                 .filter(|p| !p.trim().is_empty())
                 .map(str::to_owned);
-            let baseline = snapshot(state).run;
-            if matches!(baseline, RunState::Running { .. } | RunState::Starting) {
-                return err_msg("already running");
-            }
-            if tx.send(DaemonCommand::Start { game: profile }).is_err() {
-                return err_msg("the daemon is shutting down");
-            }
-            await_start(state, &baseline, settle)
+            start_from_disk(deps, profile, settle)
         }
+        // **Put back what `stop` stopped.** Not `start` with an argument: see
+        // [`handle_resume`], and `ksx_api::ControlSource::resume`.
+        "resume" => handle_resume(deps, settle),
         "stop" => {
             let baseline = snapshot(state).run;
             if !matches!(baseline, RunState::Running { .. } | RunState::Starting) {
@@ -1268,33 +1269,65 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
     }
 }
 
-/// `{"verb":"stage-play"}` — **play the staged setup with nothing written.**
+/// What starting the staged setup did, before it is dressed for a caller.
+///
+/// Two verbs ask for it — `stage-play` (moment 7's Play button) and `resume`
+/// (the mapper's road back from a pause) — and they answer in two different
+/// shapes: a [`ksx_api::StageOutcome`] carrying the whole setup, and the plain
+/// action line every session verb answers with. What must NOT differ is the
+/// starting itself, so it happens once, here.
+struct StagedStart {
+    /// The setup as it stood, for an answer that shows it. `None` only when it
+    /// could not be READ at all — which is not the same as an empty setup
+    /// (docs/SURFACES.md §1b) and is dressed differently.
+    setup: Option<ksx_core::StagedSetup>,
+    outcome: Result<String, ksx_api::Refusal>,
+}
+
+/// **Play the staged setup with nothing written** — the body behind
+/// `stage-play` and behind a `resume` of a staged session.
 ///
 /// The plan is built in memory (`crate::stage::plan`) and handed to the control
 /// loop as [`DaemonCommand::PlayStaged`], which takes the ordinary start path.
 /// No config file is read and none is written, which is what makes
 /// `FIRST-RUN.md` §2's "the user may leave without saving and lose only what
 /// they typed" true.
-fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
+///
+/// **The spec is committed from the setup as it stands NOW**, per call. That is
+/// what makes a resume carry the edits somebody made while emulation was
+/// paused: the control loop's copy is a snapshot taken when the session
+/// started, and re-sending that would put back the setup as it was before they
+/// walked over to change it.
+fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
+    let refused = |setup: &ksx_core::StagedSetup, refusal: ksx_api::Refusal| StagedStart {
+        setup: Some(setup.clone()),
+        outcome: Err(refusal),
+    };
+
     let (spec, staged) = {
         let Ok(s) = deps.state.lock() else {
-            return stage_json(&ksx_api::StageOutcome::unavailable(
-                "the daemon's state lock is poisoned, so the staged setup could not be started",
-            ));
+            return StagedStart {
+                setup: None,
+                outcome: Err(ksx_api::Refusal::new(
+                    ksx_api::codes::PIPE_ERROR,
+                    "the daemon's state lock is poisoned, so the staged setup could not be \
+                     started",
+                )),
+            };
         };
         match s.staged.commit() {
             Ok(spec) => (spec, s.staged.clone()),
             Err(refusal) => {
-                return stage_json(&ksx_api::StageOutcome::refused(
+                return refused(
                     &s.staged,
-                    &ksx_api::Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
-                ))
+                    ksx_api::Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
+                )
             }
         }
     };
 
     if let Err(refusal) = (deps.stage_capture_preflight)(&spec) {
-        return stage_json(&ksx_api::StageOutcome::refused(&staged, &refusal));
+        return refused(&staged, refusal);
     }
 
     // Build the plan HERE, before anything is enqueued: a setup that cannot
@@ -1306,10 +1339,10 @@ fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
     // enumeration. The factory runs the resolution pass on the same spec when
     // the session actually starts.
     if let Err(err) = crate::stage::plan(&spec) {
-        return stage_json(&ksx_api::StageOutcome::refused(
+        return refused(
             &staged,
-            &ksx_api::Refusal::new(ksx_api::codes::REFUSED, err.to_string()),
-        ));
+            ksx_api::Refusal::new(ksx_api::codes::REFUSED, err.to_string()),
+        );
     }
 
     // `PlayStaged` is one control-loop replacement operation. If a session is
@@ -1321,37 +1354,156 @@ fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
         .send(DaemonCommand::PlayStaged(Box::new(spec)))
         .is_err()
     {
-        return stage_json(&ksx_api::StageOutcome::refused(
+        return refused(
             &staged,
-            &ksx_api::Refusal::new(ksx_api::codes::REFUSED, "the daemon is shutting down"),
-        ));
+            ksx_api::Refusal::new(ksx_api::codes::REFUSED, "the daemon is shutting down"),
+        );
     }
     let started = await_start(&deps.state, &baseline, settle);
-    let mut outcome = if started["ok"] == serde_json::Value::Bool(true) {
-        let mut ok = ksx_api::StageOutcome::ok(
-            &staged,
-            started["message"]
+    if started["ok"] == serde_json::Value::Bool(true) {
+        StagedStart {
+            setup: Some(staged),
+            outcome: Ok(started["message"]
                 .as_str()
-                .unwrap_or("the staged setup is playing"),
-        );
-        ok.playing = true;
-        ok
+                .unwrap_or("the staged setup is playing")
+                .to_owned()),
+        }
     } else {
-        ksx_api::StageOutcome::refused(
+        refused(
             &staged,
-            &ksx_api::Refusal::new(
+            ksx_api::Refusal::new(
                 ksx_api::codes::REFUSED,
                 started["error"]
                     .as_str()
                     .unwrap_or("the staged setup did not start"),
             ),
         )
+    }
+}
+
+/// `{"verb":"stage-play"}` — moment 7's Play button, as a staging answer.
+fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
+    let started = play_staged(deps, settle);
+    let Some(setup) = started.setup else {
+        // The setup could not be read. "I could not read this" is not "you
+        // staged nothing" (docs/SURFACES.md §1b), and `unavailable` is the
+        // shape that says the first one.
+        return stage_json(&ksx_api::StageOutcome::unavailable(
+            started
+                .outcome
+                .err()
+                .map_or_else(String::new, |refusal| refusal.message),
+        ));
+    };
+    let mut outcome = match started.outcome {
+        Ok(message) => {
+            let mut ok = ksx_api::StageOutcome::ok(&setup, message);
+            ok.playing = true;
+            ok
+        }
+        Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
     };
     // NEVER a path. Playing writes nothing, and reporting one would be a claim
     // about the disk this verb did not make.
     outcome.saved = None;
     outcome.backup = None;
     stage_json(&outcome)
+}
+
+/// `{"verb":"start"}` — a session from **the config on disk**, optionally under
+/// a games.toml profile.
+///
+/// Factored out so that [`handle_resume`]'s config half is this exact call and
+/// not a second one that could start it differently.
+fn start_from_disk(
+    deps: &PipeDeps,
+    profile: Option<String>,
+    settle: Duration,
+) -> serde_json::Value {
+    let baseline = snapshot(&deps.state).run;
+    if matches!(baseline, RunState::Running { .. } | RunState::Starting) {
+        return err_msg("already running");
+    }
+    if deps
+        .tx
+        .send(DaemonCommand::Start { game: profile })
+        .is_err()
+    {
+        return err_msg("the daemon is shutting down");
+    }
+    await_start(&deps.state, &baseline, settle)
+}
+
+/// `{"verb":"resume"}` — **put back the session that was stopped.**
+///
+/// # Why this is not `start`
+///
+/// `start` means the config on disk. It says so, the control loop enforces it
+/// by clearing any staged override, and that rule is right: a tray Start after
+/// somebody played an unsaved setup must run what is SAVED.
+///
+/// It is therefore the wrong verb for coming back from a pause, and the mapper
+/// used to send it anyway — with the games.toml profile it had remembered, or
+/// with nothing when there was none. For a session played from a staged setup
+/// (`docs/FIRST-RUN.md` §2) there is no profile to remember and no file to
+/// re-read, so "start again" found nothing to run and dropped the daemon's
+/// pointer at the unsaved setup on the way past. The user pressed Resume and
+/// got "the daemon refused"; the setup they were playing was still staged, but
+/// nothing on the mapper said so or offered it back.
+///
+/// # What it does instead
+///
+/// The daemon knows what it started ([`super::DaemonState::origin`]), which is
+/// the one fact no surface can hold, so the decision is made here and the
+/// surface sends no argument at all:
+///
+/// - **staged** → play the staged setup again, re-committed from the setup as
+///   it stands now, so edits made while paused are in what comes back;
+/// - **config** → the ordinary start, which keeps the factory's current
+///   games.toml profile — so pausing a profile session and resuming still
+///   resumes that profile;
+/// - **unknown** → the daemon has started nothing this lifetime, and says so
+///   rather than starting something and calling it a resume.
+///
+/// Every refusal here leaves the staged setup exactly where it was: this verb
+/// has no path to `DaemonState::staged` except reading it.
+fn handle_resume(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
+    let snap = snapshot(&deps.state);
+    if matches!(snap.run, RunState::Running { .. } | RunState::Starting) {
+        return err_msg("already running");
+    }
+    match snap.origin {
+        ksx_api::SessionOrigin::Staged => {
+            let started = play_staged(deps, settle);
+            match started.outcome {
+                Ok(message) => ok_msg(message),
+                // The refusal carries ksx-core's own sentence for what is
+                // missing — the words the staging screen was already showing —
+                // and then says what this verb did NOT do. It must not read
+                // like a resume that destroyed something; and it must not
+                // claim the setup is intact either, because "Start over" while
+                // paused is legal (§2) and after one there is nothing staged
+                // to be intact. What is always true is that THIS verb changed
+                // nothing.
+                Err(refusal) => err_msg(format!(
+                    "the setup that was playing could not be started again: {} — this changed \
+                     nothing: no file was written and nothing staged was discarded. ksx's first \
+                     screen holds the setup exactly as it stands; `ksx session start` runs what \
+                     is saved in config.toml instead",
+                    refusal.message
+                )),
+            }
+        }
+        // `None`: whatever games.toml profile the daemon is already pointed at,
+        // which for a paused session is the one that was running. Naming it
+        // here would be this module deciding what the factory already knows.
+        ksx_api::SessionOrigin::Config => start_from_disk(deps, None, settle),
+        ksx_api::SessionOrigin::Unknown => err_msg(
+            "there is nothing to resume — this daemon has not started a session yet, so \
+             there is no session to put back. Press Play on ksx's first screen, or \
+             `ksx session start` to run what is saved in config.toml",
+        ),
+    }
 }
 
 /// What [`bounce_after_slot_write`] did.
@@ -2179,6 +2331,9 @@ steps = [{ hold = ["A"], ms = 50 }]
             // "requested", one the daemon refuses outright.
             Request::Start { profile: None },
             Request::Stop,
+            // The resume this daemon refuses (it has started nothing), which
+            // is still an ACTION answer and still has to model completely.
+            Request::Resume,
             Request::Map(ksx_api::MapRequest {
                 preset: "Panel P1".into(),
                 function: "A".into(),
@@ -2309,7 +2464,11 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 (&request, &typed),
                 (Request::Status, Response::Status(_))
                     | (
-                        Request::Start { .. } | Request::Stop | Request::Reload | Request::Quit,
+                        Request::Start { .. }
+                            | Request::Stop
+                            | Request::Resume
+                            | Request::Reload
+                            | Request::Quit,
                         Response::Action(_)
                     )
                     | (Request::Map(_), Response::Map(_))
@@ -3128,6 +3287,347 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             Some("usb:d209:0430:00"),
             "the staged slot names the staged board, by selector"
         );
+    }
+
+    // -- pause and resume (docs/FIRST-RUN.md §2, §6) -------------------------
+    //
+    // The mapper refuses to learn while a session runs, and answers that with
+    // one click: "Pause emulation & map", then "Resume emulation". Both of
+    // these drive the REAL control loop, because the bug they pin is not in
+    // any one handler — it is in which command comes out the other end.
+
+    /// A session that blocks until the control loop stops it, like a real one.
+    struct BlockingSession;
+
+    impl super::super::SessionRunner for BlockingSession {
+        fn run(
+            &mut self,
+            stop: Arc<std::sync::atomic::AtomicBool>,
+            _out: &mut dyn std::io::Write,
+        ) -> anyhow::Result<super::super::SessionSummary> {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(super::super::SessionSummary {
+                stop_code: "daemon-stop".into(),
+                message: "stopped from the pipe".into(),
+                ..Default::default()
+            })
+        }
+
+        fn slots(&self) -> usize {
+            1
+        }
+    }
+
+    /// A factory that CAN run a staged setup and records what it was last
+    /// pointed at — which is the fact the whole pause/resume question is
+    /// about. `LiveFactory` keeps the same value in the same field; this makes
+    /// it readable from a test without a config root or a driver.
+    struct RecordingFactory {
+        staged: Arc<Mutex<Option<ksx_core::CommitSpec>>>,
+        game: Arc<Mutex<Option<String>>>,
+        /// How many sessions this factory has been asked to build. A refused
+        /// resume must not move it — "the run state is still Stopped" would
+        /// also be true of a session that started and died.
+        makes: Arc<Mutex<u32>>,
+    }
+
+    impl super::super::SessionFactory for RecordingFactory {
+        fn make(&mut self) -> anyhow::Result<Box<dyn super::super::SessionRunner>> {
+            *self.makes.lock().unwrap() += 1;
+            Ok(Box::new(BlockingSession))
+        }
+
+        fn config_dir(&self) -> std::path::PathBuf {
+            std::path::PathBuf::from(r"C:\cfg\ksx")
+        }
+
+        fn game(&self) -> Option<String> {
+            self.game.lock().unwrap().clone()
+        }
+
+        fn set_game(&mut self, game: Option<String>) {
+            *self.game.lock().unwrap() = game;
+        }
+
+        fn set_staged(&mut self, spec: Option<ksx_core::CommitSpec>) -> bool {
+            *self.staged.lock().unwrap() = spec;
+            true
+        }
+    }
+
+    /// A daemon whose control loop is really running, with the two values a
+    /// pause/resume test has to read afterwards.
+    struct RunningDaemon {
+        deps: PipeDeps,
+        state: SharedState,
+        tx: Sender<DaemonCommand>,
+        /// What the factory is pointed at: `Some` = a staged setup, `None` =
+        /// the config on disk.
+        staged: Arc<Mutex<Option<ksx_core::CommitSpec>>>,
+        game: Arc<Mutex<Option<String>>>,
+        makes: Arc<Mutex<u32>>,
+        loop_thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl RunningDaemon {
+        fn start(game: Option<String>) -> Self {
+            let (tx, rx) = unbounded();
+            let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+            let staged = Arc::new(Mutex::new(None));
+            let game = Arc::new(Mutex::new(game));
+            let makes = Arc::new(Mutex::new(0));
+            let loop_thread = std::thread::spawn({
+                let (state, staged, game) = (state.clone(), staged.clone(), game.clone());
+                let makes = makes.clone();
+                move || {
+                    let mut factory = RecordingFactory {
+                        staged,
+                        game,
+                        makes,
+                    };
+                    let mut out: Vec<u8> = Vec::new();
+                    super::super::control_loop_with(
+                        rx,
+                        state,
+                        &mut factory,
+                        &mut super::super::NoPanel,
+                        &super::super::NoUi,
+                        &mut out,
+                    );
+                }
+            });
+            Self {
+                deps: deps(tx.clone(), state.clone(), no_profiles()),
+                state,
+                tx,
+                staged,
+                game,
+                makes,
+                loop_thread: Some(loop_thread),
+            }
+        }
+
+        fn ask(&self, line: &str) -> serde_json::Value {
+            handle_request(line, &self.deps, Duration::from_secs(2))
+        }
+    }
+
+    impl Drop for RunningDaemon {
+        fn drop(&mut self) {
+            let _ = self.tx.send(DaemonCommand::Quit);
+            if let Some(thread) = self.loop_thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// **THE PAUSE/RESUME TEST.** Play an unsaved staged setup, pause it in
+    /// the mapper, change it while paused, resume — and what comes back is
+    /// THAT setup, with the change in it, still unsaved and still staged.
+    ///
+    /// Breaks against the shipped Resume, which posted `start` with the
+    /// games.toml profile the mapper had remembered — `None` for a staged
+    /// session, because a staged session has no profile. `start` is defined as
+    /// THE CONFIG ON DISK and its arm clears the staged override to keep that
+    /// true, so against that version this test fails twice over: the factory
+    /// ends up pointed at `None` rather than at the setup, and on a first-run
+    /// machine with nothing in `config.toml` the start finds nothing to run at
+    /// all — which is the toast the owner saw.
+    ///
+    /// It drives the real `control_loop_with`, because the defect is in which
+    /// command reaches it: a test that only inspected this module's answer
+    /// would have passed against the broken version.
+    #[test]
+    fn resuming_a_paused_staged_session_puts_that_setup_back_with_its_edits() {
+        let daemon = RunningDaemon::start(None);
+        stage_ready(&daemon.deps);
+
+        // Moment 7: play it, with nothing written.
+        let played = daemon.ask(r#"{"verb":"stage-play"}"#);
+        assert_eq!(played["ok"], true, "{played}");
+        assert_eq!(played["playing"], true, "{played}");
+        assert_eq!(
+            daemon.state.lock().unwrap().origin,
+            ksx_api::SessionOrigin::Staged,
+            "the daemon must record WHAT it started, or nothing can put it back"
+        );
+
+        // "Pause emulation & map".
+        let paused = daemon.ask(r#"{"verb":"stop"}"#);
+        assert_eq!(paused["ok"], true, "{paused}");
+
+        // ...and an edit made while paused, which is the whole reason anyone
+        // pauses: this one is visible in the spec the factory receives.
+        let edited = daemon
+            .ask(r#"{"verb":"stage-edit","edit":"set-persona","number":1,"persona":"xbox360"}"#);
+        assert_eq!(edited["ok"], true, "{edited}");
+
+        // "Resume emulation".
+        let resumed = daemon.ask(r#"{"verb":"resume"}"#);
+        assert_eq!(resumed["ok"], true, "{resumed}");
+
+        // The session that came back is the staged one — and it carries the
+        // edit, so resume re-commits the setup as it stands rather than
+        // replaying the snapshot the session started with.
+        let spec = daemon.staged.lock().unwrap().clone();
+        let spec = spec.expect("resume must put the daemon back on the STAGED setup");
+        assert_eq!(spec.slots.len(), 1);
+        assert_eq!(
+            spec.slots[0].spec.persona,
+            ksx_core::Persona::Xbox360,
+            "the edit made while paused must be in what comes back"
+        );
+
+        // Nothing was written and nothing was lost: the setup is still staged
+        // and still says what the screen says.
+        let view = daemon.ask(r#"{"verb":"stage"}"#);
+        assert_eq!(view["setup"]["slots"][0]["persona"], "xbox360", "{view}");
+        assert_eq!(view["setup"]["ready"], true, "{view}");
+    }
+
+    /// **The tray Start rule is not weakened by any of this.** Start still
+    /// means the config on disk, and a Start after somebody played an unsaved
+    /// setup still drops the override — the draft stays staged, but it is not
+    /// what runs.
+    ///
+    /// This is the rule `resume` exists so as not to break. Breaks against a
+    /// "fix" that made Start remember the staged setup instead: the override
+    /// would still be set here, and the tray's Start would silently keep
+    /// playing a draft that is not in any file.
+    #[test]
+    fn start_after_a_staged_session_still_means_the_config_on_disk() {
+        let daemon = RunningDaemon::start(None);
+        stage_ready(&daemon.deps);
+        assert_eq!(daemon.ask(r#"{"verb":"stage-play"}"#)["ok"], true);
+        assert_eq!(daemon.ask(r#"{"verb":"stop"}"#)["ok"], true);
+
+        // The tray's Start — no profile, no staged setup, whatever is saved.
+        let started = daemon.ask(r#"{"verb":"start"}"#);
+        assert_eq!(started["ok"], true, "{started}");
+        assert!(
+            daemon.staged.lock().unwrap().is_none(),
+            "Start means the config on disk: the staged override must be gone"
+        );
+        assert_eq!(
+            daemon.state.lock().unwrap().origin,
+            ksx_api::SessionOrigin::Config
+        );
+
+        // The DRAFT is untouched by that — what Start dropped is the pointer,
+        // not the work. §2: the user may leave without saving and lose only
+        // what they typed.
+        let view = daemon.ask(r#"{"verb":"stage"}"#);
+        assert_eq!(
+            view["setup"]["slots"][0]["persona"], "playstation",
+            "{view}"
+        );
+    }
+
+    /// **Resuming a PROFILE session resumes that profile** — the case that
+    /// already worked, pinned so the staged fix cannot regress it.
+    ///
+    /// The profile is not sent by the caller and never was the caller's to
+    /// know: the daemon is still pointed at it, so the plain start the resume
+    /// falls through to is the same session. Breaks against a resume that
+    /// always played the staged setup, and against one that cleared the game.
+    #[test]
+    fn resuming_a_paused_profile_session_starts_that_profile_again() {
+        let daemon = RunningDaemon::start(Some("Street Fighter".to_owned()));
+
+        assert_eq!(
+            daemon.ask(r#"{"verb":"start","profile":"Metal Slug"}"#)["ok"],
+            true
+        );
+        assert_eq!(daemon.game.lock().unwrap().as_deref(), Some("Metal Slug"));
+        assert_eq!(daemon.ask(r#"{"verb":"stop"}"#)["ok"], true);
+
+        let resumed = daemon.ask(r#"{"verb":"resume"}"#);
+        assert_eq!(resumed["ok"], true, "{resumed}");
+        assert_eq!(
+            daemon.game.lock().unwrap().as_deref(),
+            Some("Metal Slug"),
+            "resume must put back the profile that was playing"
+        );
+        assert!(
+            daemon.staged.lock().unwrap().is_none(),
+            "a profile session resumes from disk, not from a stage"
+        );
+    }
+
+    /// **A resume that cannot happen says WHY, and destroys nothing.**
+    ///
+    /// "Start over" while paused is a legal thing to do (§2: it must always
+    /// work), and it leaves nothing to resume. The answer has to name what is
+    /// missing and where to go — not "the daemon refused" — and the setup, or
+    /// what is left of it, must be exactly as the user left it.
+    ///
+    /// Breaks against a resume that started the config on disk anyway, which
+    /// would report success while running a session the user never asked for.
+    #[test]
+    fn a_resume_with_nothing_left_to_resume_says_why_and_touches_nothing() {
+        let daemon = RunningDaemon::start(None);
+        stage_ready(&daemon.deps);
+        assert_eq!(daemon.ask(r#"{"verb":"stage-play"}"#)["ok"], true);
+        assert_eq!(daemon.ask(r#"{"verb":"stop"}"#)["ok"], true);
+
+        // Start over, while paused.
+        assert_eq!(
+            daemon.ask(r#"{"verb":"stage-edit","edit":"discard"}"#)["ok"],
+            true
+        );
+
+        let refused = daemon.ask(r#"{"verb":"resume"}"#);
+        assert_eq!(refused["ok"], false, "{refused}");
+        let error = refused["error"].as_str().unwrap_or_default();
+        // ksx-core's own sentence for what is missing, in the words the
+        // staging screen shows — here `StageRefusal::NoDevice`, because "Start
+        // over" takes the keyboard with it.
+        assert!(error.contains("no keyboard has been chosen"), "{error}");
+        // ...and then what this verb did NOT do. Deliberately not "it is still
+        // staged": after a Start over there is nothing staged, and a resume
+        // that said otherwise would be inventing a fact. What is true in every
+        // case is that resuming destroyed nothing.
+        assert!(
+            error.contains("no file was written") && error.contains("nothing staged was discarded"),
+            "a refused resume must say what it did not do: {error}"
+        );
+        assert!(
+            error.contains("ksx session start"),
+            "and it must name a way forward: {error}"
+        );
+        assert_eq!(
+            *daemon.makes.lock().unwrap(),
+            1,
+            "a refused resume must not build a session — only the one that was paused"
+        );
+        assert!(matches!(
+            daemon.state.lock().unwrap().run,
+            RunState::Stopped | RunState::Failed { .. }
+        ));
+    }
+
+    /// A daemon that has started nothing has nothing to resume, and says so
+    /// instead of starting whatever is on disk and calling it a resume.
+    ///
+    /// Breaks against a resume implemented as "Start unless a staged setup is
+    /// around": a fresh daemon would start a session nobody asked for.
+    #[test]
+    fn a_daemon_that_started_nothing_refuses_to_resume_rather_than_start() {
+        let daemon = RunningDaemon::start(None);
+        let refused = daemon.ask(r#"{"verb":"resume"}"#);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("has not started a session yet"),
+            "{refused}"
+        );
+        assert!(daemon.staged.lock().unwrap().is_none());
+        assert_eq!(*daemon.makes.lock().unwrap(), 0, "nothing was built");
+        assert_eq!(daemon.state.lock().unwrap().run, RunState::Stopped);
     }
 
     /// **Play refuses a controller that binds nothing, and it refuses an

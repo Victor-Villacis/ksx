@@ -177,6 +177,13 @@ pub fn serve(
             // loses the user's place.
             .route("/api/session/stop", post(api_session_stop))
             .route("/api/session/start", post(api_session_start))
+            // ...and Resume is `ControlSource::resume`, NOT a start with a
+            // remembered profile. This page cannot know whether it paused a
+            // games.toml profile or an unsaved staged setup — a staged session
+            // has no profile at all — and a start is defined as the config on
+            // disk, so resuming that way put back the wrong session (or none).
+            // The daemon knows what it started; this route asks it.
+            .route("/api/session/resume", post(api_session_resume))
             // v9 — the NO-JAVASCRIPT write path. Same verbs, same
             // ControlSource methods as the /api/* routes beside them; the
             // only difference is the wire shape (form-encoded in, 303 out
@@ -1007,8 +1014,26 @@ async fn api_session_stop(State(state): State<Arc<AppState>>) -> Response {
     .await
 }
 
-/// POST /api/session/start — "Resume emulation", with the profile the mapper
-/// remembered when it paused, so the cabinet comes back to the same game.
+/// POST /api/session/resume — **"Resume emulation".**
+///
+/// One `ControlSource::resume`, with no body at all. What it puts back is the
+/// daemon's to decide (`ksx_api::SessionOrigin`): the mapper had been sending
+/// `start` with the games.toml profile it remembered at pause time, which is
+/// `None` for a session played from an unsaved staged setup — and `start`
+/// means the config on disk, so the setup that was playing was neither
+/// restarted nor mentioned. A refusal comes back as the daemon's own sentence,
+/// which says what is missing and that nothing was written.
+async fn api_session_resume(State(state): State<Arc<AppState>>) -> Response {
+    control_json(state, |control| match control.resume() {
+        Ok(message) => serde_json::json!({ "ok": true, "message": message }),
+        Err(refusal) => serde_json::json!({ "ok": false, "error": refusal.message }),
+    })
+    .await
+}
+
+/// POST /api/session/start — start emulation from the config on disk,
+/// optionally under a games.toml profile. **Not the mapper's Resume**; see
+/// [`api_session_resume`].
 async fn api_session_start(
     State(state): State<Arc<AppState>>,
     axum::Json(request): axum::Json<SessionRequest>,

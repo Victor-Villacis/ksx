@@ -570,6 +570,7 @@ mod tests {
                 running: false,
                 line: "idle — daemon reachable".into(),
                 profile: None,
+                origin: ksx_api::SessionOrigin::Unknown,
             },
             // A machine whose driver is fine. Stated rather than defaulted:
             // `PadBusView::default()` is the UNREADABLE view (deliberately —

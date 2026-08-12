@@ -89,6 +89,11 @@ export interface SessionView {
   line: string;
   /** games.toml profile the daemon is pointed at — what Resume restarts. */
   profile: string | null;
+  /** What the running — or most recently started — session was built FROM:
+   *  `"config"`, `"staged"`, or `"unknown"` when the daemon did not say
+   *  (`ksx_api::SessionOrigin`). Never read an absent value as "config": the
+   *  difference is whether Resume puts back an unsaved setup or the file. */
+  origin?: string;
 }
 
 export interface LearnView {
@@ -478,6 +483,10 @@ export function isPlaystation(persona: string): boolean {
 const [slotLine, setSlotLine] = createSignal("no mappable slots");
 const [sourceLine, setSourceLine] = createSignal("not collected");
 const [reasonLine, setReasonLine] = createSignal("");
+/** What this page cannot change while an UNSAVED staged setup is the session.
+ *  Server-injected like every other scalar here — the sentence is composed in
+ *  `render_map.rs::staged_note` and mirrored below, never invented here. */
+const [stagedNote, setStagedNote] = createSignal("");
 const [daemonCmd, setDaemonCmd] = createSignal("ksx daemon");
 const [backupLine, setBackupLine] = createSignal("Restore backup");
 /** v14, the preset surface's identity block: which file, where, and whether a
@@ -523,6 +532,7 @@ const [stagedTarget, setStagedTarget] = createSignal(false);
 const [noDaemon, setNoDaemon] = createSignal(false);
 const [sessionRunning, setSessionRunning] = createSignal(false);
 const [pausedBar, setPausedBar] = createSignal(false);
+const [stagedWarn, setStagedWarn] = createSignal(false);
 const [readOnly, setReadOnly] = createSignal(false);
 const [canLearn, setCanLearn] = createSignal(false);
 const [artXbox, setArtXbox] = createSignal(false);
@@ -1089,6 +1099,32 @@ export function inputLabel(input: string): string {
   return trimmed;
 }
 
+/** **The staged-session warning — mirrored WORD FOR WORD from
+ *  `render_map.rs::staged_note`.** A drift here is a visible flash: the server
+ *  paints one sentence and the poll replaces it milliseconds later.
+ *
+ *  Why it exists: a staged setup (docs/FIRST-RUN.md §2) carries its own
+ *  bindings in the daemon, and a session played from it reads no preset file
+ *  at all. This page always lists the slots on DISK and always writes preset
+ *  files. So while the session is a staged one, mapping here does not change
+ *  what is playing — and saying nothing about that is exactly §6's "a screen
+ *  reports success while nothing works". */
+function stagedNoteOf(p: MapPayload): string {
+  if (!p.session.reachable || p.session.origin !== "staged") return "";
+  if (p.session.running)
+    return (
+      "Emulation is playing an UNSAVED setup from ksx's first screen. Its buttons live in " +
+      "that setup, not in the presets on this page — mapping here writes preset files and " +
+      "does not change what is playing. Save the setup on the first screen to map it here."
+    );
+  return (
+    "The session Resume puts back is an UNSAVED setup from ksx's first screen. Its buttons " +
+    "live in that setup, not in the presets on this page — mapping here writes preset files, " +
+    "and Resume brings that setup back exactly as it is. Save it on the first screen to map " +
+    "it here."
+  );
+}
+
 /** Write one /api/map payload into every signal. Keeps the client's own slot
  *  selection; modal/flash state is owned by map.ts. Safe before adoption AND
  *  per poll. */
@@ -1111,7 +1147,6 @@ export function applyMap(p: MapPayload): void {
   // started back up, so drop the paused affordance.
   if (p.session.reachable && p.session.running) {
     paused = false;
-    pausedProfile = null;
   }
 
   setSlotTabs(
@@ -1153,6 +1188,9 @@ export function applyMap(p: MapPayload): void {
 
   const live = liveMapping;
   setReasonLine(reason(p));
+  const stagedNoteText = stagedNoteOf(p);
+  setStagedNote(stagedNoteText);
+  setStagedWarn(stagedNoteText !== "");
   setReadOnly(!live);
   setCanLearn(live);
   setActionsCls(staged ? "card pactions stage-hidden" : p.session.reachable ? "card pactions" : "card pactions off");
@@ -1209,16 +1247,19 @@ export function applyMap(p: MapPayload): void {
 
 /** Client-only: this PAGE paused emulation. To the daemon it is just idle. */
 let paused = false;
-/** The profile that was running when we paused, so Resume restores it. */
-let pausedProfile: string | null = null;
+// There used to be a `pausedProfile` beside this: the games.toml profile the
+// page remembered at pause time, so Resume could start it again. It is gone,
+// and its absence is the fix. A session played from an unsaved staged setup
+// has no profile, so what it remembered was `null` — and a start with no
+// profile means THE CONFIG ON DISK, which is not what was paused. Resume
+// sends `/api/session/resume` and the daemon answers from what it started.
 
 /** The pause landed. Flip the affordances NOW rather than re-deriving from
  *  `lastPayload` — that payload still says "running" (it predates the stop by
  *  definition), and applyMap's own rule "running ⇒ not paused" would undo the
  *  pause the instant it was set. The next poll re-derives everything anyway. */
-export function markPaused(profile: string | null): void {
+export function markPaused(): void {
   paused = true;
-  pausedProfile = profile;
   setPillRunning(false);
   setPillIdle(false);
   setPillPaused(true);
@@ -1228,20 +1269,17 @@ export function markPaused(profile: string | null): void {
 
 export function clearPaused(): void {
   paused = false;
-  pausedProfile = null;
   setPillPaused(false);
   setPausedBar(false);
-}
-
-export function profileToResume(): string | null {
-  return pausedProfile;
 }
 
 export function isPaused(): boolean {
   return paused;
 }
 
-/** The profile running right now — remembered at pause time. */
+/** The games.toml profile running right now, if any — read at pause time so
+ *  the toast can NAME what it stopped. Never an instruction to Resume; see the
+ *  note above [`markPaused`]. */
 export function liveProfile(): string | null {
   return lastPayload?.session.profile ?? null;
 }
@@ -1324,6 +1362,11 @@ export function applyMapUnreachable(): void {
   setNoDaemon(true);
   setSessionRunning(false);
   setPausedBar(false);
+  // Nothing answered, so nothing is known about the session — and a warning
+  // about a staged one is a claim about what is running. Drop it rather than
+  // leave a stale sentence up (docs/SURFACES.md §1b).
+  setStagedWarn(false);
+  setStagedNote("");
 }
 
 /** Make immediate writes visible without claiming staged memory was saved. */
@@ -3875,7 +3918,8 @@ export function MapIsland() {
               "p",
               { class: "alarmlead" },
               "Pause to teach controls by pressing keys. This temporarily disconnects the ",
-              "virtual controllers; Resume reconnects the same setup when you are done.",
+              "virtual controllers; Resume reconnects the same session when you are done ",
+              "— the profile that was running, or the unsaved setup that was playing.",
             ),
             h(
               "div",
@@ -3920,6 +3964,20 @@ export function MapIsland() {
                 "Resume Play",
               ),
             ),
+          ),
+      ),
+      // The one thing this page cannot do: change a session that is an
+      // UNSAVED staged setup. Server-rendered (not client-only like the two
+      // bars above), because whether the session is staged is a fact the
+      // daemon reports and is true on the first paint.
+      createShow(
+        () => stagedWarn(),
+        () =>
+          h(
+            "section",
+            { class: "card alarm warn" },
+            h("h2", null, "This page is not what is playing."),
+            h("p", { class: "alarmlead" }, () => stagedNote()),
           ),
       ),
       h(

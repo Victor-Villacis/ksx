@@ -395,6 +395,7 @@ mod tests {
             running: false,
             line: "idle — daemon reachable".into(),
             profile: None,
+            origin: ksx_api::SessionOrigin::Unknown,
         }
     }
 
@@ -417,6 +418,7 @@ mod tests {
             running: true,
             line: "running — 4 pad(s)".into(),
             profile: Some("Example Game".into()),
+            origin: ksx_api::SessionOrigin::Config,
         }
     }
 

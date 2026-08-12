@@ -852,7 +852,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Control a running `ksx daemon`: status, start, stop, reload, quit
+    /// Control a running `ksx daemon`: status, start, stop, resume, reload, quit
     ///
     /// Talks to the daemon over its named pipe (\\.\pipe\ksx-daemon) — the
     /// same control surface as the tray menu, reachable from a script, an
@@ -1123,6 +1123,24 @@ enum SessionCommand {
     },
     /// Stop the current session (the game, if any, keeps running)
     Stop {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Put back the session that was stopped — including an UNSAVED one
+    ///
+    /// Not `start` with an argument. `start` means the config on disk (it is
+    /// what the tray sends, and it deliberately drops any unsaved setup the
+    /// daemon was playing), so it is the wrong verb for coming back from a
+    /// pause: a session played from a staged setup — ksx's first screen,
+    /// Play, nothing written — has no profile to name and no file to re-read.
+    ///
+    /// This asks the daemon what it started. A staged session comes back
+    /// staged, re-committed from the setup as it stands now, so anything
+    /// changed while it was stopped is in what returns; a profile session
+    /// comes back under that profile. If there is nothing to put back it says
+    /// so, and never starts something else instead.
+    Resume {
         /// Print the raw pipe response (one JSON object) on stdout
         #[arg(long)]
         json: bool,
@@ -1789,6 +1807,7 @@ fn main() -> anyhow::Result<()> {
                 session::run(session::Verb::Start { game }, json)
             }
             SessionCommand::Stop { json } => session::run(session::Verb::Stop, json),
+            SessionCommand::Resume { json } => session::run(session::Verb::Resume, json),
             SessionCommand::Reload { json } => session::run(session::Verb::Reload, json),
             SessionCommand::Quit { json } => session::run(session::Verb::Quit, json),
         },

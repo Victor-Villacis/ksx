@@ -218,6 +218,13 @@ impl<S: VerbSink> ControlSource for Client<S> {
         self.action(Request::Stop)
     }
 
+    /// One `resume` line. **No profile, and that is the point**: the daemon
+    /// answers from what it started, so this transport carries no guess for it
+    /// to be wrong about.
+    fn resume(&self) -> Result<String, Refusal> {
+        self.action(Request::Resume)
+    }
+
     fn reload(&self) -> Result<String, Refusal> {
         self.action(Request::Reload)
     }

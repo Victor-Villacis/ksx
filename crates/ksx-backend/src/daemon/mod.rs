@@ -353,6 +353,20 @@ pub struct DaemonState {
     /// pre-filling it would make "Start over" mean "back to the config file"
     /// rather than "back to nothing".
     pub staged: ksx_core::StagedSetup,
+    /// **What the running — or most recently started — session was built
+    /// from**, and therefore what putting it back would mean.
+    ///
+    /// The daemon is the only thing that knows: `Start` and `PlayStaged` reach
+    /// the same supervisor over the same claim, and afterwards a session that
+    /// came off `config.toml` and a session that came out of [`Self::staged`]
+    /// look identical from every surface. A mapper that paused emulation and
+    /// wanted it back therefore had nothing to ask for but a plain start —
+    /// which is *defined* as the config on disk — so an unsaved staged setup
+    /// was never what came back.
+    ///
+    /// Written beside every `SessionFactory::set_staged` call and nowhere else
+    /// ([`point_at_staged`]), so the two cannot drift.
+    pub origin: ksx_api::SessionOrigin,
 }
 
 impl DaemonState {
@@ -697,7 +711,14 @@ pub fn control_loop_with(
                 // here is what keeps that true: a tray Start after somebody
                 // played an unsaved setup must run what is saved, not the draft
                 // they walked away from.
-                factory.set_staged(None);
+                //
+                // It is therefore NOT how emulation comes back after a pause.
+                // That is `resume` (`ksx_api::ControlSource::resume`), which
+                // reads `DaemonState::origin` — written here, in the same
+                // call — and puts back whichever of the two was playing. The
+                // draft itself lives in `DaemonState::staged` and is not
+                // touched by either: what this clears is the POINTER at it.
+                point_at_staged(factory, &state, None);
                 // A per-start profile override must not outlive a start that
                 // never started: a typo'd `--game` would otherwise repoint
                 // every later tray Start at the broken title.
@@ -730,7 +751,7 @@ pub fn control_loop_with(
             // where the plan comes from: `set_staged` points the factory at a
             // setup that exists only in memory.
             Ok(DaemonCommand::PlayStaged(spec)) => {
-                if !factory.set_staged(Some(*spec)) {
+                if !point_at_staged(factory, &state, Some(*spec)) {
                     // Never silent: a factory that cannot run a staged setup
                     // would otherwise start whatever is on disk while the
                     // screen said it was playing the unsaved one.
@@ -763,8 +784,10 @@ pub fn control_loop_with(
                     panel.set_emulating(false);
                     // The override does not outlive a start that never
                     // started: a later tray Start must mean the config on
-                    // disk, not a staged setup nobody could run.
-                    factory.set_staged(None);
+                    // disk, not a staged setup nobody could run. The staged
+                    // SETUP survives untouched in `DaemonState::staged` — this
+                    // drops the pointer, not the draft.
+                    point_at_staged(factory, &state, None);
                 }
             }
             Ok(DaemonCommand::Stop) => match session.take() {
@@ -783,7 +806,7 @@ pub fn control_loop_with(
                 // "Reload config" means the FILE. A staged override left in
                 // place here would make the tray's most literal verb re-start
                 // something that is not in any config at all.
-                factory.set_staged(None);
+                point_at_staged(factory, &state, None);
                 restart(&mut session, factory, &state, panel, out);
             }
             // The mapper's save path. Cheap when it can be, honest when it
@@ -1198,6 +1221,44 @@ fn resolve_startup_plan(
         Err(crate::run::plan::PlanError::NoSlots { .. }) if game.is_none() => Ok(None),
         Err(err) => Err(err),
     }
+}
+
+/// Point the factory at a staged setup — or back at the config on disk — **and
+/// record which**, in one call.
+///
+/// Two writes that must never disagree. The factory decides what the next
+/// session is built from; [`DaemonState::origin`] is what a resume reads to put
+/// back the session that was stopped. Left as two statements they drift the
+/// moment somebody adds a start path, and the drift is invisible until a user
+/// presses Resume and gets a session they never paused — which is precisely the
+/// bug this exists for. Passing them together is what makes forgetting one a
+/// compile error.
+///
+/// Returns what `set_staged` returned: `false` means this factory cannot run an
+/// unsaved setup at all, and the caller must refuse in words rather than start
+/// something else (see [`SessionFactory::set_staged`]).
+fn point_at_staged(
+    factory: &mut dyn SessionFactory,
+    state: &SharedState,
+    spec: Option<ksx_core::CommitSpec>,
+) -> bool {
+    let origin = if spec.is_some() {
+        ksx_api::SessionOrigin::Staged
+    } else {
+        ksx_api::SessionOrigin::Config
+    };
+    let took = factory.set_staged(spec);
+    if let Ok(mut s) = state.lock() {
+        // A factory that REFUSED the override is still running what is on
+        // disk, so that is what the origin says. Recording `Staged` here would
+        // be the surface-lies-about-the-session bug in the state itself.
+        s.origin = if took {
+            origin
+        } else {
+            ksx_api::SessionOrigin::Config
+        };
+    }
+    took
 }
 
 /// CLI entry point for `ksx daemon`.
@@ -1812,7 +1873,6 @@ mod tests {
         trace: Option<Trace>,
         health: Option<ksx_capture::HealthHandle>,
         game: Option<String>,
-        staged: Option<ksx_core::CommitSpec>,
         /// What `resolve_plan()` answers. `None` = "I cannot tell", which is
         /// the default and makes every factory in these tests bounce.
         plan: Option<crate::run::plan::RunPlan>,
@@ -1822,6 +1882,15 @@ mod tests {
         shape: Option<crate::run::supervisor::SessionShape>,
         swap: crate::run::supervisor::HotSwapSlot,
         swaps: Arc<std::sync::atomic::AtomicUsize>,
+        /// What this factory is pointed at — `Some` = a staged setup, `None` =
+        /// the config on disk. `LiveFactory` holds the same value in the same
+        /// field; here it is readable from a test.
+        staged: Arc<Mutex<Option<ksx_core::CommitSpec>>>,
+        /// Whether it CAN take a staged setup at all. `false` is the honest
+        /// default of `SessionFactory::set_staged` — a factory with no way to
+        /// run an unsaved setup — and the control loop must refuse rather than
+        /// start something else.
+        takes_staged: bool,
     }
 
     impl Default for FakeFactory {
@@ -1840,11 +1909,12 @@ mod tests {
                 trace: None,
                 health: None,
                 game: Some("Example Game".into()),
-                staged: None,
                 plan: None,
                 shape: None,
                 swap: crate::run::supervisor::HotSwapSlot::default(),
                 swaps: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                staged: Arc::new(Mutex::new(None)),
+                takes_staged: true,
             }
         }
     }
@@ -1881,15 +1951,18 @@ mod tests {
             self.game = game;
         }
 
-        fn set_staged(&mut self, spec: Option<ksx_core::CommitSpec>) -> bool {
-            self.staged = spec;
-            true
-        }
-
         fn resolve_plan(&self) -> anyhow::Result<crate::run::plan::RunPlan> {
             self.plan
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("this fake factory has no plan"))
+        }
+
+        fn set_staged(&mut self, spec: Option<ksx_core::CommitSpec>) -> bool {
+            if !self.takes_staged {
+                return false;
+            }
+            *self.staged.lock().unwrap() = spec;
+            true
         }
     }
 
@@ -1997,9 +2070,125 @@ mod tests {
             2,
             "the old pipeline must be reaped and one staged pipeline created: {text}"
         );
-        assert_eq!(factory.staged, Some(spec));
+        assert_eq!(*factory.staged.lock().unwrap(), Some(spec));
         assert!(text.contains("replacing the running session"), "{text}");
         assert!(!text.contains("already running"), "{text}");
+    }
+
+    // -- what the daemon started, so a resume can put it back --------------
+
+    /// The smallest staged setup that can be played: one board, one controller
+    /// with real bindings, and §3's question answered.
+    fn a_staged_setup() -> ksx_core::CommitSpec {
+        use ksx_core::key::Key;
+        use ksx_core::pad::XButton;
+        use ksx_core::preset::Binding;
+
+        ksx_core::StagedSetup::new()
+            .choose_device(ksx_core::StagedDevice {
+                selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4".to_owned(),
+                backend: ksx_core::stage::StageCaptureBackend::Interception,
+            })
+            .unwrap()
+            .add_slot(
+                1,
+                ksx_core::Persona::Xbox360,
+                ksx_core::Preset {
+                    name: "Player 1".to_owned(),
+                    entries: vec![(Key::A, Binding::Button(XButton::A))],
+                    chords: Vec::new(),
+                    macros: Default::default(),
+                    turbo: Vec::new(),
+                    protected: false,
+                },
+            )
+            .unwrap()
+            .set_blocking(ksx_core::Blocking::BoundKeys)
+            .commit()
+            .expect("a device, a controller and an answer")
+    }
+
+    /// **The daemon records which of its two starts ran**, because that is the
+    /// only place the fact exists: from outside, a session built from
+    /// `config.toml` and one built from an unsaved staged setup are identical.
+    ///
+    /// That missing fact is the whole pause/resume bug. The mapper had nothing
+    /// to ask for but a plain start, `Start` means the config on disk, and a
+    /// paused staged session therefore never came back — see the pipe's
+    /// `resume` verb, which reads exactly this field.
+    ///
+    /// Breaks against any version that sets the origin somewhere other than
+    /// beside `set_staged`: the two go out of step the moment a start path is
+    /// added, and the symptom is a resume that plays the wrong session.
+    #[test]
+    fn the_daemon_records_whether_it_started_a_staged_setup_or_the_config() {
+        let mut factory = FakeFactory::default();
+        let (staged, _) = drive(
+            &mut factory,
+            &[
+                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::Stop,
+                DaemonCommand::Quit,
+            ],
+        );
+        assert_eq!(
+            staged.origin,
+            ksx_api::SessionOrigin::Staged,
+            "a staged session is what a resume has to put back"
+        );
+
+        // ...and STOP does not forget it. The pause is the moment the fact
+        // matters, and it is the moment it would be easiest to drop.
+        assert!(
+            factory.staged.lock().unwrap().is_some(),
+            "stopping is not un-staging: the daemon stays pointed at what it played"
+        );
+
+        // A tray Start afterwards is the config on disk, and says so.
+        let mut factory = FakeFactory::default();
+        let (config, _) = drive(
+            &mut factory,
+            &[
+                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::Stop,
+                DaemonCommand::Start { game: None },
+                DaemonCommand::Quit,
+            ],
+        );
+        assert_eq!(config.origin, ksx_api::SessionOrigin::Config);
+        assert!(
+            factory.staged.lock().unwrap().is_none(),
+            "Start means the config on disk — the staged override is dropped"
+        );
+    }
+
+    /// **A factory that cannot run an unsaved setup leaves the origin saying
+    /// `config`**, because that is what it would actually run.
+    ///
+    /// Breaks against the obvious version — set the origin from the ARGUMENT
+    /// rather than from what the factory accepted — which records `staged`
+    /// about a daemon that is still pointed at `config.toml`. A later resume
+    /// then plays the config and reports it as the staged setup: this
+    /// project's signature bug (a surface reporting one thing while another
+    /// runs), moved into the state itself.
+    #[test]
+    fn a_factory_that_refuses_a_staged_setup_never_leaves_the_origin_claiming_one() {
+        let mut factory = FakeFactory {
+            takes_staged: false,
+            ..FakeFactory::default()
+        };
+        let (state, text) = drive(
+            &mut factory,
+            &[
+                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::Quit,
+            ],
+        );
+        assert_eq!(*factory.makes.lock().unwrap(), 0, "{text}");
+        assert!(text.contains("cannot start an unsaved setup"), "{text}");
+        assert_eq!(state.origin, ksx_api::SessionOrigin::Config);
     }
 
     // -- FIX 3: ApplyBindings, the mapper's save path ----------------------
@@ -2339,6 +2528,7 @@ mod tests {
             live: None,
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         let tip = state.tooltip();
         assert!(tip.contains("running, 4 pad(s)"), "{tip}");
@@ -2356,6 +2546,7 @@ mod tests {
             live: None,
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         assert!(long.tooltip().encode_utf16().count() <= 127);
         assert!(long.tooltip().ends_with('…'));
@@ -2383,6 +2574,7 @@ mod tests {
             }),
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         let tip = state.tooltip();
         assert!(tip.contains("running, 4 pad(s)"), "{tip}");
@@ -2436,6 +2628,7 @@ mod tests {
             live: Some(LiveHealth::default()),
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         assert!(state.tooltip().contains("REBOOT REQUIRED"), "{state:?}");
     }
@@ -2458,6 +2651,7 @@ mod tests {
             }),
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         let tip = state.tooltip();
         assert!(tip.contains("watchdog TRIPPED"), "{tip}");
@@ -2480,6 +2674,7 @@ mod tests {
             cabinet_ready: true,
             apply: None,
             staged: Default::default(),
+            origin: Default::default(),
         };
         assert!(!state.tooltip().contains("[!]"), "{}", state.tooltip());
     }

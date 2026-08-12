@@ -67,7 +67,6 @@ import {
   previousKeys,
   currentMacro,
   seedMacro,
-  profileToResume,
   pushToast,
   releaseToasts,
   replaceToast,
@@ -1002,7 +1001,7 @@ async function pauseAndMap(): Promise<void> {
   const progress = pushToast("Pausing emulation…");
   const out = await verb("/api/session/stop");
   if (out.ok) {
-    markPaused(profile);
+    markPaused();
     replaceToast(
       progress,
       `Emulation is paused${profile ? ` ("${profile}")` : ""} — map away, then Resume emulation.`,
@@ -1015,15 +1014,27 @@ async function pauseAndMap(): Promise<void> {
   void poll();
 }
 
+/** Put back what [`pauseAndMap`] stopped.
+ *
+ *  ONE verb, no argument. This page cannot know what it paused — a session
+ *  played from an unsaved staged setup (docs/FIRST-RUN.md §2) has no profile
+ *  at all, so the profile it used to send was `null`, and `/api/session/start`
+ *  is defined as THE CONFIG ON DISK. Resuming that way started the wrong
+ *  session, or none, and pointed the daemon away from the setup it had been
+ *  playing. `/api/session/resume` asks the daemon, which is the only thing
+ *  that knows (`ksx_api::SessionOrigin`).
+ *
+ *  A refusal is the daemon's own sentence: it names what is missing and says
+ *  the setup is still staged, so this reports it as-is rather than dressing it
+ *  as "the daemon refused". */
 async function resumeEmulation(): Promise<void> {
-  const profile = profileToResume();
   const progress = pushToast("Resuming emulation…");
-  const out = await verb("/api/session/start", profile ? { profile } : {});
+  const out = await verb("/api/session/resume");
   if (out.ok) {
     clearPaused();
     replaceToast(progress, safeDetail(out.message, "Emulation resumed."));
   } else {
-    replaceToast(progress, `Play did not resume: ${safeDetail(out.error, "the background helper could not start it")}.`, {
+    replaceToast(progress, `Play did not resume: ${safeDetail(out.error, "nothing was started, and nothing staged was discarded")}.`, {
       kind: "err",
     });
   }

@@ -99,6 +99,7 @@ impl ControlSource for DemoControl {
             running: true,
             line: format!("running — {DEMO_PROFILE} — 4 pad(s)"),
             profile: Some(DEMO_PROFILE.into()),
+            origin: ksx_api::SessionOrigin::Config,
         }
     }
 
@@ -108,6 +109,10 @@ impl ControlSource for DemoControl {
 
     fn stop(&self) -> Result<String, Refusal> {
         Err(demo_refusal("stop emulation"))
+    }
+
+    fn resume(&self) -> Result<String, Refusal> {
+        Err(demo_refusal("resume emulation"))
     }
 
     fn reload(&self) -> Result<String, Refusal> {

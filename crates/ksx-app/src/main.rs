@@ -852,7 +852,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Control a running `ksx daemon`: status, start, stop, reload, quit
+    /// Control a running `ksx daemon`: status, start, stop, resume, reload, quit
     ///
     /// Talks to the daemon over its named pipe (\\.\pipe\ksx-daemon) — the
     /// same control surface as the tray menu, reachable from a script, an

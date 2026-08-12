@@ -4872,8 +4872,19 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
 
     let before: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
-    assert_eq!(before["flags"]["capture_prepare"], true, "{before}");
+    // This fixture's I-PAC is ALREADY held by WinUSB while `ChooseDevice`
+    // staged the ordinary Interception path, so the card is the disagreement
+    // one: no Prepare (the provider could only refuse it), no staged Release
+    // (the stage does not say winusb), not ready — and the way back is the
+    // held-keyboard list, which is keyed on the machine and not on the stage.
+    //
+    // FAILS against the QA build, where the same state offered "Prepare this
+    // keyboard for play" over a keyboard Windows had already prepared and
+    // drew no release control anywhere on the page.
+    assert_eq!(before["flags"]["capture_prepare"], false, "{before}");
     assert_eq!(before["flags"]["capture_release"], false, "{before}");
+    assert_eq!(before["flags"]["capture_blocked"], true, "{before}");
+    assert_eq!(before["flags"]["has_prepared"], true, "{before}");
     assert_eq!(before["flags"]["ready"], false, "{before}");
     assert!(
         before["capture"].get("backend").is_none(),

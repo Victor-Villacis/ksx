@@ -2339,30 +2339,53 @@ fn start_capture_redirect(action: StartCaptureMutation, result: StartCaptureResu
     Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
 }
 
-/// Resolve the exact currently staged interface again on the server.
+/// Resolve the exact interface a capture mutation names, again, on the server.
 ///
 /// The browser's hidden values are stale-action guards, not authority. An
 /// absent, duplicate, ineligible, or differently-selected target refuses
 /// before the elevated provider is called. Instance ids are Windows
 /// case-insensitive, while selectors use their canonical exact spelling.
+///
+/// # Prepare goes through the stage; Release goes through the machine
+///
+/// Preparing takes a keyboard OUT of the keyboard stack, and the only reason
+/// to do that is the setup being staged right now — so it stays gated on the
+/// staged selection, unchanged.
+///
+/// Releasing is the UNDO, and gating the undo on the stage is the 2026-08-11
+/// QA defect: the stage is per-visit daemon memory, so on a fresh install
+/// there is none, after choosing another keyboard it names something else,
+/// and after choosing the held keyboard itself it says `interception`
+/// (`StageEdit::ChooseDevice` always does). In all three the board is off the
+/// Windows keyboard stack and cannot type, and the one control that would
+/// give it back refused. `docs/FIRST-RUN.md` §6: the only way out of a mistake
+/// is never a shell command.
+///
+/// So Release resolves purely by identity, against the same live scan — one
+/// board answering to this selector, one interface answering to this instance,
+/// WinUSB-eligible, and actually claimed. Nothing weaker than before: what is
+/// dropped is a stage comparison, not a machine one. The blast radius of the
+/// difference is a loopback caller (already past `guard.rs`'s Host and Origin
+/// checks) putting a ksx-held keyboard back on the keyboard stack — the safe
+/// direction, and one the provider still refuses unless ksx owns the receipt.
 fn start_capture_target(
     state: &AppState,
     action: StartCaptureMutation,
     expected_selector: &str,
     instance_id: &str,
 ) -> Result<(String, String), StartCaptureResult> {
-    let staged = state.control.staged();
-    let device = staged
-        .device
-        .as_ref()
-        .filter(|device| staged.reachable && device.selector == expected_selector)
-        .ok_or(StartCaptureResult::TargetChanged)?;
-    let interception = "interception";
-    let winusb = "winusb";
-    if device.backend != interception && device.backend != winusb {
-        return Err(StartCaptureResult::TargetChanged);
+    if action == StartCaptureMutation::Prepare {
+        let staged = state.control.staged();
+        let device = staged
+            .device
+            .as_ref()
+            .filter(|device| staged.reachable && device.selector == expected_selector)
+            .ok_or(StartCaptureResult::TargetChanged)?;
+        if device.backend != "interception" && device.backend != "winusb" {
+            return Err(StartCaptureResult::TargetChanged);
+        }
     }
-    if action == StartCaptureMutation::Release && device.backend != winusb {
+    if expected_selector.trim().is_empty() || instance_id.trim().is_empty() {
         return Err(StartCaptureResult::TargetChanged);
     }
 
@@ -2373,7 +2396,7 @@ fn start_capture_target(
     let mut matches = scan
         .boards
         .iter()
-        .filter(|board| board.selector.as_deref() == Some(device.selector.as_str()));
+        .filter(|board| board.selector.as_deref() == Some(expected_selector));
     let board = matches.next().ok_or(StartCaptureResult::TargetChanged)?;
     if matches.next().is_some() || !board.winusb_eligible {
         return Err(StartCaptureResult::TargetChanged);
@@ -2396,7 +2419,13 @@ fn start_capture_target(
     if action == StartCaptureMutation::Release && !board.claimed {
         return Err(StartCaptureResult::TargetChanged);
     }
-    Ok((device.selector.clone(), current_instance.clone()))
+    Ok((
+        board
+            .selector
+            .clone()
+            .ok_or(StartCaptureResult::TargetChanged)?,
+        current_instance.clone(),
+    ))
 }
 
 fn checked(value: Option<&str>) -> bool {
@@ -2511,14 +2540,28 @@ async fn start_form_capture_release(
         {
             return Err(StartCaptureResult::MutationFailed);
         }
-        let staged = state
+        // **Only the STAGED board's backend follows the release.** A held
+        // keyboard that is not this visit's selection has no staged backend to
+        // correct, and posting one would refuse (`set_device_backend` compares
+        // selectors) — turning a release that actually happened into an error
+        // flash, which is `SURFACES.md` §1b's failure with the two halves
+        // swapped: reporting failure over a success.
+        if state
             .control
-            .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {
-                expected_selector,
-                backend: "interception".to_owned(),
-            });
-        if !staged.ok {
-            return Err(StartCaptureResult::StageChanged);
+            .staged()
+            .device
+            .as_ref()
+            .is_some_and(|device| device.selector == expected_selector)
+        {
+            let staged = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {
+                    expected_selector,
+                    backend: "interception".to_owned(),
+                });
+            if !staged.ok {
+                return Err(StartCaptureResult::StageChanged);
+            }
         }
         Ok(StartCaptureResult::Released)
     })

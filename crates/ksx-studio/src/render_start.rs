@@ -50,13 +50,14 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
     StartBlockingRow, StartBoardRow, StartGapRow, StartLayoutRow, StartOptionRow, StartOtherRow,
-    StartPayload, StartSlotRow, StartTextRow,
+    StartPayload, StartPreparedRow, StartSlotRow, StartTextRow,
 };
 
 /// List slot names, binding-derived (compiler 0.2.0): a `createList` reading
 /// `() => boardRows()` compiles to `list:boardRows:array`. Rename a list signal
 /// in `StartIsland.ts` and the layout test fails until these match again.
 const LIST_SLOT_BOARDS: &str = "list:boardRows:array";
+const LIST_SLOT_PREPARED: &str = "list:preparedRows:array";
 const LIST_SLOT_EXPERIMENTAL: &str = "list:experimentalRows:array";
 const LIST_SLOT_OTHER: &str = "list:otherRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
@@ -80,7 +81,7 @@ const ISLAND_COMPONENT: &str = "StartIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 28;
+const SHOW_COUNT: usize = 29;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -103,6 +104,8 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         "deviceLine": lines.device_line,
         "deviceDetail": lines.device_detail,
         "boardsLine": lines.boards_line,
+        "preparedHeading": lines.prepared_heading,
+        "preparedLine": lines.prepared_line,
         "captureHeading": lines.capture_heading,
         "captureLine": lines.capture_line,
         "captureDetail": lines.capture_detail,
@@ -177,6 +180,35 @@ fn board_row(board: &StartBoardRow) -> SlotValue {
             SlotValue::Text(board.chosen_cls.clone()),
         ),
         ("button".to_owned(), SlotValue::Text(board.button.clone())),
+    ])
+}
+
+fn prepared_row(board: &StartPreparedRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(board.name.clone())),
+        (
+            "transport".to_owned(),
+            SlotValue::Text(board.transport.clone()),
+        ),
+        ("detail".to_owned(), SlotValue::Text(board.detail.clone())),
+        ("path".to_owned(), SlotValue::Text(board.path.clone())),
+        (
+            "selector".to_owned(),
+            SlotValue::Text(board.selector.clone()),
+        ),
+        (
+            "instance_id".to_owned(),
+            SlotValue::Text(board.instance_id.clone()),
+        ),
+        ("note".to_owned(), SlotValue::Text(board.note.clone())),
+        (
+            "note_cls".to_owned(),
+            SlotValue::Text(board.note_cls.clone()),
+        ),
+        (
+            "form_cls".to_owned(),
+            SlotValue::Text(board.form_cls.clone()),
+        ),
     ])
 }
 
@@ -257,13 +289,17 @@ fn layout_row(layout: &StartLayoutRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &StartPayload) -> [(&'static str, SlotValue); 14] {
+fn list_values(payload: &StartPayload) -> [(&'static str, SlotValue); 15] {
     let rows = &payload.rows;
     let layouts = || SlotValue::array(rows.layouts.iter().map(option_row).collect());
     [
         (
             LIST_SLOT_BOARDS,
             SlotValue::array(rows.boards.iter().map(board_row).collect()),
+        ),
+        (
+            LIST_SLOT_PREPARED,
+            SlotValue::array(rows.prepared.iter().map(prepared_row).collect()),
         ),
         (
             LIST_SLOT_EXPERIMENTAL,
@@ -330,6 +366,7 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:presetsDown", f.presets_down),
         ("show:busWarn", f.bus_warn),
         ("show:hasDevice", f.has_device),
+        ("show:hasPrepared", f.has_prepared),
         ("show:capturePrepare", f.capture_prepare),
         ("show:captureRelease", f.capture_release),
         ("show:captureBlocked", f.capture_blocked),
@@ -745,14 +782,26 @@ mod tests {
             .filter_map(|e| module.strings.get(e.name_str_idx).ok())
             .collect();
 
-        // A payload that populates EVERY list, or this proves nothing.
-        let mut p = payload(stage(&[
-            choose(),
-            add("xbox360"),
-            ksx_api::StageEdit::SetBlocking {
-                blocking: "whole".into(),
-            },
-        ]));
+        // A payload that populates EVERY list, or this proves nothing. The
+        // scan is the CLAIMED one, and the stage chooses that same board
+        // WITHOUT `use_winusb()` — the state `ChooseDevice` leaves behind on a
+        // keyboard ksx is already holding, and the one that populates
+        // `preparedRows`.
+        let mut p = StartPayload {
+            scan: claimed_scan(),
+            ..payload(stage(&[
+                choose(),
+                add("xbox360"),
+                ksx_api::StageEdit::SetBlocking {
+                    blocking: "whole".into(),
+                },
+            ]))
+        }
+        .composed();
+        assert!(
+            !p.rows.prepared.is_empty(),
+            "the claimed fixture must reach the held-keyboard list"
+        );
         assert!(
             !p.rows.gaps.is_empty(),
             "the roster carries un-pluggable personas"

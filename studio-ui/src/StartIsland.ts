@@ -35,6 +35,8 @@ export interface StartLines {
   device_line: string;
   device_detail: string;
   boards_line: string;
+  prepared_heading: string;
+  prepared_line: string;
   capture_heading: string;
   capture_line: string;
   capture_detail: string;
@@ -67,6 +69,7 @@ export interface StartFlags {
   presets_down: boolean;
   bus_warn: boolean;
   has_device: boolean;
+  has_prepared: boolean;
   capture_prepare: boolean;
   capture_release: boolean;
   capture_blocked: boolean;
@@ -103,6 +106,20 @@ export interface StartBoardRow {
   alias: string;
   chosen_cls: string;
   button: string;
+}
+
+/** One keyboard ksx is holding. The two identifiers are FORM VALUES only —
+ *  the row prints the name and keeps the path in the support details. */
+export interface StartPreparedRow {
+  name: string;
+  transport: string;
+  detail: string;
+  path: string;
+  selector: string;
+  instance_id: string;
+  note: string;
+  note_cls: string;
+  form_cls: string;
 }
 
 export interface StartOtherRow {
@@ -154,6 +171,7 @@ export interface StartTextRow {
 
 export interface StartRows {
   boards: StartBoardRow[];
+  prepared: StartPreparedRow[];
   experimental: StartBoardRow[];
   other: StartOtherRow[];
   notes: StartTextRow[];
@@ -221,6 +239,8 @@ const [sessionLine, setSessionLine] = createSignal("not collected");
 const [deviceLine, setDeviceLine] = createSignal("not collected");
 const [deviceDetail, setDeviceDetail] = createSignal("");
 const [boardsLine, setBoardsLine] = createSignal("not collected");
+const [preparedHeading, setPreparedHeading] = createSignal("");
+const [preparedLine, setPreparedLine] = createSignal("");
 const [captureHeading, setCaptureHeading] = createSignal("");
 const [captureLine, setCaptureLine] = createSignal("");
 const [captureDetail, setCaptureDetail] = createSignal("");
@@ -257,6 +277,7 @@ const [scanDown, setScanDown] = createSignal(false);
 const [presetsDown, setPresetsDown] = createSignal(false);
 const [busWarn, setBusWarn] = createSignal(false);
 const [hasDevice, setHasDevice] = createSignal(false);
+const [hasPrepared, setHasPrepared] = createSignal(false);
 const [capturePrepare, setCapturePrepare] = createSignal(false);
 const [captureRelease, setCaptureRelease] = createSignal(false);
 const [captureBlocked, setCaptureBlocked] = createSignal(false);
@@ -279,6 +300,7 @@ const [flashOk, setFlashOk] = createSignal(false);
 const [flashError, setFlashError] = createSignal(false);
 
 const [boardRows, setBoardRows] = createSignal<StartBoardRow[]>([]);
+const [preparedRows, setPreparedRows] = createSignal<StartPreparedRow[]>([]);
 const [experimentalRows, setExperimentalRows] = createSignal<StartBoardRow[]>([]);
 const [otherRows, setOtherRows] = createSignal<StartOtherRow[]>([]);
 const [noteRows, setNoteRows] = createSignal<StartTextRow[]>([]);
@@ -304,6 +326,8 @@ export function applyStart(p: StartPayload): void {
   setDeviceLine(l.device_line);
   setDeviceDetail(l.device_detail);
   setBoardsLine(l.boards_line);
+  setPreparedHeading(l.prepared_heading);
+  setPreparedLine(l.prepared_line);
   setCaptureHeading(l.capture_heading);
   setCaptureLine(l.capture_line);
   setCaptureDetail(l.capture_detail);
@@ -343,6 +367,7 @@ export function applyStart(p: StartPayload): void {
   setPresetsDown(f.presets_down);
   setBusWarn(f.bus_warn);
   setHasDevice(f.has_device);
+  setHasPrepared(f.has_prepared);
   setCapturePrepare(f.capture_prepare);
   setCaptureRelease(f.capture_release);
   setCaptureBlocked(f.capture_blocked);
@@ -363,6 +388,7 @@ export function applyStart(p: StartPayload): void {
   setSessionLive(f.session_live);
 
   setBoardRows(r.boards);
+  setPreparedRows(r.prepared);
   setExperimentalRows(r.experimental);
   setOtherRows(r.other);
   setNoteRows(r.notes);
@@ -508,6 +534,110 @@ export function StartIsland() {
       createShow(
         () => flashError(),
         () => h("p", { class: "flash flash-err" }, () => flashLine()),
+      ),
+      // ── KEYBOARDS KSX IS HOLDING — the way back, before anything else ───
+      //
+      // ABOVE step 1 on purpose: a user reading this page because a keyboard
+      // stopped typing must not have to walk the setup flow to find the undo.
+      // The list comes from the DEVICE TREE (`held_boards` in snapshot.rs), so
+      // it is drawn with no config, with an empty staged setup, and while a
+      // different keyboard is selected — the three states in which the QA
+      // build had no release control at all.
+      //
+      // Selecting a keyboard remains looking, never a commitment
+      // (docs/FIRST-RUN.md §5): nothing here is a side effect of a choice
+      // above, and each row's Release is its own consented POST.
+      createShow(
+        () => hasPrepared(),
+        () =>
+          h(
+            "section",
+            { class: "card wide alarm warn capture-card" },
+            h("h2", null, () => preparedHeading()),
+            h("p", { class: "alarmlead" }, () => preparedLine()),
+            h(
+              "ul",
+              { class: "plist dv-list" },
+              createList(
+                () => preparedRows(),
+                // KEY EVERY FIELD THE ROW RENDERS — see the board list below.
+                (b) =>
+                  b.name +
+                  "|" +
+                  b.transport +
+                  "|" +
+                  b.detail +
+                  "|" +
+                  b.path +
+                  "|" +
+                  b.selector +
+                  "|" +
+                  b.instance_id +
+                  "|" +
+                  b.note +
+                  "|" +
+                  b.note_cls +
+                  "|" +
+                  b.form_cls,
+                (b) =>
+                  h(
+                    "li",
+                    { class: "dv-row" },
+                    h(
+                      "div",
+                      { class: "dv-head" },
+                      // THE NAME, and nothing else, is the identifier on screen.
+                      h("span", { class: "dv-name" }, b.name),
+                      h("span", { class: "pill pill-idle" }, b.transport),
+                      h("span", { class: "pill pill-run" }, "held by ksx"),
+                    ),
+                    h("p", { class: "dv-note" }, b.detail),
+                    h("p", { class: b.note_cls }, b.note),
+                    h(
+                      "details",
+                      { class: "st-more" },
+                      h("summary", null, "Technical details"),
+                      h("p", { class: "dv-line mono" }, b.path),
+                    ),
+                    h(
+                      "form",
+                      { class: b.form_cls, method: "post", action: "/start/capture/release" },
+                      h("input", {
+                        type: "hidden",
+                        name: "expected_selector",
+                        value: b.selector,
+                      }),
+                      h("input", { type: "hidden", name: "instance_id", value: b.instance_id }),
+                      h(
+                        "label",
+                        { class: "capture-consent" },
+                        h("input", {
+                          type: "checkbox",
+                          name: "confirm_release",
+                          value: "yes",
+                          required: "",
+                        }),
+                        h("span", null, "I want this keyboard to type normally again."),
+                      ),
+                      h(
+                        "p",
+                        { class: "pactrow" },
+                        h(
+                          "button",
+                          { class: "btn btn-primary", type: "submit" },
+                          "Give this keyboard back to Windows",
+                        ),
+                      ),
+                    ),
+                  ),
+              ),
+            ),
+            h(
+              "p",
+              { class: "dv-note" },
+              "Windows will show a permission prompt. The app stays open and does not show a command window.",
+            ),
+          ),
       ),
       // ── STEP 1 (moment 4): CHOOSE A KEYBOARD ────────────────────────────
       h(

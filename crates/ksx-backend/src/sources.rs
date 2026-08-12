@@ -627,11 +627,40 @@ fn valid_layout_names(layouts: &[ksx_config::PresetFile]) -> Vec<String> {
         .collect()
 }
 
+/// The one store-open both preset writers need, refusing in the same words.
+fn preset_store() -> Result<ksx_config::Store, Refusal> {
+    let root = ksx_config::ConfigRoot::discover().map_err(|_| {
+        Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            "Controller layouts could not be opened",
+            "reopen ksx and try again",
+        )
+    })?;
+    Ok(ksx_config::Store::new(root))
+}
 fn preset_refusal(err: crate::preset_edit::PresetError) -> Refusal {
     use crate::preset_edit::PresetError;
     use ksx_core::templates::TemplateError;
 
     match err {
+        PresetError::Unknown { name, .. } => Refusal::with_remedy(
+            ksx_api::codes::UNKNOWN_PRESET,
+            format!("no controller layout called \"{name}\" is saved on this computer"),
+            "reload the page and pick one from the list",
+        ),
+        PresetError::InUse { name, breaks } => Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            format!(
+                "\"{name}\" is still used by {breaks} controller(s), so deleting it would leave \
+                 them pointing at nothing"
+            ),
+            "point those controllers at another layout first",
+        ),
+        PresetError::NameTaken { name } => Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            format!("a controller layout called \"{name}\" already exists"),
+            "pick a different name, or delete that layout first",
+        ),
         PresetError::Exists { name, .. } => Refusal::with_remedy(
             ksx_api::codes::REFUSED,
             format!("a controller layout called \"{name}\" already exists"),
@@ -1376,6 +1405,13 @@ impl ksx_api::MachineSource for LocalMachine {
                 "reopen ksx and try again",
             )
         })?;
+        // The same reference finder `preset rename` walks, so the count a row
+        // shows and the count a refusal states can never disagree. A store
+        // that will not read is 0 references, not a refusal: this is the
+        // LAYOUT list, and failing it whole because games.toml is unreadable
+        // would hide every layout over an unrelated file.
+        let config = store.load_config().map(|l| l.value).unwrap_or_default();
+        let games = store.load_games().map(|l| l.value).unwrap_or_default();
         let presets = loaded
             .value
             .iter()
@@ -1400,6 +1436,8 @@ impl ksx_api::MachineSource for LocalMachine {
                         .preset_path(&file.name)
                         .map(|path| path.display().to_string())
                         .unwrap_or_else(|_| file.name.clone()),
+                    used_by: crate::preset_edit::preset_references(&config, &games, &file.name)
+                        .len(),
                 }
             })
             .collect();
@@ -1616,6 +1654,87 @@ impl ksx_api::MachineSource for LocalMachine {
         .map_err(preset_refusal)?;
         crate::preset_edit::apply_new(&store, &plan).map_err(preset_refusal)?;
         Ok(format!("created controller layout \"{}\"", plan.file.name))
+    }
+    /// Rename, carrying every reference. See [`crate::preset_edit::plan_rename`]
+    /// for why this is a set of writes and not a file move.
+    fn preset_rename(&self, spec: &ksx_api::RenamePreset) -> Result<String, Refusal> {
+        let store = preset_store()?;
+        let presets = store
+            .load_presets()
+            .map_err(|err| refuse_config("Controller layouts could not be read", err))?
+            .value;
+        let config = store
+            .load_config()
+            .map_err(|err| refuse_config("The controller setup could not be read", err))?
+            .value;
+        let games = store
+            .load_games()
+            .map_err(|err| refuse_config("Saved games could not be read", err))?
+            .value;
+        let plan = crate::preset_edit::plan_rename(
+            &presets,
+            &config,
+            &games,
+            &crate::preset_edit::RenameSpec {
+                from: spec.from.clone(),
+                to: spec.to.clone(),
+            },
+        )
+        .map_err(preset_refusal)?;
+        let moved = plan.references.len();
+        crate::preset_edit::apply_rename(&store, &plan).map_err(preset_refusal)?;
+        Ok(match moved {
+            0 => format!("renamed \"{}\" to \"{}\"", plan.from, plan.to),
+            1 => format!(
+                "renamed \"{}\" to \"{}\" and repointed the 1 controller using it",
+                plan.from, plan.to
+            ),
+            n => format!(
+                "renamed \"{}\" to \"{}\" and repointed the {n} controllers using it",
+                plan.from, plan.to
+            ),
+        })
+    }
+
+    /// Delete. The `force` half of the spec is deliberately NOT wired to a web
+    /// form (see the route): a page that can strand a cabinet with one click
+    /// is not a page, and the refusal names the controllers to fix first.
+    fn preset_delete(&self, spec: &ksx_api::DeletePreset) -> Result<String, Refusal> {
+        let store = preset_store()?;
+        let presets = store
+            .load_presets()
+            .map_err(|err| refuse_config("Controller layouts could not be read", err))?
+            .value;
+        let config = store
+            .load_config()
+            .map_err(|err| refuse_config("The controller setup could not be read", err))?
+            .value;
+        let games = store
+            .load_games()
+            .map_err(|err| refuse_config("Saved games could not be read", err))?
+            .value;
+        let plan = crate::preset_edit::plan_delete(
+            &presets,
+            &config,
+            &games,
+            &store,
+            &crate::preset_edit::DeleteSpec {
+                name: spec.name.clone(),
+                force: spec.force,
+            },
+        )
+        .map_err(preset_refusal)?;
+        let broke = plan.breaks.len();
+        crate::preset_edit::apply_delete(&store, &plan).map_err(preset_refusal)?;
+        Ok(if broke == 0 {
+            format!("deleted controller layout \"{}\"", plan.name)
+        } else {
+            format!(
+                "deleted \"{}\" — {broke} controller(s) now point at nothing and must be repointed \
+                 before the next start",
+                plan.name
+            )
+        })
     }
 
     /// Reuses the tray's own launcher, deliberately.

@@ -1471,6 +1471,54 @@ enum PresetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Give a preset a different name — and repoint everything that names it
+    ///
+    /// Not a file rename. A preset is named by config.toml's slots AND by
+    /// every games.toml profile, so moving the file alone leaves a config that
+    /// still parses and then refuses to start at the next boot. This rewrites
+    /// every reference in the same pass, after backing each file up to
+    /// <file>.bak-YYYYMMDD-HHMMSS.
+    ///
+    /// Refused if a preset of the new name already exists — a rename is not an
+    /// overwrite. `ksx preset new --force` is where overwriting lives.
+    Rename {
+        /// The preset to rename — `ksx preset list` names them
+        /// (case-insensitive; the file's own spelling is what gets used)
+        #[arg(value_name = "FROM")]
+        from: String,
+        /// Its new name (also its new file name)
+        #[arg(value_name = "TO")]
+        to: String,
+        /// Say what would change; write nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// One JSON object on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a preset file
+    ///
+    /// Refused while any slot still names it, and the refusal counts them.
+    /// --force deletes anyway and LEAVES those slots pointing at nothing,
+    /// which `ksx run` refuses in words: a break you can see beats a silent
+    /// repair, because nothing here can know which preset you meant instead.
+    ///
+    /// The file is copied to <preset>.toml.bak-YYYYMMDD-HHMMSS first, so a
+    /// hand-authored mapping is recoverable.
+    Delete {
+        /// The preset to remove — `ksx preset list` names them
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Delete it even though slots still name it
+        #[arg(long)]
+        force: bool,
+        /// Say what would happen; delete nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// One JSON object on stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1625,6 +1673,28 @@ fn main() -> anyhow::Result<()> {
                     name,
                     from_template,
                     player,
+                    force,
+                    dry_run,
+                },
+                json,
+            },
+            PresetCommand::Rename {
+                from,
+                to,
+                dry_run,
+                json,
+            } => preset_cli::Options {
+                action: preset_cli::Action::Rename { from, to, dry_run },
+                json,
+            },
+            PresetCommand::Delete {
+                name,
+                force,
+                dry_run,
+                json,
+            } => preset_cli::Options {
+                action: preset_cli::Action::Delete {
+                    name,
                     force,
                     dry_run,
                 },

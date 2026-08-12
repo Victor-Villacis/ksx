@@ -177,6 +177,9 @@ impl MachineSource for DemoMachine {
                 usable: true,
                 problem: None,
                 source: format!(r"C:\…\presets\{name}.toml"),
+                // The demo's two slots both name a layout, so the row that
+                // shows a use count shows a REAL one here too.
+                used_by: usize::from(name != "default"),
             })
             .collect(),
             templates: Vec::new(),

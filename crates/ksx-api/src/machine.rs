@@ -160,6 +160,22 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// `ksx preset rename <FROM> <TO>` — the file AND every slot naming it.
+    fn preset_rename(&self, _spec: &RenamePreset) -> Result<String, Refusal> {
+        Err(Refusal::not_here(
+            "renaming a preset",
+            "run `ksx preset rename \"<FROM>\" \"<TO>\"`",
+        ))
+    }
+
+    /// `ksx preset delete <NAME>` — refused while slots still name it.
+    fn preset_delete(&self, _spec: &DeletePreset) -> Result<String, Refusal> {
+        Err(Refusal::not_here(
+            "deleting a preset",
+            "run `ksx preset delete \"<NAME>\"`",
+        ))
+    }
+
     /// `ksx autostart --status` — the logon-task registration.
     fn autostart(&self) -> Result<AutostartView, Refusal> {
         Err(Refusal::not_here(
@@ -1310,6 +1326,18 @@ pub struct PresetRow {
     pub problem: Option<String>,
     /// Where it came from — a path, or the built-in's name.
     pub source: String,
+    /// **How many slots name this layout** — config.toml's own, plus every
+    /// games.toml profile's.
+    ///
+    /// Served so a surface can say "used by 2 controllers" NEXT TO the delete
+    /// control, instead of letting somebody press it and reading the refusal
+    /// afterwards. A guard the person can see before they act is a different
+    /// product from a guard that only speaks after.
+    ///
+    /// `#[serde(default)]`: an older provider that does not send it reads as
+    /// 0, which understates rather than invents.
+    #[serde(default)]
+    pub used_by: usize,
 }
 
 /// Change the split-or-freeze answer on a config that is already saved.
@@ -1456,6 +1484,7 @@ impl Default for PresetRow {
             usable: true,
             problem: None,
             source: String::new(),
+            used_by: 0,
         }
     }
 }
@@ -1582,6 +1611,32 @@ pub struct NewPreset {
     pub player: u8,
     /// Overwrite an existing preset of that name. A timestamped backup is
     /// taken first — same consent shape as `ksx preset new --force`.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Give a preset a different name, carrying every reference with it.
+///
+/// Not a file rename. A preset is named by `config.toml`'s slots and by every
+/// games.toml profile, so the write is a set: the file, plus every slot that
+/// names it, in one pass. There is no `force` — a rename onto a name that is
+/// taken is refused, because a rename that silently swallowed another layout
+/// would destroy work no backup names.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenamePreset {
+    pub from: String,
+    pub to: String,
+}
+
+/// Remove a preset file.
+///
+/// Refused while any slot still names it; `force` deletes anyway and LEAVES
+/// those slots pointing at nothing, which the session start refuses in words.
+/// A visible break beats a silent repair — nothing here can know which preset
+/// the person meant instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletePreset {
+    pub name: String,
     #[serde(default)]
     pub force: bool,
 }

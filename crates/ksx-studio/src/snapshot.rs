@@ -260,6 +260,11 @@ pub struct ProfilesDerived {
     pub profile_rows: Vec<ProfileRowView>,
     pub broken_rows: Vec<BrokenRowView>,
     pub preset_rows: Vec<PresetRowView>,
+    /// [`Self::preset_rows`] minus the built-ins. A second list rather than a
+    /// flag on the first, because the compiler cannot emit a conditional
+    /// inside a list item, and a disabled control is a promise a page cannot
+    /// keep.
+    pub preset_edit_rows: Vec<PresetRowView>,
     /// The in-box templates as a LIST, carrying `detail` — the panel note
     /// ksx-api documents as the thing that makes a template identifiable.
     /// Served since the beginning and rendered nowhere until now.
@@ -287,6 +292,11 @@ pub struct ProfilesDerived {
     /// Presets were read and there are none — a real, fixable empty state
     /// whose copy points at the template form below, which will work.
     pub no_presets_yet: bool,
+    /// **No layouts of the customer's own.** Distinct from
+    /// [`Self::no_presets_yet`], which is also false when the two built-ins
+    /// are all there is — and the built-ins are exactly what the rename and
+    /// delete card cannot offer.
+    pub no_editable_presets: bool,
     /// The presets read REFUSED. NOT [`Self::no_presets_yet`]: that sentence
     /// sends the user to a template form whose `<select>` is also empty, so
     /// the only path it offers cannot succeed — a closed loop with a wrong
@@ -342,6 +352,14 @@ pub struct PresetRowView {
     pub detail: String,
     pub statecls: String,
     pub statelabel: String,
+    /// **This layout may be renamed and deleted.** False for the two in-box
+    /// seeds, whose identity other things assume — the row still renders, it
+    /// just carries no controls, which is the honest shape for "not yours".
+    pub editable: bool,
+    /// What deleting it would break, in words, or empty when nothing names
+    /// it. Rendered NEXT to the delete control so the guard is readable
+    /// before the click rather than only in the refusal after it.
+    pub used_line: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,29 +455,11 @@ impl ProfilesDerived {
                     verdict: profile_verdict(g),
                 })
                 .collect(),
-            preset_rows: p
-                .presets
-                .presets
-                .iter()
-                .map(|r| PresetRowView {
-                    name: r.name.clone(),
-                    detail: r.problem.clone().unwrap_or_else(|| preset_detail_line(r)),
-                    statecls: if !r.usable {
-                        "pill pill-warn".to_owned()
-                    } else if r.protected {
-                        "pill pill-idle".to_owned()
-                    } else {
-                        "pill pill-ok".to_owned()
-                    },
-                    statelabel: if !r.usable {
-                        "needs attention".to_owned()
-                    } else if r.protected {
-                        "built-in".to_owned()
-                    } else {
-                        "yours".to_owned()
-                    },
-                })
+            preset_edit_rows: preset_row_views(&p.presets.presets)
+                .into_iter()
+                .filter(|r| r.editable)
                 .collect(),
+            preset_rows: preset_row_views(&p.presets.presets),
             template_rows: p
                 .presets
                 .templates
@@ -510,6 +510,7 @@ impl ProfilesDerived {
             profiles_unreadable: profiles_failed,
             can_make_profile: has_presets && !presets_failed && !profiles_failed,
             no_presets_yet: !has_presets && !presets_failed,
+            no_editable_presets: !presets_failed && p.presets.presets.iter().all(|r| r.protected),
             presets_unreadable: presets_failed,
             can_make_preset: !presets_failed,
             any_notes: !p.notes.is_empty(),
@@ -694,6 +695,40 @@ fn profile_verdict(p: &ksx_api::ProfileDetail) -> String {
     }
 }
 
+/// **One description of a controller layout, for both lists.**
+///
+/// `/profiles` shows every layout, and a second list shows only the ones that
+/// can be renamed or deleted. Two `map` bodies would be two chances for the
+/// same layout to be described differently in the same page, so there is one.
+fn preset_row_views(presets: &[ksx_api::PresetRow]) -> Vec<PresetRowView> {
+    presets
+        .iter()
+        .map(|r| PresetRowView {
+            name: r.name.clone(),
+            detail: r.problem.clone().unwrap_or_else(|| preset_detail_line(r)),
+            statecls: if !r.usable {
+                "pill pill-warn".to_owned()
+            } else if r.protected {
+                "pill pill-idle".to_owned()
+            } else {
+                "pill pill-ok".to_owned()
+            },
+            statelabel: if !r.usable {
+                "needs attention".to_owned()
+            } else if r.protected {
+                "built-in".to_owned()
+            } else {
+                "yours".to_owned()
+            },
+            editable: !r.protected,
+            used_line: match r.used_by {
+                0 => "Not used by any controller.".to_owned(),
+                1 => "Used by 1 controller.".to_owned(),
+                n => format!("Used by {n} controllers."),
+            },
+        })
+        .collect()
+}
 fn preset_detail_line(p: &ksx_api::PresetRow) -> String {
     let controls = match p.bound {
         1 => "1 control".to_owned(),

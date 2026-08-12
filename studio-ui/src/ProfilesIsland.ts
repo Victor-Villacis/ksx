@@ -119,6 +119,8 @@ interface PresetRowView {
   detail: string;
   statecls: string;
   statelabel: string;
+  /** "Used by 2 controllers." — empty when nothing names it. */
+  used_line: string;
 }
 
 interface TemplateRowView {
@@ -157,6 +159,7 @@ export interface ProfilesDerived {
   profile_rows: ProfileRowView[];
   broken_rows: BrokenRowView[];
   preset_rows: PresetRowView[];
+  preset_edit_rows: PresetRowView[];
   template_rows: TemplateRowView[];
   preset_options: OptionView[];
   template_options: OptionView[];
@@ -173,6 +176,9 @@ export interface ProfilesDerived {
   profiles_unreadable: boolean;
   can_make_profile: boolean;
   no_presets_yet: boolean;
+  /** No layouts of your own — distinct from `no_presets_yet`, which is also
+   *  true when the two built-ins are all there is. */
+  no_editable_presets: boolean;
   /** The presets read REFUSED — not "there are no presets". */
   presets_unreadable: boolean;
   can_make_preset: boolean;
@@ -232,6 +238,7 @@ const [rowsPlain, setRowsPlain] = createSignal(false);
 const [profilesUnreadable, setProfilesUnreadable] = createSignal(false);
 const [canMakeProfile, setCanMakeProfile] = createSignal(false);
 const [noPresetsYet, setNoPresetsYet] = createSignal(false);
+const [noEditablePresets, setNoEditablePresets] = createSignal(false);
 const [presetsUnreadable, setPresetsUnreadable] = createSignal(false);
 const [canMakePreset, setCanMakePreset] = createSignal(false);
 const [canStop, setCanStop] = createSignal(false);
@@ -239,6 +246,10 @@ const [canStop, setCanStop] = createSignal(false);
 const [profileRows, setProfileRows] = createSignal<ProfileRowView[]>([]);
 const [brokenRows, setBrokenRows] = createSignal<BrokenRowView[]>([]);
 const [presetRows, setPresetRows] = createSignal<PresetRowView[]>([]);
+/** The layouts that may be renamed or deleted — the built-ins filtered out on
+ *  the SERVER, because a conditional cannot live inside a createList item and
+ *  a disabled control would be a promise the page cannot keep. */
+const [presetEditRows, setPresetEditRows] = createSignal<PresetRowView[]>([]);
 const [templateRows, setTemplateRows] = createSignal<TemplateRowView[]>([]);
 const [presetOptions, setPresetOptions] = createSignal<OptionView[]>([]);
 const [templateOptions, setTemplateOptions] = createSignal<OptionView[]>([]);
@@ -281,6 +292,7 @@ export function applyProfiles(p: ProfilesPayload): void {
   setProfilesUnreadable(d.profiles_unreadable);
   setCanMakeProfile(d.can_make_profile);
   setNoPresetsYet(d.no_presets_yet);
+  setNoEditablePresets(d.no_editable_presets);
   setPresetsUnreadable(d.presets_unreadable);
   setCanMakePreset(d.can_make_preset);
   setAnyNotes(d.any_notes);
@@ -288,6 +300,7 @@ export function applyProfiles(p: ProfilesPayload): void {
   setBrokenRows(d.broken_rows);
   setProfileRows(d.profile_rows);
   setPresetRows(d.preset_rows);
+  setPresetEditRows(d.preset_edit_rows);
   setTemplateRows(d.template_rows);
   setPresetOptions(d.preset_options);
   setTemplateOptions(d.template_options);
@@ -318,12 +331,17 @@ const PROFILE_FLASH_ALLOWLIST: readonly string[] = [
   "Saved game updated.",
   "Saved game deleted.",
   "Controller layout created.",
+  "Controller layout renamed. Every controller that used it now uses the new name.",
+  "Controller layout deleted.",
   "Play started.",
   "Play stopped.",
   "error: Saved game could not be added. Check the game name, program location, players, and controller layout; nothing was changed.",
   "error: Saved game could not be updated. Refresh the page, then check its details; nothing was changed.",
   "error: Saved game could not be deleted. Refresh the page and try again; nothing was changed.",
   "error: Controller layout could not be created. Choose a different name or starter layout; nothing was changed.",
+  "error: Controller layout could not be renamed. Choose a new name that is not already taken; nothing was changed.",
+  "error: Controller layout could not be deleted. Controllers still using it must be pointed at another layout first; nothing was changed.",
+  "error: Tick the confirmation box before deleting a controller layout; nothing was changed.",
   "error: That game could not be started. Open Edit and check its program and controllers.",
   "error: Play could not be stopped. Reopen ksx and try again.",
   UNKNOWN_FLASH,
@@ -1115,8 +1133,105 @@ export function ProfilesIsland() {
                   { class: "pmeta" },
                   h("span", { class: "ptitle" }, r.name),
                   h("span", { class: "pdetail" }, r.detail),
+                  // Always rendered, never a conditional: this compiler
+                  // does not emit createShow inside a createList item, so the
+                  // server decides the sentence and the row just prints it.
+                  h("span", { class: "pdetail" }, r.used_line),
                 ),
                 h("span", { class: r.statecls }, r.statelabel),
+              ),
+          ),
+        ),
+      ),
+      // ── RENAME / DELETE A LAYOUT ──────────────────────────────────────
+      // A separate card rather than controls inside the list above, for a
+      // compiler reason with a product benefit: item bodies must be uniform,
+      // so built-ins would have needed a disabled control. Splitting the list
+      // means the layouts you can change are the only ones shown here.
+      h(
+        "section",
+        { class: "card wide" },
+        h("h2", null, "Rename or delete a layout"),
+        h(
+          "p",
+          { class: "cardline" },
+          "Renaming also repoints every controller that uses the layout, so ",
+          "nothing is left naming a layout that is not there. A layout still ",
+          "in use cannot be deleted until those controllers point somewhere ",
+          "else. Built-in layouts are not listed here.",
+        ),
+        createShow(
+          () => noEditablePresets(),
+          h(
+            "p",
+            { class: "cardline mono" },
+            "No layouts of your own yet — create one below.",
+          ),
+        ),
+        h(
+          "ul",
+          { class: "plist" },
+          createList(
+            () => presetEditRows(),
+            (r) => r.name + "|" + r.used_line,
+            (r) =>
+              h(
+                "li",
+                null,
+                h(
+                  "div",
+                  { class: "pmeta" },
+                  h("span", { class: "ptitle" }, r.name),
+                  h("span", { class: "pdetail" }, r.used_line),
+                ),
+                h(
+                  "form",
+                  {
+                    class: "preset-rename",
+                    method: "post",
+                    action: "/profiles/preset/rename",
+                  },
+                  h("input", { type: "hidden", name: "from", value: r.name }),
+                  h(
+                    "label",
+                    null,
+                    "New name",
+                    h("input", {
+                      type: "text",
+                      name: "to",
+                      value: r.name,
+                      required: "",
+                    }),
+                  ),
+                  h("button", { class: "btn", type: "submit" }, "Rename layout"),
+                ),
+                h(
+                  "form",
+                  {
+                    class: "preset-delete",
+                    method: "post",
+                    action: "/profiles/preset/delete",
+                    "data-confirm":
+                      "Delete this controller layout? Saved games that use it keep their other settings.",
+                  },
+                  h("input", { type: "hidden", name: "name", value: r.name }),
+                  h(
+                    "label",
+                    { class: "checkline" },
+                    h("input", {
+                      type: "checkbox",
+                      name: "confirm_delete",
+                      value: "yes",
+                      required: "",
+                    }),
+                    "I want to delete this controller layout",
+                  ),
+                  h(
+                    "button",
+                    { class: "btn btn-danger-ghost", type: "submit" },
+                    "Delete layout",
+                  ),
+                ),
               ),
           ),
         ),

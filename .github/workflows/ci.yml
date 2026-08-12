@@ -125,6 +125,27 @@ jobs:
               Write-Host '::endgroup::'
             }
           }
+      # ...and then RUN them. The step above proves the gated code COMPILES in
+      # every combination; it does not execute a single one of its tests, and
+      # for three of them that was the difference between green and true.
+      # `profile_edit`'s fixtures went stale in the 0.2.0 rebuild and sat red
+      # from b652579 until 2026-08-12, because `cargo test --workspace` above
+      # runs default features, and `crates/ksx-backend/src/lib.rs` gates
+      # `pub mod sources;` behind `any(studio, cabinet)` — so those tests were
+      # never compiled by the test job, and never run by the clippy job.
+      #
+      # ONE combination, not four: the gate is `any(...)`, so `studio,cabinet`
+      # is the union and enables every gated module at once. Per-combination
+      # COMPILATION is already covered above; this exists to execute.
+      - name: Test the feature-gated code (the default build compiles none of it)
+        shell: pwsh
+        run: |
+          foreach ($p in @('ksx-app', 'ksx-backend')) {
+            Write-Host "::group::$p tests, features studio,cabinet"
+            cargo test -p $p --features studio,cabinet
+            if ($LASTEXITCODE -ne 0) { throw "$p tests failed with features studio,cabinet" }
+            Write-Host '::endgroup::'
+          }
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
 

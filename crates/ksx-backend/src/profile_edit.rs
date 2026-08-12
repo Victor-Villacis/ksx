@@ -1155,7 +1155,7 @@ mod tests {
         let err = plan_new(
             &existing("Example Game"),
             &presets(),
-            &spec("street fighter", "C:\\x.exe"),
+            &spec("EXAMPLE GAME", "C:\\x.exe"),
         )
         .unwrap_err();
         assert!(matches!(err, ProfileError::Duplicate { .. }), "{err}");
@@ -1334,7 +1334,7 @@ mod tests {
             games: vec![original.clone()],
         };
         let before = games.clone();
-        let mut asked = update_spec(&games, "street fighter");
+        let mut asked = update_spec(&games, "Example Game");
         asked.title = "  Example Fighter  ".to_owned();
         asked.path = "  \"C:\\Program Files\\ExampleFighter.exe\"  ".to_owned();
         asked.arguments = "  -fullscreen  ".to_owned();
@@ -1468,7 +1468,7 @@ mod tests {
         let err = plan_delete(
             &ambiguous,
             &DeleteProfileSpec {
-                title: "STEAM".to_owned(),
+                title: "Example Launcher".to_owned(),
                 revision: String::new(),
             },
         )

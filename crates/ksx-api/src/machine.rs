@@ -1411,6 +1411,36 @@ pub struct WinusbResidueView {
     pub detail: String,
     /// One row per disagreement. Empty when everything agrees.
     pub rows: Vec<WinusbResidueRow>,
+    /// **Signing certificates left in the machine stores by attempts that are
+    /// finished** — counted in certificates, not subjects, because that is
+    /// what a person sees if they open certmgr.
+    ///
+    /// Receipts and certificates are different residue with different
+    /// lifetimes: a receipt is ksx's own bookkeeping, a certificate is a
+    /// change to the machine's trust stores. A view that counted only the
+    /// first would call a machine clean while sixteen certificates sat in
+    /// LocalMachine\Root — which is exactly what the reporting machine did.
+    #[serde(default)]
+    pub leftover_certificates: usize,
+    /// Certificates that are still signing an installed driver package. NOT
+    /// residue: removing one breaks the package holding a keyboard.
+    #[serde(default)]
+    pub certificates_in_use: usize,
+    /// Why the certificates could not be judged, when they could not be. A
+    /// ksx package whose signer cannot be read makes every one of them
+    /// unclassifiable, and saying so beats reporting a confident zero.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub certificates_unknown: String,
+    /// The certificate state in one sentence, or EMPTY when there is nothing
+    /// to say — a page renders no row at all rather than a cheerful "0
+    /// certificates" nobody asked about.
+    ///
+    /// Served, like [`Self::line`] and [`Self::detail`] beside it, because
+    /// this view's words are its own: a surface that recomputed them from the
+    /// counts would be a second place for them to drift, and the SSR render
+    /// and the hydrating island would be the two places.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub certificates_line: String,
 }
 
 /// One receipt that disagrees with the machine.

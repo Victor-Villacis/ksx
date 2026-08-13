@@ -1589,6 +1589,30 @@ pub struct StoreDriver {
     /// `ksx-winusb-vid-d209-pid-0430-mi-00.inf` — the name it was added under.
     pub original_name: String,
     pub provider: String,
+    /// **The certificate subject that signed this package**, when it is one of
+    /// ksx's own — `KSX WinUSB <32 hex>`, without the `CN=`.
+    ///
+    /// Read rather than inferred from [`Self::original_name`], because the
+    /// name has had more than one generation (the doc line above shows an
+    /// older one) and a package installed under an older name would make a
+    /// LIVE certificate look orphaned. Deleting that certificate is the one
+    /// mistake a certificate sweep must never make.
+    ///
+    /// Matched by SHAPE, like everything else here: `pnputil`'s labels are
+    /// localised, but this value is not — it is the fixed subject namespace
+    /// ksx signs in, so a machine in German still yields it.
+    pub signer_subject: Option<String>,
+}
+
+/// Is this the subject namespace ksx signs its own packages in?
+///
+/// The same shape [`owned_certificates`] enforces in the certificate stores
+/// (`winusb_transaction.rs`), so a package's signer and a store's certificate
+/// are recognised by one rule rather than two that can drift apart.
+pub fn is_ksx_signer_subject(value: &str) -> bool {
+    value
+        .strip_prefix("KSX WinUSB ")
+        .is_some_and(|suffix| suffix.len() == 32 && suffix.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Parse `pnputil /enum-drivers` output.
@@ -1629,6 +1653,8 @@ pub fn parse_enum_drivers(text: &str) -> Vec<StoreDriver> {
             } else {
                 current.original_name = value.to_owned();
             }
+        } else if is_ksx_signer_subject(value) {
+            current.signer_subject = Some(value.to_owned());
         } else if current.provider.is_empty() && !lower.ends_with(".cat") {
             // First non-filename field after the names is the provider on every
             // locale's layout; harmless if it picks up the class instead.
@@ -1650,6 +1676,86 @@ pub fn store_drivers_matching<'a>(
         .collect()
 }
 
+/// One KSX-owned certificate, and whether anything still depends on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateResidue {
+    /// `CN=KSX WinUSB <32 hex>`.
+    pub subject: String,
+    /// The machine stores it was found in, e.g. `Root`, `TrustedPublisher`.
+    pub stores: Vec<String>,
+    /// **An installed driver package is signed by this certificate.** Removing
+    /// it is not tidying, it is breaking the package that is holding a
+    /// keyboard right now.
+    pub in_use: bool,
+}
+
+/// Why a sweep will not run, rather than running on a guess.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SweepBlock {
+    /// A package ksx published is installed, but nothing on it names a ksx
+    /// certificate subject. Which certificate keeps it working is then
+    /// unknown, and the only safe move is to touch none of them.
+    UnattributedPackage { published_name: String },
+}
+
+/// **Sort KSX-owned certificates into the ones still holding a driver package
+/// up and the ones left over from attempts that are finished.**
+///
+/// The join is on the SIGNER a package reports, never on its file name.
+/// `ksx-winusb-<32 hex>.inf` happens to embed the same token today, but the
+/// name has had more than one generation, and a package installed under an
+/// older one would make its live certificate look orphaned. The certificate
+/// that signed a working package is the one thing a sweep must never delete.
+///
+/// A ksx package that reports no ksx signer at all does not produce a wrong
+/// answer here — it produces a [`SweepBlock`], and the caller refuses.
+pub fn classify_certificates(
+    owned: &[(String, String)],
+    drivers: &[StoreDriver],
+) -> (Vec<CertificateResidue>, Vec<SweepBlock>) {
+    let ksx_packages: Vec<&StoreDriver> = drivers
+        .iter()
+        .filter(|d| {
+            d.signer_subject.is_some()
+                || d.original_name
+                    .to_ascii_lowercase()
+                    .starts_with("ksx-winusb")
+                || d.provider.eq_ignore_ascii_case("KSX")
+        })
+        .collect();
+
+    let blocked: Vec<SweepBlock> = ksx_packages
+        .iter()
+        .filter(|d| d.signer_subject.is_none())
+        .map(|d| SweepBlock::UnattributedPackage {
+            published_name: d.published_name.clone(),
+        })
+        .collect();
+
+    // `CN=` is the store's spelling; `pnputil` reports the bare subject.
+    let live: Vec<&str> = ksx_packages
+        .iter()
+        .filter_map(|d| d.signer_subject.as_deref())
+        .collect();
+
+    let mut rows: Vec<CertificateResidue> = Vec::new();
+    for (store, subject) in owned {
+        let bare = subject.strip_prefix("CN=").unwrap_or(subject);
+        match rows.iter_mut().find(|r| r.subject == *subject) {
+            Some(row) => row.stores.push(store.clone()),
+            None => rows.push(CertificateResidue {
+                subject: subject.clone(),
+                stores: vec![store.clone()],
+                in_use: live.iter().any(|s| s.eq_ignore_ascii_case(bare)),
+            }),
+        }
+    }
+    rows.sort_by(|a, b| a.subject.cmp(&b.subject));
+    for row in &mut rows {
+        row.stores.sort();
+    }
+    (rows, blocked)
+}
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
@@ -1887,6 +1993,192 @@ pub fn apply_release(plan: &ReleasePlan) -> Result<Vec<String>, ApplyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// **The reporting machine, exactly as measured on 2026-08-12.**
+    ///
+    /// Eight KSX subjects, each in both machine stores — sixteen certificates
+    /// — and ONE installed package, `oem200.inf`, signed by `c8772f66…`. So
+    /// seven subjects are leftovers from earlier attempts and one is holding
+    /// the I-PAC's claim up.
+    ///
+    /// This is the case the existing `cleanup_owned_residue` cannot serve:
+    /// it deletes every owned certificate, which is right after every package
+    /// has been removed and wrong while one is installed.
+    #[test]
+    fn the_certificate_that_signed_an_installed_package_is_not_a_leftover() {
+        const LIVE: &str = "c8772f6671208ad7ff655420aca52e18";
+        let subjects = [
+            "b7827c656fd3376df4eb4c299b34cc5d",
+            "ab7144ca38ccd6ac2b109cd2b058bae9",
+            LIVE,
+            "dce9b8db32a69548ee78b97de93d78a1",
+            "0a468347dd47c74246cebd18d3830285",
+            "3bbc5a6f56a5f4a4eb27d248969d6a89",
+            "daeabd8805fe2c17ad53b5b75c36e25e",
+            "52dc8168ca99f97de5ddc5c4f9fde05e",
+        ];
+        let owned: Vec<(String, String)> = ["Root", "TrustedPublisher"]
+            .into_iter()
+            .flat_map(|store| {
+                subjects
+                    .iter()
+                    .map(move |id| (store.to_owned(), format!("CN=KSX WinUSB {id}")))
+            })
+            .collect();
+        assert_eq!(owned.len(), 16, "eight subjects in two stores");
+
+        let installed = vec![StoreDriver {
+            published_name: "oem200.inf".to_owned(),
+            original_name: format!("ksx-winusb-{LIVE}.inf"),
+            provider: "KSX".to_owned(),
+            signer_subject: Some(format!("KSX WinUSB {LIVE}")),
+        }];
+
+        let (rows, blocked) = classify_certificates(&owned, &installed);
+        assert!(blocked.is_empty(), "every ksx package named its signer");
+        assert_eq!(rows.len(), 8, "one row per subject, not per certificate");
+        assert!(
+            rows.iter().all(|r| r.stores.len() == 2),
+            "each subject was found in both stores"
+        );
+
+        let live: Vec<&CertificateResidue> = rows.iter().filter(|r| r.in_use).collect();
+        assert_eq!(live.len(), 1, "exactly one is still holding a package up");
+        assert_eq!(live[0].subject, format!("CN=KSX WinUSB {LIVE}"));
+        assert_eq!(
+            rows.iter().filter(|r| !r.in_use).count(),
+            7,
+            "seven subjects — fourteen certificates — are leftovers"
+        );
+    }
+
+    /// **A ksx package whose signer cannot be read blocks the sweep entirely.**
+    ///
+    /// Not "skip that one and delete the rest": if a package that is installed
+    /// might depend on any of these certificates, and nothing says which, then
+    /// every deletion is a guess. Refusing costs a person some disk; guessing
+    /// wrong costs them a keyboard that stops working at the next boot.
+    #[test]
+    fn a_ksx_package_with_no_readable_signer_blocks_the_whole_sweep() {
+        let owned = vec![(
+            "Root".to_owned(),
+            "CN=KSX WinUSB 0a468347dd47c74246cebd18d3830285".to_owned(),
+        )];
+        let installed = vec![StoreDriver {
+            published_name: "oem7.inf".to_owned(),
+            // The older naming generation, which carries no subject token.
+            original_name: "ksx-winusb-vid-d209-pid-0430-mi-00.inf".to_owned(),
+            provider: "KSX".to_owned(),
+            signer_subject: None,
+        }];
+        let (rows, blocked) = classify_certificates(&owned, &installed);
+        assert_eq!(
+            blocked,
+            vec![SweepBlock::UnattributedPackage {
+                published_name: "oem7.inf".to_owned()
+            }]
+        );
+        // The row still reads as a leftover — the BLOCK is what stops the
+        // sweep, so the classification stays honest about what it could see.
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].in_use);
+    }
+
+    /// Somebody else's driver is not ksx's business, and does not block.
+    #[test]
+    fn a_foreign_package_neither_saves_a_certificate_nor_blocks() {
+        let owned = vec![(
+            "Root".to_owned(),
+            "CN=KSX WinUSB 0a468347dd47c74246cebd18d3830285".to_owned(),
+        )];
+        let installed = vec![StoreDriver {
+            published_name: "oem99.inf".to_owned(),
+            original_name: "some-other-tool.inf".to_owned(),
+            provider: "Somebody Else".to_owned(),
+            signer_subject: None,
+        }];
+        let (rows, blocked) = classify_certificates(&owned, &installed);
+        assert!(blocked.is_empty());
+        assert!(!rows[0].in_use);
+    }
+
+    /// No packages at all — a machine that has released everything. Every
+    /// certificate is then a leftover, which is the state a sweep exists for.
+    #[test]
+    fn with_no_packages_installed_every_certificate_is_a_leftover() {
+        let owned = vec![
+            ("Root".to_owned(), "CN=KSX WinUSB 0a46".to_owned()),
+            (
+                "TrustedPublisher".to_owned(),
+                "CN=KSX WinUSB 0a46".to_owned(),
+            ),
+        ];
+        let (rows, blocked) = classify_certificates(&owned, &[]);
+        assert!(blocked.is_empty());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stores, vec!["Root", "TrustedPublisher"]);
+        assert!(!rows[0].in_use);
+    }
+
+    /// **The signer comes off a real machine's output, verbatim.**
+    ///
+    /// Captured from the reporting machine on 2026-08-12, where eight KSX
+    /// certificate subjects existed and exactly ONE of them signed an
+    /// installed package. Deciding which is the whole safety property of a
+    /// certificate sweep, so the fixture is the real text rather than one
+    /// somebody composed to pass.
+    #[test]
+    fn the_signer_subject_is_read_off_a_real_enum_drivers_block() {
+        let text = "Published Name:     oem200.inf\n\
+                    Original Name:      ksx-winusb-c8772f6671208ad7ff655420aca52e18.inf\n\
+                    Provider Name:      KSX\n\
+                    Class Name:         USBDevice\n\
+                    Class GUID:         {88bae032-5a81-49f0-bc3d-a4ff138216d6}\n\
+                    Driver Version:     08/12/2026 1.0.0.0\n\
+                    Signer Name:        KSX WinUSB c8772f6671208ad7ff655420aca52e18\n";
+        let drivers = parse_enum_drivers(text);
+        assert_eq!(drivers.len(), 1);
+        assert_eq!(drivers[0].published_name, "oem200.inf");
+        assert_eq!(drivers[0].provider, "KSX");
+        assert_eq!(
+            drivers[0].signer_subject.as_deref(),
+            Some("KSX WinUSB c8772f6671208ad7ff655420aca52e18"),
+        );
+    }
+
+    /// A package nobody signed with a ksx certificate leaves the field EMPTY
+    /// rather than guessing. `None` is what makes the sweep refuse instead of
+    /// deleting on an assumption.
+    #[test]
+    fn a_package_signed_by_someone_else_yields_no_ksx_signer() {
+        let text = "Published Name:     oem7.inf\n\
+                    Original Name:      usbser.inf\n\
+                    Provider Name:      Microsoft\n\
+                    Signer Name:        Microsoft Windows\n";
+        let drivers = parse_enum_drivers(text);
+        assert_eq!(drivers.len(), 1);
+        assert_eq!(drivers[0].signer_subject, None);
+        assert_eq!(drivers[0].provider, "Microsoft");
+    }
+
+    /// The subject namespace, at its edges. A sweep keys on this, so a value
+    /// that is nearly right must not pass: the wrong answer here deletes the
+    /// certificate that signed a working driver.
+    #[test]
+    fn only_the_exact_ksx_subject_shape_counts() {
+        assert!(is_ksx_signer_subject(
+            "KSX WinUSB c8772f6671208ad7ff655420aca52e18"
+        ));
+        assert!(!is_ksx_signer_subject("KSX WinUSB"), "no suffix");
+        assert!(!is_ksx_signer_subject("KSX WinUSB c877"), "too short");
+        assert!(
+            !is_ksx_signer_subject("KSX WinUSB c8772f6671208ad7ff655420aca52e1z"),
+            "not hex"
+        );
+        assert!(
+            !is_ksx_signer_subject("CN=KSX WinUSB c8772f6671208ad7ff655420aca52e18"),
+            "the CN= belongs to the store's spelling, not pnputil's"
+        );
+    }
 
     // -----------------------------------------------------------------
     // A synthetic copy of THIS cabinet's device tree (verified read-only

@@ -907,6 +907,43 @@ impl ksx_api::MachineSource for LocalMachine {
             })
             .collect();
 
+        // The trust stores, read alongside the receipt store and INDEPENDENTLY
+        // of it: a certificate count is still worth reporting on a machine
+        // whose receipts will not load, so neither read inherits the other's
+        // failure.
+        let (leftover_certificates, certificates_in_use, certificates_unknown) =
+            match ksx_platform::winusb::transaction::certificate_report() {
+                Ok((rows, blocked)) if blocked.is_empty() => (
+                    // Counted in CERTIFICATES, not subjects: one subject sits
+                    // in both machine stores, and a person who opens certmgr
+                    // counts what they can see.
+                    rows.iter()
+                        .filter(|r| !r.in_use)
+                        .map(|r| r.stores.len())
+                        .sum(),
+                    rows.iter()
+                        .filter(|r| r.in_use)
+                        .map(|r| r.stores.len())
+                        .sum(),
+                    String::new(),
+                ),
+                // A package whose signer cannot be read makes every certificate
+                // unclassifiable. Say so, and report NO leftovers: a count
+                // nothing can safely act on is worse than silence.
+                Ok(_) => (
+                    0,
+                    0,
+                    "A driver package ksx published does not say which certificate signed it, so \
+                     none of them can be judged safe to remove."
+                        .to_owned(),
+                ),
+                Err(err) => (
+                    0,
+                    0,
+                    format!("The certificate stores could not be read: {err}"),
+                ),
+            };
+
         Ok(ksx_api::WinusbResidueView {
             readable: true,
             error: String::new(),
@@ -933,6 +970,28 @@ impl ksx_api::MachineSource for LocalMachine {
                     .to_owned(),
             },
             rows,
+            certificates_line: if !certificates_unknown.is_empty() {
+                certificates_unknown.clone()
+            } else {
+                let kept = match certificates_in_use {
+                    0 => String::new(),
+                    1 => " One more is still signing an installed driver, and is left alone."
+                        .to_owned(),
+                    n => format!(
+                        " {n} more are still signing an installed driver, and are left alone."
+                    ),
+                };
+                match leftover_certificates {
+                    0 => String::new(),
+                    1 => format!("1 signing certificate is left over from an earlier setup.{kept}"),
+                    n => {
+                        format!("{n} signing certificates are left over from earlier setups.{kept}")
+                    }
+                }
+            },
+            leftover_certificates,
+            certificates_in_use,
+            certificates_unknown,
         })
     }
 

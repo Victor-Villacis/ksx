@@ -171,7 +171,7 @@ impl HelperElevator for SystemHelperElevator {
                         instance = instance_id,
                         exit = exit.code,
                         meaning = helper_exit_meaning(exit.code),
-                        "the elevated WinUSB helper refused. Its own message goes to a                          stdout Windows does not hand back through the UAC prompt; run the                          same verb from an elevated prompt with output redirected to read it"
+                        "the elevated WinUSB helper refused. Its own message goes to a stdout Windows does not hand back through the UAC prompt; run the same verb from an elevated prompt with output redirected to read it"
                     );
                 }
                 exit.code

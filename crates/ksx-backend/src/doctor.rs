@@ -234,10 +234,31 @@ fn render_virtual_pads(doc: &mut Doc, pads: &VirtualPadReport) {
         }
     }
     match pads.owners.first() {
-        Some(owner) => doc.line(format!(
-            "  [INFO] a splitter is running ({} pid {}) — pads unplug when it exits",
-            owner.name, owner.pid
-        )),
+        // NOT "pads unplug when it exits". That sentence was reassurance
+        // this report had no grounds for: the owner check matches on process
+        // NAME, and the tray daemon is `ksx.exe` whether or not it has a
+        // session. On a cabinet the daemon runs all day, so there is always
+        // an "owner" here, so the ghost branch below essentially never fires
+        // on the one machine it exists to protect.
+        //
+        // `advice.rs::summarize_virtual_pads` was corrected for exactly this
+        // and says so at length; this line was left behind saying the old
+        // thing, so the same report reassured a reader in one section and
+        // qualified it in another. 16 pads accumulated on the reporting
+        // machine under this sentence, unremarked, while `ksx session status`
+        // said stopped.
+        Some(owner) => {
+            doc.line(format!(
+                "  [INFO] a splitter process is running ({} pid {}) and is ASSUMED to own them",
+                owner.name, owner.pid
+            ));
+            doc.line(
+                "  [INFO] this matches on process name only — the tray daemon is that name whether or not it is running a session",
+            );
+            doc.line(
+                "  [INFO] if `ksx session status` says stopped, these outlived whatever made them: `ksx pads --prune` clears them",
+            );
+        }
         None => {
             doc.line(format!(
                 "  [WARN] no known splitter process is running (checked {})",
@@ -421,6 +442,51 @@ mod tests {
     };
 
     use super::*;
+    /// **The pads section and the Advice section must not disagree.**
+    ///
+    /// The reporting machine sat at SIXTEEN virtual pads with `ksx session
+    /// status` saying stopped, and the report told a reader two different
+    /// things about them: the pads section said "pads unplug when it exits"
+    /// (reassurance), and the Advice section said the owner is only ASSUMED
+    /// because the check matches on process name. `advice.rs` had been
+    /// deliberately corrected; this renderer had not, so whichever section a
+    /// person read first decided whether they thought anything was wrong.
+    ///
+    /// Both now carry the same three facts, so the report can only be read
+    /// one way.
+    #[test]
+    fn a_named_owner_is_never_reported_as_proof_that_the_pads_are_owned() {
+        let mut report = cabinet_report();
+        report.virtual_pads = ksx_platform::virtual_pads::VirtualPadReport::from_bus_children(
+            Some(r"ROOT\SYSTEM\0002".into()),
+            (1..=16).map(|n| format!(r"USB\VID_045E&PID_028E\{n:02}")),
+            vec![ksx_platform::virtual_pads::OwnerProcess {
+                pid: 82788,
+                name: "ksx.exe".into(),
+            }],
+        );
+        let advice = summarize(&report);
+        let text = render_human(&report, &advice);
+
+        assert!(
+            !text.contains("pads unplug when it exits"),
+            "the report still promises the pads are somebody's: {text}"
+        );
+        // The three facts, in both sections' words.
+        assert!(text.contains("ASSUMED"), "{text}");
+        assert!(
+            text.matches("process name").count() >= 2,
+            "the name-only caveat must appear in the pads section AND the advice: {text}"
+        );
+        assert!(
+            text.matches("ksx session status").count() >= 2,
+            "the check that settles it must appear in both: {text}"
+        );
+        assert!(
+            text.matches("ksx pads --prune").count() >= 2,
+            "the remedy must appear in both: {text}"
+        );
+    }
 
     fn file(status: SignatureStatus, signer: &str, not_after: Option<&str>) -> DriverFileReport {
         DriverFileReport {
@@ -611,6 +677,12 @@ mod tests {
         assert_eq!(exit_code(&advice), 0);
     }
 
+    /// A named owner still suppresses the GHOST verdict — that part was
+    /// right, and third-party ViGEm feeders are exactly why the heuristic
+    /// cannot go the other way. What changed is the sentence beside it: it
+    /// used to read "pads unplug when it exits", which was a promise about
+    /// pads this report cannot attribute to anyone. See
+    /// `a_named_owner_is_never_reported_as_proof_that_the_pads_are_owned`.
     #[test]
     fn render_human_owned_pads_are_not_ghosts() {
         let mut report = cabinet_report();
@@ -622,8 +694,12 @@ mod tests {
         let text = render_human(&report, &summarize(&report));
         assert!(!text.contains("ghosts"), "{text}");
         assert!(
-            text.contains("a splitter is running (ksx.exe pid 4242)"),
+            text.contains("a splitter process is running (ksx.exe pid 4242)"),
             "{text}"
+        );
+        assert!(
+            text.contains("ASSUMED to own them"),
+            "the owner is named, not proven: {text}"
         );
     }
 

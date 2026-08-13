@@ -3643,7 +3643,7 @@ mod tests {
         );
         assert_eq!(
             socd, None,
-            "no --socd means the slot keeps the policy it has; it must NOT              parse as the `off` default, which would switch a fighting              cabinet's handling off on every preset change"
+            "no --socd means the slot keeps the policy it has; it must NOT parse as the `off` default, which would switch a fighting cabinet's handling off on every preset change"
         );
         assert_eq!(profile, None, "config.toml unless a profile is named");
         assert!(!reload, "nothing is disturbed unless asked");

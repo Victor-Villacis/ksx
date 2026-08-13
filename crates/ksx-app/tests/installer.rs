@@ -646,7 +646,7 @@ fn installer_and_ci_package_the_prepare_provider_only_in_the_installed_product()
     assert_eq!(
         helper_entries.len(),
         2,
-        "one extracted copy for the read-only pre-install audit, one installed copy for the          mutating verbs"
+        "one extracted copy for the read-only pre-install audit, one installed copy for the mutating verbs"
     );
     let installed = helper_entries
         .iter()

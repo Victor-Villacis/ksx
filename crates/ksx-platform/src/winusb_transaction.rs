@@ -4781,7 +4781,7 @@ mod tests {
         match WindowsTrustVerifier.cleanup_owned_residue() {
             Ok(()) => println!("every KSX-owned certificate and key container is gone"),
             Err(err) => panic!(
-                "KSX-owned trust residue could not be removed, which is what turns a                  successful rebind into \"RECOVERY REQUIRED\": {err}"
+                "KSX-owned trust residue could not be removed, which is what turns a successful rebind into \"RECOVERY REQUIRED\": {err}"
             ),
         }
     }
@@ -4806,7 +4806,7 @@ mod tests {
         match initialize_store() {
             Ok(()) => println!("the store on this machine initializes cleanly"),
             Err(err) => panic!(
-                "initialize-store refused this machine's real store, which is what                  Setup shows as \"initializer exit code 3\": {err}"
+                "initialize-store refused this machine's real store, which is what Setup shows as \"initializer exit code 3\": {err}"
             ),
         }
     }

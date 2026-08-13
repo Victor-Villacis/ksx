@@ -1534,10 +1534,16 @@ enum SlotCommand {
     },
     /// Point a slot at a preset
     ///
-    /// One field of one entry. `ksx config export | edit | import` can do the
-    /// same thing and rewrites the WHOLE file, which loses every comment in
-    /// it — and ksx config files are annotated on purpose. This writes the one
-    /// line, after copying the file to <file>.bak-YYYYMMDD-HHMMSS.
+    /// One field of one entry, validated, with a refusal in words if the
+    /// preset is not there — which `ksx config export | edit | import` cannot
+    /// give you, because it hands the whole file back and asks you to be
+    /// careful.
+    ///
+    /// COMMENTS DO NOT SURVIVE EITHER VERB. Both re-emit the file from the
+    /// parsed value, so remarks are dropped and settings you never wrote are
+    /// written out at their defaults. Your annotated copy is the
+    /// <file>.bak-YYYYMMDD-HHMMSS taken immediately before the write; that is
+    /// where the comments live afterwards, and it is worth keeping.
     ///
     /// The preset must already exist (a slot pointing at a preset that is not
     /// there is a cabinet that refuses to start, at the next boot). A refusal
@@ -3798,7 +3804,11 @@ mod tests {
         let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
         for needle in [
             "THE PADS REPLUG",
-            "loses every comment",
+            // The help used to claim this verb spared the comments that
+            // `config export | import` destroys. It does not: both re-emit
+            // the file from the parsed value. What it must say instead is
+            // where an annotated copy actually survives.
+            "COMMENTS DO NOT SURVIVE EITHER VERB",
             "must already exist",
         ] {
             assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");

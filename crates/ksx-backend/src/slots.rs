@@ -4,9 +4,25 @@
 //! bindings *inside* a preset; nothing until now could say which preset slot 3
 //! points at except a hand edit of `config.toml` — or, since the interop verbs
 //! landed, a whole-file `ksx config export | edit | import`, which works and
-//! **loses every comment in the file**. That is exactly the loss the TOML-is-
-//! canonical decision exists to prevent, so the narrow verb is worth having:
-//! this one rewrites one field of one entry.
+//! asks the user to be careful with the entire document. So the narrow verb
+//! is worth having — but NOT for the reason this comment used to give.
+//!
+//! # It does not preserve comments, and it never did
+//!
+//! This said "this one rewrites one field of one entry", contrasted against
+//! the interop verbs "losing every comment". Both statements were wrong about
+//! this code. [`ksx_config::Store::save_config`] renders the parsed value
+//! through serde and writes the whole document, so a hand-annotated
+//! `config.toml` comes back with its remarks gone and a `[settings]` table it
+//! never had, spelled out at the defaults. MEASURED: a two-comment file lost
+//! both and gained four settings lines.
+//!
+//! What the verb actually buys is the rest of the shape below — a validated
+//! spec, a refusal in words, and a timestamped backup taken BEFORE the write.
+//! The backup is where an annotated file survives, and the CLI help says so.
+//! Making the write itself comment-preserving is a real change (every writer
+//! would have to express what CHANGED rather than hand over a whole struct,
+//! and `ksx-config` depends on `toml`, not `toml_edit`) and is not done.
 //!
 //! # One writer, like every other write
 //!
@@ -712,6 +728,55 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+    /// **The write drops comments, and the backup is where they live.**
+    ///
+    /// This is the property the CLI help now states, pinned against the code
+    /// rather than against itself. The help used to claim the opposite — that
+    /// this verb spared the comments `config export | import` destroys — and
+    /// nothing checked, so the two disagreed for as long as anyone had looked.
+    ///
+    /// If someone later makes the write comment-preserving (`toml_edit`), this
+    /// test fails and the help has to be corrected in the same change, which
+    /// is the point.
+    #[test]
+    fn the_write_drops_comments_and_the_backup_keeps_them() {
+        let root = TempRoot::new("comments");
+        let store = root.store();
+        let annotated = "schema_version = 1\n\n\
+                         # the LEFT panel, worn Start button\n\
+                         [[slot]]\n\
+                         number = 1\n\
+                         preset = \"Panel P1\"  # rewired 2026-07\n";
+        let path = store.root().config_path();
+        std::fs::write(&path, annotated).unwrap();
+
+        let outcome = assign(
+            &store,
+            &SlotSpec {
+                slot: 1,
+                preset: Some("Panel P2".to_owned()),
+                persona: None,
+                profile: None,
+                socd: None,
+            },
+        )
+        .expect("the assign applies");
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("Panel P2"), "the field did change: {after}");
+        assert!(
+            !after.contains("worn Start button") && !after.contains("rewired"),
+            "comments unexpectedly survived — if this is now true, the CLI help \
+             for `slot assign` must stop saying they do not: {after}"
+        );
+
+        let backup = outcome.backup.expect("a backup is taken before the write");
+        let saved = std::fs::read_to_string(&backup).unwrap();
+        assert!(
+            saved.contains("worn Start button") && saved.contains("rewired"),
+            "the backup is the only copy that still has them: {saved}"
+        );
     }
 
     /// **A write that was not asked about SOCD must never turn it off.**

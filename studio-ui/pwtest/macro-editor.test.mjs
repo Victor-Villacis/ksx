@@ -850,11 +850,11 @@ describe("diagonals are a lens over the stored pair", () => {
         "macgrp g9",
       ]);
       // The no-JS page carries the same columns and the ring line that
-      // explains them — it cannot tick a cell, but it can read what a pick
-      // would write and hand-edit the TOML block below.
+      // explains them — it cannot tick a cell, but it can still read what a
+      // diagonal pick means before JavaScript takes over.
       assert.ok(ssr.includes('data-cell="0|diag:dpad:dr"'), "SSR has no diagonal column");
       assert.ok(ssr.includes("↑ ↖ ← ↙ ↓ ↘ → ↗ (numpad 8 7 4 1 2 3 6 9)"), "SSR has no ring line");
-      assert.ok(ssr.includes("stores dpad.down + dpad.right on that step"));
+      assert.ok(ssr.includes("combines down and right in one step"));
     } finally {
       await page.close();
     }
@@ -882,7 +882,7 @@ describe("a step shorter than the sampling floor", () => {
       assert.equal(state.shortRows, 1, "the row is not marked");
       // Answered in the unit it was AUTHORED in — not "16 ms", a number this
       // author never typed.
-      assert.match(state.stepLine, /1 frame is shorter than the 2-frame floor/);
+      assert.match(state.stepLine, /1 frame is shorter than the reliable 2-frame minimum/);
 
       // Back above the floor and every mark goes away.
       await durBox(page, 0).fill("3");

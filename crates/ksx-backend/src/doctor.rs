@@ -444,7 +444,7 @@ mod tests {
     use super::*;
     /// **The pads section and the Advice section must not disagree.**
     ///
-    /// The reporting machine sat at SIXTEEN virtual pads with `ksx session
+    /// A reproduced failure sat at sixteen virtual pads with `ksx session
     /// status` saying stopped, and the report told a reader two different
     /// things about them: the pads section said "pads unplug when it exits"
     /// (reassurance), and the Advice section said the owner is only ASSUMED

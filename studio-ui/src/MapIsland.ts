@@ -1138,7 +1138,11 @@ export function applyMap(p: MapPayload): void {
     selectedSlot = p.selected;
   }
   const slot = currentSlot();
-  setRootCls(slot === null ? "studio mapper mapper-empty" : "studio mapper");
+  // `wire()` adds the marker to the SSR node before Forma adopts it, but the
+  // reactive class binding is authoritative after adoption and on every poll.
+  // Keep the marker in that state too or hydration immediately hides every
+  // JS-only mapper control again.
+  setRootCls(slot === null ? "studio mapper mapper-empty js" : "studio mapper js");
   // Derived BEFORE the row builders run — they read it for the dead look.
   liveMapping = learnable(p) && slot !== null;
   canWrite =

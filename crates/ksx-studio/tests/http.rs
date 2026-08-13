@@ -1403,6 +1403,118 @@ impl ksx_api::MachineSource for FixedMachine {
     }
 }
 
+/// A certificate-only machine for the `/devices` trust-store action. It can
+/// model success, a hostile provider refusal, an incomplete cleanup and an
+/// unattributable installed signer without touching the real certificate
+/// stores on the test host.
+struct CertificateMachine {
+    leftovers: AtomicUsize,
+    in_use: usize,
+    blocked: bool,
+    refuse: bool,
+    keep_leftovers: bool,
+    sweep_calls: AtomicUsize,
+    residue_reads: AtomicUsize,
+}
+
+impl CertificateMachine {
+    fn ready(leftovers: usize, in_use: usize) -> Self {
+        Self {
+            leftovers: AtomicUsize::new(leftovers),
+            in_use,
+            blocked: false,
+            refuse: false,
+            keep_leftovers: false,
+            sweep_calls: AtomicUsize::new(0),
+            residue_reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn view(&self) -> ksx_api::WinusbResidueView {
+        let leftovers = self.leftovers.load(Ordering::SeqCst);
+        let unknown = self.blocked.then(|| {
+            "An installed KSX package has no attributable signer, so no certificate can be judged safe to remove."
+                .to_owned()
+        });
+        let certificates_line = match (&unknown, leftovers) {
+            (Some(message), _) => message.clone(),
+            (None, 0) => String::new(),
+            (None, 1) => format!(
+                "1 signing certificate is left over. {} still sign an installed driver and are left alone.",
+                self.in_use
+            ),
+            (None, count) => format!(
+                "{count} signing certificates are left over. {} still sign an installed driver and are left alone.",
+                self.in_use
+            ),
+        };
+        ksx_api::WinusbResidueView {
+            readable: true,
+            receipts: 0,
+            drifted: 0,
+            bookkeeping_only: true,
+            line: "Everything KSX prepared is accounted for.".to_owned(),
+            detail: "Certificate residue is reported separately.".to_owned(),
+            leftover_certificates: leftovers,
+            certificates_in_use: self.in_use,
+            certificates_unknown: unknown.unwrap_or_default(),
+            certificates_line,
+            ..ksx_api::WinusbResidueView::default()
+        }
+    }
+}
+
+impl ksx_api::MachineSource for CertificateMachine {
+    fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
+        Ok(ksx_api::DeviceScanView::read(
+            "test".to_owned(),
+            true,
+            true,
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    fn winusb_residue(&self) -> Result<ksx_api::WinusbResidueView, Refusal> {
+        self.residue_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(self.view())
+    }
+
+    fn winusb_sweep_certificates(
+        &self,
+        spec: &ksx_api::WinusbCertificateSweepSpec,
+    ) -> Result<ksx_api::WinusbResidueView, Refusal> {
+        if !spec.confirm {
+            return Err(Refusal::new(
+                ksx_api::codes::BAD_REQUEST,
+                "certificate cleanup was not confirmed",
+            ));
+        }
+        if self.blocked || self.leftovers.load(Ordering::SeqCst) == 0 {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "certificate cleanup is not currently safe or necessary",
+            ));
+        }
+        self.sweep_calls.fetch_add(1, Ordering::SeqCst);
+        if self.refuse {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                r#"private helper failed at C:\secret\generated.inf --repair thumbprint DEADBEEF"#,
+            ));
+        }
+        if !self.keep_leftovers {
+            self.leftovers.store(0, Ordering::SeqCst);
+        }
+        // The typed action returns post-operation state, but the HTTP handler
+        // must still call the independent read method above before it says
+        // success. `residue_reads` is how the test proves that happened.
+        Ok(self.view())
+    }
+}
+
 /// Bind port 0 to learn a free port, release it, and serve there. The tiny
 /// race is acceptable in a local test.
 fn start_server(control: Arc<ScriptedControl>) -> SocketAddr {
@@ -1537,6 +1649,15 @@ fn start_server_with_sources(
             spec: &ksx_api::WinusbReleaseSpec,
         ) -> Result<ksx_api::WinusbMutationView, Refusal> {
             self.0.winusb_release(spec)
+        }
+        fn winusb_residue(&self) -> Result<ksx_api::WinusbResidueView, Refusal> {
+            self.0.winusb_residue()
+        }
+        fn winusb_sweep_certificates(
+            &self,
+            spec: &ksx_api::WinusbCertificateSweepSpec,
+        ) -> Result<ksx_api::WinusbResidueView, Refusal> {
+            self.0.winusb_sweep_certificates(spec)
         }
         fn profiles(&self) -> Result<ksx_api::ProfilesView, Refusal> {
             self.0.profiles()
@@ -3041,6 +3162,159 @@ fn a_ticked_force_box_reaches_the_backend_as_force() {
 
     post_form(addr, "/devices/remove", "alias=panel&force=yes");
     assert!(machine.removed.lock().unwrap()[0].1, "--force must carry");
+}
+
+#[test]
+fn certificate_cleanup_is_post_only_and_requires_explicit_confirmation() {
+    let machine = Arc::new(CertificateMachine::ready(2, 2));
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let get_response = get(addr, "/devices/certificates/sweep");
+    assert!(
+        get_response.starts_with("HTTP/1.1 405"),
+        "the trust-store mutation must have no GET route: {get_response}"
+    );
+
+    let response = post_form(addr, "/devices/certificates/sweep", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("Confirm%20the%20certificate%20cleanup"),
+        "the missing consent needs a fixed, useful sentence: {response}"
+    );
+    assert_eq!(
+        machine.sweep_calls.load(Ordering::SeqCst),
+        0,
+        "an unconfirmed form must not reach the elevated action"
+    );
+    assert_eq!(machine.leftovers.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn certificate_cleanup_success_is_a_fresh_zero_read_and_keeps_live_signers() {
+    let machine = Arc::new(CertificateMachine::ready(6, 2));
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let before_page = body_of(&get(addr, "/devices")).to_owned();
+    assert!(
+        before_page.contains(r#"action="/devices/certificates/sweep""#),
+        "{before_page}"
+    );
+    assert!(
+        before_page.contains("still signing an installed driver stays in place"),
+        "the page must state the live-signer boundary before the click: {before_page}"
+    );
+    let reads_before = machine.residue_reads.load(Ordering::SeqCst);
+
+    let response = post_form(addr, "/devices/certificates/sweep", "confirm=yes");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("Removed%20the%20leftover%20KSX%20signing%20certificates"),
+        "{response}"
+    );
+    assert!(
+        response.contains("live%20driver%20keeps%20working"),
+        "the success flash must repeat that live signers remain: {response}"
+    );
+    assert_eq!(machine.sweep_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(machine.leftovers.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        machine.residue_reads.load(Ordering::SeqCst),
+        reads_before + 1,
+        "success must be licensed by a separate residue read after the action"
+    );
+
+    let after_page = body_of(&get(addr, "/devices")).to_owned();
+    assert!(
+        !after_page.contains(r#"action="/devices/certificates/sweep""#),
+        "a zero-count action must disappear after the verified read: {after_page}"
+    );
+    assert!(
+        !after_page.contains("Remove leftover certificates"),
+        "{after_page}"
+    );
+}
+
+#[test]
+fn certificate_cleanup_never_claims_success_while_residue_remains() {
+    let mut fixture = CertificateMachine::ready(2, 2);
+    fixture.keep_leftovers = true;
+    let machine = Arc::new(fixture);
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_form(addr, "/devices/certificates/sweep", "confirm=yes");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("could%20not%20be%20verified"),
+        "{response}"
+    );
+    assert!(
+        !response.contains("Removed%20the%20leftover"),
+        "an optimistic helper result must not become a success flash: {response}"
+    );
+    assert_eq!(machine.leftovers.load(Ordering::SeqCst), 2);
+    assert_eq!(machine.residue_reads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn blocked_certificate_cleanup_is_disabled_and_a_forged_post_still_refuses() {
+    let mut fixture = CertificateMachine::ready(0, 0);
+    fixture.blocked = true;
+    let machine = Arc::new(fixture);
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let page = body_of(&get(addr, "/devices")).to_owned();
+    assert!(page.contains("Certificate cleanup unavailable"), "{page}");
+    assert!(page.contains("disabled"), "{page}");
+    assert!(
+        !page.contains(r#"action="/devices/certificates/sweep""#),
+        "a blocked classifier must not render an actionable form: {page}"
+    );
+
+    let response = post_form(addr, "/devices/certificates/sweep", "confirm=yes");
+    assert!(
+        response.contains("could%20not%20be%20verified"),
+        "{response}"
+    );
+    assert_eq!(
+        machine.sweep_calls.load(Ordering::SeqCst),
+        0,
+        "a hand-authored POST must not bypass the blocked read state"
+    );
+}
+
+#[test]
+fn certificate_cleanup_is_same_origin_and_never_reflects_helper_output() {
+    let mut fixture = CertificateMachine::ready(2, 0);
+    fixture.refuse = true;
+    let machine = Arc::new(fixture);
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = "confirm=yes";
+    let cross_site = http(
+        addr,
+        &format!(
+            "POST /devices/certificates/sweep HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+             Origin: https://evil.example\r\nConnection: close\r\n\
+             Content-Type: application/x-www-form-urlencoded\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(cross_site.starts_with("HTTP/1.1 403"), "{cross_site}");
+    assert_eq!(machine.sweep_calls.load(Ordering::SeqCst), 0);
+
+    let same_origin = post_form(addr, "/devices/certificates/sweep", body);
+    assert!(same_origin.starts_with("HTTP/1.1 303"), "{same_origin}");
+    assert!(
+        same_origin.contains("could%20not%20be%20verified"),
+        "{same_origin}"
+    );
+    for secret in ["secret", "generated.inf", "--repair", "DEADBEEF"] {
+        assert!(
+            !same_origin.contains(secret),
+            "provider/helper output crossed the presentation boundary ({secret}): {same_origin}"
+        );
+    }
+    assert_eq!(machine.sweep_calls.load(Ordering::SeqCst), 1);
 }
 
 /// Both writes are POST and both sit inside the guarded router. The assertion

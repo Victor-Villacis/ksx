@@ -189,6 +189,32 @@ by hand with Zadig:
   boot" failure in §1 — that failure needed a *filter* in the class stack, and a
   WinUSB claim has none.
 
+### 2g. Signing certificates remain after an old or interrupted setup
+
+This is trust-store residue, not a stuck keyboard. Use the installed KSX CLI to
+inspect it first; reporting is read-only and does not need an administrator:
+
+```powershell
+ksx winusb sweep-certificates          # report; removes nothing
+ksx winusb sweep-certificates --json   # the same report for a script
+ksx winusb sweep-certificates --yes    # fixed installed helper + UAC; apply
+```
+
+The applying form removes only `CN=KSX WinUSB <32hex>` certificates that no
+installed KSX driver package reports as its signer, plus stranded containers
+in KSX's fixed one-time signing-key namespace. Installed packages need only
+their retained public signer certificate. Certificates still signing an
+installed package are left alone. If even one installed KSX package has no
+readable signer, or one subject names different certificate bytes, the entire
+sweep refuses and removes nothing. It never removes
+a driver package or changes a keyboard binding; `release`/`release-all` are the
+separate operations for that.
+
+Do not bulk-delete the subject prefix in `certlm.msc`: a certificate marked in
+use may be what lets the package holding a panel load. The sweep deletes by the
+exact thumbprint and DER hash it classified, through the same installed-helper
+boundary as the other WinUSB mutations, and verifies the stores afterward.
+
 ## 3. Virtual pads misbehaving
 
 - Ghost/stuck pads: kill ksx (pads auto-unplug); check Device Manager under

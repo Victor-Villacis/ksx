@@ -236,6 +236,24 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// Remove only KSX signing certificates that no installed driver package
+    /// depends on, plus stranded KSX one-time signing-key containers.
+    ///
+    /// This is a machine trust-store write, so the explicit confirmation is
+    /// part of the typed request and an implementation may elevate only the
+    /// installed fixed-purpose helper. The returned residue view is a fresh
+    /// post-operation read; a surface must not infer success from the helper's
+    /// exit code or output.
+    fn winusb_sweep_certificates(
+        &self,
+        _spec: &WinusbCertificateSweepSpec,
+    ) -> Result<WinusbResidueView, Refusal> {
+        Err(Refusal::not_here(
+            "removing leftover KSX signing certificates",
+            "use the installed KSX application, or run `ksx winusb sweep-certificates --yes` and approve its Windows permission prompt",
+        ))
+    }
+
     /// `ksx doctor` — driver health plus advice, with the stable codes.
     fn doctor(&self) -> Result<DoctorView, Refusal> {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
@@ -1418,8 +1436,8 @@ pub struct WinusbResidueView {
     /// Receipts and certificates are different residue with different
     /// lifetimes: a receipt is ksx's own bookkeeping, a certificate is a
     /// change to the machine's trust stores. A view that counted only the
-    /// first would call a machine clean while sixteen certificates sat in
-    /// LocalMachine\Root — which is exactly what the reporting machine did.
+    /// first could call a machine clean while certificate pairs remained in
+    /// LocalMachine\Root and LocalMachine\TrustedPublisher.
     #[serde(default)]
     pub leftover_certificates: usize,
     /// Certificates that are still signing an installed driver package. NOT
@@ -1457,6 +1475,18 @@ pub struct WinusbResidueRow {
     pub bookkeeping: bool,
     /// Short id, for a support conversation.
     pub reference: String,
+}
+
+/// Explicit consent for the machine-wide certificate cleanup.
+///
+/// No subject, thumbprint, store name or filesystem path is accepted from a
+/// surface. The backend classifies the installed KSX packages and certificates
+/// itself, and the fixed helper removes only certificates proven not to sign a
+/// live package plus KSX's fixed one-time signing-key namespace.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WinusbCertificateSweepSpec {
+    /// The person confirmed removal of KSX's leftover signing certificates.
+    pub confirm: bool,
 }
 
 /// Consent and identity for an exact-device WinUSB preparation.

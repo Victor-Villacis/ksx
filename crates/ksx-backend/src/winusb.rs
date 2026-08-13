@@ -38,6 +38,10 @@ pub enum HelperMutation {
     ReleaseAll,
     /// Bring the journal and the machine back into agreement.
     Repair,
+    /// Remove the signing certificates nothing depends on. Names no device
+    /// for the same reason `ReleaseAll` does not: this is about the machine's
+    /// trust stores, which no single keyboard owns.
+    SweepCertificates,
 }
 
 pub trait HelperElevator: Send + Sync {
@@ -53,6 +57,7 @@ impl HelperMutation {
             HelperMutation::Release => "release-exact",
             HelperMutation::ReleaseAll => "release-all",
             HelperMutation::Repair => "repair",
+            HelperMutation::SweepCertificates => "sweep-certificates",
         }
     }
 }
@@ -60,7 +65,10 @@ impl HelperMutation {
 fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
     // `release-all` names no device, and must not: the machine is the only
     // source of truth left in the situation it recovers from.
-    if matches!(action, HelperMutation::ReleaseAll | HelperMutation::Repair) {
+    if matches!(
+        action,
+        HelperMutation::ReleaseAll | HelperMutation::Repair | HelperMutation::SweepCertificates
+    ) {
         return vec![action.verb().to_owned()];
     }
     let mut args = vec![action.verb().to_owned(), instance_id.to_owned()];
@@ -71,7 +79,9 @@ fn helper_arguments(action: HelperMutation, instance_id: &str) -> Vec<String> {
             "--confirm-machine-certificate".to_owned(),
         ]),
         HelperMutation::Release => args.push("--confirm-release".to_owned()),
-        HelperMutation::ReleaseAll | HelperMutation::Repair => unreachable!("handled above"),
+        HelperMutation::ReleaseAll | HelperMutation::Repair | HelperMutation::SweepCertificates => {
+            unreachable!("handled above")
+        }
     }
     args
 }
@@ -293,7 +303,7 @@ fn binding_gate(
         // Store-free release names no device, so no per-device gate applies to
         // it. Reaching here means a caller asked whether one binding is right
         // for an action that is about all of them.
-        HelperMutation::ReleaseAll | HelperMutation::Repair => {
+        HelperMutation::ReleaseAll | HelperMutation::Repair | HelperMutation::SweepCertificates => {
             return Err(ApiRefusal::new(
                 "winusb-live-state-changed",
                 "this action is about the whole machine, not one device",
@@ -305,7 +315,9 @@ fn binding_gate(
     }
     if observed == already {
         return Err(match action {
-            HelperMutation::ReleaseAll | HelperMutation::Repair => ApiRefusal::new(
+            HelperMutation::ReleaseAll
+            | HelperMutation::Repair
+            | HelperMutation::SweepCertificates => ApiRefusal::new(
                 "winusb-live-state-changed",
                 "this action is about the whole machine, not one device",
             ),
@@ -381,6 +393,129 @@ pub fn release_all_machine_with(
         still_bound,
         message,
     })
+}
+
+/// What a sweep left behind, verified by RE-READING the stores rather than by
+/// believing the helper's exit code — the same discipline
+/// [`release_all_machine_with`] applies for the same reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SweepCertificatesView {
+    pub helper_exit: u32,
+    pub leftover_certificates: usize,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CertificateSweepPostState {
+    pub leftover_certificates: usize,
+    pub blocked: Vec<String>,
+}
+
+const SWEEP_REFUSED: &str = "winusb-certificate-sweep-refused";
+const SWEEP_FAILED: &str = "winusb-certificate-sweep-failed";
+const SWEEP_RECOVERY_REQUIRED: &str = "winusb-certificate-sweep-recovery-required";
+const SWEEP_UNVERIFIED: &str = "winusb-certificate-sweep-unverified";
+const SWEEP_INCOMPLETE: &str = "winusb-certificate-sweep-incomplete";
+
+fn helper_sweep_refusal(exit: u32) -> ApiRefusal {
+    match exit {
+        2 => ApiRefusal::with_remedy(
+            SWEEP_REFUSED,
+            "Windows refused the certificate cleanup before anything was removed",
+            "reopen Devices or run `ksx winusb sweep-certificates` to read the current classification",
+        ),
+        4 => ApiRefusal::with_remedy(
+            SWEEP_RECOVERY_REQUIRED,
+            "the certificate cleanup stopped in a state that requires recovery",
+            "do not repeat it blindly; run `ksx doctor` and inspect the WinUSB recovery report",
+        ),
+        _ => ApiRefusal::with_remedy(
+            SWEEP_FAILED,
+            format!("the elevated certificate cleanup failed with helper exit {exit}"),
+            "leave the certificates in place and run `ksx doctor` before retrying",
+        ),
+    }
+}
+
+pub fn sweep_certificates_machine_with(
+    elevator: &dyn HelperElevator,
+    report: &dyn Fn() -> Result<CertificateSweepPostState, ApiRefusal>,
+) -> Result<SweepCertificatesView, ApiRefusal> {
+    let exit = elevator.run(HelperMutation::SweepCertificates, "")?;
+    if exit != 0 {
+        return Err(helper_sweep_refusal(exit));
+    }
+    let after = report().map_err(|refusal| {
+        ApiRefusal::with_remedy(
+            SWEEP_UNVERIFIED,
+            format!(
+                "the helper finished, but the machine certificate state could not be verified: {}",
+                refusal.message
+            ),
+            "do not repeat the cleanup; run `ksx doctor` and inspect the current WinUSB state",
+        )
+    })?;
+    if !after.blocked.is_empty() {
+        return Err(ApiRefusal::with_remedy(
+            SWEEP_UNVERIFIED,
+            format!(
+                "the helper finished, but the fresh certificate classification is blocked: {}",
+                after.blocked.join("; ")
+            ),
+            "do not repeat the cleanup; run `ksx doctor` and inspect the installed WinUSB packages",
+        ));
+    }
+    if after.leftover_certificates != 0 {
+        return Err(ApiRefusal::with_remedy(
+            SWEEP_INCOMPLETE,
+            format!(
+                "{} leftover signing certificate(s) remain after the helper finished",
+                after.leftover_certificates
+            ),
+            "do not remove certificates manually; run `ksx doctor` and inspect the current classification",
+        ));
+    }
+    Ok(SweepCertificatesView {
+        helper_exit: exit,
+        leftover_certificates: 0,
+        message: "no leftover signing certificates remain on this machine".to_owned(),
+    })
+}
+
+fn sweep_block_message(block: &ksx_platform::winusb::SweepBlock) -> String {
+    match block {
+        ksx_platform::winusb::SweepBlock::UnattributedPackage { published_name } => {
+            format!("installed package {published_name} has no attributable KSX signer")
+        }
+        ksx_platform::winusb::SweepBlock::MismatchedCertificateIdentity { subject } => {
+            format!("{subject} names different certificate identities across the machine stores")
+        }
+    }
+}
+
+/// Fresh, authoritative state used to judge the elevated helper. A successful
+/// helper exit is necessary but never sufficient.
+pub fn certificate_sweep_state_now() -> Result<CertificateSweepPostState, ApiRefusal> {
+    let (rows, blocked) =
+        ksx_platform::winusb::transaction::certificate_report().map_err(|err| {
+            ApiRefusal::with_remedy(
+                "winusb-certificate-read-failed",
+                format!("the machine certificate state could not be read: {err}"),
+                "leave the certificates in place and run `ksx doctor` before retrying",
+            )
+        })?;
+    Ok(CertificateSweepPostState {
+        leftover_certificates: rows
+            .iter()
+            .filter(|row| !row.in_use)
+            .map(|row| row.stores.len())
+            .sum(),
+        blocked: blocked.iter().map(sweep_block_message).collect(),
+    })
+}
+
+pub fn sweep_certificates_machine() -> Result<SweepCertificatesView, ApiRefusal> {
+    sweep_certificates_machine_with(&SystemHelperElevator, &certificate_sweep_state_now)
 }
 
 /// Interfaces currently bound to winusb.sys, as a fresh read of the machine.
@@ -543,6 +678,8 @@ pub enum Action {
     ReleaseAll,
     /// Reconcile the journal against the machine.
     Repair,
+    /// Remove the signing certificates no installed package depends on.
+    SweepCertificates,
 }
 
 pub struct Options {
@@ -562,6 +699,7 @@ pub fn run(opts: Options) -> anyhow::Result<()> {
         Action::Release { device, force } => release(&survey, device, *force, &opts),
         Action::ReleaseAll => release_all(&opts),
         Action::Repair => repair(&opts),
+        Action::SweepCertificates => sweep_certificates(&opts),
     }
 }
 
@@ -863,12 +1001,143 @@ fn repair(opts: &Options) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `ksx winusb release-all`: the recovery that needs no journal.
+/// `ksx winusb sweep-certificates` — the leftovers, and only the leftovers.
 ///
-/// Prints what it will do and stops, like every other mutating verb, unless
-/// `--yes`. There is no device to name and no dry-run plan to render from a
-/// receipt, because the situation this exists for is the one where no receipt
-/// can be trusted -- so the "plan" is simply the truthful current state.
+/// Reports without an administrator, like `repair`: reading a machine store
+/// needs no elevation, and a person is entitled to know what is on their
+/// computer before being asked to approve anything. Only `--yes` elevates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CertificateSweepDecision {
+    ReportOnly,
+    NothingToDo,
+    Refused,
+    Apply,
+}
+
+fn certificate_sweep_decision(
+    yes: bool,
+    dry_run: bool,
+    blocked: bool,
+    leftover_certificates: usize,
+) -> CertificateSweepDecision {
+    if !yes || dry_run {
+        CertificateSweepDecision::ReportOnly
+    } else if blocked {
+        CertificateSweepDecision::Refused
+    } else if leftover_certificates == 0 {
+        CertificateSweepDecision::NothingToDo
+    } else {
+        CertificateSweepDecision::Apply
+    }
+}
+
+fn sweep_certificates(opts: &Options) -> anyhow::Result<()> {
+    let (rows, blocked) = match ksx_platform::winusb::transaction::certificate_report() {
+        Ok(pair) => pair,
+        Err(err) => {
+            certificate_sweep_refused(
+                &ApiRefusal::with_remedy(
+                    "winusb-certificate-read-failed",
+                    format!("the certificate stores could not be read: {err}"),
+                    "leave the certificates in place and run `ksx doctor` before retrying",
+                ),
+                opts.json,
+                None,
+                false,
+            );
+        }
+    };
+    let orphans: Vec<_> = rows.iter().filter(|r| !r.in_use).collect();
+    let kept: Vec<_> = rows.iter().filter(|r| r.in_use).collect();
+    let certificates: usize = orphans.iter().map(|r| r.stores.len()).sum();
+    let block_messages: Vec<String> = blocked.iter().map(sweep_block_message).collect();
+    // A block is not a partial result. If any ksx package cannot say which
+    // certificate signed it, nothing is safe to remove -- see
+    // `sweep_orphaned_certificates`.
+    let decision =
+        certificate_sweep_decision(opts.yes, opts.dry_run, !blocked.is_empty(), certificates);
+    let wants_apply = opts.yes && !opts.dry_run;
+    let will_apply = decision == CertificateSweepDecision::Apply;
+    let mut result = serde_json::json!({
+        "ok": true,
+        "action": "sweep-certificates",
+        "leftover_subjects": orphans.iter().map(|r| &r.subject).collect::<Vec<_>>(),
+        "leftover_certificates": certificates,
+        "in_use_subjects": kept.iter().map(|r| &r.subject).collect::<Vec<_>>(),
+        "blocked": block_messages,
+        "will_apply": will_apply,
+        "applied": false,
+        "attempted": false,
+        "verified": true,
+    });
+
+    if !opts.json {
+        println!("Signing certificates ksx put in this computer's trust stores.\n");
+        if rows.is_empty() {
+            println!("  None. Nothing to do.");
+        }
+        for row in &orphans {
+            println!("  leftover   {} ({})", row.subject, row.stores.join(", "));
+        }
+        for row in &kept {
+            println!(
+                "  IN USE     {} — signs an installed driver package",
+                row.subject
+            );
+        }
+        if !blocked.is_empty() {
+            println!();
+            println!("  REFUSED. The current package/certificate inventory is not safe to mutate:");
+            for message in &block_messages {
+                println!("    {message}");
+            }
+        } else if !orphans.is_empty() {
+            println!();
+            println!("  Removing the leftovers changes no driver and no keyboard. The ones");
+            println!("  marked IN USE are left alone: deleting one breaks the package that");
+            println!("  is holding a keyboard right now.");
+        }
+        if !wants_apply && blocked.is_empty() && !orphans.is_empty() {
+            println!("\nNothing was removed. Re-run with --yes to apply.");
+        }
+    }
+
+    if decision == CertificateSweepDecision::Refused {
+        certificate_sweep_refused(
+            &ApiRefusal::with_remedy(
+                SWEEP_REFUSED,
+                format!("certificate cleanup refused: {}", block_messages.join("; ")),
+                "leave the certificates in place and run `ksx doctor` before retrying",
+            ),
+            opts.json,
+            Some(result),
+            false,
+        );
+    }
+    if !will_apply {
+        if opts.json {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        return Ok(());
+    }
+
+    let view = match sweep_certificates_machine() {
+        Ok(view) => view,
+        Err(err) => certificate_sweep_refused(&err, opts.json, Some(result), true),
+    };
+    if opts.json {
+        result["applied"] = serde_json::json!(true);
+        result["attempted"] = serde_json::json!(true);
+        result["verified"] = serde_json::json!(true);
+        result["helper_exit"] = serde_json::json!(view.helper_exit);
+        result["leftover_certificates_after"] = serde_json::json!(view.leftover_certificates);
+        result["message"] = serde_json::json!(view.message);
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("\n{}", view.message);
+    }
+    Ok(())
+}
 fn release_all(opts: &Options) -> anyhow::Result<()> {
     let bound = match winusb_bound_now() {
         Ok(bound) => bound,
@@ -1028,6 +1297,56 @@ fn mutation_refused(refusal: &ApiRefusal, json: bool) -> ! {
     std::process::exit(EXIT_APPLY_FAILED);
 }
 
+fn certificate_sweep_exit_code(refusal: &ApiRefusal) -> i32 {
+    match refusal.code.as_str() {
+        SWEEP_REFUSED | "winusb-certificate-read-failed" | ksx_api::codes::BAD_REQUEST => {
+            EXIT_REFUSED
+        }
+        SWEEP_RECOVERY_REQUIRED | SWEEP_UNVERIFIED | SWEEP_INCOMPLETE => EXIT_RECOVERY_REQUIRED,
+        _ => EXIT_APPLY_FAILED,
+    }
+}
+
+fn certificate_sweep_refused(
+    refusal: &ApiRefusal,
+    json: bool,
+    plan: Option<serde_json::Value>,
+    attempted: bool,
+) -> ! {
+    if json {
+        let mut value = plan.unwrap_or_else(|| {
+            serde_json::json!({
+                "action": "sweep-certificates",
+                "applied": false,
+            })
+        });
+        value["ok"] = serde_json::json!(false);
+        value["will_apply"] = serde_json::json!(false);
+        value["attempted"] = serde_json::json!(attempted);
+        value["verified"] = serde_json::json!(false);
+        value["applied"] = if attempted {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(false)
+        };
+        value["error"] = serde_json::json!({
+            "code": refusal.code,
+            "message": refusal.message,
+            "remedy": refusal.remedy,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        );
+    } else {
+        eprintln!("REFUSED: {}", refusal.message);
+        if let Some(remedy) = &refusal.remedy {
+            eprintln!("\n{remedy}");
+        }
+    }
+    std::process::exit(certificate_sweep_exit_code(refusal));
+}
+
 fn mutation_unverified(view: &WinusbMutationView, expected: &str, json: bool) -> ! {
     if json {
         println!(
@@ -1181,6 +1500,119 @@ mod tests {
         assert_eq!(
             helper_arguments(HelperMutation::Release, instance),
             vec!["release-exact", instance, "--confirm-release"]
+        );
+        assert_eq!(
+            helper_arguments(HelperMutation::SweepCertificates, "ignored"),
+            vec!["sweep-certificates"]
+        );
+    }
+
+    fn sweep_state(left: usize, blocked: &[&str]) -> CertificateSweepPostState {
+        CertificateSweepPostState {
+            leftover_certificates: left,
+            blocked: blocked
+                .iter()
+                .map(|message| (*message).to_owned())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn certificate_sweep_requires_zero_exit_and_a_clean_authoritative_postread() {
+        for (exit, expected_code) in [
+            (2, SWEEP_REFUSED),
+            (3, SWEEP_FAILED),
+            (4, SWEEP_RECOVERY_REQUIRED),
+            (19, SWEEP_FAILED),
+        ] {
+            let elevator = FakeElevator {
+                exit,
+                calls: Mutex::new(Vec::new()),
+            };
+            let report = || panic!("a failed helper must not be licensed by a later read");
+            let refusal = sweep_certificates_machine_with(&elevator, &report)
+                .expect_err("nonzero helper exit");
+            assert_eq!(refusal.code, expected_code, "exit {exit}");
+        }
+
+        let elevator = FakeElevator {
+            exit: 0,
+            calls: Mutex::new(Vec::new()),
+        };
+        let leftovers = || Ok(sweep_state(2, &[]));
+        let refusal =
+            sweep_certificates_machine_with(&elevator, &leftovers).expect_err("leftovers remain");
+        assert_eq!(refusal.code, SWEEP_INCOMPLETE);
+
+        let blocked = || Ok(sweep_state(0, &["signer attribution changed"]));
+        let refusal =
+            sweep_certificates_machine_with(&elevator, &blocked).expect_err("blocked postread");
+        assert_eq!(refusal.code, SWEEP_UNVERIFIED);
+
+        let unreadable = || {
+            Err(ApiRefusal::new(
+                "winusb-certificate-read-failed",
+                "store unavailable",
+            ))
+        };
+        let refusal = sweep_certificates_machine_with(&elevator, &unreadable)
+            .expect_err("unreadable poststate");
+        assert_eq!(refusal.code, SWEEP_UNVERIFIED);
+
+        let clean = || Ok(sweep_state(0, &[]));
+        let view = sweep_certificates_machine_with(&elevator, &clean).expect("verified clean");
+        assert_eq!(view.helper_exit, 0);
+        assert_eq!(view.leftover_certificates, 0);
+        assert_eq!(
+            elevator.calls.lock().unwrap().as_slice(),
+            &[
+                (HelperMutation::SweepCertificates, String::new()),
+                (HelperMutation::SweepCertificates, String::new()),
+                (HelperMutation::SweepCertificates, String::new()),
+                (HelperMutation::SweepCertificates, String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn certificate_sweep_exit_codes_distinguish_refusal_failure_and_recovery() {
+        assert_eq!(
+            certificate_sweep_exit_code(&ApiRefusal::new(SWEEP_REFUSED, "blocked")),
+            EXIT_REFUSED
+        );
+        assert_eq!(
+            certificate_sweep_exit_code(&ApiRefusal::new(SWEEP_FAILED, "failed")),
+            EXIT_APPLY_FAILED
+        );
+        for code in [SWEEP_RECOVERY_REQUIRED, SWEEP_UNVERIFIED, SWEEP_INCOMPLETE] {
+            assert_eq!(
+                certificate_sweep_exit_code(&ApiRefusal::new(code, "unverified")),
+                EXIT_RECOVERY_REQUIRED
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_sweep_never_elevates_for_report_dry_run_block_or_zero_leftovers() {
+        assert_eq!(
+            certificate_sweep_decision(false, false, false, 2),
+            CertificateSweepDecision::ReportOnly
+        );
+        assert_eq!(
+            certificate_sweep_decision(true, true, false, 2),
+            CertificateSweepDecision::ReportOnly
+        );
+        assert_eq!(
+            certificate_sweep_decision(true, false, true, 2),
+            CertificateSweepDecision::Refused
+        );
+        assert_eq!(
+            certificate_sweep_decision(true, false, false, 0),
+            CertificateSweepDecision::NothingToDo
+        );
+        assert_eq!(
+            certificate_sweep_decision(true, false, false, 2),
+            CertificateSweepDecision::Apply
         );
     }
 

@@ -871,13 +871,11 @@ impl ksx_api::MachineSource for LocalMachine {
             .iter()
             .map(|f| ksx_api::WinusbResidueRow {
                 board: name_of(&f.instance_id),
-                // From the PHASE, not the drift. Five of the nine receipts on
-                // the reporting machine were `RecoveryRequired` - ksx writing
-                // down that something had gone wrong - and every one of them
-                // has drift `ReleaseFinished`. Wording these off the drift gave
-                // all nine the same sentence and quietly dropped the fact that
-                // ksx had flagged a problem, which is exactly the half a person
-                // would want to know about their own machine.
+                // From the PHASE, not the drift. A reproduced stale set mixed
+                // `RecoveryRequired` receipts with ordinary finished ones even
+                // though all had drift `ReleaseFinished`. Wording these from
+                // drift alone quietly dropped the fact that ksx had flagged a
+                // problem, exactly what a person would want to know.
                 says: match f.phase {
                     Phase::Preparing | Phase::Prepared | Phase::Installed => {
                         "ksx recorded that it was in the middle of preparing this keyboard"
@@ -993,6 +991,67 @@ impl ksx_api::MachineSource for LocalMachine {
             certificates_in_use,
             certificates_unknown,
         })
+    }
+
+    /// Remove only certificates the WinUSB transaction layer proves are not
+    /// signing an installed KSX package, then return an authoritative fresh
+    /// residue read. The browser never supplies a subject, thumbprint, store
+    /// or path; the installed fixed-purpose helper owns all classification and
+    /// mutation details.
+    #[cfg(windows)]
+    fn winusb_sweep_certificates(
+        &self,
+        spec: &ksx_api::WinusbCertificateSweepSpec,
+    ) -> Result<ksx_api::WinusbResidueView, Refusal> {
+        if !spec.confirm {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                "removing leftover KSX signing certificates was not confirmed",
+                "tick the confirmation box, then try again",
+            ));
+        }
+
+        // Revalidate the rendered offer before elevation. A hand-authored or
+        // stale POST must not turn a hidden/disabled button into authority.
+        let before = self.winusb_residue()?;
+        if !before.certificates_unknown.trim().is_empty() {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "KSX cannot prove which signing certificates are safe to remove",
+                "leave them in place and inspect the installed WinUSB packages with `ksx doctor`",
+            ));
+        }
+        if before.leftover_certificates == 0 {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "there are no leftover KSX signing certificates to remove",
+                "reload Devices to read the current machine state",
+            ));
+        }
+
+        // The helper's stdout cannot cross the UAC boundary and its exit code
+        // is not proof of state. Ignore its presentation-shaped answer and
+        // judge the operation only by a new receipt/package/store read.
+        let _ = crate::winusb::sweep_certificates_machine()?;
+        let after = self.winusb_residue()?;
+        if !after.readable || !after.certificates_unknown.trim().is_empty() {
+            return Err(Refusal::with_remedy(
+                "winusb-certificate-sweep-unverified",
+                "the certificate cleanup finished, but KSX could not verify the machine trust stores afterwards",
+                "do not repeat the cleanup; reopen Devices or run `ksx doctor` to read the current state",
+            ));
+        }
+        if after.leftover_certificates != 0 {
+            return Err(Refusal::with_remedy(
+                "winusb-certificate-sweep-incomplete",
+                format!(
+                    "{} leftover KSX signing certificate(s) are still present after cleanup",
+                    after.leftover_certificates
+                ),
+                "do not assume they are safe to remove manually; run `ksx doctor` for the current classification",
+            ));
+        }
+        Ok(after)
     }
 
     /// The logon registration, read.

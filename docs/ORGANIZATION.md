@@ -67,6 +67,14 @@ Every item moved verbatim. No route changed, no test changed, and the 89 HTTP
 integration tests pass unmodified — which is the evidence that it was a move
 and not a rewrite.
 
+**Orphaned WinUSB certificates now have a narrow cleaner.** The read-only
+machine view classifies KSX certificates against the signer reported by every
+installed KSX package. `ksx winusb sweep-certificates` reports without
+elevation; `--yes` crosses the fixed installed-helper boundary and removes only
+exact thumbprint/DER identities no package uses. An unattributed package or a
+subject identity mismatch blocks the whole sweep. The command removes no
+driver and changes no keyboard binding.
+
 The split was done by script with a **hard coverage gate**: it refuses to write
 anything unless every non-blank line of the original lands in exactly one
 output file. That gate earned its place immediately. The first attempt dropped
@@ -89,10 +97,6 @@ files.
   in `CONFIG_SURFACES` in `crates/ksx-app/tests/parity.rs`, which asserts the
   set has not grown. `starting_user_index` is the one to do first: it decides
   which XInput slot player 1 lands on.
-- **Orphaned WinUSB certificates have no cleaner.** `repair_with` settles the
-  journal and never touches the certificate store; `delete_matching` only
-  removes the pair belonging to its own transaction. Nothing, in any surface,
-  removes a pair whose transaction is over.
 - **§3 cell cross-references are never validated.** `classify` reads only the
   first word of a cell, so `**primary** (§3a)` passes with the parenthetical
   unchecked — and the pads row points at §3a, which is about WinUSB.

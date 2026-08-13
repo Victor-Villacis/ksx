@@ -228,6 +228,8 @@ pub enum TransactionError {
     Verification(String),
     #[error("driver-store inventory is not authoritative: {0}")]
     Inventory(String),
+    #[error("certificate sweep refused: {0}")]
+    SweepBlocked(String),
     #[error("{command} failed with exit {code}: {output}")]
     CommandFailed {
         command: String,
@@ -806,8 +808,8 @@ fn rollback_installed(
         // backend reports success only on `Released` and recovery only on
         // `RecoveryRequired`, so a stuck `Releasing` matched neither and every
         // such release told the user it had failed AFTER the driver was
-        // already rebound. Four receipts on the reporting machine, all with a
-        // keyboard that types fine.
+        // already rebound. The regression fixture carries several such stale
+        // receipts beside a keyboard that types fine.
         //
         // The phase, not the error type, is the record. Persist it here when
         // nobody else has.
@@ -1255,12 +1257,125 @@ struct PnPUtilInventory<'a> {
     runner: &'a dyn CommandRunner,
 }
 
+fn authoritative_driver_inventory(text: &str) -> Result<Vec<StoreDriver>, TransactionError> {
+    let drivers = parse_enum_drivers(text);
+    let raw_values: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.split_once(':').map(|(_, value)| value.trim()))
+        .collect();
+    let is_oem_name = |value: &str| {
+        let lower = value.to_ascii_lowercase();
+        lower.starts_with("oem")
+            && lower.ends_with(".inf")
+            && !lower[3..lower.len() - 4].is_empty()
+            && lower[3..lower.len() - 4]
+                .chars()
+                .all(|character| character.is_ascii_digit())
+    };
+    let mut parsed_published: Vec<String> = drivers
+        .iter()
+        .map(|driver| driver.published_name.to_ascii_lowercase())
+        .collect();
+    let mut parsed_original: Vec<String> = drivers
+        .iter()
+        .map(|driver| driver.original_name.to_ascii_lowercase())
+        .collect();
+    parsed_published.sort();
+    parsed_original.sort();
+
+    // Compare the raw INF stream by record position, not filename spelling.
+    // An original source package can legitimately be named `oemsetup.inf` or
+    // even `oem123.inf`; only the first INF in each pnputil record is the
+    // published driver-store name.
+    let mut raw_published = Vec::new();
+    let mut raw_original = Vec::new();
+    let mut inf_in_record = 0usize;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            inf_in_record = 0;
+            continue;
+        }
+        let Some((_, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if !value.to_ascii_lowercase().ends_with(".inf") {
+            continue;
+        }
+        match inf_in_record {
+            0 => raw_published.push(value.to_ascii_lowercase()),
+            1 => raw_original.push(value.to_ascii_lowercase()),
+            _ => {
+                // More than two INF fields without a record boundary cannot
+                // be attributed authoritatively.
+                raw_published.push("<malformed-extra-inf>".to_owned());
+            }
+        }
+        inf_in_record += 1;
+    }
+    raw_published.sort();
+    raw_original.sort();
+
+    let recognisable_header = text.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("microsoft") && lower.contains("pnp")
+    });
+    if raw_published != parsed_published
+        || raw_original != parsed_original
+        || raw_published.iter().any(|name| !is_oem_name(name))
+        || drivers
+            .iter()
+            .any(|driver| driver.published_name.is_empty() || driver.original_name.is_empty())
+        || (raw_published.is_empty() && !recognisable_header)
+    {
+        return Err(TransactionError::Inventory(format!(
+            "pnputil /enum-drivers did not yield an authoritative Driver Store inventory (raw published/original entries: {}/{}, parsed entries: {})",
+            raw_published.len(),
+            raw_original.len(),
+            drivers.len()
+        )));
+    }
+
+    // The destructive certificate sweep cares most about our own values. If
+    // either a canonical KSX INF name or signer subject appeared in raw output
+    // but did not survive the generic parser, classification is incomplete.
+    let raw_ksx_infs = raw_values
+        .iter()
+        .filter(|value| {
+            is_ksx_package(&StoreDriver {
+                original_name: (**value).to_owned(),
+                ..StoreDriver::default()
+            })
+        })
+        .count();
+    let parsed_ksx_infs = drivers
+        .iter()
+        .filter(|driver| is_ksx_package(driver))
+        .count();
+    let raw_ksx_signers = raw_values
+        .iter()
+        .filter(|value| super::is_ksx_signer_subject(value))
+        .count();
+    let parsed_ksx_signers = drivers
+        .iter()
+        .filter(|driver| driver.signer_subject.is_some())
+        .count();
+    if raw_ksx_infs != parsed_ksx_infs || raw_ksx_signers != parsed_ksx_signers {
+        return Err(TransactionError::Inventory(
+            "pnputil /enum-drivers contained KSX package data the inventory parser could not attribute"
+                .to_owned(),
+        ));
+    }
+    Ok(drivers)
+}
+
 #[cfg(windows)]
 impl DriverInventory for PnPUtilInventory<'_> {
     fn enumerate(&self) -> Result<Vec<StoreDriver>, TransactionError> {
         let enumerate = command(&["/enum-drivers"], "inventory the driver store")?;
         let result = run_required(self.runner, &enumerate)?;
-        Ok(parse_enum_drivers(&result.output))
+        authoritative_driver_inventory(&result.output)
     }
 }
 
@@ -2730,8 +2845,8 @@ mod windows_trust {
         // compensation then found the certificate still present, called itself
         // a failed rollback, and left the transaction recovery-required with a
         // certificate in LocalMachine Root and TrustedPublisher per attempt.
-        // Measured on the reporting machine: the identical delete commits when
-        // the store is opened for write.
+        // The identical delete commits only when the store is opened for
+        // write; read-only access can misleadingly report success.
         let flags = CERT_OPEN_STORE_FLAGS(
             CERT_SYSTEM_STORE_LOCAL_MACHINE
                 | CERT_STORE_OPEN_EXISTING_FLAG.0
@@ -2869,7 +2984,7 @@ mod windows_trust {
         Ok(names)
     }
 
-    fn delete_owned_private_keys() -> Result<(), TransactionError> {
+    pub(super) fn delete_owned_private_keys() -> Result<(), TransactionError> {
         for container in owned_private_keys()? {
             let wide: Vec<u16> = container.encode_utf16().chain(std::iter::once(0)).collect();
             let mut unused = 0usize;
@@ -2923,7 +3038,7 @@ mod windows_trust {
         Ok(())
     }
 
-    fn delete_matching(
+    pub(super) fn delete_matching(
         name: &str,
         subject: &str,
         thumbprint: Option<&str>,
@@ -2978,7 +3093,7 @@ mod windows_trust {
         // found the certificate still present, called itself a failed
         // rollback, and left the transaction recovery-required with one
         // certificate per attempt in LocalMachine Root and TrustedPublisher.
-        // Six of each on the reporting machine.
+        // Repeated attempts can otherwise strand one pair each time.
         //
         // The measurement behind the write-access flag above was a .NET
         // `X509Store.Open(ReadWrite)` + `Remove()` on that same machine,
@@ -3007,8 +3122,8 @@ mod windows_trust {
     #[derive(Clone)]
     pub(super) struct OwnedCertificate {
         pub(super) subject: String,
-        thumbprint: String,
-        der_hash: String,
+        pub(super) thumbprint: String,
+        pub(super) der_hash: String,
     }
 
     pub(super) fn owned_certificates(
@@ -3261,8 +3376,8 @@ pub fn reconcile(receipts: &[Receipt], bound: &[String], packages: &[StoreDriver
             // same board has been prepared more than once the live claim's
             // binding would otherwise make every older receipt look
             // unfinished. Acting on that would release a keyboard the user has
-            // prepared right now -- measured on the reporting machine, where
-            // two spent receipts and one live claim all name the I-PAC.
+            // prepared right now -- the regression fixture has two spent
+            // receipts and one live claim naming the same board.
             let residue = packages.iter().any(|p| {
                 p.original_name
                     .eq_ignore_ascii_case(&receipt.original_inf_name)
@@ -3445,7 +3560,12 @@ pub fn certificate_report() -> Result<(Vec<CertificateResidue>, Vec<SweepBlock>)
     let mut owned = Vec::new();
     for store in ["Root", "TrustedPublisher"] {
         for cert in windows_trust::owned_certificates(store)? {
-            owned.push((store.to_owned(), cert.subject));
+            owned.push((
+                store.to_owned(),
+                cert.subject,
+                cert.thumbprint,
+                cert.der_hash,
+            ));
         }
     }
     let runner = PnPUtilRunner;
@@ -3456,6 +3576,120 @@ pub fn certificate_report() -> Result<(Vec<CertificateResidue>, Vec<SweepBlock>)
 #[cfg(not(windows))]
 pub fn certificate_report() -> Result<(Vec<CertificateResidue>, Vec<SweepBlock>), TransactionError>
 {
+    Err(TransactionError::Unsupported)
+}
+
+/// What a certificate sweep did, or would do.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SweepResult {
+    /// Subjects removed, one entry per SUBJECT (each was in both stores).
+    pub removed: Vec<String>,
+    /// Subjects left alone because they still sign an installed package.
+    pub kept: Vec<String>,
+    /// Certificates actually deleted, counted per store.
+    pub certificates: usize,
+    pub message: String,
+}
+
+fn sweep_classified_certificates(
+    rows: Vec<CertificateResidue>,
+    blocked: Vec<SweepBlock>,
+    mut cleanup_keys: impl FnMut() -> Result<(), TransactionError>,
+    mut delete: impl FnMut(&CertificateResidue, &str) -> Result<(), TransactionError>,
+) -> Result<SweepResult, TransactionError> {
+    if let Some(block) = blocked.first() {
+        return Err(TransactionError::SweepBlocked(match block {
+            SweepBlock::UnattributedPackage { published_name } => format!(
+                "{published_name} is installed but does not say which certificate signed it, so none can be judged safe to remove"
+            ),
+            SweepBlock::MismatchedCertificateIdentity { subject } => format!(
+                "{subject} names different certificate identities across the machine stores, so none can be judged safe to remove"
+            ),
+        }));
+    }
+
+    let (orphans, kept): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| !row.in_use);
+    if !orphans.is_empty() {
+        // A provider crash can strand a random one-time key. It is never
+        // required to validate an installed package; only the public
+        // certificate is. The production callback touches solely the fixed
+        // KSX-libwdi-<32 hex> namespace.
+        cleanup_keys()?;
+    }
+    let mut certificates = 0usize;
+    for row in &orphans {
+        for store in &row.stores {
+            delete(row, store)?;
+            certificates += 1;
+        }
+    }
+
+    let kept: Vec<String> = kept.into_iter().map(|row| row.subject).collect();
+    let removed: Vec<String> = orphans.into_iter().map(|row| row.subject).collect();
+    let message = match (removed.len(), kept.len()) {
+        (0, 0) => "there are no ksx signing certificates on this machine".to_owned(),
+        (0, count) => format!(
+            "nothing to remove; {count} certificate subject(s) still sign an installed driver"
+        ),
+        (count, 0) => format!(
+            "removed {count} leftover certificate subject(s) ({certificates} certificates)"
+        ),
+        (removed_count, kept_count) => format!(
+            "removed {removed_count} leftover certificate subject(s) ({certificates} certificates); {kept_count} still sign an installed driver and were left alone"
+        ),
+    };
+    Ok(SweepResult {
+        removed,
+        kept,
+        certificates,
+        message,
+    })
+}
+
+/// **Remove the KSX-owned certificates nothing depends on, and only those.**
+///
+/// The difference from [`TrustVerifier::cleanup_owned_residue`], which removes
+/// EVERY owned certificate: that one is correct after every driver package has
+/// been removed, and wrong while one is installed, because it would delete the
+/// certificate that signed the package currently holding a keyboard. This one
+/// is for the ordinary case — a machine that has been used, with leftovers
+/// from attempts that are finished and one live claim that must keep working.
+///
+/// REFUSES RATHER THAN GUESSES. If [`crate::winusb::classify_certificates`]
+/// could not attribute a ksx package to a certificate, nothing is deleted at
+/// all — not even the rows it *could* classify. A package that is installed
+/// might depend on any of them, and with nothing saying which, every deletion
+/// is a guess. Refusing costs a person some disk; guessing wrong costs them a
+/// keyboard that stops working at the next boot.
+#[cfg(windows)]
+pub fn sweep_orphaned_certificates() -> Result<SweepResult, TransactionError> {
+    if crate::process::is_elevated() != Some(true) {
+        return Err(TransactionError::Verification(
+            "sweeping certificates writes to the machine stores and needs an administrator"
+                .to_owned(),
+        ));
+    }
+    let _lock = MutationGuard::acquire()?;
+    let (rows, blocked) = certificate_report()?;
+    sweep_classified_certificates(
+        rows,
+        blocked,
+        windows_trust::delete_owned_private_keys,
+        |row, store| {
+            // Through `delete_matching`, never around it: every identity and
+            // duplicate guard remains in force at deletion time.
+            windows_trust::delete_matching(
+                store,
+                &row.subject,
+                Some(&row.thumbprint),
+                Some(&row.der_hash),
+            )
+        },
+    )
+}
+
+#[cfg(not(windows))]
+pub fn sweep_orphaned_certificates() -> Result<SweepResult, TransactionError> {
     Err(TransactionError::Unsupported)
 }
 /// Real repair. The installed elevated helper is the only intended caller.
@@ -3895,6 +4129,189 @@ mod tests {
     const OEM: &str = "oem42.inf";
     const HID_CLASS: &str = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
 
+    fn driver_inventory_text(published: &str, original: &str, signer: Option<&str>) -> String {
+        let mut text = format!(
+            "Microsoft PnP Utility\n\nPublished Name : {published}\nOriginal Name : {original}\nProvider Name : KSX\n"
+        );
+        if let Some(signer) = signer {
+            text.push_str(&format!("Signer Name : {signer}\n"));
+        }
+        text
+    }
+
+    #[test]
+    fn authoritative_inventory_accepts_complete_localised_shape_and_empty_output() {
+        let text = driver_inventory_text(
+            "oem42.inf",
+            "ksx-winusb-0123456789abcdef0123456789abcdef.inf",
+            Some("KSX WinUSB 0123456789abcdef0123456789abcdef"),
+        );
+        let drivers = authoritative_driver_inventory(&text).expect("complete inventory");
+        assert_eq!(drivers.len(), 1);
+        assert_eq!(drivers[0].published_name, "oem42.inf");
+        for original in ["oemsetup.inf", "oem123.inf"] {
+            let text = driver_inventory_text("oem43.inf", original, None);
+            let parsed = authoritative_driver_inventory(&text)
+                .expect("original INF spelling is positional, not an oem-name heuristic");
+            assert_eq!(parsed[0].published_name, "oem43.inf");
+            assert_eq!(parsed[0].original_name, original);
+        }
+        assert_eq!(
+            authoritative_driver_inventory("Microsoft PnP Utility\n")
+                .expect("a legitimate empty store"),
+            Vec::<StoreDriver>::new()
+        );
+    }
+
+    #[test]
+    fn authoritative_inventory_rejects_partial_or_missed_records() {
+        let complete = driver_inventory_text(
+            "oem42.inf",
+            "ksx-winusb-0123456789abcdef0123456789abcdef.inf",
+            Some("KSX WinUSB 0123456789abcdef0123456789abcdef"),
+        );
+        let missing_original =
+            "Microsoft PnP Utility\n\nPublished Name : oem42.inf\nProvider Name : KSX\n";
+        let raw_ksx_missed = "Microsoft PnP Utility\n\nPublished Name : oem42.inf\nOriginal Name : ksx-winusb-0123456789abcdef0123456789abcdef.inf\nSigner Name : KSX WinUSB 0123456789abcdef0123456789abcdef\n\nPublished Name : oem43.inf\nOriginal Name : foreign.inf\nSigner Name : KSX WinUSB fedcba9876543210fedcba9876543210\nSigner Copy : KSX WinUSB 11111111111111111111111111111111\n";
+
+        for text in [
+            missing_original.to_owned(),
+            format!("{complete}\nPublished Name : oem43.inf\n"),
+            raw_ksx_missed.to_owned(),
+            "not pnputil output".to_owned(),
+        ] {
+            assert!(
+                matches!(
+                    authoritative_driver_inventory(&text),
+                    Err(TransactionError::Inventory(_))
+                ),
+                "partial or unrecognisable inventory must fail closed: {text}"
+            );
+        }
+    }
+
+    fn residue(subject: &str, in_use: bool) -> CertificateResidue {
+        CertificateResidue {
+            subject: subject.to_owned(),
+            stores: vec!["Root".to_owned(), "TrustedPublisher".to_owned()],
+            thumbprint: format!("thumb-{subject}"),
+            der_hash: format!("der-{subject}"),
+            in_use,
+        }
+    }
+
+    #[test]
+    fn certificate_sweep_deletes_only_exact_orphans_and_keeps_live_signers() {
+        let mut keys = 0usize;
+        let mut deleted = Vec::new();
+        let result = sweep_classified_certificates(
+            vec![
+                residue("CN=KSX WinUSB orphan", false),
+                residue("CN=KSX WinUSB live", true),
+            ],
+            Vec::new(),
+            || {
+                keys += 1;
+                Ok(())
+            },
+            |row, store| {
+                deleted.push((
+                    row.subject.clone(),
+                    row.thumbprint.clone(),
+                    row.der_hash.clone(),
+                    store.to_owned(),
+                ));
+                Ok(())
+            },
+        )
+        .expect("safe sweep");
+
+        assert_eq!(keys, 1);
+        assert_eq!(result.removed, vec!["CN=KSX WinUSB orphan"]);
+        assert_eq!(result.kept, vec!["CN=KSX WinUSB live"]);
+        assert_eq!(result.certificates, 2);
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted.iter().all(|entry| entry.0.ends_with("orphan")));
+        assert!(deleted.iter().any(|entry| entry.3 == "Root"));
+        assert!(deleted.iter().any(|entry| entry.3 == "TrustedPublisher"));
+    }
+
+    #[test]
+    fn certificate_sweep_blocks_before_keys_or_certificates_and_noop_stays_unelevated() {
+        let mut keys = 0usize;
+        let mut deletes = 0usize;
+        let blocked = sweep_classified_certificates(
+            vec![residue("CN=KSX WinUSB orphan", false)],
+            vec![SweepBlock::UnattributedPackage {
+                published_name: "oem42.inf".to_owned(),
+            }],
+            || {
+                keys += 1;
+                Ok(())
+            },
+            |_, _| {
+                deletes += 1;
+                Ok(())
+            },
+        )
+        .expect_err("blocked classification");
+        assert!(matches!(blocked, TransactionError::SweepBlocked(_)));
+        assert_eq!((keys, deletes), (0, 0));
+
+        let clean = sweep_classified_certificates(
+            vec![residue("CN=KSX WinUSB live", true)],
+            Vec::new(),
+            || panic!("no orphan means no private-key cleanup"),
+            |_, _| panic!("no orphan means no certificate deletion"),
+        )
+        .expect("clean no-op");
+        assert!(clean.removed.is_empty());
+    }
+
+    #[test]
+    fn certificate_sweep_never_starts_certificate_deletion_when_key_cleanup_fails() {
+        let mut deletes = 0usize;
+        let error = sweep_classified_certificates(
+            vec![residue("CN=KSX WinUSB orphan", false)],
+            Vec::new(),
+            || {
+                Err(TransactionError::RecoveryRequired(
+                    "stranded key could not be removed".to_owned(),
+                ))
+            },
+            |_, _| {
+                deletes += 1;
+                Ok(())
+            },
+        )
+        .expect_err("key cleanup is a precondition");
+        assert!(matches!(error, TransactionError::RecoveryRequired(_)));
+        assert_eq!(deletes, 0);
+    }
+
+    #[test]
+    fn certificate_sweep_propagates_identity_drift_and_stops_after_failure() {
+        let mut stores = Vec::new();
+        let error = sweep_classified_certificates(
+            vec![residue("CN=KSX WinUSB orphan", false)],
+            Vec::new(),
+            || Ok(()),
+            |_, store| {
+                stores.push(store.to_owned());
+                if store == "TrustedPublisher" {
+                    Err(TransactionError::RecoveryRequired(
+                        "certificate identity changed".to_owned(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("identity drift must fail closed");
+        assert!(matches!(error, TransactionError::RecoveryRequired(_)));
+        assert_eq!(stores, vec!["Root", "TrustedPublisher"]);
+    }
+
     #[derive(Default)]
     struct FakeState {
         events: Vec<String>,
@@ -4268,13 +4685,13 @@ mod tests {
     /// Fails against that version: the receipt below is refused.
     #[test]
     fn a_receipt_belongs_to_its_transaction_however_the_store_spells_the_path() {
-        const ID: &str = "0a468347dd47c74246cebd18d3830285";
+        const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         // Exactly what `initialize` builds: no verbatim prefix.
         let store = ProgramDataStore {
             journal: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\journal"),
             transactions: PathBuf::from(r"C:\ProgramData\KSX\WinUSB\transactions"),
         };
-        // Exactly what was read off the reporting machine.
+        // A verbatim path spelling returned by the Windows filesystem APIs.
         let verbatim = format!(r"\\?\C:\ProgramData\KSX\WinUSB\transactions\{ID}\ksx-winusb-{ID}");
         let receipt = Receipt {
             schema: JOURNAL_SCHEMA,
@@ -4347,7 +4764,7 @@ mod tests {
         }
     }
 
-    const ID: &str = "0a468347dd47c74246cebd18d3830285";
+    const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DEVICE: &str = r"USB\VID_D209&PID_0430&MI_00\7&IPAC&0&0000";
 
     fn drift_of(phase: Phase, bound: bool, package: bool) -> Drift {
@@ -4365,8 +4782,8 @@ mod tests {
         reconcile(&receipts, &bound, &packages)[0].drift
     }
 
-    /// **The four receipts on the reporting machine.** Stuck at `releasing`
-    /// beside a keyboard that typed perfectly: the rebind had committed, the
+    /// Several receipts stuck at `releasing` beside a keyboard that typed
+    /// perfectly: the rebind had committed, the
     /// process recording it died, and every surface afterwards read the journal
     /// and called it a failure.
     ///
@@ -4435,9 +4852,8 @@ mod tests {
     /// bound" would mark every older receipt unfinished -- and a repair that
     /// acted on that would release a keyboard the user has prepared right now.
     ///
-    /// Measured on the reporting machine, which is exactly this shape: one
-    /// live `active` claim on the I-PAC and several spent receipts naming the
-    /// same board.
+    /// The fixture is exactly this shape: one live `active` claim and several
+    /// spent receipts naming the same board.
     ///
     /// Fails against the version that treated a binding as residue: the spent
     /// receipt below reads `release-incomplete`.
@@ -4639,7 +5055,7 @@ mod tests {
     fn a_keyboard_is_released_with_no_journal_anywhere() {
         let bare = Bare::new(
             vec![Bare::ksx_package(
-                "0a468347dd47c74246cebd18d3830285",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "oem42.inf",
             )],
             &[IPAC],
@@ -4680,7 +5096,7 @@ mod tests {
         };
         let bare = Bare::new(
             vec![
-                Bare::ksx_package("0a468347dd47c74246cebd18d3830285", "oem42.inf"),
+                Bare::ksx_package("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "oem42.inf"),
                 foreign,
             ],
             &[IPAC, OTHER],
@@ -4734,21 +5150,21 @@ mod tests {
             signer_subject: None,
         };
         assert!(is_ksx_package(&named(
-            "ksx-winusb-0a468347dd47c74246cebd18d3830285.inf"
+            "ksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.inf"
         )));
         // Uppercase published names are normal on Windows; the ID is not.
         assert!(is_ksx_package(&named(
-            "KSX-WinUSB-0a468347dd47c74246cebd18d3830285.INF"
+            "KSX-WinUSB-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.INF"
         )));
 
         for near_miss in [
             "ksx-winusb.inf",
             "ksx-winusb-.inf",
-            "ksx-winusb-0a468347dd47c74246cebd18d383028.inf",
-            "ksx-winusb-0a468347dd47c74246cebd18d38302855.inf",
-            "ksx-winusb-0a468347dd47c74246cebd18d383028z.inf",
-            "notksx-winusb-0a468347dd47c74246cebd18d3830285.inf",
-            "ksx-winusb-0a468347dd47c74246cebd18d3830285.cat",
+            "ksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.inf",
+            "ksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.inf",
+            "ksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz.inf",
+            "notksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.inf",
+            "ksx-winusb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cat",
         ] {
             assert!(
                 !is_ksx_package(&named(near_miss)),
@@ -4757,37 +5173,8 @@ mod tests {
         }
     }
 
-    /// The REAL certificate residue on the machine this runs on, removed by
-    /// the real code.
-    ///
-    /// Ignored: it needs elevation and it deletes certificates. It only ever
-    /// touches subjects beginning `CN=KSX WinUSB `, which nothing but ksx
-    /// mints.
-    ///
-    /// It exists because certificate deletion is the one step in a release
-    /// whose failure is invisible until afterwards -- the API reports success
-    /// and the verification, a fresh store read, is the only thing that
-    /// notices. Two separate mistakes hid there: a store opened without write
-    /// access, and then a store closed before the delete. Both were found on a
-    /// real machine and neither could be, in CI, because a runner has no
-    /// certificates to delete.
-    ///
-    /// ```text
-    /// cargo test -p ksx-platform --lib the_real_certificate -- --ignored --nocapture
-    /// ```
-    #[test]
-    #[ignore = "needs an elevated prompt; deletes CN=KSX WinUSB certificates"]
-    fn the_real_certificate_residue_on_this_machine_is_removable() {
-        match WindowsTrustVerifier.cleanup_owned_residue() {
-            Ok(()) => println!("every KSX-owned certificate and key container is gone"),
-            Err(err) => panic!(
-                "KSX-owned trust residue could not be removed, which is what turns a successful rebind into \"RECOVERY REQUIRED\": {err}"
-            ),
-        }
-    }
-
-    /// The REAL store on the machine this runs on, initialized by the real
-    /// code. Ignored, because it needs elevation and mutates the store's DACLs
+    /// A live store initialized by the production code. Ignored, because it
+    /// needs elevation and mutates the store's DACLs
     /// -- which is exactly what the installer's post-copy step does, on every
     /// install, so running it costs nothing a reinstall would not.
     ///

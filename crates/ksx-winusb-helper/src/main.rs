@@ -40,6 +40,11 @@ enum Operation {
     Release(ReleaseSpec),
     CleanupCoordinator,
     CleanupWorker,
+    /// Remove the KSX-owned signing certificates that no installed driver
+    /// package depends on, and ONLY those. `release-all` also clears
+    /// certificates, but only after removing every package, so it is the
+    /// wrong tool for a working cabinet with leftovers from earlier attempts.
+    SweepCertificates,
     /// Read-only pre-install audit. Deliberately NOT anchored to a protected
     /// directory: Setup runs it from its temporary directory, which the
     /// invoking user owns, and it mutates nothing.
@@ -76,6 +81,7 @@ where
         [verb] if verb == "check-store" => Ok(Operation::CheckStore),
         [verb] if verb == "release-all" => Ok(Operation::ReleaseAll),
         [verb] if verb == "repair" => Ok(Operation::Repair),
+        [verb] if verb == "sweep-certificates" => Ok(Operation::SweepCertificates),
         [verb, instance, spare, rebind, certificate]
             if verb == "prepare-exact"
                 && spare == "--confirm-spare-keyboard"
@@ -329,7 +335,8 @@ fn transaction_exit(error: &TransactionError) -> i32 {
         | TransactionError::LastKeyboard { .. }
         | TransactionError::SharedHardwareId { .. }
         | TransactionError::DeviceChanged(_)
-        | TransactionError::UnsafeHardwareId(_) => EXIT_REFUSED,
+        | TransactionError::UnsafeHardwareId(_)
+        | TransactionError::SweepBlocked(_) => EXIT_REFUSED,
         TransactionError::Verification(_)
         | TransactionError::Inventory(_)
         | TransactionError::CommandFailed { .. }
@@ -401,6 +408,10 @@ fn execute(operation: Operation) -> (i32, Value) {
             ),
             Err(error) => failed_transaction_value("repair", error),
         },
+        Operation::SweepCertificates => sweep_certificates_with(
+            installed_self,
+            ksx_platform::winusb::transaction::sweep_orphaned_certificates,
+        ),
         Operation::ReleaseAll => match ksx_platform::winusb::transaction::release_all() {
             Ok(result) => (
                 EXIT_SUCCESS,
@@ -470,6 +481,32 @@ fn execute(operation: Operation) -> (i32, Value) {
     }
 }
 
+fn sweep_certificates_with(
+    anchor: impl FnOnce() -> Result<PathBuf, String>,
+    sweep: impl FnOnce() -> Result<ksx_platform::winusb::transaction::SweepResult, TransactionError>,
+) -> (i32, Value) {
+    if let Err(message) = anchor() {
+        return (
+            EXIT_INTERNAL,
+            error_value("sweep-certificates", "internal", message),
+        );
+    }
+    match sweep() {
+        Ok(result) => (
+            EXIT_SUCCESS,
+            json!({
+                "ok": true,
+                "operation": "sweep-certificates",
+                "removed": result.removed,
+                "kept": result.kept,
+                "certificates": result.certificates,
+                "message": result.message,
+            }),
+        ),
+        Err(error) => failed_transaction_value("sweep-certificates", error),
+    }
+}
+
 fn emit(value: &Value) -> io::Result<()> {
     let mut output = io::stdout().lock();
     serde_json::to_writer(&mut output, value)?;
@@ -484,7 +521,7 @@ fn run(args: impl IntoIterator<Item = OsString>) -> i32 {
             let message = match error {
                 ParseError::NonUnicode => "arguments must be ordinary Windows text",
                 ParseError::WrongShape => {
-                    "the helper accepts only check-store, initialize-store, prepare-exact, release-exact or cleanup-owned in their fixed forms"
+                    "the helper accepts only check-store, initialize-store, prepare-exact, release-exact, release-all, repair, sweep-certificates or cleanup-owned in their fixed forms"
                 }
             };
             let _ = emit(&error_value("arguments", "refused", message.to_owned()));
@@ -521,6 +558,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -605,6 +643,30 @@ mod tests {
             parse_args(args(&["cleanup-owned-worker", "anything"])),
             Err(ParseError::WrongShape)
         );
+        assert_eq!(
+            parse_args(args(&["sweep-certificates"])),
+            Ok(Operation::SweepCertificates)
+        );
+        assert_eq!(
+            parse_args(args(&["sweep-certificates", "anything"])),
+            Err(ParseError::WrongShape)
+        );
+    }
+
+    #[test]
+    fn certificate_sweep_cannot_mutate_from_an_unanchored_helper_copy() {
+        let called = Cell::new(false);
+        let (exit, value) = sweep_certificates_with(
+            || Err("not an installed protected helper".to_owned()),
+            || {
+                called.set(true);
+                panic!("the mutation must remain unreachable")
+            },
+        );
+        assert_eq!(exit, EXIT_INTERNAL);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["operation"], "sweep-certificates");
+        assert!(!called.get());
     }
 
     #[test]

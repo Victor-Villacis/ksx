@@ -187,7 +187,7 @@ pub enum CaptureError {
     /// is no `winusb.sys` to claim through. Never auto-fixed: rebinding is a
     /// supervised manual step (`docs/RECOVERY.md` §2).
     #[error(
-        "{id} is bound to {bound}, not winusb.sys — the WinUSB rebind has not been performed          for this interface (see docs/WINUSB.md; ksx never rebinds a device itself)"
+        "{id} is bound to {bound}, not winusb.sys — the WinUSB rebind has not been performed for this interface (see docs/WINUSB.md; ksx never rebinds a device itself)"
     )]
     NotRebound { id: String, bound: String },
     /// Enumeration found nothing matching the configured device id.

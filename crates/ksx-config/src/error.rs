@@ -15,7 +15,7 @@ pub enum ConfigError {
     #[error("axis value '{0}' is not 'min', 'max' or a signed 16-bit integer")]
     InvalidAxisValue(String),
     #[error(
-        "{0} — a macro step's duration is `ms = <n>` or `frames = <n>` (60 Hz), exactly one of          them; a step with no duration would be an input no game could sample"
+        "{0} — a macro step's duration is `ms = <n>` or `frames = <n>` (60 Hz), exactly one of them; a step with no duration would be an input no game could sample"
     )]
     MacroStepDuration(String),
     #[error(

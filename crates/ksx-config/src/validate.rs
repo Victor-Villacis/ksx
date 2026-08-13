@@ -503,7 +503,7 @@ impl fmt::Display for Issue {
                 reason,
             } => write!(
                 f,
-                "preset '{preset}': macro '{name}' step {step} {reason} — `frames` is 60 Hz and                  is a readable unit, not a promise that the game samples exactly that many                  frames (docs/INPUT-TRANSFORMS.md §1c)"
+                "preset '{preset}': macro '{name}' step {step} {reason} — `frames` is 60 Hz and is a readable unit, not a promise that the game samples exactly that many frames (docs/INPUT-TRANSFORMS.md §1c)"
             ),
             Issue::UnknownMacroHold {
                 preset,

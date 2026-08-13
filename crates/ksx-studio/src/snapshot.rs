@@ -135,7 +135,7 @@ pub struct DevicesPayload {
     /// SEPARATE read from the scan and deliberately so: the device tree is the
     /// thing that looks healthy while the receipt store disagrees with it, and
     /// a page that only ever read the tree is why nine stale receipts sat
-    /// unreported on the reporting machine.
+    /// unreported on an affected machine.
     #[serde(default)]
     pub residue: ksx_api::WinusbResidueView,
     /// Session state, for the header pill and for the one caution this page

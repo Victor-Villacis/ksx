@@ -96,10 +96,10 @@ pub use machine::{
     ImportWrite, KeyboardRow, MachineSource, NewPreset, NewProfile, PadBusView, PadsSpawnSpec,
     PadsView, PresetRow, PresetsView, ProfileDetail, ProfilesView, PrunePlanView, RenamePreset,
     SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer, SpawnOption, TemplateRow,
-    UpdateProfile, UsbRow, VirtualPadRow, WinusbMutationView, WinusbPrepareSpec, WinusbReleaseSpec,
-    WinusbResidueRow, WinusbResidueView, WinusbView, CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD,
-    INSTALL_BUS_REMEDY, NO_BOARDS_LINE, NO_BUS_READ_REMEDY, RELEASE_LEAD, UNREAD_BOARDS_LINE,
-    UNREAD_CONFIGURED_LINE,
+    UpdateProfile, UsbRow, VirtualPadRow, WinusbCertificateSweepSpec, WinusbMutationView,
+    WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow, WinusbResidueView, WinusbView,
+    CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD, INSTALL_BUS_REMEDY, NO_BOARDS_LINE, NO_BUS_READ_REMEDY,
+    RELEASE_LEAD, UNREAD_BOARDS_LINE, UNREAD_CONFIGURED_LINE,
 };
 pub use pipe::{PipeTransport, TransportError, NO_CHANNEL};
 pub use refusal::{codes, Refusal, Refused};

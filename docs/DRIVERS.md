@@ -278,6 +278,29 @@ and absence of private-key properties/containers before package installation.
 Release and uninstall delete that exact identity from both stores and prove it
 absent; they never delete broadly by a friendly subject prefix.
 
+#### Cleaning certificate residue without releasing a working panel
+
+An interrupted or older completed transaction can leave its public certificate
+after no installed package needs it. The residue is visible on Studio's Devices
+page and from the read-only default command:
+
+```powershell
+ksx winusb sweep-certificates
+ksx winusb sweep-certificates --yes
+```
+
+Only the second form elevates. It removes no package and changes no device
+binding, so it is deliberately distinct from `release-all`. It also removes
+stranded key containers in KSX's fixed one-time signing namespace; installed
+driver packages need only their retained public signer certificate. Classification
+joins each installed KSX package to the signer reported by the Driver Store,
+not to an INF filename. A matching signer is kept. An installed package with no
+readable signer blocks every deletion, as does a subject that resolves to
+different certificate bytes. Safe candidates
+are deleted only by their exact subject, thumbprint and DER hash through the
+fixed installed helper, and the unelevated caller re-reads the stores before it
+reports success.
+
 `bcdedit /set testsigning on` remains rejected. It would weaken Secure Boot
 policy machine-wide to solve a one-device package problem the installed
 transaction already handles narrowly.

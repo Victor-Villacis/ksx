@@ -5,15 +5,15 @@ import { h, createSignal, createList, createShow } from "@getforma/core";
 //
 // # What this page is, and the three things it is not
 //
-// It is the web face of `ksx device scan` (read) plus `ksx device pick` and
-// `ksx device remove` (write) — `docs/SURFACES.md` §3 puts "device pick /
-// remove" on Studio, following the CLI verb. Every button here is one
-// `MachineSource` call; nothing below decides anything.
+// It is the web face of `ksx device scan` (read) plus `ksx device pick`,
+// `ksx device remove`, and the narrow orphaned-certificate cleanup. Every
+// button here is one `MachineSource` call; nothing below decides what is safe
+// to remove.
 //
-// It is NOT a claim screen. Taking a board off the Windows keyboard stack
-// needs an elevated process, so §3 marks WinUSB claim/release "never" for the
-// browser. The commands are SHOWN, as copyable text, and that is the whole of
-// it — a button that could only ever fail is worse than no button.
+// It is NOT a claim screen. Exact-device preparation and release live in the
+// guarded Setup flow. The certificate cleanup here names no device, subject,
+// thumbprint, store or path: it can only ask the installed fixed-purpose
+// helper to remove certificates the backend proved no live package uses.
 //
 // It is NOT the other two removals. ksx has three and they are routinely
 // confused: `ksx pads --prune` drops stale VIRTUAL PADS off the ViGEm bus,
@@ -186,6 +186,11 @@ export interface WinusbResidueView {
   line: string;
   detail: string;
   rows: ResidueTile[];
+  leftover_certificates: number;
+  certificates_in_use: number;
+  /** Non-empty means the backend cannot safely classify the signer set, so
+   *  cleanup is visibly disabled and a hand-authored POST still refuses. */
+  certificates_unknown: string;
   /** Certificates left in the machine's trust stores, in one sentence.
    *  SERVED rather than derived here: the SSR render and this island must
    *  never disagree about the words. Empty when there is nothing to say. */
@@ -300,6 +305,9 @@ const [residueCertificates, setResidueCertificates] = createSignal("");
 const [residueError, setResidueError] = createSignal("");
 const [showResidue, setShowResidue] = createSignal(false);
 const [residueUnreadable, setResidueUnreadable] = createSignal(false);
+const [showCertificateSweep, setShowCertificateSweep] = createSignal(false);
+const [certificateSweepReady, setCertificateSweepReady] = createSignal(false);
+const [certificateSweepBlocked, setCertificateSweepBlocked] = createSignal(false);
 
 // ── Row shaping (mirrors render_devices.rs; NOT deciding anything) ─────────
 //
@@ -416,14 +424,24 @@ export function applyDevices(p: DevicesPayload): void {
   // The server marks a skipped read as `readable` with no receipts, which is
   // indistinguishable from a clean machine BY VALUE. So the client keeps what
   // the page render gave it and only takes an update that actually looked:
-  // any receipts, or an unreadable store.
+  // any receipt/certificate fact, or an unreadable store.
   const residue = p.residue;
-  const looked = !residue.readable || residue.receipts > 0;
+  const leftoverCertificates = residue.leftover_certificates ?? 0;
+  const certificatesInUse = residue.certificates_in_use ?? 0;
+  const certificatesUnknown = (residue.certificates_unknown ?? "").trim();
+  const certificatesLine = residue.certificates_line ?? "";
+  const looked =
+    !residue.readable ||
+    residue.receipts > 0 ||
+    leftoverCertificates > 0 ||
+    certificatesInUse > 0 ||
+    certificatesUnknown !== "" ||
+    certificatesLine !== "";
   if (looked) {
     setResidueRows(residue.rows);
     setResidueLine(residue.line);
     setResidueDetail(residue.detail);
-    setResidueCertificates(residue.certificates_line ?? "");
+    setResidueCertificates(certificatesLine);
     setResidueError(residue.error);
     setResidueUnreadable(!residue.readable);
     // Shown when there is something to say: a disagreement, certificates left
@@ -433,7 +451,16 @@ export function applyDevices(p: DevicesPayload): void {
     setShowResidue(
       !residue.readable ||
         residue.drifted > 0 ||
-        (residue.certificates_line ?? "") !== "",
+        certificatesLine !== "",
+    );
+    const hasCertificateSweep =
+      !residue.readable || leftoverCertificates > 0 || certificatesUnknown !== "";
+    setShowCertificateSweep(hasCertificateSweep);
+    setCertificateSweepReady(
+      residue.readable && leftoverCertificates > 0 && certificatesUnknown === "",
+    );
+    setCertificateSweepBlocked(
+      !residue.readable || certificatesUnknown !== "",
     );
   }
   setUnavailableLine(unavailable);
@@ -823,6 +850,86 @@ export function DevicesIsland() {
             createShow(
               () => residueUnreadable(),
               () => h("p", { class: "dv-note warn" }, () => residueError()),
+            ),
+            createShow(
+              () => showCertificateSweep(),
+              () =>
+                h(
+                  "div",
+                  { class: "dv-sweep" },
+                  h(
+                    "p",
+                    { class: "dv-note" },
+                    "This removes only KSX signing certificates and stranded one-time signing keys left by finished attempts. ",
+                    "Any certificate still signing an installed driver stays in place, so ",
+                    "the live driver keeps working.",
+                  ),
+                  createShow(
+                    () => certificateSweepReady(),
+                    () =>
+                      h(
+                        "form",
+                        {
+                          class: "capture-form",
+                          method: "post",
+                          action: "/devices/certificates/sweep",
+                        },
+                        h(
+                          "label",
+                          { class: "capture-consent" },
+                          h("input", {
+                            type: "checkbox",
+                            name: "confirm",
+                            value: "yes",
+                            required: "",
+                          }),
+                          h(
+                            "span",
+                            null,
+                            "I want KSX to remove only its leftover signing certificates and one-time signing keys ",
+                            "from this computer.",
+                          ),
+                        ),
+                        h(
+                          "p",
+                          { class: "pactrow" },
+                          h(
+                            "button",
+                            { class: "btn btn-danger", type: "submit" },
+                            "Remove leftover certificates",
+                          ),
+                        ),
+                        h(
+                          "p",
+                          { class: "dv-note" },
+                          "Windows will show an administrator permission prompt.",
+                        ),
+                      ),
+                  ),
+                  createShow(
+                    () => certificateSweepBlocked(),
+                    () =>
+                      h(
+                        "div",
+                        { class: "capture-form" },
+                        h(
+                          "p",
+                          { class: "dv-warn" },
+                          "Cleanup is disabled because KSX cannot prove which certificates ",
+                          "still sign installed drivers. Nothing will be removed.",
+                        ),
+                        h(
+                          "p",
+                          { class: "pactrow" },
+                          h(
+                            "button",
+                            { class: "btn", type: "button", disabled: "" },
+                            "Certificate cleanup unavailable",
+                          ),
+                        ),
+                      ),
+                  ),
+                ),
             ),
             h(
               "ul",

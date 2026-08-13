@@ -277,16 +277,21 @@ pub fn serve(
             .route("/pads/spawn", post(pads_form_spawn))
             .route("/pads/prune", post(pads_form_prune))
             // v17: the DEVICE PICKER — `ksx device scan` as a page, plus the
-            // two writes it exists for. Read is `MachineSource::device_scan`
-            // (boards, not devnodes); the writes are `device_pick` and
-            // `device_remove`, which are the CLI's own plan/apply pair and
-            // need no daemon. Claiming is NOT here and never will be: it needs
-            // elevation, which docs/SURFACES.md §3 marks "never" for the
-            // browser — the page prints the command instead.
+            // two config writes it exists for. Read is
+            // `MachineSource::device_scan` (boards, not devnodes); the writes
+            // are `device_pick` and `device_remove`, which are the CLI's own
+            // plan/apply pair and need no daemon. Exact-device prepare/release
+            // stay in the guarded Setup flow. The separate certificate sweep
+            // below is machine-wide, accepts no identity/path from the browser
+            // and can reach only the installed fixed-purpose helper.
             .route("/devices", get(devices_page))
             .route("/api/devices", get(api_devices))
             .route("/devices/pick", post(devices_form_pick))
             .route("/devices/remove", post(devices_form_remove))
+            .route(
+                "/devices/certificates/sweep",
+                post(devices_form_sweep_certificates),
+            )
             // PROFILES & PRESETS. The read is `MachineSource::profiles`
             // (games.toml with `ksx_games::preflight` already run, so a
             // profile whose .exe moved is a broken ROW instead of a cabinet

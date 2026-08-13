@@ -1374,6 +1374,34 @@ enum WinusbCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Remove the signing certificates ksx left behind, and only those
+    ///
+    /// Every prepare puts a `CN=KSX WinUSB <id>` certificate in this
+    /// computer's LocalMachine Root and TrustedPublisher stores so Windows
+    /// will load the driver package it signed. Releasing removes that pair —
+    /// but a transaction that dies in between can leave a certificate pair
+    /// behind after the package itself is gone.
+    ///
+    /// A certificate that still signs an INSTALLED package is left alone.
+    /// Deleting that one breaks the package holding a keyboard right now, so
+    /// the match is on the signer a package reports, never on a file name.
+    /// If any ksx package cannot say which certificate signed it, nothing is
+    /// removed at all — with something installed that might depend on any of
+    /// them, every deletion would be a guess.
+    ///
+    /// Reporting needs no administrator; only --yes does. This is not
+    /// `release-all`: no driver is removed and no keyboard changes hands.
+    SweepCertificates {
+        /// Say what would be removed; remove nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove them (needs an administrator)
+        #[arg(long)]
+        yes: bool,
+        /// JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Say what the journal and the machine disagree about, and settle it
     ///
     /// Reporting needs no administrator; only --yes does. Drift is ordinary:
@@ -2055,6 +2083,14 @@ fn main() -> anyhow::Result<()> {
                 yes,
                 json,
             }),
+            WinusbCommand::SweepCertificates { dry_run, yes, json } => {
+                winusb::run(winusb::Options {
+                    action: winusb::Action::SweepCertificates,
+                    dry_run,
+                    yes,
+                    json,
+                })
+            }
             WinusbCommand::Repair { dry_run, yes, json } => winusb::run(winusb::Options {
                 action: winusb::Action::Repair,
                 dry_run,

@@ -585,14 +585,16 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/pads/spawn", "/pads/prune"],
     },
     Anchors {
-        capability: "What ksx left behind (receipts vs machine)",
-        // The CLI owns it because settling a receipt needs the elevated
-        // helper. Studio only READS — the same read `--dry-run` performs —
-        // because the thing that was wrong was never that you could not fix
-        // it, it was that no screen would tell you there was anything to fix.
-        cli: &["winusb repair"],
+        capability: "What ksx left behind (receipts and signing certificates)",
+        // Two kinds of residue with two lifetimes: a receipt is ksx's own
+        // bookkeeping, a certificate is a change to the machine's trust
+        // stores that outlives the config that made it. The CLI owns both
+        // repair verbs. Devices reports both and exposes the narrow, explicit
+        // certificate-only cleanup through the same installed elevated
+        // helper; receipt reconciliation remains a CLI recovery operation.
+        cli: &["winusb repair", "winusb sweep-certificates"],
         egui: &[],
-        studio: &["/devices"],
+        studio: &["/devices", "/devices/certificates/sweep"],
     },
     Anchors {
         capability: "What opposite directions do (SOCD)",

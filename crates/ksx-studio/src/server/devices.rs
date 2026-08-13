@@ -181,6 +181,24 @@ pub(super) struct RemoveForm {
     force: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(super) struct CertificateSweepForm {
+    /// Present only when the explicit confirmation box was ticked. No
+    /// subject, thumbprint, store, package or filesystem path is accepted by
+    /// this route.
+    #[serde(default)]
+    confirm: Option<String>,
+}
+
+const CERTIFICATE_SWEEP_OK: &str = "Removed the leftover KSX signing certificates and stranded one-time signing keys. Any certificate still signing an installed driver was left in place, so the live driver keeps working.";
+const CERTIFICATE_SWEEP_CONSENT: &str =
+    "error: Confirm the certificate cleanup first. Nothing was removed.";
+const CERTIFICATE_SWEEP_UNVERIFIED: &str = "error: The certificate cleanup could not be verified. KSX will not assume what changed; reopen Devices to read the machine again.";
+
+fn certificate_sweep_redirect(message: &'static str) -> Response {
+    Redirect::to(&format!("/devices?flash={}", urlencode(message))).into_response()
+}
+
 /// 303 back to the picker, carrying the outcome as the flash.
 ///
 /// Errors flash exactly like successes: this page's whole job is deciding
@@ -245,4 +263,49 @@ pub(super) async fn devices_form_remove(
     .await
     .unwrap_or_else(|_| Err("the device removal panicked".to_owned()));
     devices_redirect(outcome)
+}
+
+/// POST /devices/certificates/sweep — remove only orphaned KSX signing
+/// certificates through the installed fixed-purpose elevated helper.
+///
+/// This presentation boundary accepts one bit of consent and nothing else,
+/// never reflects helper/provider text, and licenses success only from the
+/// typed provider's fresh post-operation residue view. The router-wide
+/// loopback Host + same-origin guard applies before this handler, exactly as it
+/// does to the config writers above.
+pub(super) async fn devices_form_sweep_certificates(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<CertificateSweepForm>,
+) -> Response {
+    if form.confirm.as_deref() != Some("yes") {
+        return certificate_sweep_redirect(CERTIFICATE_SWEEP_CONSENT);
+    }
+
+    let verified = tokio::task::spawn_blocking(move || {
+        // Ignore every helper/provider word. Even the typed action's return is
+        // not the proof used by this presentation boundary: ask the existing
+        // read side again after it completes, so a stale or optimistic action
+        // result cannot license the success flash.
+        let _ = state
+            .machine
+            .winusb_sweep_certificates(&ksx_api::WinusbCertificateSweepSpec { confirm: true })
+            .map_err(|_| ())?;
+        let after = state.machine.winusb_residue().map_err(|_| ())?;
+        if after.readable
+            && after.leftover_certificates == 0
+            && after.certificates_unknown.trim().is_empty()
+        {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .await
+    .is_ok_and(|result| result.is_ok());
+
+    certificate_sweep_redirect(if verified {
+        CERTIFICATE_SWEEP_OK
+    } else {
+        CERTIFICATE_SWEEP_UNVERIFIED
+    })
 }

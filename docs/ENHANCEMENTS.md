@@ -362,12 +362,10 @@ live_pipe.rs` + `ksx-studio/src/live.rs`), so the sink trait now has a
 concrete second consumer to be shaped against rather than a hypothetical one —
 and `PadFeedback` is already a field of every frame both of them read.
 
-## E9 — WinUSB residue has no face, and only an uninstall clears it (2026-08-11)
+## E9 — WinUSB residue reporting and narrow certificate cleanup (shipped)
 
-Found while fixing the held-keyboard dead end (`SURFACES.md` §3a). Not the same
-bug, and worth writing down because it explains a report that looks like one:
-the owner's machine carries **12 `CN=KSX WinUSB *` certificates**, six in Root
-and six in TrustedPublisher, one pair per prepare, none removed.
+WinUSB preparation has three independent lifetimes, so cleanup cannot be
+inferred from configuration alone:
 
 **Three lifetimes, and only one of them is the configuration.**
 
@@ -375,7 +373,7 @@ and six in TrustedPublisher, one pair per prepare, none removed.
 |---|---|---|
 | the driver binding | the Windows device tree (`winusb.sys` on that interface) | a release, or `pnputil` by hand |
 | the transaction receipt | `%ProgramData%\KSX\WinUSB\{journal,transactions}` | a release, a rollback, or the uninstaller |
-| the signing certificate | the machine Root + TrustedPublisher stores, subject `CN=KSX WinUSB <transaction id>` | the same three |
+| the signing certificate and one-time key residue | the machine Root + TrustedPublisher stores and KSX's fixed key-container namespace | release/rollback/uninstall, or the narrow certificate sweep when no installed package depends on it |
 
 The config root is `%APPDATA%\ksx` and appears in none of those rows. So
 **"which boards are prepared" cannot be answered from configuration at all** —
@@ -385,23 +383,12 @@ independent facts, a board can be held with no entry naming it, and moving
 is why the held-keyboard list reads `BoardRow::claimed` off the live scan and
 why it belongs on `/start` rather than on the config page.
 
-**What is missing.** `cleanup-owned` — the helper verb that audits every
-receipt and deletes the owned certificates and key containers — is reachable
-only from the elevated uninstaller (`packaging/ksx.iss`). A machine that has
-prepared and released ten times, or that has abandoned transactions from
-crashed or refused runs, has no way to be told so and no way to tidy it short
-of uninstalling KSX. `ksx winusb status` reads the device tree, not the
-residue.
-
-The shape when it is built: a read first (how many receipts, in which phases,
-how many owned certificates), because a count nobody can see is the reason this
-went unnoticed for six prepares; then one consented sweep over what is provably
-KSX's own and terminal, reusing `cleanup_with` rather than a second
-implementation.
-
-**One known cause of the leftovers is already fixed elsewhere and is not this
-item**: `delete_matching` closed the certificate store before deleting, so the
-delete reported success and never committed. Every release since has left its
-certificate behind and reported recovery-required afterwards. That fix is on
-`fix/initialize-store-on-a-used-machine` and is **not yet in `main`** — this
-entry is about the machines that will still be carrying residue after it lands.
+**Shipped contract.** `/devices` and `ksx winusb sweep-certificates` report
+receipt and certificate residue without elevation. The consented sweep invokes
+only the installed elevated helper. It joins installed KSX packages to the
+certificate subject Windows reports, refuses the whole operation if any
+package or cross-store identity is ambiguous, deletes each exact orphan by
+subject + thumbprint + DER, clears only KSX's stranded one-time signing-key
+namespace, and re-reads the stores before reporting success. A certificate
+still signing an installed package is always retained. No driver package,
+binding, configuration, or receipt is changed by this verb.

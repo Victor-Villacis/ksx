@@ -46,6 +46,17 @@ function wireForms(root: HTMLElement): void {
 }
 
 async function submitForm(form: HTMLFormElement): Promise<void> {
+  if (pendingForms.has(form)) return;
+  pendingForms.add(form);
+  let leavingPage = false;
+  const submits = Array.from(
+    form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+      'button[type="submit"], input[type="submit"]',
+    ),
+  );
+  submits.forEach((control) => {
+    control.disabled = true;
+  });
   try {
     const body = new URLSearchParams();
     new FormData(form).forEach((value, key) => {
@@ -56,12 +67,34 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
       body,
       redirect: "follow", // 303 → GET /devices?flash=…; the outcome rides res.url
     });
+    // The interval poll deliberately skips the expensive receipt/package
+    // reconcile. Certificate cleanup changes exactly that skipped state, so
+    // follow its redirect as a real navigation and let GET /devices perform
+    // the authoritative fresh read. Other row edits continue refreshing in
+    // place beneath the pointer.
+    if (new URL(form.action).pathname === "/devices/certificates/sweep") {
+      window.location.assign(res.url);
+      leavingPage = true;
+      return;
+    }
     applyFlash(new URL(res.url).searchParams.get("flash"));
   } catch {
     applyFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    if (!leavingPage) {
+      pendingForms.delete(form);
+      submits.forEach((control) => {
+        if (control.isConnected) control.disabled = false;
+      });
+    }
   }
   void poll();
 }
+
+/** A UAC-backed mutation must not be launched twice by a double click while
+ *  the first permission prompt is still open. Shared by all forms because it
+ *  also makes the ordinary pick/remove path deterministic. */
+const pendingForms = new WeakSet<HTMLFormElement>();
 
 /** The SOURCE payload the server embedded (render.rs `PAYLOAD_SCRIPT_ID`).
  *  Deliberately NOT the island's `props` argument — since compiler 0.3.1

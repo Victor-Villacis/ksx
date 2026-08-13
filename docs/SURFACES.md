@@ -169,7 +169,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Start ksx at sign-in | owns (all options) | planned | **primary** (`/start`, one tick box) |
 | Split or freeze, after saving | — | — | **primary** (`/setup`) |
 | What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/setup`) |
-| What ksx left behind (receipts vs machine) | owns (`winusb repair`) | — | view (`/devices`) |
+| What ksx left behind (receipts and signing certificates) | owns (`winusb repair`, `winusb sweep-certificates`) | — | **primary** certificate cleanup (`/devices`); receipt view |
 
 "owns" = the verb lives here. "primary" = where a human does it. "view" =
 renders backend state, takes no decisions. **"planned" = nothing is there** —

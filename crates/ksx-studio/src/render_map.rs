@@ -2831,14 +2831,15 @@ fn macro_note(payload: &MapPayload, mac: Option<&MacroView>) -> String {
     if payload.target == "stage" {
         format!(
             "Steps and policies are a draft until you press Save macro. That updates \"{}\" in \
-             this unsaved setup only; Play will use it immediately and nothing is written until \
-             you choose Save in Setup.",
+             this unsaved setup; nothing is written or plugged in. New, Rename and Delete update \
+             the setup immediately.",
             mac.name
         )
     } else {
         format!(
             "Steps and policies are a draft until you press Save macro. That updates \"{}\" in \
-             the saved controller layout and leaves a recovery copy.",
+             the saved layout and leaves a recovery copy. New, Rename and Delete apply \
+             immediately.",
             mac.name
         )
     }
@@ -5558,7 +5559,7 @@ mod tests {
         );
         assert!(
             out.html
-                .contains("updates \"hadouken\" in the saved controller layout"),
+                .contains("updates \"hadouken\" in the saved layout"),
             "the save destination is stated in consumer language: {}",
             out.html
         );

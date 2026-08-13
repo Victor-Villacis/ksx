@@ -22,10 +22,12 @@
 //!
 //! # Three rules this page inherits and one it adds
 //!
-//! Inherited: no logic in the page (§1), no elevated verb on this surface
-//! (§3 marks WinUSB claim/release "never" for the browser — the commands are
-//! rendered as text), and every mutating route is a 303 post-redirect-get with
-//! the outcome in `?flash=`.
+//! Inherited: no logic in the page (§1), exact-device prepare/release only
+//! through the guarded Setup flow, and every mutating route is a 303
+//! post-redirect-get with the outcome in `?flash=`. The one machine-wide
+//! elevated action here is the orphaned-certificate sweep: it accepts no
+//! device, subject, thumbprint, store or path and reaches only the installed
+//! fixed-purpose helper.
 //!
 //! Added: **an optional line is rendered and hidden, never omitted.** A
 //! `createShow` inside a `createList` is not a shape this compiler emits, so a
@@ -57,7 +59,7 @@ const ISLAND_COMPONENT: &str = "DevicesIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 15;
+const SHOW_COUNT: usize = 18;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim: every signal `DevicesIsland.ts` binds to the
@@ -497,6 +499,14 @@ fn show_values(
     let unavailable = !payload.unavailable.trim().is_empty();
     let scan = &payload.scan;
     let session = &payload.session;
+    let certificate_sweep = !payload.residue.readable
+        || payload.residue.leftover_certificates > 0
+        || !payload.residue.certificates_unknown.trim().is_empty();
+    let certificate_sweep_ready = payload.residue.readable
+        && payload.residue.leftover_certificates > 0
+        && payload.residue.certificates_unknown.trim().is_empty();
+    let certificate_sweep_blocked =
+        !payload.residue.readable || !payload.residue.certificates_unknown.trim().is_empty();
     [
         ("show:pillRunning", session.reachable && session.running),
         ("show:pillIdle", session.reachable && !session.running),
@@ -535,6 +545,9 @@ fn show_values(
                 || !payload.residue.certificates_line.is_empty(),
         ),
         ("show:residueUnreadable", !payload.residue.readable),
+        ("show:showCertificateSweep", certificate_sweep),
+        ("show:certificateSweepReady", certificate_sweep_ready),
+        ("show:certificateSweepBlocked", certificate_sweep_blocked),
     ]
 }
 
@@ -793,12 +806,12 @@ mod tests {
             // each list to be non-empty: an empty list binds nothing and
             // therefore proves nothing about the bindings.
             residue: ksx_api::WinusbResidueView {
-                // The reporting machine's real numbers: eight subjects in two
-                // stores, one of them signing the installed package.
-                leftover_certificates: 14,
+                // Synthetic non-zero counts exercise both cleanup and the
+                // protected live-signer copy without carrying host state.
+                leftover_certificates: 6,
                 certificates_in_use: 2,
                 certificates_unknown: String::new(),
-                certificates_line: "14 signing certificates are left over from earlier setups.                                     2 more are still signing an installed driver, and are left                                     alone."
+                certificates_line: "6 signing certificates are left over from earlier setups.                                      2 more are still signing an installed driver, and are left                                     alone."
                     .to_owned(),
                 readable: true,
                 error: String::new(),
@@ -814,7 +827,7 @@ mod tests {
                         .to_owned(),
                     machine: "Windows says it is an ordinary keyboard again".to_owned(),
                     bookkeeping: true,
-                    reference: "3bbc5a6f".to_owned(),
+                    reference: "11111111".to_owned(),
                 }],
             },
             session: SessionView {
@@ -1303,9 +1316,9 @@ mod tests {
         );
     }
 
-    /// Claiming needs elevation, so `docs/SURFACES.md` §3 marks it "never" for
-    /// the browser. The command must be on the page as TEXT, and there must be
-    /// no form that posts it.
+    /// Exact-device claim/release is not this specialist card's mutation. The
+    /// command remains TEXT here, while the guarded Setup flow owns the real
+    /// exact-device action.
     #[test]
     fn the_claim_and_release_commands_are_shown_and_never_posted() {
         let page = EmbeddedPage::load("/devices").unwrap();
@@ -1325,10 +1338,115 @@ mod tests {
         ] {
             assert!(
                 !out.html.contains(forbidden),
-                "{forbidden} is a form on a surface that cannot elevate: {}",
+                "{forbidden} is an exact-device form outside the guarded Setup flow: {}",
                 out.html
             );
         }
+    }
+
+    /// Certificate cleanup is a different, machine-wide action: one explicit
+    /// confirmation, no caller-supplied identity, and copy that promises the
+    /// live signer is retained rather than merely saying "safe".
+    #[test]
+    fn orphaned_certificate_cleanup_is_confirmed_and_keeps_live_signers_in_words() {
+        let page = EmbeddedPage::load("/devices").unwrap();
+        let out = render_devices(&page, &cabinet(), None);
+
+        assert!(
+            out.html.contains(r#"action="/devices/certificates/sweep""#),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains(r#"method="post""#), "{}", out.html);
+        assert!(
+            out.html.contains(r#"name="confirm" value="yes" required"#),
+            "the trust-store write must require an explicit checkbox: {}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains("Any certificate still signing an installed driver stays in place"),
+            "the live-signer safety boundary is not stated: {}",
+            out.html
+        );
+        for forbidden in [
+            "thumbprint",
+            "name=\"subject\"",
+            "name=\"store\"",
+            "name=\"path\"",
+        ] {
+            assert!(
+                !out.html.contains(forbidden),
+                "the browser must not choose certificate identity ({forbidden}): {}",
+                out.html
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_cleanup_is_hidden_at_zero_and_disabled_when_classification_is_blocked() {
+        let page = EmbeddedPage::load("/devices").unwrap();
+
+        let mut clean = cabinet();
+        clean.residue.leftover_certificates = 0;
+        clean.residue.certificates_in_use = 2;
+        clean.residue.certificates_unknown.clear();
+        clean.residue.certificates_line.clear();
+        let clean = render_devices(&page, &clean, None);
+        assert!(
+            !clean
+                .html
+                .contains(r#"action="/devices/certificates/sweep""#),
+            "a zero-count cleanup offer is a stale-action trap: {}",
+            clean.html
+        );
+        assert!(
+            !clean.html.contains("Remove leftover certificates"),
+            "the zero-count control must be hidden: {}",
+            clean.html
+        );
+
+        let mut blocked = cabinet();
+        blocked.residue.leftover_certificates = 0;
+        blocked.residue.certificates_in_use = 0;
+        blocked.residue.certificates_unknown =
+            "An installed package has no attributable signer.".to_owned();
+        blocked.residue.certificates_line = blocked.residue.certificates_unknown.clone();
+        let blocked = render_devices(&page, &blocked, None);
+        assert!(
+            blocked.html.contains("Certificate cleanup unavailable"),
+            "{}",
+            blocked.html
+        );
+        assert!(blocked.html.contains("disabled"), "{}", blocked.html);
+        assert!(
+            !blocked
+                .html
+                .contains(r#"action="/devices/certificates/sweep""#),
+            "a blocked classifier must not leave a hand-submittable form: {}",
+            blocked.html
+        );
+
+        let mut unreadable = cabinet();
+        unreadable.residue = ksx_api::WinusbResidueView {
+            readable: false,
+            error: "the certificate stores could not be read".to_owned(),
+            line: "What ksx left behind could not be read.".to_owned(),
+            ..ksx_api::WinusbResidueView::default()
+        };
+        let unreadable = render_devices(&page, &unreadable, None);
+        assert!(
+            unreadable.html.contains("Certificate cleanup unavailable"),
+            "an unreadable store is blocked, not a clean zero: {}",
+            unreadable.html
+        );
+        assert!(
+            !unreadable
+                .html
+                .contains(r#"action="/devices/certificates/sweep""#),
+            "an unreadable store must expose no actionable form: {}",
+            unreadable.html
+        );
     }
 
     /// The three removals are routinely confused, so the page names all three

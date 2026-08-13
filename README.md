@@ -178,6 +178,7 @@ ksx play demo.jsonl               # play that recording back into the real pipel
 ksx pads --count 4                # plug 4 test pads, LED order, kill-recovery
 ksx doctor                        # driver health, CI-policy state, verdicts
 ksx winusb status                 # WinUSB claim state per USB interface (read-only)
+ksx winusb sweep-certificates     # report leftover KSX signing certificates (read-only)
 ```
 
 #### `ksx setup` — the developer first-contact wizard
@@ -352,6 +353,8 @@ ksx winusb status --json
 ksx winusb claim "USB\VID_D209&PID_0430&MI_00\7&TEST_DEVICE&0&0000"        # DRY RUN
 ksx winusb claim "USB\VID_D209&PID_0430&MI_00\7&TEST_DEVICE&0&0000" --yes  # installed helper + UAC
 ksx winusb release "USB\VID_D209&PID_0430&MI_00\7&TEST_DEVICE&0&0000" --yes
+ksx winusb sweep-certificates             # report only; no elevation or mutation
+ksx winusb sweep-certificates --yes       # remove unused certificates and stranded KSX one-time signing keys
 ```
 
 Rebinds the selected USB interface from the keyboard stack to Microsoft's
@@ -394,13 +397,26 @@ Uninstall runs the same ownership audit across active, interrupted,
 disconnected, and terminal receipts; if it cannot prove cleanup, uninstall
 stops and preserves the recovery components rather than deleting the way out.
 
+An interrupted or older setup can leave KSX's public signing certificate in
+Local Machine Root and TrustedPublisher after its transaction is over.
+`ksx winusb sweep-certificates` reports those leftovers without elevation or
+mutation; add `--yes` to use the fixed installed helper and UAC to remove them
+and any stranded container in KSX's fixed one-time signing-key namespace.
+This is not `release-all`: it removes no driver package and changes no keyboard.
+KSX keeps every certificate whose reported signer still matches an installed
+KSX package. If any installed package has no attributable signer, or one
+subject names different certificate bytes, the whole
+sweep refuses instead of making a partial guess. Each deletion is pinned to the
+certificate's thumbprint and DER hash, then the stores are read again.
+
 Migration walkthrough: [`docs/MIGRATION-WINUSB.md`](docs/MIGRATION-WINUSB.md).
 Rollback: [`docs/RECOVERY.md`](docs/RECOVERY.md) §2 — including the Device
 Manager route that needs only a mouse.
 
-Exit codes: 0 reported/done, 1 error, 2 refused (unknown or ambiguous device,
-not a keyboard interface, already claimed, elevation needed, **or it is the only
-keyboard**), 3 pnputil ran and failed.
+Exit codes: 0 reported/done, 1 unexpected error, 2 refused before mutation
+(unknown or ambiguous device, unsafe certificate classification, or the only
+keyboard), 3 elevated helper/apply failure, 4 recovery or post-mutation state
+could not be verified.
 
 #### Frontend integration
 

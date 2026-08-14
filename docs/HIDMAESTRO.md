@@ -1,9 +1,9 @@
 # HIDMaestro M8 execution plan
 
-Status: **non-executing catalog, host-contract, unsigned-package audit and pure
-rendezvous policy checkpoints complete; SDK-free authenticated transport source
-complete with Actions evidence pending; live use blocked on the production
-host, provenance and hardware evidence; no HIDMaestro persona is enabled**.
+Status: **non-executing catalog, host-contract, unsigned-package audit, pure
+rendezvous policy and SDK-free authenticated transport checkpoints complete;
+live use blocked on the production host, provenance and hardware evidence; no
+HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -202,7 +202,7 @@ Two routing changes prepare S4 without enabling a driver:
 | S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
 | S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | Pending. Pin the KSX signer identity, verify every INF/DLL as a member of its signed catalog, isolate fixed installed helpers, add online revocation and clean-runner install/repair/uninstall proof, and coordinate the upstream security report |
 | S1.6a — pure one-use rendezvous policy | Freeze launch correlation and peer-acceptance rules without acquiring OS authority | **Done.** A 32-byte token has one exact lowercase encoding, pipe names use one fixed prefix, host argv is exactly `serve-v1`, token and daemon PID, and peer policy requires non-forgeable authenticated process evidence. The module does not create a pipe, launch or elevate a process, load the SDK or touch a device |
-| S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Source complete; Actions evidence pending.** The ordinary process precreates the local-only pipe, launches and retains one exact inherited-token child object, authenticates the accepted endpoint, and exchanges the frozen protocol with an SDK-free fake host. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
+| S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Done.** [Actions run 31849073410](https://github.com/Victor-Villacis/ksx/actions/runs/31849073410) built the fixed SDK-free apphost, deleted every SDK input before executing it, passed the authenticated Rust/.NET pipe test, and then passed the complete Rust and release/installer gates. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
 | S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |
 | S4 — gated KSX adapter | Production `VirtualPadBackend` implementation behind a default-off gate | `PadState` translation, lifecycle and feedback have contract tests; no accidental persona substitution; missing/mismatched SDK refuses safely; ViGEm tests remain unchanged |
@@ -335,10 +335,13 @@ The fake connects with explicit anonymous SQOS so the ordinary server cannot
 impersonate it. It covers all three allowlisted profile identities and the
 full create/submit/feedback/destroy/shutdown conversation, but creates only
 in-memory fake state. It contains no SDK reference or lifecycle API and cannot
-enable a persona. GitHub Actions is configured to build the fixed apphost,
-delete every SDK input and environment path, run its pure contracts, place it
-beside the Rust test executable, and execute the authenticated cross-language
-test. This checkpoint remains evidence-pending until that workflow is green.
+enable a persona. [Actions run
+31849073410](https://github.com/Victor-Villacis/ksx/actions/runs/31849073410)
+built the fixed apphost, deleted every SDK input and environment path, passed
+its pure contracts, placed it beside the Rust test executable, and passed the
+authenticated cross-language test. The same run also passed the workspace,
+feature-matrix, native-provider, portable-package, installer, hostile-junction
+and install-twice gates.
 
 ## Source-derived working answers
 

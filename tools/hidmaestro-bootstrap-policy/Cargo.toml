@@ -4,6 +4,11 @@ description = "Pure, non-launching policy model for KSX's future native HIDMaest
 version = "0.0.0"
 edition = "2021"
 publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+build = false
 
 [lib]
 path = "src/lib.rs"

@@ -197,11 +197,14 @@ impl fmt::Debug for ConnectedPipeHandle {
 #[derive(PartialEq, Eq)]
 struct ManagedChildPlan {
     image: &'static str,
+    working_directory: ChildWorkingDirectory,
     argv: [String; 2],
     unicode_environment: Vec<u16>,
     inherited_handles: [ConnectedPipeHandle; 1],
     contract: ChildLaunchContract,
     identity: ChildIdentityContract,
+    managed_entry: ManagedEntryContract,
+    graph_and_loader: ManagedGraphAndLoaderContract,
 }
 
 impl fmt::Debug for ManagedChildPlan {
@@ -209,13 +212,24 @@ impl fmt::Debug for ManagedChildPlan {
         formatter
             .debug_struct("ManagedChildPlan")
             .field("image", &self.image)
+            .field("working_directory", &self.working_directory)
             .field("argv", &[INNER_VERB, "[HANDLE REDACTED]"])
             .field("unicode_environment", &"[FIXED ENVIRONMENT BLOCK]")
             .field("inherited_handles", &"[ONE AUTHENTICATED PIPE]")
             .field("contract", &self.contract)
             .field("identity", &self.identity)
+            .field("managed_entry", &self.managed_entry)
+            .field("graph_and_loader", &self.graph_and_loader)
             .finish()
     }
+}
+
+/// The child never inherits the daemon or bootstrap current directory and no
+/// caller supplies a path. The implementation derives this directory from the
+/// protected bootstrap module and proves it is the managed image's parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildWorkingDirectory {
+    ProtectedBootstrapSiblingDirectory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,6 +279,7 @@ struct ChildIdentityContract {
     require_same_nonzero_session: bool,
     require_elevated_token: bool,
     retain_image_seal_through_child_lifetime: bool,
+    retain_full_graph_seals_through_child_lifetime: bool,
     verify_before_first_resume: bool,
     resume_primary_thread_exactly_once: bool,
 }
@@ -276,9 +291,68 @@ const CHILD_IDENTITY_CONTRACT: ChildIdentityContract = ChildIdentityContract {
     require_same_nonzero_session: true,
     require_elevated_token: true,
     retain_image_seal_through_child_lifetime: true,
+    retain_full_graph_seals_through_child_lifetime: true,
     verify_before_first_resume: true,
     resume_primary_thread_exactly_once: true,
 };
+
+/// First managed-entry actions after the fixed inner argv is parsed. CoreCLR
+/// has necessarily reached managed entry already; "immediate" means before
+/// KSX creates a thread, initializes the SDK, or performs optional logging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ManagedEntryContract {
+    clear_pipe_inherit_flag_immediately: bool,
+    verify_pipe_inherit_flag_is_clear: bool,
+    fail_closed_when_flag_clear_fails: bool,
+    clear_before_ksx_thread_sdk_or_logging: bool,
+    never_reenable_pipe_inheritance: bool,
+    never_spawn_descendants: bool,
+}
+
+const MANAGED_ENTRY_CONTRACT: ManagedEntryContract = ManagedEntryContract {
+    clear_pipe_inherit_flag_immediately: true,
+    verify_pipe_inherit_flag_is_clear: true,
+    fail_closed_when_flag_clear_fails: true,
+    clear_before_ksx_thread_sdk_or_logging: true,
+    never_reenable_pipe_inheritance: true,
+    never_spawn_descendants: true,
+};
+
+/// S1.5b must turn the complete managed/native load closure into retained,
+/// immutable evidence. A signed apphost alone is insufficient because CoreCLR,
+/// host policy, native runtime dependencies, managed assemblies and config all
+/// participate before or during managed entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ManagedGraphAndLoaderContract {
+    seal_every_manifest_file_before_child_creation: bool,
+    retain_all_seals_through_child_lifetime: bool,
+    reject_reparse_point_in_entire_graph: bool,
+    hash_and_signature_reads_use_sealed_objects: bool,
+    runtimeconfig_and_deps_close_the_graph: bool,
+    explicit_application_path: bool,
+    explicit_protected_working_directory: bool,
+    inherited_path_is_absent: bool,
+    prefer_system32_for_system_images: bool,
+    block_remote_native_images: bool,
+    block_low_integrity_native_images: bool,
+    allow_native_modules_only_from_graph_or_system32: bool,
+}
+
+const MANAGED_GRAPH_AND_LOADER_CONTRACT: ManagedGraphAndLoaderContract =
+    ManagedGraphAndLoaderContract {
+        seal_every_manifest_file_before_child_creation: true,
+        retain_all_seals_through_child_lifetime: true,
+        reject_reparse_point_in_entire_graph: true,
+        hash_and_signature_reads_use_sealed_objects: true,
+        runtimeconfig_and_deps_close_the_graph: true,
+        explicit_application_path: true,
+        explicit_protected_working_directory: true,
+        inherited_path_is_absent: true,
+        prefer_system32_for_system_images: true,
+        block_remote_native_images: true,
+        block_low_integrity_native_images: true,
+        allow_native_modules_only_from_graph_or_system32: true,
+    };
 
 /// The daemon must not let a completed pipe operation outrun the lifetime of
 /// the exact bootstrap process authenticated during admission. A completion
@@ -317,9 +391,12 @@ enum RequiredWindowsEvidence {
     HandleListExcludesInheritableCanaries,
     SuspendedChildCannotReachManagedEntryBeforeResume,
     IdentityMismatchCannotReachManagedEntry,
+    ChildWorkingDirectoryIsProtectedSiblingDirectory,
+    ManagedChildClearsPipeInheritanceImmediately,
+    NativeModuleOriginsMatchProtectedGraphOrSystem32,
 }
 
-const REQUIRED_WINDOWS_EVIDENCE: [RequiredWindowsEvidence; 7] = [
+const REQUIRED_WINDOWS_EVIDENCE: [RequiredWindowsEvidence; 10] = [
     RequiredWindowsEvidence::PipeClientPidStableAcrossInheritance,
     RequiredWindowsEvidence::BootstrapAndManagedChildSessionStable,
     RequiredWindowsEvidence::BootstrapCrashClosesJobAndReapsChild,
@@ -327,17 +404,23 @@ const REQUIRED_WINDOWS_EVIDENCE: [RequiredWindowsEvidence; 7] = [
     RequiredWindowsEvidence::HandleListExcludesInheritableCanaries,
     RequiredWindowsEvidence::SuspendedChildCannotReachManagedEntryBeforeResume,
     RequiredWindowsEvidence::IdentityMismatchCannotReachManagedEntry,
+    RequiredWindowsEvidence::ChildWorkingDirectoryIsProtectedSiblingDirectory,
+    RequiredWindowsEvidence::ManagedChildClearsPipeInheritanceImmediately,
+    RequiredWindowsEvidence::NativeModuleOriginsMatchProtectedGraphOrSystem32,
 ];
 
 impl ManagedChildPlan {
     fn for_authenticated_pipe(pipe: ConnectedPipeHandle, system_root: &QueriedSystemRoot) -> Self {
         Self {
             image: MANAGED_HOST_IMAGE,
+            working_directory: ChildWorkingDirectory::ProtectedBootstrapSiblingDirectory,
             argv: [INNER_VERB.to_owned(), pipe.0.get().to_string()],
             unicode_environment: managed_environment_block(system_root),
             inherited_handles: [pipe],
             contract: CHILD_LAUNCH_CONTRACT,
             identity: CHILD_IDENTITY_CONTRACT,
+            managed_entry: MANAGED_ENTRY_CONTRACT,
+            graph_and_loader: MANAGED_GRAPH_AND_LOADER_CONTRACT,
         }
     }
 }
@@ -455,6 +538,10 @@ mod tests {
         let root = QueriedSystemRoot::from_windows_query(r"C:\Windows").unwrap();
         let plan = ManagedChildPlan::for_authenticated_pipe(pipe, &root);
         assert_eq!(plan.image, MANAGED_HOST_IMAGE);
+        assert_eq!(
+            plan.working_directory,
+            ChildWorkingDirectory::ProtectedBootstrapSiblingDirectory
+        );
         assert_eq!(plan.argv, [INNER_VERB.to_owned(), "4660".to_owned()]);
         assert_eq!(plan.inherited_handles, [pipe]);
         assert_eq!(parse_canonical_nonzero_usize(&plan.argv[1]), Some(pipe.0));
@@ -491,8 +578,37 @@ mod tests {
         assert!(contract.require_same_nonzero_session);
         assert!(contract.require_elevated_token);
         assert!(contract.retain_image_seal_through_child_lifetime);
+        assert!(contract.retain_full_graph_seals_through_child_lifetime);
         assert!(contract.verify_before_first_resume);
         assert!(contract.resume_primary_thread_exactly_once);
+    }
+
+    #[test]
+    fn managed_entry_clears_pipe_inheritance_before_any_ksx_runtime_work() {
+        let contract = MANAGED_ENTRY_CONTRACT;
+        assert!(contract.clear_pipe_inherit_flag_immediately);
+        assert!(contract.verify_pipe_inherit_flag_is_clear);
+        assert!(contract.fail_closed_when_flag_clear_fails);
+        assert!(contract.clear_before_ksx_thread_sdk_or_logging);
+        assert!(contract.never_reenable_pipe_inheritance);
+        assert!(contract.never_spawn_descendants);
+    }
+
+    #[test]
+    fn complete_graph_and_native_loader_are_closed_to_unprotected_paths() {
+        let contract = MANAGED_GRAPH_AND_LOADER_CONTRACT;
+        assert!(contract.seal_every_manifest_file_before_child_creation);
+        assert!(contract.retain_all_seals_through_child_lifetime);
+        assert!(contract.reject_reparse_point_in_entire_graph);
+        assert!(contract.hash_and_signature_reads_use_sealed_objects);
+        assert!(contract.runtimeconfig_and_deps_close_the_graph);
+        assert!(contract.explicit_application_path);
+        assert!(contract.explicit_protected_working_directory);
+        assert!(contract.inherited_path_is_absent);
+        assert!(contract.prefer_system32_for_system_images);
+        assert!(contract.block_remote_native_images);
+        assert!(contract.block_low_integrity_native_images);
+        assert!(contract.allow_native_modules_only_from_graph_or_system32);
     }
 
     #[test]
@@ -510,7 +626,7 @@ mod tests {
 
     #[test]
     fn windows_gate_inventory_covers_inheritance_crash_identity_and_racing_io() {
-        assert_eq!(REQUIRED_WINDOWS_EVIDENCE.len(), 7);
+        assert_eq!(REQUIRED_WINDOWS_EVIDENCE.len(), 10);
         for required in [
             RequiredWindowsEvidence::PipeClientPidStableAcrossInheritance,
             RequiredWindowsEvidence::BootstrapAndManagedChildSessionStable,
@@ -519,6 +635,9 @@ mod tests {
             RequiredWindowsEvidence::HandleListExcludesInheritableCanaries,
             RequiredWindowsEvidence::SuspendedChildCannotReachManagedEntryBeforeResume,
             RequiredWindowsEvidence::IdentityMismatchCannotReachManagedEntry,
+            RequiredWindowsEvidence::ChildWorkingDirectoryIsProtectedSiblingDirectory,
+            RequiredWindowsEvidence::ManagedChildClearsPipeInheritanceImmediately,
+            RequiredWindowsEvidence::NativeModuleOriginsMatchProtectedGraphOrSystem32,
         ] {
             assert!(REQUIRED_WINDOWS_EVIDENCE.contains(&required));
         }
@@ -528,7 +647,35 @@ mod tests {
     fn this_harness_has_no_binary_or_os_authority() {
         let manifest = include_str!("../Cargo.toml");
         assert!(manifest.contains("[lib]"));
-        assert!(!manifest.contains("[[bin]]"));
+        for forbidden_table in ["[[bin]]", "[[example]]", "[[test]]", "[[bench]]"] {
+            assert!(!manifest.contains(forbidden_table));
+        }
+        for disabled in [
+            "autobins = false",
+            "autoexamples = false",
+            "autotests = false",
+            "autobenches = false",
+            "build = false",
+        ] {
+            assert!(manifest.contains(disabled), "missing {disabled}");
+        }
+        assert!(!manifest.contains("[dependencies]"));
+        assert!(!manifest.contains("[build-dependencies]"));
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for forbidden_target in [
+            "build.rs",
+            "src/main.rs",
+            "src/bin",
+            "examples",
+            "tests",
+            "benches",
+        ] {
+            assert!(
+                !root.join(forbidden_target).exists(),
+                "automatic target exists at {forbidden_target}"
+            );
+        }
 
         let production = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
         for forbidden in [

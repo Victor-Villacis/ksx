@@ -199,17 +199,16 @@ pub enum SlotError {
     },
     /// The persona is a real persona, and this build cannot create it.
     ///
-    /// The gap is [`ksx_core::PadBackend::gap`]'s own sentence, not a
+    /// The gap is [`ksx_core::Persona::gap`]'s own sentence, not a
     /// paraphrase, so the CLI, the pipe, Studio and `ksx doctor` all say the
-    /// identical thing — and so that the day HIDMaestro's shared section gets
-    /// a mapper, one `is_implemented` flips and every one of them stops
-    /// refusing at once.
+    /// identical thing — and so each HIDMaestro persona stops refusing only
+    /// after its own implementation gate is proven.
     #[error(
         "persona '{persona}' is a persona ksx knows and this build cannot create — {reason}. \
          What decides it is the BINARY, not the machine: `Persona::backend()` sends {persona} to \
-         {backend}, and `PadBackend::is_implemented` is false for {backend} in this build, so \
+         {backend}, and `Persona::can_plug` is false for {persona} in this build, so \
          this refusal is identical on every PC and on this one tomorrow. It changes when a ksx \
-         release ships code that can map {backend}'s shared section — nothing you can install \
+         release ships and proves host support for that exact persona — nothing you can install \
          moves it. Use persona '{instead}' for now"
     )]
     PersonaNotImplemented {
@@ -326,7 +325,7 @@ pub fn assign(store: &Store, spec: &SlotSpec) -> Result<AppliedSlot, SlotError> 
     }
 }
 
-/// Refuse a persona this BUILD cannot create, in [`ksx_core::PadBackend`]'s own
+/// Refuse a persona this BUILD cannot create, in [`ksx_core::Persona`]'s own
 /// words.
 ///
 /// Reads [`Persona::can_plug`] and nothing else — never a driver probe, for the
@@ -343,7 +342,7 @@ fn check_pluggable(persona: Persona) -> Result<(), SlotError> {
     Err(SlotError::PersonaNotImplemented {
         persona,
         backend: backend.label(),
-        reason: backend
+        reason: persona
             .gap()
             .unwrap_or("this build ships no code that can create it"),
         instead: persona.nearest_pluggable(),
@@ -1118,7 +1117,7 @@ mod tests {
     }
 
     /// The three HIDMaestro personas are refused BEFORE the disk is touched,
-    /// in `PadBackend::gap()`'s own words — including the sentence that closes
+    /// in `Persona::gap()`'s own words — including the sentence that closes
     /// off the wrong fix, because "not installed" is the reading that costs a
     /// pointless driver install.
     ///

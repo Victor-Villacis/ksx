@@ -94,8 +94,8 @@ impl RoutedBackend {
     ///
     /// The factory is wired even though today's build gate refuses every
     /// persona that would reach it. That is deliberate and it is the point:
-    /// flipping [`ksx_core::PadBackend::is_implemented`] in the commit that
-    /// lands a real driver lights this path up with nothing else to change.
+    /// enabling one exact [`Persona`] in the commit that lands a proven host
+    /// lights only that route up with nothing else to change.
     pub fn standard(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
             vigem,

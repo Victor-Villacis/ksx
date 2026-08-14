@@ -51,7 +51,7 @@ pub enum OutputError {
         "persona '{persona}' cannot be plugged by this build of ksx: {gap}. \
          Use persona '{instead}'",
         persona = .0,
-        gap = .0.backend().gap().unwrap_or("no reason recorded"),
+        gap = .0.gap().unwrap_or("no reason recorded"),
         instead = .0.nearest_pluggable()
     )]
     PersonaNotImplemented(ksx_core::Persona),

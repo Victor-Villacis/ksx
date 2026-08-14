@@ -26,7 +26,7 @@
 //! - [`HidMaestroBackend`] (M8) — HIDMaestro implementation, for the personas
 //!   ViGEmBus cannot express (DualSense, Switch Pro, Xbox Series). The protocol
 //!   itself lives in `ksx-hidmaestro`; this crate holds only the adapter.
-//!   The production shared-section adapter is not implemented, so these
+//!   The production SDK-host adapter is not implemented, so these
 //!   personas remain unavailable regardless of the local install state — see
 //!   that crate's docs for what is verified vs written-to-spec.
 //! - [`RoutedBackend`] — persona → backend selection. X360/DS4 stay on ViGEm

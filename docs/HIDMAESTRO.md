@@ -121,10 +121,10 @@ owns any required idle keepalive pump: KSX's engine emits state changes, so a
 cadence check called only from `VirtualPadBackend::update()` cannot fire while
 the input is held and unchanged.
 
-Two routing changes belong in S4, not in the probe:
+Two routing changes prepare S4 without enabling a driver:
 
-- Capability must be gated per persona. Flipping today's one HIDMaestro backend
-  boolean would expose DualSense, Switch Pro and Xbox Series at the same time.
+- **Done:** capability is gated per persona. A future DualSense proof can no
+  longer expose Switch Pro and Xbox Series by flipping one backend-wide bit.
 - ViGEm and HIDMaestro must both be factory-backed and lazy. Today ordinary
   startup connects ViGEm before the router is used, so a future
   HIDMaestro-only configuration would still fail when ViGEm is absent.
@@ -135,6 +135,7 @@ Two routing changes belong in S4, not in the probe:
 |---|---|---|
 | S0 — truth reset | Correct credits, source facts and routing decision | **Done.** Existing transport says it is incompatible; personas remain gated; ViGEm behavior is unchanged |
 | S1 — SDK catalog probe | Pinned, source-only .NET probe using `HIDMaestro.Core.dll` | **Done.** Default run is read-only, emits one machine-readable result, loads the embedded catalog and proves the exact DualSense, Switch Pro and Xbox Series candidates without installing or creating anything |
+| S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
 | S1.5 — distribution and elevation hardening | Resolve the embedded WDK-tool license and reusable `%TEMP%` helper boundary | Private upstream disclosure completed; no non-redistributable Microsoft tool ships; helper/package identity and ACLs fail closed; a clean-runner security test proves an unprivileged pre-seed cannot influence elevated execution |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
 | S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |

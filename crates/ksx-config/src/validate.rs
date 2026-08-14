@@ -59,7 +59,7 @@ pub enum Issue {
         slot: u8,
         /// Canonical name, as written in the file.
         persona: String,
-        /// What is missing, verbatim from [`ksx_core::PadBackend::gap`] —
+        /// What is missing, verbatim from [`ksx_core::Persona::gap`] —
         /// carried rather than re-derived so `--json` consumers read the same
         /// sentence the text output prints.
         reason: String,
@@ -898,11 +898,7 @@ fn persona_gap(persona: Persona) -> Option<(String, String)> {
         return None;
     }
     Some((
-        persona
-            .backend()
-            .gap()
-            .unwrap_or("no reason recorded")
-            .to_owned(),
+        persona.gap().unwrap_or("no reason recorded").to_owned(),
         persona.nearest_pluggable().to_string(),
     ))
 }

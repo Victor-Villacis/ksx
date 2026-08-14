@@ -2363,7 +2363,7 @@ pub struct StartLayoutRow {
     pub players: String,
 }
 
-/// One persona this build cannot plug, with `PadBackend::gap()`'s own sentence.
+/// One persona this build cannot plug, with `Persona::gap()`'s own sentence.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartGapRow {
     pub label: String,
@@ -2564,7 +2564,7 @@ impl StartRows {
                 .filter(|p| !p.can_plug)
                 .map(|p| StartGapRow {
                     label: p.label.clone(),
-                    // `PadBackend::gap()`'s own sentence. A surface that
+                    // `Persona::gap()`'s own sentence. A surface that
                     // paraphrased it into "install HIDMaestro" would be
                     // promising a fix that does not exist for two of the three.
                     gap: p.gap.clone().unwrap_or_default(),

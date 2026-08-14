@@ -32,9 +32,9 @@
 //! Every rule here already existed somewhere and is *read*, not re-derived:
 //!
 //! - [`Persona::can_plug`] gates the three HIDMaestro personas, and the refusal
-//!   quotes [`crate::PadBackend::gap`] verbatim — the same sentence
-//!   `ksx slot assign` prints, so the day HIDMaestro's shared section gets a
-//!   mapper, one `is_implemented` flips and both stop refusing at once;
+//!   quotes [`crate::Persona::gap`] verbatim — the same sentence
+//!   `ksx slot assign` prints, so each exact persona stops refusing only when
+//!   its production host path is proven;
 //! - [`MAX_XINPUT_SLOTS`] caps the personas that occupy one of Windows' four
 //!   XInput slots, counted through [`Persona::is_xinput`] — which is why
 //!   `playstation` is plain HID, takes none, and is how players 5+ exist;
@@ -177,12 +177,12 @@ pub enum StageRefusal {
     )]
     NoFreeSlot,
     /// The persona is a real persona, and this build cannot create it. Worded
-    /// from [`crate::PadBackend::gap`] so this refusal and `ksx slot assign`'s
+    /// from [`crate::Persona::gap`] so this refusal and `ksx slot assign`'s
     /// say the identical thing.
     #[error(
         "persona '{persona}' is a persona ksx knows and this build cannot create — {reason}. \
          What decides it is the BINARY, not the machine: `Persona::backend()` sends {persona} to \
-         {backend}, and `PadBackend::is_implemented` is false for {backend} in this build. \
+         {backend}, and `Persona::can_plug` is false for {persona} in this build. \
          Stage persona '{instead}' instead"
     )]
     PersonaNotImplemented {
@@ -651,7 +651,7 @@ fn check_slot_number(number: u8) -> Result<(), StageRefusal> {
     Ok(())
 }
 
-/// Refuse a persona this BUILD cannot create, in [`crate::PadBackend`]'s own
+/// Refuse a persona this BUILD cannot create, in [`crate::Persona`]'s own
 /// words.
 ///
 /// Reads [`Persona::can_plug`] and nothing else — never a driver probe, for the
@@ -666,7 +666,7 @@ fn check_pluggable(persona: Persona) -> Result<(), StageRefusal> {
     Err(StageRefusal::PersonaNotImplemented {
         persona,
         backend: backend.label(),
-        reason: backend
+        reason: persona
             .gap()
             .unwrap_or("this build ships no code that can create it"),
         instead: persona.nearest_pluggable(),
@@ -807,7 +807,7 @@ mod tests {
         );
     }
 
-    /// The three HIDMaestro personas are refused in `PadBackend::gap()`'s own
+    /// The three HIDMaestro personas are refused in `Persona::gap()`'s own
     /// words — including the half that closes off the wrong fix.
     ///
     /// Breaks against a stage that accepted them: the user picks DualSense, the

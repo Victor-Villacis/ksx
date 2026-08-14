@@ -201,6 +201,7 @@ struct ManagedChildPlan {
     unicode_environment: Vec<u16>,
     inherited_handles: [ConnectedPipeHandle; 1],
     contract: ChildLaunchContract,
+    identity: ChildIdentityContract,
 }
 
 impl fmt::Debug for ManagedChildPlan {
@@ -212,6 +213,7 @@ impl fmt::Debug for ManagedChildPlan {
             .field("unicode_environment", &"[FIXED ENVIRONMENT BLOCK]")
             .field("inherited_handles", &"[ONE AUTHENTICATED PIPE]")
             .field("contract", &self.contract)
+            .field("identity", &self.identity)
             .finish()
     }
 }
@@ -225,7 +227,13 @@ struct ChildLaunchContract {
     use_shell_activation: bool,
     use_extended_startup_info: bool,
     inherit_ambient_handles: bool,
+    create_primary_thread_suspended: bool,
+    create_kill_on_close_job_before_child: bool,
+    assign_job_in_creation_attribute_list: bool,
+    inherit_job_handle: bool,
+    resume_only_after_job_and_identity: bool,
     retain_bootstrap_pipe_through_child_lifetime: bool,
+    retain_job_through_child_lifetime: bool,
     bootstrap_waits_for_child: bool,
     bootstrap_may_terminate_child: bool,
 }
@@ -238,10 +246,88 @@ const CHILD_LAUNCH_CONTRACT: ChildLaunchContract = ChildLaunchContract {
     use_shell_activation: false,
     use_extended_startup_info: true,
     inherit_ambient_handles: false,
+    create_primary_thread_suspended: true,
+    create_kill_on_close_job_before_child: true,
+    assign_job_in_creation_attribute_list: true,
+    inherit_job_handle: false,
+    resume_only_after_job_and_identity: true,
     retain_bootstrap_pipe_through_child_lifetime: true,
+    retain_job_through_child_lifetime: true,
     bootstrap_waits_for_child: true,
     bootstrap_may_terminate_child: false,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChildIdentityContract {
+    use_returned_process_handle_as_identity: bool,
+    compare_image_to_retained_seal: bool,
+    compare_pid_to_returned_process_handle: bool,
+    require_same_nonzero_session: bool,
+    require_elevated_token: bool,
+    retain_image_seal_through_child_lifetime: bool,
+    verify_before_first_resume: bool,
+    resume_primary_thread_exactly_once: bool,
+}
+
+const CHILD_IDENTITY_CONTRACT: ChildIdentityContract = ChildIdentityContract {
+    use_returned_process_handle_as_identity: true,
+    compare_image_to_retained_seal: true,
+    compare_pid_to_returned_process_handle: true,
+    require_same_nonzero_session: true,
+    require_elevated_token: true,
+    retain_image_seal_through_child_lifetime: true,
+    verify_before_first_resume: true,
+    resume_primary_thread_exactly_once: true,
+};
+
+/// The daemon must not let a completed pipe operation outrun the lifetime of
+/// the exact bootstrap process authenticated during admission. A completion
+/// and process exit may become observable together, so the post-completion
+/// handle query is authoritative and completed read bytes remain quarantined
+/// until it passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DaemonIoContract {
+    retain_authenticated_bootstrap_handle: bool,
+    wait_on_bootstrap_during_pending_io: bool,
+    recheck_after_synchronous_completion: bool,
+    recheck_after_overlapped_completion: bool,
+    recheck_after_complete_frame: bool,
+    discard_read_when_exit_observed: bool,
+    poison_write_when_exit_observed: bool,
+    bootstrap_exit_wins_completion_tie: bool,
+}
+
+const DAEMON_IO_CONTRACT: DaemonIoContract = DaemonIoContract {
+    retain_authenticated_bootstrap_handle: true,
+    wait_on_bootstrap_during_pending_io: true,
+    recheck_after_synchronous_completion: true,
+    recheck_after_overlapped_completion: true,
+    recheck_after_complete_frame: true,
+    discard_read_when_exit_observed: true,
+    poison_write_when_exit_observed: true,
+    bootstrap_exit_wins_completion_tie: true,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequiredWindowsEvidence {
+    PipeClientPidStableAcrossInheritance,
+    BootstrapAndManagedChildSessionStable,
+    BootstrapCrashClosesJobAndReapsChild,
+    BootstrapCrashRejectsQueuedFrame,
+    HandleListExcludesInheritableCanaries,
+    SuspendedChildCannotReachManagedEntryBeforeResume,
+    IdentityMismatchCannotReachManagedEntry,
+}
+
+const REQUIRED_WINDOWS_EVIDENCE: [RequiredWindowsEvidence; 7] = [
+    RequiredWindowsEvidence::PipeClientPidStableAcrossInheritance,
+    RequiredWindowsEvidence::BootstrapAndManagedChildSessionStable,
+    RequiredWindowsEvidence::BootstrapCrashClosesJobAndReapsChild,
+    RequiredWindowsEvidence::BootstrapCrashRejectsQueuedFrame,
+    RequiredWindowsEvidence::HandleListExcludesInheritableCanaries,
+    RequiredWindowsEvidence::SuspendedChildCannotReachManagedEntryBeforeResume,
+    RequiredWindowsEvidence::IdentityMismatchCannotReachManagedEntry,
+];
 
 impl ManagedChildPlan {
     fn for_authenticated_pipe(pipe: ConnectedPipeHandle, system_root: &QueriedSystemRoot) -> Self {
@@ -251,6 +337,7 @@ impl ManagedChildPlan {
             unicode_environment: managed_environment_block(system_root),
             inherited_handles: [pipe],
             contract: CHILD_LAUNCH_CONTRACT,
+            identity: CHILD_IDENTITY_CONTRACT,
         }
     }
 }
@@ -378,10 +465,63 @@ mod tests {
         assert!(!plan.contract.use_shell_activation);
         assert!(plan.contract.use_extended_startup_info);
         assert!(!plan.contract.inherit_ambient_handles);
+        assert!(plan.contract.create_primary_thread_suspended);
+        assert!(plan.contract.create_kill_on_close_job_before_child);
+        assert!(plan.contract.assign_job_in_creation_attribute_list);
+        assert!(!plan.contract.inherit_job_handle);
+        assert!(plan.contract.resume_only_after_job_and_identity);
         assert!(plan.contract.retain_bootstrap_pipe_through_child_lifetime);
+        assert!(plan.contract.retain_job_through_child_lifetime);
         assert!(plan.contract.bootstrap_waits_for_child);
         assert!(!plan.contract.bootstrap_may_terminate_child);
         assert!(!format!("{plan:?}").contains("4660"));
+    }
+
+    #[test]
+    fn suspended_child_is_contained_and_identified_before_its_only_resume() {
+        let contract = CHILD_IDENTITY_CONTRACT;
+        assert!(CHILD_LAUNCH_CONTRACT.create_primary_thread_suspended);
+        assert!(CHILD_LAUNCH_CONTRACT.create_kill_on_close_job_before_child);
+        assert!(CHILD_LAUNCH_CONTRACT.assign_job_in_creation_attribute_list);
+        assert!(!CHILD_LAUNCH_CONTRACT.inherit_job_handle);
+        assert!(CHILD_LAUNCH_CONTRACT.resume_only_after_job_and_identity);
+        assert!(contract.use_returned_process_handle_as_identity);
+        assert!(contract.compare_image_to_retained_seal);
+        assert!(contract.compare_pid_to_returned_process_handle);
+        assert!(contract.require_same_nonzero_session);
+        assert!(contract.require_elevated_token);
+        assert!(contract.retain_image_seal_through_child_lifetime);
+        assert!(contract.verify_before_first_resume);
+        assert!(contract.resume_primary_thread_exactly_once);
+    }
+
+    #[test]
+    fn daemon_io_never_delivers_a_completion_that_lost_its_bootstrap() {
+        let contract = DAEMON_IO_CONTRACT;
+        assert!(contract.retain_authenticated_bootstrap_handle);
+        assert!(contract.wait_on_bootstrap_during_pending_io);
+        assert!(contract.recheck_after_synchronous_completion);
+        assert!(contract.recheck_after_overlapped_completion);
+        assert!(contract.recheck_after_complete_frame);
+        assert!(contract.discard_read_when_exit_observed);
+        assert!(contract.poison_write_when_exit_observed);
+        assert!(contract.bootstrap_exit_wins_completion_tie);
+    }
+
+    #[test]
+    fn windows_gate_inventory_covers_inheritance_crash_identity_and_racing_io() {
+        assert_eq!(REQUIRED_WINDOWS_EVIDENCE.len(), 7);
+        for required in [
+            RequiredWindowsEvidence::PipeClientPidStableAcrossInheritance,
+            RequiredWindowsEvidence::BootstrapAndManagedChildSessionStable,
+            RequiredWindowsEvidence::BootstrapCrashClosesJobAndReapsChild,
+            RequiredWindowsEvidence::BootstrapCrashRejectsQueuedFrame,
+            RequiredWindowsEvidence::HandleListExcludesInheritableCanaries,
+            RequiredWindowsEvidence::SuspendedChildCannotReachManagedEntryBeforeResume,
+            RequiredWindowsEvidence::IdentityMismatchCannotReachManagedEntry,
+        ] {
+            assert!(REQUIRED_WINDOWS_EVIDENCE.contains(&required));
+        }
     }
 
     #[test]
@@ -400,6 +540,7 @@ mod tests {
             "CreateNamedPipe",
             "CreateFileW",
             "LoadLibrary",
+            "TerminateProcess",
             "hostfxr",
         ] {
             assert!(

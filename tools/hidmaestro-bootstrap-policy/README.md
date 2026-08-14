@@ -24,11 +24,27 @@ After connecting, the bootstrap will start exactly one protected sibling,
 `ksx-hidmaestro-host.exe`, with an environment block constructed from scratch.
 It will pass exactly one inheritable handle through an explicit handle-list
 attribute: the already-connected duplex pipe. The managed host will wrap that
-handle instead of opening a second pipe. The bootstrap will close its local
-pipe copy only after the managed child exits, retain and wait on the exact
-managed-child handle, and remain an owner of the client endpoint for the whole
-conversation. It will never relay or interpret protocol frames and will never
-terminate the managed child.
+handle instead of opening a second pipe.
+
+Before creation, the bootstrap will configure one unnamed job with
+kill-on-last-handle-close. The child is assigned to that job atomically through
+the process-creation job list and its primary thread is created suspended. The
+bootstrap then proves the returned process handle names the fixed sealed image,
+same nonzero session and elevated token. Only after every identity check passes
+does it resume the primary thread, exactly once. A bootstrap crash closes the
+job and the OS reaps the managed child; a failed creation cannot leave an
+uncontained suspended process.
+
+The bootstrap retains its own client-pipe handle, job handle, child process
+handle and managed-image seal until the managed child exits. Retaining the pipe
+copy is intentional: the endpoint authenticated by the daemon is the native
+bootstrap, so that process remains a real owner of the client endpoint for the
+whole conversation. Closing it immediately after inheritance would leave only
+an indirectly trusted child holding a handle whose kernel PID attribution may
+still name the bootstrap. The retained copy delays EOF only until the bootstrap
+observes child exit and closes its resources; the job prevents the reverse
+problem, a child outliving a crashed bootstrap. The bootstrap never relays or
+interprets protocol frames and never directly terminates a running child.
 
 The managed apphost is self-contained but not single-file, so there is no
 bundle-extraction path. This is smaller than hosting CoreCLR in-process: it
@@ -52,6 +68,14 @@ inherited environment.
   absent rather than filtered after copying.
 - Child handle inheritance is enabled only together with an explicit list
   containing the single connected pipe handle.
+- The managed child starts suspended and already assigned to the bootstrap's
+  unnamed kill-on-close job. Image, PID, session, elevation and seal checks all
+  precede its one permitted resume.
+- The daemon retains the authenticated bootstrap process handle. After every
+  synchronous or overlapped read/write completion—and once more after a whole
+  frame—it rechecks that handle. A simultaneous exit wins: read bytes are
+  discarded, completed writes are reported failed, and the connection is
+  poisoned.
 
 ## Required implementation gates
 
@@ -75,24 +99,53 @@ implementation needs all of the following before production wiring:
 4. Obtain `SystemRoot` from `GetWindowsDirectoryW`, not from the inherited
    environment. Encode the policy model's sorted, double-NUL-terminated Unicode
    environment block.
-5. Start only the fixed self-contained managed apphost with extended startup
-   information and a one-entry inherited-handle list. Do not use shell or
-   `PATH` discovery, a single-file bundle/extraction path, inherited standard
-   handles, or the ambient handle table.
-6. Keep the bootstrap alive while waiting on the exact managed-child handle.
-   On child exit, close the bootstrap's remaining resources and return the
-   child's code. On daemon/pipe loss, let the managed host perform the existing
-   ownership-scoped neutralize/dispose path; do not add a kill primitive.
-7. Add an Actions-only Windows integration test that injects hostile mixed-case
+5. Before child creation, create one unnamed job and set
+   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Put both the one-entry pipe handle list
+   and one-entry job list into the same extended startup attribute list. The job
+   handle is not inherited. Use the creation-time job-list assignment so a
+   failed call cannot strand an uncontained suspended process.
+6. Start only the fixed self-contained managed apphost with
+   `CREATE_SUSPENDED`, a Unicode environment, extended startup information and
+   an explicit application path. Do not use shell or `PATH` discovery, a
+   single-file bundle/extraction path, inherited standard handles, or the
+   ambient handle table.
+7. Before the first resume, query the returned process handle—not its PID—to
+   prove the handle-derived image equals the retained sealed image, its PID is
+   the returned process PID, its session equals the bootstrap's nonzero
+   interactive session, and its token is elevated. Retain the image seal,
+   process handle and job handle through child exit. Any mismatch closes the job
+   while the primary thread is still suspended. A successful resume must report
+   the one expected creation-time suspend count; it is never called again.
+8. Keep the bootstrap's connected pipe copy for the managed child's lifetime,
+   wait on the exact child process handle, then close pipe and job and return the
+   child's code. On clean daemon/pipe loss, the managed host still performs the
+   ownership-scoped neutralize/dispose path. Kill-on-job-close is the crash and
+   pre-resume containment backstop, not a normal teardown shortcut, and there is
+   no generic or caller-directed termination API.
+9. Change daemon pipe I/O before production construction exists. The retained
+   bootstrap process handle participates in pending waits and is queried again
+   after every synchronous and overlapped completion. Read data stays in owned
+   quarantine until that check passes. If exit and completion race, exit wins,
+   read bytes are discarded, writes become terminal errors, and both pipe halves
+   close. Recheck once more after assembling a complete frame before decode or
+   delivery.
+10. Add an Actions-only Windows integration test that injects hostile mixed-case
    startup-hook, additional-deps, shared-store, profiler, diagnostics, tracing,
    roll-forward, `COMPlus_`, and legacy `COR_` variables. A harmless managed
-   sentinel must prove none executed or survived, and handle enumeration must
-   prove that only the pipe crossed the child boundary. The server must also
-   measure that its reported client PID remains the retained bootstrap before
-   and after the managed child inherits the handle; Microsoft documents the
-   PID query but does not specify inheritance semantics strongly enough for KSX
-   to substitute an assumption for that gate.
-8. Preserve the existing daemon-side order: listener, fixed launch, kernel PID
+   sentinel must prove none executed or survived. Seed extra inheritable canary
+   handles and prove the child receives none of them while the pipe is usable.
+   The server must measure that its reported client PID remains the retained
+   bootstrap and that both process sessions remain stable before and after
+   inheritance; Microsoft documents the PID query but does not specify
+   inheritance semantics strongly enough for KSX to substitute an assumption
+   for that gate.
+11. The Actions matrix must also crash the bootstrap while the managed sentinel
+   queues a frame. Prove the kill-on-close job reaps the child, the server never
+   delivers the racing frame, and the pipe becomes unusable. A second sentinel
+   must prove managed entry cannot run before resume and cannot run at all when
+   the suspended child's image/session/elevation evidence is deliberately made
+   invalid.
+12. Preserve the existing daemon-side order: listener, fixed launch, kernel PID
    correlation to the retained elevated bootstrap, then `Hello`.
 
 The current fake host remains separate. Its inherited test-runner environment

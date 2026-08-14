@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/hifihedgehog/HIDMaestro",
+  "tag": "v1.6.1",
+  "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "releaseAsset": {
+    "fileName": "HIDMaestro-v1.6.1.zip",
+    "url": "https://github.com/hifihedgehog/HIDMaestro/releases/download/v1.6.1/HIDMaestro-v1.6.1.zip",
+    "sha256": "00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34"
+  },
+  "coreDll": {
+    "fileName": "HIDMaestro.Core.dll",
+    "sha256": "ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5",
+    "fileVersion": "1.6.1.0",
+    "informationalVersion": "1.6.1+2a0dac0857901a63d365a36dcf99cf50114ca954"
+  }
+}

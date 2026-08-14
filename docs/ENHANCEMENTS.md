@@ -93,6 +93,10 @@ daemon, Studio and launched games remain at normal user integrity. Elevating the
 current daemon would elevate user-editable game launches and local control surfaces,
 which is not an acceptable accidental side effect.
 
+The pinned SDK spike, sprint slices and their exact exit criteria live in
+[`HIDMAESTRO.md`](HIDMAESTRO.md). That file is the implementation checklist;
+this section remains the product decision and capability-routing record.
+
 ### E1.1 — VIIPER virtual USB and network lane
 
 VIIPER is scheduled **after the HIDMaestro production spike**, but the architecture is

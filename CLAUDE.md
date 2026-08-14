@@ -211,6 +211,7 @@ that is sitting right there.
 | how is a device identified, and why not by path? | `docs/DEVICE-IDENTITY.md` |
 | what can each control surface do? | `docs/CONTROL-SURFACE.md` |
 | the milestone map and exit criteria | `docs/ARCHITECTURE.md` |
+| the HIDMaestro M8 implementation sprint | `docs/HIDMAESTRO.md` |
 | how a customer gets a build (tag → releases page) | `docs/RELEASING.md` |
 | supervised cabinet runbooks (the hardware gates) | `docs/GATES.md` |
 | the panel is dead / a claim went wrong | `docs/RECOVERY.md` |

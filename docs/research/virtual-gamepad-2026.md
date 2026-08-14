@@ -1,8 +1,35 @@
 # Virtual Xbox 360 / XInput Gamepads on Windows 11 — State of the Art, August 2026
 
+## Product decision addendum — 2026-08-14
+
+The original recommendation below correctly chose ViGEmBus for the first shipped
+backend, but KSX is no longer planning a single successor. The adopted capability
+matrix is:
+
+| Need | Chosen lane |
+|---|---|
+| Proven X360/DS4 compatibility | keep ViGEmBus as supported foundation/fallback |
+| Rich byte-exact local Windows profiles | finish HIDMaestro M8 |
+| Software-defined virtual USB, network endpoints and Linux reach | prototype VIIPER as a complementary backend |
+
+These lanes work side by side. They do not silently substitute identities. VirtualHere
+was also evaluated, but it forwards a real physical USB device and is proprietary; it
+may become an optional external integration, not a required virtual-device backend.
+
+HIDMaestro's author has since supplied the exact mapping/event/config names and the
+authoritative MIT layout sources (`driver/driver.h` and
+`sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs`). That closes the former fact-finding
+gap, not the implementation: the present Rust crate's small latch is not the real
+creator/input/output/PID protocol. The supported `HMContext`/`HMController` SDK is the
+first production spike. The WGI double-input issue cited in the original survey was
+fixed upstream and must be re-tested against the current release rather than used as
+a standing rejection.
+
 ## TL;DR
 
-**Target ViGEmBus 1.22.0 via the `vigem-client` Rust crate today, behind a `VirtualPadBackend` trait.** It is the only stack that (a) is production-signed and installable on stock Windows 11 with Secure Boot on, (b) produces *genuine* XInput slots via Microsoft's own `xusb22.sys`, and (c) has a working pure-Rust client. It is abandoned but not broken. Design for replacement: the two credible successors (**HIDMaestro**, **libvirtualhid**) are both < 1 year old and neither has Rust bindings yet.
+**Original research conclusion:** target ViGEmBus 1.22.0 via the `vigem-client`
+Rust crate for the first shipped backend, behind `VirtualPadBackend`. That decision
+shipped and remains valid; the addendum above now governs expansion.
 
 ---
 
@@ -51,7 +78,10 @@ Instead, two **from-scratch** replacements appeared in 2026, both deliberately a
 - **Force feedback**: HID PID 1.0 writes + rumble raise an `OutputReceived` event; routing to real hardware is the consumer's job
 - **Latest**: **v1.4.3** (1 Aug 2026). 506 commits, ~51 stars, 3 forks
 - **API**: **C# only** (`HIDMaestro.Core.dll`, `HMContext`/`HMGamepadState`/`HMButton`). **No C, C++, or Rust bindings.** Requires .NET 10 runtime
-- **Known open bug**: dual enumeration (xinputhid companion + separate HID interface) causes **double-input on the WGI surface** — D-pad moves two positions in the Start menu / Xbox accessories app. Unfixed as of v1.1.15 line; fixed on the Chromium Gamepad surface only
+- **Historical bug, now fixed upstream**: older releases could double-enumerate on
+  WGI through the XUSB companion plus HID interface. KSX must validate the current
+  release across WGI/GameInput, XInput, SDL and browser Gamepad instead of carrying
+  the old issue as a permanent architectural fact.
 
 Sites: https://github.com/hifihedgehog/HIDMaestro · https://hidmaestro.org/ · https://github.com/hifihedgehog/HIDMaestro/issues/8
 
@@ -133,7 +163,11 @@ This is where ViGEmBus is genuinely hard to replace:
 - **LED / player number** comes back through the **notification callback** (`request_notification` / the `Xbox360Notification` payload), together with the rumble motor values. The XUSB stack pushes it down exactly as it would to real hardware
 - **Slot count:** ViGEmBus itself will happily create more than 4 X360 targets, but **XInput only ever exposes 4**. Targets beyond the 4th exist in the device tree and in DirectInput but get no `dwUserIndex`. For a 10-keyboard → 4-pad design this is fine and matches KSX's four-pad scope
 - **Coexistence with real controllers:** slots are assigned **in arrival order** across real + virtual devices. A real Xbox pad plugged into the cabinet will steal a slot and shift your virtual pads. Two mitigations: (a) plug your virtual pads in at boot before anything else and read back `get_user_index()`, (b) **HidHide** the real devices. ViGEm's own docs cite "working around player slot assignment order issues in XInput" as a primary use case
-- **HIDMaestro's approach is different and weaker here.** It publishes a HID gamepad and a *companion device registering the XUSB interface*, so Windows' `xinputhid` synthesizes a 16-button XInput layout over the 12-button HID descriptor. It works, but it's a synthesis layer — and it's the direct cause of the unfixed **WGI double-input bug** (#8), because WGI enumerates both the xinputhid companion and the raw HID interface
+- **HIDMaestro's approach is different here.** It publishes a HID gamepad and a
+  companion device registering the XUSB interface, so Windows' `xinputhid`
+  supplies XInput behavior. Older releases exposed both paths incorrectly to WGI;
+  that upstream bug has since been fixed. KSX still needs current-release slot,
+  feedback and multi-API measurements before relying on this path.
 - **libvirtualhid** is VHF-based and publishes plain HID gamepads. Whether Xbox profiles land in real XInput slots is **undocumented**. Assume DirectInput/RawInput/SDL work and **verify XInput yourself before committing**
 
 https://learn.microsoft.com/en-us/windows/win32/xinput/directinput-and-xusb-devices
@@ -171,7 +205,7 @@ Sources: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/kern
 
 ---
 
-## Recommendation for your Rust backend
+## Original recommendation for the first Rust backend
 
 ### Primary: **ViGEmBus 1.22.0 + `vigem-client`**
 
@@ -203,9 +237,14 @@ trait VirtualPadBackend {
 
 This is ~1 day of work and it is what makes plan B cheap. Keep `PadState` in ViGEm's `XGamepad` shape (it's the XInput wire format anyway) so no backend needs a translation layer.
 
-### Plan B (in order of preference, if ViGEmBus dies)
+### Historical Plan B (superseded by the capability matrix above)
 
-1. **HIDMaestro** — MIT, actively developed (v1.4.3, 1 Aug 2026), user-mode, no EV cert, proven in production by PadForge, and the *only* successor with a shipping consumer. **Write a native Rust client against its shared-memory protocol** rather than P/Invoking the .NET SDK — everything you need (driver, section layout, profile JSON, `docs/INTERNALS.md`) is MIT. Before committing, **test whether the WGI double-input bug (#8) affects your frontend** (it will hit the Xbox Game Bar / Start menu; it may not matter in MAME/RetroArch/Steam Big Picture)
+1. **HIDMaestro** — MIT, active, user-mode and proven by PadForge. The original
+   report preferred an immediate native transcription. The current decision is
+   safer: measure the supported SDK first, use the author's authoritative layout
+   sources for conformance, then choose a narrow SDK host or native Rust. The old
+   WGI issue is fixed upstream; current multi-API behavior remains an acceptance
+   test, not a presumed defect.
 2. **libvirtualhid** — backed by an organisation (LizardByte) rather than one person, which is a real durability argument. But: no stable release, C++-only API, **driver is source-available not open-source (LB-SAL 1.0)**, and **XInput slot behaviour is unverified**. Revisit when Sunshine PR #5368 merges out of draft
 3. **Fork ViGEmBus yourself** — BSD-3-Clause permits it; rename it (drop "ViGEm"). But you'd need an EV cert + Dev Center account (~$250/yr + entity validation) to sign a kernel driver. Only worth it if the project grows well past one cabinet
 4. **VirtualPad** — closed, commercial, business-partners-only, and Nefarius has not answered an open-source licensing request in five months. **Do not plan around it.**
@@ -229,6 +268,8 @@ This is ~1 day of work and it is what makes plan B cheap. Keep `PadState` in ViG
 - [hifihedgehog/HIDMaestro](https://github.com/hifihedgehog/HIDMaestro) · [hidmaestro.org](https://hidmaestro.org/) · [Issue #8 (WGI double-input)](https://github.com/hifihedgehog/HIDMaestro/issues/8)
 - [hifihedgehog/PadForge](https://github.com/hifihedgehog/PadForge) · [padforge.org](https://padforge.org/)
 - [LizardByte/libvirtualhid](https://github.com/LizardByte/libvirtualhid)
+- [Alia5/VIIPER](https://github.com/Alia5/VIIPER) · [Alia5/SISR](https://github.com/Alia5/SISR)
+- [VirtualHere USB Server](https://www.virtualhere.com/usb_server_software) · [server license](https://www.virtualhere.com/embedded_server_license)
 - [Sunshine Issue #3527 — Transition away from ViGEmBus](https://github.com/LizardByte/Sunshine/issues/3527) · [PR #5368 — implement libvirtualhid](https://github.com/LizardByte/Sunshine/pull/5368)
 - [nefarius/HidHide](https://github.com/nefarius/HidHide) · [Releases](https://github.com/nefarius/HidHide/releases) · [Issue #215 — 25H2 crash](https://github.com/nefarius/HidHide/issues/215)
 - [schmaldeo/DS4Windows (archived)](https://github.com/schmaldeo/DS4Windows) · [hbashton/DS4Windows](https://github.com/hbashton/DS4Windows) · [nefarius/DS4Windows-schmaldeo](https://github.com/nefarius/DS4Windows-schmaldeo)

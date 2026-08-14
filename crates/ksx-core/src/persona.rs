@@ -176,14 +176,13 @@ impl Persona {
 
     /// Which driver stack has to materialize this persona.
     ///
-    /// **The migration rule, stated as code** (`docs/ENHANCEMENTS.md` E1/E4):
-    /// Xbox 360 and PlayStation stay on ViGEmBus *forever*, even once
-    /// HIDMaestro is installed and could emulate them. HIDMaestro's XInput is a
-    /// synthesis layer — its GIP companion maps a HID device onto an XInput
-    /// slot — and that layer is the direct cause of its WGI double-input bug
-    /// (`docs/research/padforge-code-audit.md` §3.6). ViGEmBus's X360 target is
-    /// the genuine `xusb22.sys` article. Slots 1–4 are the cabinet's whole
-    /// reason to exist; they do not move to a synthesis layer to gain nothing.
+    /// **The current capability rule, stated as code**
+    /// (`docs/ENHANCEMENTS.md` E1/E4): Xbox 360 and PlayStation use the shipped
+    /// ViGEmBus compatibility lane; richer identities use the gated HIDMaestro
+    /// lane. ViGEmBus's X360 target reaches Microsoft's genuine `xusb22.sys`
+    /// stack and is kept as a supported fallback even after HIDMaestro ships.
+    /// The historical HIDMaestro WGI double-input issue was fixed upstream and
+    /// is no longer an architectural reason for this routing rule.
     pub const fn backend(self) -> PadBackend {
         match self {
             Persona::Xbox360 | Persona::PlayStation => PadBackend::Vigem,

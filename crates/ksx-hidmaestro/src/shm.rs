@@ -1,16 +1,16 @@
 //! Windows file-mapping storage for a [`crate::seqlock::Latch`].
 //!
-//! This is the transport half: a named section opened read/write, handed to the
-//! same [`LatchStorage`] trait the heap test double implements, so the seqlock
-//! discipline above it is byte-identical in tests and in production.
+//! This is an experimental transport scaffold: a named section opened read/write
+//! and handed to the same [`LatchStorage`] trait the heap test double implements.
+//! It is not HIDMaestro's production transport.
 //!
-//! The **section name is a parameter, not a constant**, and that is deliberate:
-//! the audit documents the transport shape (shared section + event signalling,
-//! seqlocked latch, consumer-driven cadence) but not HIDMaestro's naming
-//! convention, because PadForge consumes the SDK in-process and never opens the
-//! section itself. Hardcoding a guessed name here would be exactly the kind of
-//! invented fact this crate is trying not to ship. The name comes from the
-//! driver implementation when there is one.
+//! The upstream names are now known (`Global\HIDMaestroInput{N}` and companion
+//! output/PID sections and events), but the supported writer **creates** those
+//! objects with a defined security descriptor and publishes substantially larger
+//! structures. Replacing this parameter with a known name would still be wrong:
+//! this module only opens an existing mapping and models the obsolete custom
+//! latch. It remains test infrastructure until the SDK-backed spike determines
+//! the production boundary.
 
 use std::sync::atomic::AtomicU8;
 

@@ -19,11 +19,25 @@ Deep dives: [`research/virtual-gamepad-2026.md`](research/virtual-gamepad-2026.m
 - **Installed by the ksx installer, from a checkbox** — see "Who runs it, and
   when" below. `ksx install-drivers` is still the verb; the setup wizard is now
   one of the two places it is run from.
-- Plan B: HIDMaestro (MIT, user-mode UMDF2; would mean a hand-written Rust client for
-  its documented shared-memory protocol — verify its WGI double-input bug first).
-  Plan C: libvirtualhid (LizardByte; revisit when Sunshine's PR merges and XInput slot
-  behavior is verified). Not options: Nefarius VirtualPad (closed/commercial), vJoy
-  (DirectInput-only).
+- **ViGEmBus remains the compatibility foundation/fallback**, not the only future
+  backend. Its shipped X360 and DS4 paths stay supported while they work.
+- **HIDMaestro is the chosen rich-profile Windows backend.** It is MIT and active;
+  upstream has supplied the exact shared-memory/event names and authoritative layout
+  sources. KSX still needs a real, measured production adapter and a narrow privileged
+  host before enabling any HIDMaestro persona.
+- **VIIPER is the complementary virtual-USB/network/Linux lane.** It is for
+  software-defined controllers, keyboards and mice, including remote endpoints—not a
+  replacement profile catalog. Its GPL core stays across a deliberate process boundary
+  unless a future licensing review approves a different distribution design.
+- **Watchlist, not roadmap dependencies:** libvirtualhid has a useful cross-platform
+  API but its Windows driver/broker is commercially licensed; Nefarius VirtualPad is
+  commercial partner-only; WinUHid would make KSX responsible for building, signing
+  and maintaining a Windows driver; vJoy is a generic DirectInput path.
+
+No future backend in this list is bundled or enabled merely because it appears here.
+The current release still ships ViGEmBus only. VirtualHere is a proprietary external
+raw-USB forwarding product and could be an optional user-installed/OEM integration;
+it is not an output dependency and cannot be vendored under its standard license.
 
 ### Expired signing certificate — accepted, because a verified timestamp covers it
 

@@ -50,6 +50,13 @@ explicit recovery model and a virtual-controller stack that games actually see:
 | Keyboard capture | [`kanata-interception`](https://crates.io/crates/kanata-interception) for broad keyboard support, plus a **WinUSB/`nusb` direct-claim backend** | Per-device routing, scoped blocking, explicit recovery, and a path that uses an in-box Windows driver. |
 | Virtual controller output | **ViGEmBus 1.22.0** through a vendored pure-Rust [`vigem-client`](https://github.com/CasualX/vigem-client) | Real XInput slots through Microsoft's `xusb22.sys`, with PlayStation-style targets available beyond the four-controller XInput ceiling. |
 
+That table is shipped reality. The output roadmap deliberately keeps three
+complementary lanes: ViGEmBus for proven X360/DS4 compatibility, HIDMaestro for
+rich byte-exact Windows controller profiles, and VIIPER for virtual USB,
+network endpoints and Linux reach. HIDMaestro and VIIPER are not yet customer
+features, and KSX never silently changes a requested controller identity because
+one backend is unavailable. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md#e1--a-capability-routed-output-stack).
+
 The driver analysis and dated prior-art survey live in [`docs/research/`](docs/research/).
 
 ## Core behavior
@@ -446,7 +453,7 @@ crates/ksx-core           pure mapping engine (CI-tested, proptest)
 crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
-crates/ksx-output         VirtualPadBackend: ViGEmBus
+crates/ksx-output         VirtualPadBackend: shipped ViGEmBus + gated HIDMaestro adapter
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else
@@ -505,6 +512,9 @@ portable release both include that material.
 - **Francisco Lopes (oblitum)** — Interception
 - **Nefarius Software Solutions / Benjamin Höglinger-Stelzer** — ViGEmBus
 - **CasualX** — vigem-client
+- **Hifihedgehog** — HIDMaestro, PadForge, and direct protocol guidance for the
+  planned rich-profile backend
+- **Alia5** — VIIPER and SISR, informing the planned virtual-USB/network lane
 - **jtroo** — kanata-interception
 - **Lucide contributors** — the `gamepad-2` silhouette in the ksx mark (ISC)
 - **AL2009man** — Gamepad-Asset-Pack, the controller art in ksx Studio (MIT)

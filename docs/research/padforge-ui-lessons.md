@@ -63,8 +63,8 @@ is: look at the controller, touch what you want to change.
   UI lands, surfacing our SOCD rule (and possibly making it configurable at
   the engine layer, where history exists) becomes a real feature request.
 - HIDMaestro shipping inside a 2,843-commit active product is strong evidence
-  for M8's viability (and its WGI double-input caveat needs re-testing against
-  their current experience).
+  for M8's viability. The historical WGI double-input issue has since been fixed
+  upstream; current-release multi-API behavior still belongs in M8 acceptance.
 - Their "web controller: phones AS gamepads, 16 at once, no install" is the
   mirror image of our "phone as config remote" — noted as an E-idea, not
   scheduled.

@@ -8,10 +8,11 @@
 //! # What this backend will and will not emulate
 //!
 //! Only the three personas ViGEmBus cannot express. **Xbox 360 and PlayStation
-//! are refused here even though HIDMaestro could technically produce them**:
-//! its XInput is a synthesis layer (the GIP companion mapping a HID device onto
-//! an XInput slot) and that layer is the direct cause of its WGI double-input
-//! bug. Slots 1–4 stay on the genuine `xusb22.sys` article — see
+//! are refused here even though HIDMaestro could technically produce them**.
+//! ViGEmBus remains the shipped compatibility lane with genuine `xusb22.sys`
+//! XInput behavior; HIDMaestro is the chosen rich-profile lane. The historical
+//! WGI double-input issue was fixed upstream and is no longer the reason for the
+//! split. See
 //! [`ksx_core::Persona::backend`], which is where the rule is stated once and
 //! enforced by [`crate::router`].
 //!
@@ -19,8 +20,8 @@
 //!
 //! Everything below is the adapter, and the adapter is finished: persona
 //! refusal, axis routing, submit cadence, feedback preservation, teardown
-//! order. What is missing is one level down — ksx has no code that maps
-//! HIDMaestro's shared section, so the only [`HmDriverApi`] that ships
+//! order. What is missing is one level down — ksx has no wire-compatible
+//! HIDMaestro creator/input/output implementation, so the only [`HmDriverApi`] that ships
 //! ([`UnavailableDriver`]) cannot create a controller.
 //!
 //! [`HidMaestroBackend::connect`] therefore fails **everywhere**, including on

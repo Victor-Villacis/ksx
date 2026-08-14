@@ -20,18 +20,20 @@
 //!
 //! ## What a real implementation still needs
 //!
-//! The one thing the protocol map does **not** contain is the byte layout and
-//! name of HIDMaestro's shared section — the audit documents the *discipline*
-//! (seqlocked latch, consumer-driven cadence) and the *field set*, because
-//! PadForge consumes the SDK in-process as a managed library and never sees the
-//! section directly. Two routes, both open:
+//! HIDMaestro's author has supplied the exact object names and the authoritative
+//! MIT sources: `driver/driver.h` for packed structures/bounds and
+//! `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs` for creator/writer behavior.
+//! They prove that the real protocol is not this crate's small open-existing
+//! latch. Two implementation routes remain:
 //!
-//! 1. Read `HIDMaestro`'s own MIT sources (`driver.c` / `companion.c` are cited
-//!    by name in PadForge's comments) and implement the section natively.
-//! 2. Host the MIT `HIDMaestro.Core.dll` and call it — costs a CLR in-process.
+//! 1. Host the supported MIT `HIDMaestro.Core.dll` behind a narrow installed
+//!    process and call `HMContext` / `HMController`.
+//! 2. Transcribe the complete creator/input/output/PID protocol natively after
+//!    the SDK spike supplies live conformance fixtures.
 //!
-//! Route 1 is the right one for ksx (no CLR in a 1 kHz daemon), and it is a
-//! *transcription* job on top of what is already here, not a redesign.
+//! Route 1 is the next measurement, not a commitment to keep a CLR in the 1 kHz
+//! daemon. The production privilege boundary is a separate narrow host; the main
+//! daemon and games stay unelevated.
 
 use crate::error::{HmError, ProbeSummary};
 
@@ -138,8 +140,8 @@ pub struct UnavailableDriver {
 ///
 /// Short and concrete on purpose: [`HmError::NotImplemented`]'s own message
 /// already supplies the consequences, so this only has to name the hole.
-const GAP: &str = "HIDMaestro's shared-section byte layout has never been transcribed from its \
-                   sources, so no HmDriverApi implementation here can create a controller";
+const GAP: &str = "HIDMaestro's real creator/input/output protocol is not implemented here; the \
+                   experimental latch is not wire-compatible and cannot create a controller";
 
 impl UnavailableDriver {
     pub fn new() -> Self {

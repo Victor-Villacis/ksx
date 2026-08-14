@@ -10,10 +10,10 @@
 //! not get working, and would then debug — so it must not be expressible.
 //!
 //! Concretely (`docs/ENHANCEMENTS.md` E1/E4):
-//! - `xbox360`, `playstation` → **ViGEmBus, always**. Slots 1–4 never migrate:
-//!   HIDMaestro's XInput is a synthesis layer and the direct cause of its WGI
-//!   double-input bug, while ViGEm's X360 target is Microsoft's own
-//!   `xusb22.sys`. There is nothing to gain and a known bug to inherit.
+//! - `xbox360`, `playstation` → **ViGEmBus in the current capability matrix**.
+//!   It is the shipped compatibility/fallback lane, and its X360 target reaches
+//!   Microsoft's own `xusb22.sys`. The historical HIDMaestro WGI issue was fixed
+//!   upstream; it is not the reason for preserving this explicit routing.
 //! - `dualsense`, `switchpro`, `xboxseries` → **HIDMaestro**, because ViGEmBus
 //!   cannot express them at all and never will (the project is frozen).
 //!

@@ -167,11 +167,11 @@ impl HmGamepadState {
     /// Serializes into the latch payload. Fixed length, little-endian, no
     /// allocation; `out` must be at least [`FRAME_BYTES`].
     ///
-    /// This framing is **ours**: HIDMaestro's SDK is in-process C# and the
-    /// byte layout of its shared section is not published in the material we
-    /// hold, so the field set is taken from the documented `HMGamepadState`
-    /// surface and packed here. Anything that turns out to disagree with a real
-    /// driver is a change to this one function.
+    /// This framing is **ours and is not HIDMaestro wire format**. It predates
+    /// the authoritative upstream packed layout and exists only for the isolated
+    /// routing/cadence tests in this crate. The real shared input carries native
+    /// HID report bytes plus GIP and optional extended data; production code must
+    /// replace this encoder rather than hand its output to the driver.
     pub fn encode(&self, out: &mut [u8]) -> usize {
         assert!(out.len() >= FRAME_BYTES, "frame buffer too small");
         out[0..4].copy_from_slice(&self.buttons.to_le_bytes());

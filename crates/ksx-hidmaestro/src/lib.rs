@@ -6,15 +6,20 @@
 //! DS4 and nothing else, and the project is frozen
 //! (`docs/ENHANCEMENTS.md` E1).
 //!
-//! # Status: written to spec, NOT verified against a live driver
+//! # Status: experimental model, NOT a production wire client
 //!
-//! This build has no production implementation that maps HIDMaestro's shared
-//! section, regardless of whether the driver is installed. Everything in this
-//! crate is implemented against the protocol map in
+//! This build has no production implementation of HIDMaestro's creator/input/
+//! output protocol, regardless of whether the driver is installed. Most of this
+//! crate predates the authoritative upstream layout and was implemented against
+//! the protocol map in
 //! `docs/research/padforge-code-audit.md` §3, which was extracted from
-//! PadForge's working C# client. That map is a good spec — it records the
-//! *bugs* as well as the shapes, which is the expensive half — but a spec is not
-//! a measurement.
+//! PadForge's working C# client. HIDMaestro's author has since supplied the exact
+//! object names and pointed KSX to `driver/driver.h` and
+//! `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs`. Those sources show that the
+//! real protocol is larger than this crate's custom latch: creator-owned mappings
+//! and events, native HID/GIP/extended input data, an output ring, PID state and
+//! per-controller configuration. The current encoder must not be connected to a
+//! live driver.
 //!
 //! What that means concretely:
 //!
@@ -25,7 +30,7 @@
 //! | Axis routing by name ([`axis`], [`state`]) | **Yes** — pure logic | including a counterfactual that reproduces the phantom-trigger bug |
 //! | Lifecycle order ([`context`]) | **Yes** — recorded call order | test double behind [`context::HmDriverApi`] |
 //! | Feedback decode table ([`feedback`]) | **Table pinned, bytes unverified** | fixtures from the audit, incl. the BT length trap |
-//! | Shared-section layout ([`shm`], [`state::HmGamepadState::encode`]) | **No** | the audit documents the field set and the discipline, not the byte layout |
+//! | Current custom latch ([`shm`], [`state::HmGamepadState::encode`]) | **Not HIDMaestro wire-compatible** | useful test scaffold; upstream layout is now known but not implemented here |
 //! | Anything touching a real device | **No** | there is no device to touch |
 //!
 //! Nothing here fakes a controller. On a machine without HIDMaestro,
@@ -34,8 +39,8 @@
 //!
 //! # Shape
 //!
-//! - [`seqlock`] — the shared-memory latch and its read/write discipline. The
-//!   consumer drives the cadence; **this crate spawns no threads**.
+//! - [`seqlock`] — an isolated seqlock model and its read/write discipline. The
+//!   production SDK/driver structures have additional fields and ownership rules.
 //! - [`keepalive`] — 16 ms idle-dedup, derived from three driver watchdogs.
 //! - [`axis`] / [`state`] — HID-usage axes, routed **by role through the
 //!   profile's map**, never positionally.
@@ -43,7 +48,8 @@
 //! - [`context`] — lifecycle, in the one order that works.
 //! - [`feedback`] — the decode table, including the Bluetooth length trap.
 //! - [`driver`] — availability probe and the honest not-installed driver.
-//! - [`shm`] (Windows) — file-mapping storage for the latch.
+//! - [`shm`] (Windows) — experimental open-existing file-mapping storage; the
+//!   real writer creates named mappings/events with the upstream security contract.
 
 pub mod axis;
 pub mod context;

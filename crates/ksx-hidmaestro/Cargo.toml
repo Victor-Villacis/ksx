@@ -1,6 +1,6 @@
 [package]
 name = "ksx-hidmaestro"
-description = "HIDMaestro protocol client: seqlocked shared-memory latch, lifecycle, axis routing, feedback decode."
+description = "HIDMaestro experiments and a bounded, versioned future host contract."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

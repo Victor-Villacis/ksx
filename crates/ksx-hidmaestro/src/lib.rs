@@ -1,4 +1,4 @@
-//! ksx-hidmaestro — a Rust client for HIDMaestro's protocol.
+//! ksx-hidmaestro — HIDMaestro experiments and a future host contract.
 //!
 //! HIDMaestro (<https://github.com/hifihedgehog/HIDMaestro>, **MIT**) is a
 //! user-mode (UMDF2) HID descriptor emulator. It is the only route to the
@@ -28,8 +28,9 @@
 //! | Seqlock discipline ([`seqlock`]) | **Yes** — real concurrency test | writer thread vs reader loop over shared atomics |
 //! | Keepalive cadence ([`keepalive`]) | **Yes** — pure logic, derived constants | arithmetic against the three watchdogs |
 //! | Axis routing by name ([`axis`], [`state`]) | **Yes** — pure logic | including a counterfactual that reproduces the phantom-trigger bug |
-//! | Lifecycle order ([`context`]) | **Yes** — recorded call order | test double behind [`context::HmDriverApi`] |
+//! | Legacy lifecycle scaffold ([`context`]) | **Model only, not the supported upstream lifecycle** | recorded test-double order; it must not back production Play |
 //! | Feedback decode table ([`feedback`]) | **Table pinned, bytes unverified** | fixtures from the audit, incl. the BT length trap |
+//! | Privileged-host protocol ([`host`]) | **Yes — pure framing/state machine only** | all twelve frozen message vectors + encoded in-memory host; no OS transport or SDK calls |
 //! | Current custom latch ([`shm`], [`state::HmGamepadState::encode`]) | **Not HIDMaestro wire-compatible** | useful test scaffold; upstream layout is now known but not implemented here |
 //! | Anything touching a real device | **No** | there is no device to touch |
 //!
@@ -45,8 +46,11 @@
 //! - [`axis`] / [`state`] — HID-usage axes, routed **by role through the
 //!   profile's map**, never positionally.
 //! - [`profile`] — descriptor + axis map, PID-block detection.
-//! - [`context`] — lifecycle, in the one order that works.
+//! - [`context`] — an older lifecycle scaffold retained for tests, not the
+//!   supported `HMContext` / `HMController` production boundary.
 //! - [`feedback`] — the decode table, including the Bluetooth length trap.
+//! - [`host`] — bounded/versioned future process protocol and transport-neutral
+//!   client state machine. It launches nothing and touches no driver.
 //! - [`driver`] — availability probe and the honest not-installed driver.
 //! - [`shm`] (Windows) — experimental open-existing file-mapping storage; the
 //!   real writer creates named mappings/events with the upstream security contract.
@@ -56,6 +60,7 @@ pub mod context;
 pub mod driver;
 pub mod error;
 pub mod feedback;
+pub mod host;
 pub mod keepalive;
 pub mod profile;
 pub mod seqlock;

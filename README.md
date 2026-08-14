@@ -512,8 +512,10 @@ portable release both include that material.
 - **Francisco Lopes (oblitum)** — Interception
 - **Nefarius Software Solutions / Benjamin Höglinger-Stelzer** — ViGEmBus
 - **CasualX** — vigem-client
-- **Hifihedgehog** — HIDMaestro, PadForge, and direct protocol guidance for the
-  planned rich-profile backend
+- **[Hifihedgehog](https://github.com/hifihedgehog)** —
+  [HIDMaestro](https://github.com/hifihedgehog/HIDMaestro),
+  [PadForge](https://github.com/hifihedgehog/PadForge), and direct protocol
+  guidance for the planned rich-profile backend
 - **Alia5** — VIIPER and SISR, informing the planned virtual-USB/network lane
 - **jtroo** — kanata-interception
 - **Lucide contributors** — the `gamepad-2` silhouette in the ksx mark (ISC)

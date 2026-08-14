@@ -13,6 +13,7 @@ internal static class PureSelfTests
             Run("contract rejects a property drift", ContractRejectsDrift),
             Run("contract rejects a missing persona", ContractRejectsMissingPersona),
         };
+        tests.AddRange(ProtocolSelfTests.Run());
 
         return new SelfTestDocument(1, "self-test", tests.All(test => test.Passed), tests);
     }

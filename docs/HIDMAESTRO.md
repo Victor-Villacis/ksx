@@ -1,7 +1,7 @@
 # HIDMaestro M8 execution plan
 
-Status: **read-only catalog spike complete; live use blocked on hardening; no
-HIDMaestro persona is enabled**.
+Status: **read-only catalog and host-contract spikes complete; live use blocked
+on hardening; no HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -57,15 +57,12 @@ not approved for KSX distribution or elevated execution as-is:
   states that SignTool is not redistributable, so the release asset's MIT
   license does not by itself grant KSX the right to redistribute that Microsoft
   toolchain.
-- `DriverBuilder.EnsureExtracted()` reuses a predictable `%TEMP%` directory
-  after checking the expected files by name and length, then launches signing
-  tools from it during the elevated install path.
-- `SwdDeviceFactory.EnsureHelperExtracted()` similarly reuses
-  `%TEMP%\HIDMaestro\hmswd.exe` when its length matches before device
-  creation/removal.
-- The install path creates a long-lived self-signed machine trust certificate
-  with a persisted exportable private key. The audited release does not provide
-  a matching ownership ledger and uninstall cleanup contract suitable for KSX.
+- The release contains an elevated helper-staging boundary that is under
+  coordinated security review. KSX will not execute or redistribute that path;
+  implementation details belong in a private upstream report until disclosure
+  is coordinated.
+- The default developer-signing path does not meet KSX's production signing,
+  trust-ownership, or uninstall-cleanup requirements.
 - Controller indices, registry names and cleanup are machine-global. A normal
   runtime must not sweep devices belonging to another HIDMaestro consumer, and
   the current shared objects have no negotiated layout version or KSX ownership
@@ -102,8 +99,22 @@ ordinary KSX daemon  ->  narrow authenticated IPC  ->  HIDMaestro host
 ```
 
 The host may ultimately be an installed service or a long-lived per-user
-elevated process. The spike must first establish whether the supported SDK is
-intended to run in Session 0. Until then, neither topology is claimed as final.
+elevated process. Source inspection makes a **LocalSystem** Session 0 host
+technically plausible: controller objects use the `Global\` namespace, their
+shared-object SDDL grants SYSTEM, Administrators and LocalService access,
+device creation is callback/event driven, and no interactive desktop or
+message loop is required. That SDDL is not evidence that LocalService can own
+the lifecycle; upstream source identifies authority failures for that account.
+The service experiment is LocalSystem-only, and the topology is not upstream
+documented or tested, so a disposable-machine matrix must still prove it before
+KSX chooses that design.
+
+KSX's current installer and executables are unsigned. A per-Play elevated host
+would therefore show an `Unknown publisher` UAC prompt every session. That
+prototype is acceptable on a disposable QA image, but production must either
+code-sign the host or pay the additional engineering cost of a securely
+installed on-demand service; a highest-privilege scheduled task is not an
+acceptable prompt bypass.
 
 The IPC boundary, when built, must reject arbitrary executable paths, driver
 paths, descriptors, profile files and commands. It accepts only versioned
@@ -119,15 +130,19 @@ non-compatible 80-byte frame into it. The real host owns `HMContext`,
 `HMController` and all SDK objects. It also caches the last full `PadState` and
 owns any required idle keepalive pump: KSX's engine emits state changes, so a
 cadence check called only from `VirtualPadBackend::update()` cannot fire while
-the input is held and unchanged.
+the input is held and unchanged. The ordinary client still renews a slower
+lease with an unchanged full-state submission every second. If no valid state
+arrives for five seconds, the host neutralizes and destroys that controller
+even when a wedged client keeps the pipe open.
 
 Two routing changes prepare S4 without enabling a driver:
 
 - **Done:** capability is gated per persona. A future DualSense proof can no
   longer expose Switch Pro and Xbox Series by flipping one backend-wide bit.
-- ViGEm and HIDMaestro must both be factory-backed and lazy. Today ordinary
-  startup connects ViGEm before the router is used, so a future
-  HIDMaestro-only configuration would still fail when ViGEm is absent.
+- **Seam done, production preflight pending:** ViGEm and HIDMaestro can both be
+  factory-backed and either can start first. Existing entry points retain their
+  current eager ViGEm ordering until an exact-persona preflight preserves the
+  rule that output availability is known before keyboard capture is armed.
 
 ## Current sprint
 
@@ -136,17 +151,17 @@ Two routing changes prepare S4 without enabling a driver:
 | S0 — truth reset | Correct credits, source facts and routing decision | **Done.** Existing transport says it is incompatible; personas remain gated; ViGEm behavior is unchanged |
 | S1 — SDK catalog probe | Pinned, source-only .NET probe using `HIDMaestro.Core.dll` | **Done.** Default run is read-only, emits one machine-readable result, loads the embedded catalog and proves the exact DualSense, Switch Pro and Xbox Series candidates without installing or creating anything |
 | S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
-| S1.5 — distribution and elevation hardening | Resolve the embedded WDK-tool license and reusable `%TEMP%` helper boundary | Private upstream disclosure completed; no non-redistributable Microsoft tool ships; helper/package identity and ACLs fail closed; a clean-runner security test proves an unprivileged pre-seed cannot influence elevated execution |
+| S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
+| S1.5 — distribution and elevation hardening | Resolve the embedded WDK-tool license and elevated helper-staging boundary | Upstream contact is open; exact security detail stays private until a reporting channel is available. No non-redistributable Microsoft tool may ship; helper/package identity and ACLs must fail closed; a clean-runner security test must prove elevated execution is isolated from untrusted state |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
 | S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |
 | S4 — gated KSX adapter | Production `VirtualPadBackend` implementation behind a default-off gate | `PadState` translation, lifecycle and feedback have contract tests; no accidental persona substitution; missing/mismatched SDK refuses safely; ViGEm tests remain unchanged |
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1 is code-complete only when it can be reproduced without administrator
-rights. S2 is blocked by S1.5 and is intentionally not automated on a developer
-workstation: it changes trust, driver and device state and needs an explicit
-supervised hardware gate.
+S1 has been reproduced without administrator rights. S2 is blocked by S1.5 and
+is intentionally not automated on a developer workstation: it changes trust,
+driver and device state and needs an explicit supervised hardware gate.
 
 ### S1 measured result
 
@@ -165,11 +180,66 @@ constructs `HMContext` or calls install, create-controller, USB/IP-install or
 global cleanup APIs; a source scanner enforces that boundary before every
 build. This result proves catalog/API compatibility only.
 
-## Questions for HIDMaestro upstream
+### S1.3 host-contract result
 
-The first reply should thank the author, state that the incompatible latch will
-remain disabled, and ask only the two architecture questions the source does not
-answer:
+The Rust client and .NET simulator share the bounded `KSXH` V1 envelope. The
+contract freezes all twelve Play-time message kinds with byte-for-byte golden
+frames, not merely independent same-language round trips. It also fixes:
+
+- a maximum of 16 total controller identities per conversation;
+- exact pinned SDK hash, catalog hash, embedded-resource count, profile slug and
+  VID/PID checks before state can be accepted;
+- finite operation deadlines, including a 250 ms state-submit bound;
+- immediate conversation poisoning and transport close after an ambiguous
+  post-dispatch response, so host EOF cleanup neutralizes owned controllers;
+- a host-local 16 ms SDK pump, one-second client lease refresh and five-second
+  neutralize/destroy expiry; and
+- full effective feedback snapshots in one conversation-global, 64-entry
+  drop-oldest queue, so a later LED event cannot erase a previously observed
+  zero-motor stop.
+
+This remains an in-memory conformance boundary. It does not create a named
+pipe, authenticate a Windows peer, construct `HMContext`, install a driver or
+enable a persona. V1 also has no asynchronous lease-expired notification: the
+client treats its controller list as presumed state, and a later operation on
+an expired id fails closed and ends that conversation. A typed expiry event is
+a future UX/recovery refinement, not permission to weaken the watchdog.
+
+## Source-derived working answers
+
+KSX does not need to wait for upstream to choose its working architecture:
+
+- The raw mappings/events/registry contract is internal and unversioned.
+  `SharedMemoryIO` and `DeviceOrchestrator` are internal SDK types, while the
+  shared structures carry no magic, ABI version, declared size, feature bitmap
+  or ownership token. KSX therefore treats `HMContext` / `HMController` as the
+  supported boundary and will not ship a native raw-mapping client unless
+  upstream later formalizes that ABI.
+- Session 0 is a viable experiment, not a supported fact. A LocalSystem service
+  has the right machine/global authority and the standard controller path has
+  no visible interactive-session dependency. Open questions remain around the
+  service account's HKCU, XInput visibility across sessions, crash recovery,
+  logoff/logon and sleep/resume.
+- One machine-wide owner is mandatory. Controller indices, object names and
+  registry keys are global but allocation/teardown ownership is only
+  process-local; a second context or process can reset or remove another
+  consumer's same-index controller. KSX's host must own one context, one
+  exclusive lease and one central index allocator, and normal Play must never
+  call HIDMaestro's global cleanup operations. A KSX mutex can serialize KSX
+  processes, but it cannot stop PadForge or another HIDMaestro consumer from
+  choosing the same global index. Until upstream provides a cross-client owner
+  token/allocator, production must detect existing HIDMaestro objects/devices
+  and refuse coexistence explicitly; that detection still needs a
+  disposable-machine race test and must not be described as perfect isolation.
+
+These conclusions are source-backed defaults. The author's response can confirm
+or correct the intended support policy, and disposable-machine evidence remains
+the authority for runtime behavior.
+
+## HIDMaestro upstream follow-up
+
+Victor has thanked the author, confirmed that the incompatible latch remains
+disabled, and asked the two architecture questions the source does not answer:
 
 1. Are the named mappings/events/registry structures a supported and versioned
    downstream ABI, or should external products host `HIDMaestro.Core` and treat
@@ -179,10 +249,10 @@ answer:
    Windows service in Session 0, with an unelevated UI using its own narrow
    authenticated IPC channel?
 
-The public reply should also ask for a private security contact. KSX found a
-potential elevated helper-staging issue and a SignTool redistribution concern,
-but should send the exact paths and reproduction privately before discussing
-them in a public issue or commit thread.
+The next public follow-up should ask only for a private security contact and
+mention an elevated helper-staging boundary plus the SignTool redistribution
+question at a high level. Exact paths, reproduction details, and impact belong
+in a private report until disclosure is coordinated.
 
 Compatibility, teardown, latency, multi-controller and XInput-slot questions
 come after the probe produces reproducible logs. That gives upstream a concrete
@@ -190,7 +260,8 @@ failure or measurement to review instead of another hypothetical design.
 
 ## Go/no-go rule
 
-Do not flip `PadBackend::is_implemented()` and do not offer DualSense, Switch
-Pro or Xbox Series in customer configuration until S4 and S5 pass. A successful
-catalog read proves the dependency can be hosted; it does not prove that a
+Do not enable any rich persona's exact capability gate and do not offer
+DualSense, Switch Pro or Xbox Series in customer configuration until S4 and S5
+pass. A successful catalog read proves the dependency can be hosted; it does
+not prove that a
 controller can be created, driven, observed, recovered or safely packaged.

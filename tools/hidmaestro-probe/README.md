@@ -9,14 +9,32 @@ loading it, inventories every embedded profile JSON, checks the public catalog
 surface, and pins the `dualsense`, `switch-pro`, and `xbox-series-xs-bt`
 properties KSX depends on. It writes exactly one JSON document to stdout.
 
+The same executable also carries a pure, nonprivileged simulation of the
+future KSX-to-host data boundary. `protocol` describes the exact
+`ksx.hidmaestro.host.v1` (`KSXH`) little-endian envelope from
+`crates/ksx-hidmaestro/src/host.rs`: a 16-byte header, one of twelve bounded
+typed payloads, and a 528-byte maximum frame. C# pins all twelve Rust golden
+frames byte-for-byte, plus the standalone Submit boundary vector.
+`simulate-protocol` runs a deterministic transcript: initial/changed complete
+state crosses the wire, while the privileged host republishes its cached state
+to the SDK every 16 ms with no wire request. The ordinary client sends an
+unchanged complete-state lease heartbeat once per second; five seconds without
+Submit neutralizes, destroys, and tombstones only that controller while the
+conversation remains usable. The model also enforces a lifetime budget of 16
+controller identities per conversation and converts partial SDK callbacks into
+full effective motor/LED snapshots before one copied, conversation-global,
+64-entry feedback queue may drop oldest. This is frozen for in-memory
+conformance tests, not approved as
+production IPC: authentication, ACLs, ownership, callback synchronization and
+the OS transport remain deliberately unspecified.
+
 ## Safety boundary
 
 This probe deliberately has no install, create-device, cleanup, or live-input
-command. It never constructs `HMContext`; v1.6.1 does background payload
-extraction from that constructor. More importantly, its elevated lifecycle path
-may reuse same-length-validated helper executables in a shared `%TEMP%`
-location. A live conformance run is deferred until that trust boundary is fixed
-upstream or KSX uses a reviewed patched SDK.
+command. It never constructs `HMContext`; v1.6.1 performs background payload
+work from that constructor. Its elevated helper-staging boundary is under
+coordinated security review, so a live conformance run is deferred until that
+boundary is fixed upstream or KSX uses a reviewed hardened SDK.
 
 `test-safety.ps1` scans every C# source before compilation and rejects SDK
 driver lifecycle calls or context construction. The check is intentionally
@@ -46,6 +64,8 @@ $sdk = 'C:\path\to\extracted\HIDMaestro.Core.dll'
 ./build.ps1 -DotNet $dotnet -SdkDll $sdk
 
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll'
+& $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' protocol
+& $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' simulate-protocol
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' self-test
 ```
 

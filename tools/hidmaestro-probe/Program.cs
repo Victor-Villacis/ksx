@@ -10,7 +10,7 @@ internal static class Program
         ConstructsSdkContext: false,
         CallsDriverLifecycleApis: false,
         LiveExerciseStatus: "deferred",
-        Reason: "HIDMaestro v1.6.1 elevated lifecycle paths may reuse same-length-validated helpers under a shared %TEMP% location; KSX will not execute them until upstream resolves or patches that trust boundary.");
+        Reason: "HIDMaestro v1.6.1 has an elevated helper-staging boundary under coordinated security review; this probe never executes lifecycle operations.");
 
     public static int Main(string[] args)
     {
@@ -23,6 +23,8 @@ internal static class Program
             {
                 [] => Inventory(),
                 ["inventory"] => Inventory(),
+                ["protocol"] => Protocol(),
+                ["simulate-protocol"] => SimulateProtocol(),
                 ["self-test"] => SelfTest(),
                 ["help"] or ["--help"] or ["-h"] => Help(),
                 _ => InvalidArguments(args),
@@ -111,6 +113,18 @@ internal static class Program
         return (document, document.Ok ? 0 : 1);
     }
 
+    private static (object Document, int ExitCode) Protocol()
+    {
+        var document = new ProtocolDocument(1, "protocol", true, ProtocolContract.Describe(), Safety);
+        return (document, 0);
+    }
+
+    private static (object Document, int ExitCode) SimulateProtocol()
+    {
+        SimulationDocument document = ProtocolContract.Simulate(Safety);
+        return (document, document.Ok ? 0 : 1);
+    }
+
     private static (object Document, int ExitCode) Help() =>
         (new
         {
@@ -121,6 +135,8 @@ internal static class Program
             {
                 new { syntax = "ksx-hidmaestro-probe", effect = "Read and verify the pinned SDK's embedded profile catalog." },
                 new { syntax = "ksx-hidmaestro-probe inventory", effect = "Same as the default command." },
+                new { syntax = "ksx-hidmaestro-probe protocol", effect = "Describe the frozen, pure host-protocol simulation contract." },
+                new { syntax = "ksx-hidmaestro-probe simulate-protocol", effect = "Run the deterministic cadence, feedback, and teardown transcript." },
                 new { syntax = "ksx-hidmaestro-probe self-test", effect = "Run pure parser and contract tests." },
             },
             safety = Safety,
@@ -133,7 +149,7 @@ internal static class Program
             command = "invalid",
             ok = false,
             arguments = args,
-            error = new ErrorInfo("invalid_arguments", "Use no arguments, inventory, self-test, or help."),
+            error = new ErrorInfo("invalid_arguments", "Use no arguments, inventory, protocol, simulate-protocol, self-test, or help."),
             safety = Safety,
         }, 2);
 }

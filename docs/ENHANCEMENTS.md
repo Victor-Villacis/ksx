@@ -44,8 +44,9 @@ network/cross-platform endpoint → VIIPER.
 
 **Feasibility check first.** Installation state is not the blocker: this build has no
 production implementation that maps HIDMaestro's shared section. Installing the driver
-would therefore not make these personas usable. The managed SDK is a specification
-source, not a production transport for KSX.
+would therefore not make these personas usable. In this build, the managed SDK is used
+only as a specification and catalog source; the roadmap's first production boundary is
+a separately hardened SDK host.
 
 So M8 shipped the **client, honestly gated**, and nothing that pretends:
 
@@ -58,14 +59,13 @@ So M8 shipped the **client, honestly gated**, and nothing that pretends:
 - `ksx-output`: `HidMaestroBackend` (adapter) + `RoutedBackend` (persona → stack).
 - `ksx-core`: `Persona::{DualSense, SwitchPro, XboxSeries}` + `PadBackend`, with
   `Persona::backend()` as the single statement of the routing rule.
-- **The three personas are not offered until the section lands.**
-  `PadBackend::is_implemented()` says this build cannot create a HIDMaestro device, and
+- **The three personas are not offered until their exact implementations land.**
+  `PadBackend::supports(persona)` records that per-persona build capability, and
   `Persona::can_plug()` is what the config validator (`Issue::PersonaNotImplemented`),
-  `RoutedBackend`, `ksx pads` and `ksx doctor` all read. The gate is that build fact and
-  **never a driver probe** — a probe flips to "installed" the moment a user installs
-  HIDMaestro, and the plug fails exactly as before, so a probe-based gate is wrong in
-  the one case it exists for. Flipping `is_implemented()` in the same commit that lands
-  a real driver re-opens every one of those paths with nothing else to change.
+  `RoutedBackend`, `ksx pads` and `ksx doctor` all read. The gate is a build fact and
+  **never a driver probe** — installing HIDMaestro cannot expose an unimplemented
+  persona. A persona is enabled only in the same change that lands and verifies that
+  exact implementation, without accidentally enabling its siblings.
 - `ksx doctor` reports HIDMaestro's absence at **Info** severity (`hidmaestro-missing`)
   and says nothing depends on it, because nothing does: a cabinet on
   xbox360/playstation loses nothing by not having it, and neither does anyone else.

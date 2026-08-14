@@ -621,7 +621,7 @@ crossing is a design smell worth a second look.
 
   - **Backend** (`ksx-backend/src/slots.rs`) applies it, and refuses two things in
     words: a persona this build cannot plug (`Persona::can_plug`, which reads
-    the backend's `is_implemented` and never a driver probe) and a fifth XInput
+    `PadBackend::supports(persona)` and never a driver probe) and a fifth XInput
     slot — counted **after** the write would land, over the whole destination
     file, so the refusal is about the config that would exist rather than about
     the one field being touched.

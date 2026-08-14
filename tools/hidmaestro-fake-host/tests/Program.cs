@@ -53,11 +53,12 @@ internal static class Program
     {
         string[] args = ["serve-v1", CanonicalToken, "12345"];
         Require(LaunchArguments.TryParse(args, out LaunchArguments? launch, out _));
-        Require(launch is not null);
-        Require(launch.DaemonPid == 12345);
-        Require(launch.PipeNameComponent == "KSX.HIDMaestro.Play.v1." + CanonicalToken);
-        Require(!launch.PipeNameComponent.Contains("\\\\.\\pipe", StringComparison.Ordinal));
-        Require(!launch.ToString().Contains(CanonicalToken, StringComparison.Ordinal));
+        LaunchArguments parsed = launch
+            ?? throw new InvalidOperationException("Canonical launch arguments did not parse.");
+        Require(parsed.DaemonPid == 12345);
+        Require(parsed.PipeNameComponent == "KSX.HIDMaestro.Play.v1." + CanonicalToken);
+        Require(!parsed.PipeNameComponent.Contains("\\\\.\\pipe", StringComparison.Ordinal));
+        Require(!parsed.ToString().Contains(CanonicalToken, StringComparison.Ordinal));
 
         string[][] refused =
         [
@@ -221,10 +222,14 @@ internal static class Program
             10);
         AppliedMessage response = RequireMessage<AppliedMessage>(applied.Response);
         Require(response.Controller == controller && response.Sequence == 1);
-        Require(session.TryDequeueFeedback(out byte[]? encoded) && encoded is not null);
-        Require(HostProtocolCodec.TryDecode(encoded, out HostFrame? frame, out _));
-        Require(frame is not null && frame.RequestId == 0);
-        FeedbackMessage feedback = RequireMessage<FeedbackMessage>(frame);
+        Require(session.TryDequeueFeedback(out byte[]? encoded));
+        byte[] encodedFeedback = encoded
+            ?? throw new InvalidOperationException("The accepted Submit emitted no feedback bytes.");
+        Require(HostProtocolCodec.TryDecode(encodedFeedback, out HostFrame? frame, out _));
+        HostFrame decoded = frame
+            ?? throw new InvalidOperationException("The feedback frame did not decode.");
+        Require(decoded.RequestId == 0);
+        FeedbackMessage feedback = RequireMessage<FeedbackMessage>(decoded);
         Require(feedback.Controller == controller && feedback.Sequence == 1);
         Require(feedback.Source == HostFeedbackSource.OutputDecoded && feedback.ReportLength == 0);
         Require(feedback.MotorsValid && feedback.LedValid);

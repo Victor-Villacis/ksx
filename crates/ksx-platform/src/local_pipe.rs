@@ -422,11 +422,8 @@ impl PipeInner {
     fn child_exit_code(&self) -> Result<Option<u32>, PipeIoError> {
         #[cfg(windows)]
         {
-            return crate::process::retained_process_exit_code(
-                self.child_handle as _,
-                Duration::ZERO,
-            )
-            .map_err(PipeIoError::Io);
+            crate::process::retained_process_exit_code(self.child_handle as _, Duration::ZERO)
+                .map_err(PipeIoError::Io)
         }
         #[cfg(not(windows))]
         {
@@ -437,7 +434,7 @@ impl PipeInner {
     fn read_exact(&self, buffer: &mut [u8], timeout: Duration) -> Result<(), PipeIoError> {
         #[cfg(windows)]
         {
-            return self.read_exact_windows(buffer, timeout);
+            self.read_exact_windows(buffer, timeout)
         }
         #[cfg(not(windows))]
         {
@@ -449,7 +446,7 @@ impl PipeInner {
     fn write_all(&self, buffer: &[u8], timeout: Duration) -> Result<(), PipeIoError> {
         #[cfg(windows)]
         {
-            return self.write_all_windows(buffer, timeout);
+            self.write_all_windows(buffer, timeout)
         }
         #[cfg(not(windows))]
         {
@@ -1369,10 +1366,11 @@ impl PipeInner {
             return Err(map_pipe_io_error(error));
         }
 
-        let mut handles: Vec<windows_sys::Win32::Foundation::HANDLE> = Vec::with_capacity(3);
-        handles.push(pending.event.as_raw_handle().cast());
-        handles.push(self.cancel_event.as_raw_handle().cast());
-        handles.push(self.child_handle as _);
+        let handles: [windows_sys::Win32::Foundation::HANDLE; 3] = [
+            pending.event.as_raw_handle().cast(),
+            self.cancel_event.as_raw_handle().cast(),
+            self.child_handle as _,
+        ];
         // SAFETY: all handles stay owned by self/event through the wait.
         let waited = unsafe {
             WaitForMultipleObjects(

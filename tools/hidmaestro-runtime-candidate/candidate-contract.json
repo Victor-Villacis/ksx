@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "candidate": "s1.5b-dualsense-conformance",
+  "status": "design-contract-only",
+  "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "artifact": {
+    "assemblyName": "HIDMaestro.Core",
+    "versionContract": {
+      "assemblyVersion": "1.6.1.0",
+      "fileVersion": "1.6.1.0",
+      "informationalVersion": "1.6.1-ksx-s1.5b+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954"
+    },
+    "targetFramework": "net10.0-windows10.0.26100.0",
+    "runtimeIdentifier": "win-x64",
+    "embeddedResourcePolicy": {
+      "allowedPrefix": "HIDMaestro.Profiles.",
+      "resourceCount": 228,
+      "deployableProfileCount": 130,
+      "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A"
+    }
+  },
+  "gateState": {
+    "artifactPublicApiAllowlistFrozen": false,
+    "artifactCompileAllowlistFrozen": false,
+    "profileSourceCatalogBound": false,
+    "rawFeedbackDecoderFrozen": false,
+    "driverRuntimeAbiBound": false,
+    "distributionReady": false
+  },
+  "conformanceScope": {
+    "maximumLiveControllers": 1,
+    "controllerIndex": 0,
+    "profile": {
+      "id": "dualsense",
+      "vendorId": 1356,
+      "productId": 3302,
+      "connection": "usb",
+      "requiresUsbipBackend": false,
+      "usesUpperFilter": false,
+      "requiresXusbCompanion": false
+    },
+    "machinePrecondition": "Disposable Windows machine with the exact signed HID driver package preinstalled and no other HIDMaestro consumer or device present."
+  },
+  "requiredHostApiMinimum": {
+    "HIDMaestro.HMContext": [
+      ".ctor",
+      "LoadDefaultProfiles",
+      "GetProfile",
+      "CreateController",
+      "Dispose"
+    ],
+    "HIDMaestro.HMController": [
+      "get_Profile",
+      "add_OutputReceived",
+      "remove_OutputReceived",
+      "SubmitState",
+      "Dispose"
+    ],
+    "HIDMaestro.HMProfile": [
+      "get_Id",
+      "get_Name",
+      "get_VendorId",
+      "get_ProductId"
+    ],
+    "HIDMaestro.HMGamepadState": [
+      "Axes",
+      "Buttons",
+      "Hat"
+    ],
+    "HIDMaestro.HMAxis": "required typed state enum",
+    "HIDMaestro.HMButton": "required typed state enum",
+    "HIDMaestro.HMHat": "required typed state enum",
+    "HIDMaestro.HMOutputPacket": [
+      "Source",
+      "ReportId",
+      "Data",
+      "SeqNo"
+    ],
+    "HIDMaestro.HMOutputSource": "required raw-feedback source enum"
+  },
+  "feedbackBoundary": "The intended boundary is raw HMController.OutputReceived packets and a future source-frozen DualSense adapter; HMOutputPacket.ReportId is separate and HMOutputPacket.Data excludes that report-ID byte. The broader OutputDecoded surface is not required for this checkpoint.",
+  "requiredSourceReplacements": [
+    {
+      "unit": "HMContext",
+      "requirements": [
+        "Constructor performs no background work, process launch, file extraction, driver probe, service mutation or global cleanup.",
+        "CreateController accepts only the exact conformance profile and refuses a second live controller.",
+        "Dispose tears down only the exact owned device set returned by create."
+      ]
+    },
+    {
+      "unit": "RuntimePlainHidLifecycle",
+      "requirements": [
+        "Create only the one plain-HID parent required by dualsense after proving the signed package was preinstalled.",
+        "Capture the exact parent instance identity immediately when registration succeeds, before any later fallible binding or child-discovery step.",
+        "Retain a partial-owned transaction record until creation either commits or exact-identity rollback completes.",
+        "On every error after registration, neutralize any started state path and roll back only the exact captured parent and child identities; report rollback failure explicitly instead of discarding ownership state.",
+        "Return an immutable owned-device record containing the exact parent instance ID and exact child IDs observed from that parent.",
+        "Never enumerate or delete devices by ControllerIndex, VID/PID, HIDMaestro token, profile family or global orphan status."
+      ]
+    },
+    {
+      "unit": "HMController",
+      "requirements": [
+        "Retain the immutable owned-device record for the controller lifetime.",
+        "Dispose first neutralizes and stops owned shared-memory pumps, then removes only retained exact instance IDs."
+      ]
+    },
+    {
+      "unit": "RawDualSenseFeedbackAdapter",
+      "requirements": [
+        "Accept HMOutputPacket.ReportId and HMOutputPacket.Data as separate inputs; never index Data as though it contains the report-ID byte.",
+        "Validate source, report ID and exact packet length before reading valid flags, motor bytes or optional fields.",
+        "Freeze every byte coordinate against the pinned upstream encoder/decoder source and cross-language golden vectors, including motor-stop and partial-validity cases.",
+        "Emit a complete effective feedback snapshot so bounded queue loss cannot resurrect stale motor state."
+      ]
+    },
+    {
+      "unit": "HIDMaestro.Core.csproj",
+      "requirements": [
+        "Disable default compile and resource globs.",
+        "Compile an explicit source allowlist.",
+        "Embed only the hash-pinned profile catalog; never run PackResources or DownloadFile."
+      ]
+    }
+  ],
+  "sourceUnitsExcludedFromRuntimeAssembly": [
+    "Internal/DeviceOrchestrator.cs",
+    "Internal/DeviceNodeCreator.cs",
+    "Internal/DeviceManager.cs",
+    "Internal/DriverBuilder.cs",
+    "Internal/EmbeddedManifest.cs",
+    "Internal/PnputilHelper.cs",
+    "Internal/SwdDeviceFactory.cs",
+    "Internal/Usbip/**",
+    "Internal/VrDriverBuilder.cs",
+    "HMDeviceExtractor.cs",
+    "HMOemNameOverride.cs",
+    "HMProfileBuilder.cs",
+    "HMUsbAudio.cs",
+    "HMVR.cs",
+    "HMVRController.cs"
+  ],
+  "forbiddenTypeOrMemberNames": [
+    "DriverBuilder",
+    "EmbeddedManifest",
+    "PnputilHelper",
+    "UsbipDriverInstaller",
+    "VrDriverBuilder",
+    "InstallDriver",
+    "InstallUsbipBackend",
+    "RemoveAllVirtualControllers",
+    "EnsureTestCertificate",
+    "SignDrivers",
+    "GenerateCatalogs",
+    "FullDeploy",
+    "RemoveOldDriverPackages",
+    "EnsureHelperExtracted",
+    "RemoveOrphanHidChildren",
+    "CleanupGhostDevices",
+    "DisableGhostXusbInterfaces",
+    "DetachAllOwned"
+  ],
+  "forbiddenRuntimeEffects": [
+    "embedded executables, driver packages, WDK files, USB/IP payloads or VR payloads",
+    "certificate-store writes",
+    "driver-store add, delete, update or repair",
+    "temporary executable extraction or temporary helper logs",
+    "caller-selected executable, driver, INF or profile paths",
+    "system-wide device, mapping, event, registry or package sweeps",
+    "on-demand installation or repair"
+  ],
+  "notAuthorized": [
+    "building a runtime artifact from this incomplete design contract",
+    "treating requiredHostApiMinimum as an exhaustive public API allowlist",
+    "treating the release-DLL catalog hash as a source-tree catalog binding",
+    "treating raw OutputReceived packets as decoded feedback before rawFeedbackDecoderFrozen is true",
+    "treating source-level driver layouts as proof of the installed signed driver binary/catalog ABI",
+    "distribution or signing while any gateState value is false",
+    "product enablement",
+    "Switch Pro enablement",
+    "Xbox Series enablement",
+    "USB composite profiles",
+    "multiple controllers",
+    "coexistence with another HIDMaestro consumer",
+    "execution on a developer workstation"
+  ],
+  "unresolvedArtifactGates": [
+    "Freeze every public type/member reachable from the chosen host API, or fork the exposed DTO/profile types to that exact allowlist.",
+    "Freeze the complete explicit compile-source allowlist for the runtime fork.",
+    "Pin a canonical manifest and digest for all profile source JSON and prove the candidate's 228 raw resources derive from those exact bytes.",
+    "Freeze and test the raw DualSense feedback adapter over the separate HMOutputPacket ReportId and Data coordinates.",
+    "Bind driver.h and driver.c layout/lifecycle facts to the exact signed installed HID driver binary and catalog consumed by the runtime.",
+    "Freeze the complete native-bootstrap, managed-host, runtimeconfig, deps and self-contained runtime file graph with stable file identities, hashes and signer policy."
+  ]
+}

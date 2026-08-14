@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/hifihedgehog/HIDMaestro",
+  "tag": "v1.6.1",
+  "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "checkout": {
+    "platform": "windows",
+    "coreAutocrlf": true,
+    "hashesDescribe": "checked-out file bytes after Git's explicit Windows CRLF conversion"
+  },
+  "purpose": "Static source baseline for the S1.5b runtime-only fork; this is not an executable or distributable candidate.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "7DC6524E5E31D606A2109CCFFF42D37E4596DBB64206A45DEA362B77590D5B0F"
+    },
+    {
+      "path": "Directory.Build.props",
+      "sha256": "504997271FB02F0EDB63971FD6F0AF55667AD0F3F88433A93D2AC48F600BFA8C"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HIDMaestro.Core.csproj",
+      "sha256": "5A477A82A5CF9D6A5B4BA103AA88A9FD6CD35A96736097A3EE6D54534E65DDFA"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMContext.cs",
+      "sha256": "9C2DFA766961DE1608E2F12E51B89439E15B1F6C62CD4F40F6ADF83A6A3915C5"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMController.cs",
+      "sha256": "0750DE36C54F89B2B64734D10D3DFD417F3A8BF3A06D50D2E10DF953630CC7FD"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMProfile.cs",
+      "sha256": "08C7373401BD986DFE34DD160CBA38B21A10FC2C040E230326DF03E6A568D94F"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "sha256": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+      "sha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMOutputDecodedEventArgs.cs",
+      "sha256": "8028278D660A5579A24B32A1803E0FCECD507ACA8BC434C6C50B9E37813080CD"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMPidState.cs",
+      "sha256": "D0E908C09561D9059F9F6D2A018BFE735BEE055052657605D16BC891F729D4F0"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMLayout.cs",
+      "sha256": "DCF6243987FC6A0D7F135557067DDD2998876B7FAD6A5CF104B4A0C9A79E4B8F"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/AssemblyInfo.cs",
+      "sha256": "A17F49167476184BE31BF913B4050FDF09FC98A6940036264904BF9746A1AAAB"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs",
+      "sha256": "ECA1A6DF9E4DC763B7B10972C2AE8EF45B4931159D1E8B4DE7CB26ECA8D58F5C"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs",
+      "sha256": "9E2205F791B63E45C54D9F881F0788B8E56DA77F6BF8D556BE526361E02587E0"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs",
+      "sha256": "D831EE4AAC15A3D187BED3EF422DE70D150D7FEA6DBC96FC289522A841B06C18"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs",
+      "sha256": "FB2367A582C16C597192C0768B762EDBE02EFD738A3A1AA8E26A5551964C2D14"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/VendorBlobCodec.cs",
+      "sha256": "05DC4CB4EA683DEF263BC49ED639F7771E501C1C78F957E484D031898E185A88"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/VendorBlobProgram.cs",
+      "sha256": "7DF6EDB9087141391BD1DC23027861C6F1D128DE5DC4FF23081C2681BA5CA7B2"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/SwitchProPacker.cs",
+      "sha256": "B57F0E387C4AC1011A92B9B8E081D8A7833A5D1F6E5F167846915423C1DE9104"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/PidReportIdExtractor.cs",
+      "sha256": "14CEBBD871D4BD98F6C548205C008FEBD9373EF182018B36E3EA1CBB4BC0FAD2"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs",
+      "sha256": "1A6BA29B0EEC2A1151903FA2F67174DA1B08D1066323FB70463EDB1AC0294FDC"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceNodeCreator.cs",
+      "sha256": "7A5DC2C96840006990036B074C9E92A2914D3E99941176644BBAAE68468B4748"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceManager.cs",
+      "sha256": "24EB7D60FF64AC39275CA551165AFF5D71628B4E1E63DAC3F1273BF6998D310E"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceProperties.cs",
+      "sha256": "1CB72E7DE59D473AD64B73F45E194B185C66D7BF35B2FEE73B921572711CF50A"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/TimeoutScale.cs",
+      "sha256": "FC1681FF543042481CFB070918C2F89D10E4A321495EE2E0CBFCFF72CE8F26EA"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DriverBuilder.cs",
+      "sha256": "38BD4C943FA098CA4FCA80ECCEB73040F76755815A6EA644832DE2FECFFDF8C9"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/EmbeddedManifest.cs",
+      "sha256": "ECEE8360EE021521384A2D014626C1442D5B72CAFEB7DBE72C4BE6A88999CEE4"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/PnputilHelper.cs",
+      "sha256": "96932BEB0E940D59DFD61904B1A9CCC040DCA3110A0E7BD9817B1A6AD078B07D"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/SwdDeviceFactory.cs",
+      "sha256": "72387CB648662140B8E6488B897D09C1A3533C969DC597E64A686503799F8A9D"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs",
+      "sha256": "D641727ADA747966257862E88199712F717189FCAFA85A8FAD4559EE32428308"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs",
+      "sha256": "B5934817C8984B0EFFFC8CCC3AD94ACA4495194AFDBADC0A2A7ECFDE2C4D37B8"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/VrDriverBuilder.cs",
+      "sha256": "539EFB83CD183CB07E0263740B75C931BCEB0409D7C85DCE6896C7765A3B2D72"
+    },
+    {
+      "path": "profiles/sony/dualsense.json",
+      "sha256": "DBD33E713FAFA6670610E75CC247AECE5BBAEB51591521A41AF6275D7808A4C5"
+    },
+    {
+      "path": "driver/hidmaestro.inf",
+      "sha256": "E5F3DD1273E81A90CE0D97CF6C6AB52C77A82910C61E55F2D8442C7BCC26D376"
+    },
+    {
+      "path": "driver/hidmaestro_xusb.inf",
+      "sha256": "83F308CE7B5427E714F5F4F66F8434ACD92FD0278A775B74D65D9F530BFBCDEF"
+    },
+    {
+      "path": "driver/hmswd/hmswd.c",
+      "sha256": "B812F2BDB643118554DB54C87A082C017076FB4648429D400211BC58FFD34679"
+    }
+  ]
+}

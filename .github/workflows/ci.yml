@@ -169,6 +169,130 @@ jobs:
           # Match the SDK used to establish the current probe baseline; do not
           # let `LangVersion=latest` silently move under this contract.
           dotnet-version: '10.0.400'
+      - name: Verify the hash-pinned runtime source contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-NormalizedTextSha256([string] $path) {
+            $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path))
+            $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+              $dashed = [BitConverter]::ToString(
+                $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)))
+              return $dashed.Replace('-', '')
+            } finally {
+              $sha.Dispose()
+            }
+          }
+
+          $lockPath = 'tools/hidmaestro-runtime-candidate/source.lock.json'
+          $contractPath = 'tools/hidmaestro-runtime-candidate/candidate-contract.json'
+          $expectedLockHash = '140A562055D7659FD3A8B8D100C2EA15589C0E76CB6A647638DD5F4B136FCF71'
+          $expectedContractHash = '70617FB5622A608F91361CF5199725FF3D124AE383EC78C534D253F0E1F317C1'
+          if ((Get-NormalizedTextSha256 $lockPath) -cne $expectedLockHash -or
+              (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash) {
+            throw 'The complete runtime source lock or inert candidate contract drifted.'
+          }
+          $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+          $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+          $expectedRepository = 'https://github.com/hifihedgehog/HIDMaestro'
+          $expectedCommit = '2a0dac0857901a63d365a36dcf99cf50114ca954'
+          if ($lock.repository -cne $expectedRepository -or
+              $lock.tag -cne 'v1.6.1' -or
+              $lock.commit -cne $expectedCommit -or
+              $lock.checkout.platform -cne 'windows' -or
+              $lock.checkout.coreAutocrlf -ne $true) {
+            throw 'The source-fetch authority or checkout-byte contract drifted.'
+          }
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'hidmaestro-runtime-source'
+          $emptyHooks = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-hooks'
+          $emptyGitConfig = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-gitconfig'
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+
+          try {
+            New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+            New-Item -ItemType Directory -Path $emptyHooks -Force | Out-Null
+            New-Item -ItemType File -Path $emptyGitConfig -Force | Out-Null
+            $env:GIT_CONFIG_NOSYSTEM = '1'
+            $env:GIT_CONFIG_GLOBAL = $emptyGitConfig
+            git -C $sourceRoot init --quiet --template=$emptyHooks
+            if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the inert source checkout.' }
+            git -C $sourceRoot `
+              -c core.hooksPath=$emptyHooks `
+              -c protocol.allow=never `
+              -c protocol.https.allow=always `
+              fetch `
+              --quiet `
+              --depth=1 `
+              --no-tags `
+              $expectedRepository `
+              $expectedCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the pinned HIDMaestro source commit.' }
+            git -C $sourceRoot `
+              -c core.autocrlf=true `
+              -c core.eol=crlf `
+              -c core.hooksPath=$emptyHooks `
+              checkout `
+              --quiet `
+              --detach `
+              FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Could not check out the pinned HIDMaestro source commit.' }
+
+            $stdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/test-source-contract.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro runtime source contract failed.' }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 20
+              $checks = @($report.checks)
+              if ($report.schemaVersion -ne 1 -or
+                  $report.command -cne 'runtime-source-baseline' -or
+                  $report.assurance -cne 'hash-pinned-static-source-facts-only' -or
+                  $report.ok -ne $true -or
+                  $report.upstreamCommit -cne $lock.commit -or
+                  $checks.Count -ne 82 -or
+                  @($checks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 82-check source contract did not pass'
+              }
+              if ($contract.schemaVersion -ne 1 -or
+                  $contract.status -cne 'design-contract-only' -or
+                  $contract.upstreamCommit -cne $lock.commit -or
+                  $contract.conformanceScope.maximumLiveControllers -ne 1 -or
+                  $contract.conformanceScope.controllerIndex -ne 0 -or
+                  $contract.conformanceScope.profile.id -cne 'dualsense' -or
+                  $contract.conformanceScope.profile.vendorId -ne 1356 -or
+                  $contract.conformanceScope.profile.productId -ne 3302 -or
+                  $contract.gateState.artifactPublicApiAllowlistFrozen -ne $false -or
+                  $contract.gateState.artifactCompileAllowlistFrozen -ne $false -or
+                  $contract.gateState.profileSourceCatalogBound -ne $false -or
+                  $contract.gateState.rawFeedbackDecoderFrozen -ne $false -or
+                  $contract.gateState.driverRuntimeAbiBound -ne $false -or
+                  $contract.gateState.distributionReady -ne $false) {
+                throw 'the inert one-DualSense candidate contract drifted'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro source audit did not emit the exact inert contract: $_"
+            }
+          } finally {
+            foreach ($target in @($sourceRoot, $emptyHooks, $emptyGitConfig)) {
+              $resolvedTarget = [IO.Path]::GetFullPath($target)
+              if (!$resolvedTarget.StartsWith(
+                  $runnerTemp,
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to clean source input outside RUNNER_TEMP: $resolvedTarget"
+              }
+              if (Test-Path -LiteralPath $resolvedTarget) {
+                Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+              }
+            }
+          }
       - name: Fetch the hash-pinned HIDMaestro SDK input
         shell: pwsh
         run: |
@@ -351,6 +475,32 @@ jobs:
               throw "HIDMaestro $label did not emit exactly one JSON document: $_"
             }
             Write-Host '::endgroup::'
+          }
+
+          $env:CARGO_TARGET_DIR = Join-Path `
+            $env:RUNNER_TEMP `
+            'ksx-hidmaestro-bootstrap-policy-target'
+          cargo fmt `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            -- `
+            --check
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy is not formatted.'
+          }
+          cargo clippy `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            --all-targets `
+            --locked `
+            -- `
+            -D warnings
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy failed strict clippy.'
+          }
+          cargo test `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy failed.'
           }
 
           # Everything below is deliberately SDK-free. Build the inherited-token

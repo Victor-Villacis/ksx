@@ -1741,6 +1741,7 @@ name = "ksx-hidmaestro"
 version = "0.3.1"
 dependencies = [
  "ksx-core",
+ "ksx-platform",
  "thiserror 2.0.19",
  "tracing",
  "windows-sys 0.60.2",

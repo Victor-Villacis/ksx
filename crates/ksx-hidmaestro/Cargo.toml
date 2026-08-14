@@ -13,6 +13,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+ksx-platform.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Memory",
@@ -25,3 +26,6 @@ windows-sys = { workspace = true, features = [
 # `cab-tests`. Every test in this crate that is NOT behind this feature runs
 # against in-process fakes and needs no driver.
 cab-tests = []
+# Exercises only the fixed, non-elevating inherited-token cross-language fake
+# host. This does not expose or select production elevated-host admission.
+hidmaestro-fake-host-tests = ["ksx-platform/hidmaestro-fake-host-tests"]

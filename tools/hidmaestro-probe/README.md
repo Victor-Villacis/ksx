@@ -17,7 +17,10 @@ resource, but this command does not reopen the path to read it.) It never
 uses the CLR assembly loader, reflection activation, `ResourceManager`, or an
 upstream SDK type.
 
-The reader parses and hashes every embedded profile JSON and requires the
+The reader parses and hashes only directly embedded
+`HIDMaestro.Profiles.*.json` rows as bounded raw bytes. Linked manifest
+resources fail closed; `.resources` containers, satellite assemblies, culture
+fallback and resource deserialization are never resolved. It requires the
 measured v1.6.1 aggregate contract: 228 resources, 130 deployable profiles and
 catalog SHA-256
 `8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A`.

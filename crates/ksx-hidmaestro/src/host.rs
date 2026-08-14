@@ -48,8 +48,8 @@ pub const HEADER_BYTES: usize = 16;
 pub const MAX_PAYLOAD_BYTES: usize = 512;
 /// Maximum encoded frame size.
 pub const MAX_FRAME_BYTES: usize = HEADER_BYTES + MAX_PAYLOAD_BYTES;
-/// Conversation-correlation challenge size. The future OS transport must fill this from
-/// a cryptographically secure source; this module only carries and compares it.
+/// Conversation-correlation challenge size. The OS transport fills this from a
+/// cryptographically secure source; this module only carries and compares it.
 pub const NONCE_BYTES: usize = 32;
 /// The maximum diagnostic text a privileged host may return.
 pub const MAX_FAULT_DETAIL_BYTES: usize = 256;
@@ -73,7 +73,7 @@ pub const CLIENT_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 /// If no valid Submit arrives before this host-local deadline, the host must
 /// neutralize and destroy the controller even while the pipe remains open.
 pub const CLIENT_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Finite upper bounds passed to every future transport implementation.
+/// Finite upper bounds passed to every transport implementation.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_millis(250);
@@ -945,9 +945,9 @@ fn read_u64(bytes: &[u8], at: usize) -> u64 {
 /// A transport which can perform one correlated request/response and poll one
 /// unsolicited host event without blocking.
 ///
-/// A named-pipe implementation will own its reader thread and correlate replies
-/// by `request_id`; keeping those mechanics out of [`HostClient`] makes this
-/// state machine independently testable and keeps OS authority at the edge.
+/// The Windows named-pipe implementation owns its reader thread and correlates
+/// replies by `request_id`; keeping those mechanics out of [`HostClient`] makes
+/// this state machine independently testable and keeps OS authority at the edge.
 pub trait HostTransport: Send {
     /// Complete the request or return by `timeout`. Implementations must never
     /// treat the value as advisory or substitute an infinite wait.
@@ -966,6 +966,20 @@ pub trait HostTransport: Send {
 pub enum HostTransportError {
     #[error("the HIDMaestro host transport closed")]
     Closed,
+    #[error("the HIDMaestro host transport operation timed out")]
+    TimedOut,
+    #[error("the HIDMaestro host exited with code {code}")]
+    ChildExited { code: u32 },
+    #[error("a HIDMaestro host request is already in flight")]
+    RequestAlreadyInFlight,
+    #[error("transport was asked to send host-to-client message kind {0:?}")]
+    InvalidRequestMessage(MessageKind),
+    #[error("host response id {actual} did not match the one in-flight request {expected}")]
+    UnexpectedResponseId { expected: u32, actual: u32 },
+    #[error("host response id {actual} arrived with no request in flight")]
+    UnexpectedResponseWithoutRequest { actual: u32 },
+    #[error("the host sent client-to-host message kind {0:?} on its response stream")]
+    UnexpectedPeerMessage(MessageKind),
     #[error("HIDMaestro host transport I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("HIDMaestro host protocol failed: {0}")]
@@ -1052,8 +1066,8 @@ impl From<Fault> for HostClientError {
 /// Transport-independent owner of one correlated host conversation.
 ///
 /// The nonce detects crossed conversations and [`HostExpectation`] rejects
-/// dependency drift. Neither authenticates the peer: the future OS transport
-/// must verify the server PID, token, image and pipe ACL before using this type.
+/// dependency drift. Neither authenticates the peer: the OS transport must
+/// verify the server PID, token, image and pipe ACL before using this type.
 ///
 /// It does not implement `Drop` by sending IPC: a destructor must not perform a
 /// potentially blocking round trip. The future backend explicitly calls
@@ -1448,7 +1462,7 @@ impl<T: HostTransport> HostClient<T> {
     }
 }
 
-/// Keeps the future boxed transport boundary honest.
+/// Keeps the boxed transport boundary honest.
 const _: Option<&'static dyn HostTransport> = None;
 
 #[cfg(test)]

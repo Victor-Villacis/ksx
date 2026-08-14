@@ -1121,10 +1121,7 @@ impl std::fmt::Debug for ElevatedChild {
 /// elevation are captured from the retained object rather than from a
 /// cross-account pid reopen.
 #[derive(Debug, PartialEq, Eq)]
-// S1.6b's combined live-pipe authenticator will consume this crate-private
-// evidence. Keep it unreachable to external callers until that provenance
-// boundary exists, and remove the allowance with the consumer.
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) struct ElevatedProcessEvidence {
     pid: u32,
     session_id: u32,
@@ -1133,7 +1130,7 @@ pub(crate) struct ElevatedProcessEvidence {
     elevated: bool,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 impl ElevatedProcessEvidence {
     pub(crate) fn pid(&self) -> u32 {
         self.pid
@@ -1158,6 +1155,7 @@ impl ElevatedProcessEvidence {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) enum ElevatedProcessCorrelationError {
     #[error("the elevated child exited with code {code} during process correlation")]
     ChildExited { code: u32 },
@@ -1171,10 +1169,138 @@ pub(crate) enum ElevatedProcessCorrelationError {
     },
     #[error("candidate pid {pid} is not the retained elevated process object")]
     DifferentProcess { pid: u32 },
+    #[error("candidate pid {pid} is in non-interactive session zero")]
+    NonInteractiveSession { pid: u32 },
     #[error("candidate pid {pid} changed its {field} identity evidence")]
     EvidenceMismatch { pid: u32, field: &'static str },
     #[error("candidate pid {pid} is the expected process object but its token is not elevated")]
     NotElevated { pid: u32 },
+}
+
+/// Exact SDK-free executable used only by the S1.6b transport integration
+/// feature. It is deliberately not a production HIDMaestro host allowlist.
+#[cfg(all(windows, feature = "hidmaestro-fake-host-tests"))]
+const HIDMAESTRO_FAKE_HOST_NAME: &str = "ksx-hidmaestro-fake-host.exe";
+
+/// Retained ordinary child for the SDK-free S1.6b fake.
+///
+/// Construction is available only with the integration-test feature and
+/// resolves one fixed sibling of the running test executable. The child must
+/// inherit the parent's measured elevation state and exact session (including
+/// session zero on hosted CI); those facts are checked only after the pipe's
+/// kernel client PID is available, so no post-spawn validation error can lose
+/// the retained child. There is no caller-selected path, raw handle, kill
+/// operation, or production conversion from this type to [`ElevatedChild`].
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+pub struct FakeHostChild {
+    #[cfg(windows)]
+    child: std::process::Child,
+    pid: u32,
+    canonical_image: PathBuf,
+    expected_session_id: u32,
+    expected_elevated: bool,
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+impl std::fmt::Debug for FakeHostChild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeHostChild")
+            .field("pid", &self.pid)
+            .field("canonical_image", &self.canonical_image)
+            .field("expected_session_id", &self.expected_session_id)
+            .field("expected_elevated", &self.expected_elevated)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[derive(Debug, thiserror::Error)]
+pub enum FakeHostLaunchError {
+    #[error("could not resolve the running transport-test executable: {0}")]
+    CurrentExecutable(#[source] std::io::Error),
+    #[error("the fixed SDK-free HIDMaestro fake host is missing")]
+    Missing,
+    #[error("the transport fake could not determine the parent process privilege")]
+    ParentPrivilegeUnknown,
+    #[error("the transport fake could not determine the parent process session: {0}")]
+    ParentInspection(#[source] std::io::Error),
+    #[error("could not start the fixed SDK-free HIDMaestro fake host: {0}")]
+    Spawn(#[source] std::io::Error),
+    #[error("could not resolve the fixed SDK-free HIDMaestro fake host: {0}")]
+    Resolve(#[source] std::io::Error),
+    #[error("the SDK-free fake host is supported only on Windows")]
+    Unsupported,
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct FakeHostProcessEvidence {
+    pid: u32,
+    session_id: u32,
+    canonical_image: PathBuf,
+    elevated: bool,
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[cfg_attr(not(windows), allow(dead_code))]
+impl FakeHostProcessEvidence {
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub(crate) fn session_id(&self) -> u32 {
+        self.session_id
+    }
+
+    pub(crate) fn canonical_image(&self) -> &Path {
+        &self.canonical_image
+    }
+
+    pub(crate) fn elevated(&self) -> bool {
+        self.elevated
+    }
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[derive(Debug, thiserror::Error)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) enum FakeHostCorrelationError {
+    #[error("the SDK-free fake child exited with code {code} during process correlation")]
+    ChildExited { code: u32 },
+    #[error("could not inspect the retained SDK-free fake child: {0}")]
+    ProcessInspection(#[source] std::io::Error),
+    #[error("candidate pid {pid} is not the retained SDK-free fake child")]
+    DifferentProcess { pid: u32 },
+    #[error("candidate pid {pid} changed its {field} identity evidence")]
+    EvidenceMismatch { pid: u32, field: &'static str },
+    #[error("candidate pid {pid} changed its inherited privilege state")]
+    PrivilegeMismatch { pid: u32 },
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+enum FakeInheritanceMismatch {
+    Session,
+    Privilege,
+}
+
+#[cfg(feature = "hidmaestro-fake-host-tests")]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn validate_fake_child_inheritance(
+    parent_session: u32,
+    parent_elevated: bool,
+    child_session: u32,
+    child_elevated: bool,
+) -> Result<(), FakeInheritanceMismatch> {
+    if child_session != parent_session {
+        return Err(FakeInheritanceMismatch::Session);
+    }
+    if child_elevated != parent_elevated {
+        return Err(FakeInheritanceMismatch::Privilege);
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1278,8 +1404,7 @@ fn observe_elevated_exit(
     Ok(Some(code))
 }
 
-// Pending S1.6b consumer; on non-Windows the live correlation method is a stub.
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug)]
 struct ObservedProcess {
     pid: u32,
@@ -1290,7 +1415,7 @@ struct ObservedProcess {
     elevated: bool,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn validate_process_observation(
     expected_pid: u32,
     expected_session_id: u32,
@@ -1300,6 +1425,9 @@ fn validate_process_observation(
 ) -> Result<ElevatedProcessEvidence, ElevatedProcessCorrelationError> {
     if !observed.retained_object || observed.pid != expected_pid {
         return Err(ElevatedProcessCorrelationError::DifferentProcess { pid: observed.pid });
+    }
+    if observed.session_id == 0 {
+        return Err(ElevatedProcessCorrelationError::NonInteractiveSession { pid: observed.pid });
     }
     if observed.session_id != expected_session_id {
         return Err(ElevatedProcessCorrelationError::EvidenceMismatch {
@@ -1426,7 +1554,177 @@ fn process_token_is_elevated(
     Ok(elevation.TokenIsElevated != 0)
 }
 
+#[cfg(windows)]
+pub(crate) fn retained_process_exit_code(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    timeout: Duration,
+) -> std::io::Result<Option<u32>> {
+    use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+
+    // SAFETY: the caller retains ownership of `handle` for this bounded wait.
+    match unsafe { WaitForSingleObject(handle, bounded_wait_millis(timeout)) } {
+        WAIT_TIMEOUT => Ok(None),
+        WAIT_OBJECT_0 => {
+            let mut code = 0u32;
+            // SAFETY: a signalled retained process handle remains valid until
+            // its owner drops it; `code` is a writable result slot.
+            if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(Some(code))
+            }
+        }
+        WAIT_FAILED => Err(std::io::Error::last_os_error()),
+        other => Err(std::io::Error::other(format!(
+            "WaitForSingleObject returned unexpected status {other:#x}"
+        ))),
+    }
+}
+
+/// Launch the one fixed, SDK-free HIDMaestro transport fake.
+///
+/// This symbol does not exist unless the explicit integration-test feature is
+/// enabled. The path is resolved from `current_exe` internally and the array
+/// width prevents adding an open-ended test command surface.
+#[cfg(all(windows, feature = "hidmaestro-fake-host-tests"))]
+pub fn launch_hidmaestro_fake_host(
+    args: &[String; 3],
+) -> Result<FakeHostChild, FakeHostLaunchError> {
+    use std::process::Stdio;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+
+    let parent_elevated = is_elevated().ok_or(FakeHostLaunchError::ParentPrivilegeUnknown)?;
+    // SAFETY: GetCurrentProcessId has no arguments or failure state.
+    let parent_pid = unsafe { GetCurrentProcessId() };
+    let parent_session =
+        process_session_id(parent_pid).map_err(FakeHostLaunchError::ParentInspection)?;
+
+    let current = std::env::current_exe().map_err(FakeHostLaunchError::CurrentExecutable)?;
+    let current = std::fs::canonicalize(current).map_err(FakeHostLaunchError::CurrentExecutable)?;
+    let parent = current.parent().ok_or(FakeHostLaunchError::Missing)?;
+    let requested = parent.join(HIDMAESTRO_FAKE_HOST_NAME);
+    let canonical = match std::fs::canonicalize(&requested) {
+        Ok(path) if path.is_file() => path,
+        Ok(_) => return Err(FakeHostLaunchError::Missing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(FakeHostLaunchError::Missing)
+        }
+        Err(error) => return Err(FakeHostLaunchError::Resolve(error)),
+    };
+    let actual_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !actual_name.eq_ignore_ascii_case(HIDMAESTRO_FAKE_HOST_NAME) {
+        return Err(FakeHostLaunchError::Missing);
+    }
+
+    let mut command = std::process::Command::new(&canonical);
+    command
+        .args(args)
+        .current_dir(parent)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    no_window(&mut command);
+    let child = command.spawn().map_err(FakeHostLaunchError::Spawn)?;
+    let pid = child.id();
+
+    Ok(FakeHostChild {
+        child,
+        pid,
+        canonical_image: canonical,
+        expected_session_id: parent_session,
+        expected_elevated: parent_elevated,
+    })
+}
+
+#[cfg(all(not(windows), feature = "hidmaestro-fake-host-tests"))]
+pub fn launch_hidmaestro_fake_host(
+    _args: &[String; 3],
+) -> Result<FakeHostChild, FakeHostLaunchError> {
+    Err(FakeHostLaunchError::Unsupported)
+}
+
+#[cfg(all(windows, feature = "hidmaestro-fake-host-tests"))]
+impl FakeHostChild {
+    pub(crate) fn retained_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        use std::os::windows::io::AsRawHandle as _;
+
+        self.child.as_raw_handle().cast()
+    }
+
+    pub(crate) fn correlate_fake_process_pid(
+        &self,
+        candidate_pid: u32,
+    ) -> Result<FakeHostProcessEvidence, FakeHostCorrelationError> {
+        use windows_sys::Win32::System::Threading::GetProcessId;
+
+        let handle = self.retained_handle();
+        if let Some(code) = retained_process_exit_code(handle, Duration::ZERO)
+            .map_err(FakeHostCorrelationError::ProcessInspection)?
+        {
+            return Err(FakeHostCorrelationError::ChildExited { code });
+        }
+        // SAFETY: `handle` is owned by this live FakeHostChild.
+        let retained_pid = unsafe { GetProcessId(handle) };
+        if candidate_pid != self.pid || retained_pid != self.pid {
+            return Err(FakeHostCorrelationError::DifferentProcess { pid: candidate_pid });
+        }
+
+        let session_id = process_session_id(retained_pid)
+            .map_err(FakeHostCorrelationError::ProcessInspection)?;
+        let observed_image =
+            process_image(handle).map_err(FakeHostCorrelationError::ProcessInspection)?;
+        if !executable_path_eq(&observed_image, &self.canonical_image) {
+            return Err(FakeHostCorrelationError::EvidenceMismatch {
+                pid: candidate_pid,
+                field: "canonical image",
+            });
+        }
+        let elevated = process_token_is_elevated(handle)
+            .map_err(FakeHostCorrelationError::ProcessInspection)?;
+        match validate_fake_child_inheritance(
+            self.expected_session_id,
+            self.expected_elevated,
+            session_id,
+            elevated,
+        ) {
+            Ok(()) => {}
+            Err(FakeInheritanceMismatch::Session) => {
+                return Err(FakeHostCorrelationError::EvidenceMismatch {
+                    pid: candidate_pid,
+                    field: "inherited session",
+                })
+            }
+            Err(FakeInheritanceMismatch::Privilege) => {
+                return Err(FakeHostCorrelationError::PrivilegeMismatch { pid: candidate_pid })
+            }
+        }
+        if let Some(code) = retained_process_exit_code(handle, Duration::ZERO)
+            .map_err(FakeHostCorrelationError::ProcessInspection)?
+        {
+            return Err(FakeHostCorrelationError::ChildExited { code });
+        }
+
+        Ok(FakeHostProcessEvidence {
+            pid: candidate_pid,
+            session_id,
+            canonical_image: self.canonical_image.clone(),
+            elevated,
+        })
+    }
+}
+
 impl ElevatedChild {
+    #[cfg(windows)]
+    pub(crate) fn retained_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        use std::os::windows::io::AsRawHandle as _;
+
+        self.handle.as_raw_handle().cast()
+    }
+
     /// Process id captured from the retained process handle at launch time.
     /// It is correlation evidence only; the handle remains the identity.
     pub fn pid(&self) -> u32 {
@@ -1510,8 +1808,6 @@ impl ElevatedChild {
     /// crate-private so only a future combined live-pipe authenticator can turn
     /// OS-reported client identity into transport trust.
     #[cfg(windows)]
-    // Pending S1.6b's named-pipe consumer; deliberately not public meanwhile.
-    #[allow(dead_code)]
     pub(crate) fn correlate_process_pid(
         &mut self,
         candidate_pid: u32,
@@ -2092,6 +2388,16 @@ mod tests {
         assert!(matches!(
             validate_process_observation(
                 41,
+                0,
+                9001,
+                image,
+                observation(true, 0, 9001, image, true),
+            ),
+            Err(ElevatedProcessCorrelationError::NonInteractiveSession { pid: 41 })
+        ));
+        assert!(matches!(
+            validate_process_observation(
+                41,
                 2,
                 9001,
                 image,
@@ -2138,6 +2444,41 @@ mod tests {
             ),
             Err(ElevatedProcessCorrelationError::NotElevated { pid: 41 })
         ));
+    }
+
+    #[cfg(feature = "hidmaestro-fake-host-tests")]
+    #[test]
+    fn fake_child_inherits_parent_session_and_privilege_even_in_session_zero() {
+        assert!(validate_fake_child_inheritance(0, false, 0, false).is_ok());
+        assert!(validate_fake_child_inheritance(0, true, 0, true).is_ok());
+        assert!(matches!(
+            validate_fake_child_inheritance(1, false, 2, false),
+            Err(FakeInheritanceMismatch::Session)
+        ));
+        assert!(matches!(
+            validate_fake_child_inheritance(1, false, 1, true),
+            Err(FakeInheritanceMismatch::Privilege)
+        ));
+    }
+
+    #[cfg(feature = "hidmaestro-fake-host-tests")]
+    #[test]
+    fn fake_launch_has_no_fallible_post_spawn_identity_edge() {
+        let source = include_str!("process.rs").replace("\r\n", "\n");
+        let launch = source
+            .split("pub fn launch_hidmaestro_fake_host(")
+            .nth(1)
+            .expect("Windows fixed fake launcher")
+            .split("#[cfg(all(not(windows)")
+            .next()
+            .unwrap();
+        let after_spawn = launch
+            .split("command.spawn().map_err(FakeHostLaunchError::Spawn)?")
+            .nth(1)
+            .expect("spawn boundary");
+        assert!(!after_spawn.contains("map_err("));
+        assert!(!after_spawn.contains('?'));
+        assert!(after_spawn.contains("Ok(FakeHostChild"));
     }
 
     /// Broken versions caught: `runas` intent was converted into

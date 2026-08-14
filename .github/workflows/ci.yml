@@ -156,9 +156,14 @@ jobs:
   # then deletes every copied SDK byte before running the pure host contracts.
   hidmaestro-contracts:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: hidmaestro-contracts
       - uses: actions/setup-dotnet@v4
         with:
           # Match the SDK used to establish the current probe baseline; do not
@@ -309,6 +314,15 @@ jobs:
           if ($remainingSdk.Count -ne 0) {
             throw 'The upstream SDK remained in the executable probe tree.'
           }
+          foreach ($name in @(
+            'HIDMAESTRO_CORE_PATH',
+            'HIDMAESTRO_ARCHIVE_PATH',
+            'HIDMAESTRO_EXPANDED_PATH'
+          )) {
+            if (Test-Path "Env:$name") {
+              throw "The upstream SDK environment path remained set: $name"
+            }
+          }
 
           foreach ($command in @('protocol', 'simulate-protocol', 'self-test')) {
             $arguments = @($command)
@@ -337,6 +351,112 @@ jobs:
               throw "HIDMaestro $label did not emit exactly one JSON document: $_"
             }
             Write-Host '::endgroup::'
+          }
+
+          # Everything below is deliberately SDK-free. Build the inherited-token
+          # apphost only after the upstream archive, extraction, copied DLL and
+          # related environment paths have been removed.
+          foreach ($name in @(
+            'DOTNET_STARTUP_HOOKS',
+            'DOTNET_ADDITIONAL_DEPS',
+            'DOTNET_SHARED_STORE',
+            'CORECLR_ENABLE_PROFILING',
+            'CORECLR_PROFILER',
+            'CORECLR_PROFILER_PATH',
+            'DOTNET_ENABLE_PROFILING',
+            'DOTNET_PROFILER',
+            'DOTNET_PROFILER_PATH'
+          )) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+
+          & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File tools/hidmaestro-fake-host/test-safety.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host safety guard failed.' }
+
+          dotnet build tools/hidmaestro-fake-host/HidMaestroFakeHost.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host build failed.' }
+          dotnet build tools/hidmaestro-fake-host/tests/HidMaestroFakeHost.PureTests.csproj `
+            --configuration Release `
+            --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host pure-test build failed.' }
+
+          $fakeRoot = Resolve-Path `
+            'tools/hidmaestro-fake-host/bin/Release/net10.0-windows10.0.26100.0/win-x64'
+          $fakeExe = Join-Path $fakeRoot 'ksx-hidmaestro-fake-host.exe'
+          if (!(Test-Path -LiteralPath $fakeExe -PathType Leaf)) {
+            throw 'The fixed HIDMaestro fake-host apphost was not emitted.'
+          }
+          $fakeDependencyFiles = @(
+            (Join-Path $fakeRoot 'ksx-hidmaestro-fake-host.deps.json')
+            'tools/hidmaestro-fake-host/tests/bin/Release/net10.0-windows10.0.26100.0/ksx-hidmaestro-fake-host-pure-tests.deps.json'
+            'tools/hidmaestro-fake-host/obj/project.assets.json'
+            'tools/hidmaestro-fake-host/tests/obj/project.assets.json'
+          )
+          foreach ($dependencyFile in $fakeDependencyFiles) {
+            if (!(Test-Path -LiteralPath $dependencyFile -PathType Leaf)) {
+              throw "Missing fake-host dependency evidence: $dependencyFile"
+            }
+            $dependencyText = Get-Content -LiteralPath $dependencyFile -Raw
+            if ($dependencyText.Contains('HIDMaestro.Core', [StringComparison]::Ordinal)) {
+              throw "The SDK-free fake host references HIDMaestro.Core: $dependencyFile"
+            }
+          }
+
+          $pureTests = Resolve-Path `
+            'tools/hidmaestro-fake-host/tests/bin/Release/net10.0-windows10.0.26100.0/ksx-hidmaestro-fake-host-pure-tests.dll'
+          $pureStdout = & dotnet $pureTests
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host pure tests failed.' }
+          $pureJson = $pureStdout -join "`n"
+          try {
+            $pureDocument = [System.Text.Json.JsonDocument]::Parse($pureJson)
+            if ($pureDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+              throw 'the root JSON value is not an object'
+            }
+            $pureReport = $pureJson | ConvertFrom-Json
+            if ($pureReport.schemaVersion -ne 1 -or
+                $pureReport.command -cne 'fake-host-pure-tests' -or
+                $pureReport.passed -ne 10) {
+              throw 'unexpected pure-test result'
+            }
+            $pureDocument.Dispose()
+          } catch {
+            throw "HIDMaestro fake-host pure tests did not emit the exact result: $_"
+          }
+
+          # The fixed Rust launcher resolves only this basename beside its own
+          # test executable. Build first, then copy the exact framework-
+          # dependent apphost quartet into that test directory.
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'ksx-hidmaestro-s1-6b-target'
+          cargo test -p ksx-hidmaestro `
+            --features hidmaestro-fake-host-tests `
+            --lib `
+            --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro transport test build failed.' }
+          $rustTestDirectory = Join-Path $env:CARGO_TARGET_DIR 'debug/deps'
+          if (!(Test-Path -LiteralPath $rustTestDirectory -PathType Container)) {
+            throw 'The Rust test executable directory was not emitted.'
+          }
+          foreach ($suffix in @('.exe', '.dll', '.deps.json', '.runtimeconfig.json')) {
+            $name = "ksx-hidmaestro-fake-host$suffix"
+            $source = Join-Path $fakeRoot $name
+            if (!(Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "The fake-host apphost quartet is missing $name."
+            }
+            Copy-Item -LiteralPath $source -Destination $rustTestDirectory -Force
+          }
+          cargo test -p ksx-hidmaestro `
+            --features hidmaestro-fake-host-tests `
+            --lib `
+            windows_transport::windows::integration_tests::fixed_cross_language_fake_exercises_authenticated_framing_and_feedback `
+            -- `
+            --exact `
+            --nocapture
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The authenticated HIDMaestro fake-host transport test failed.'
           }
 
   # The shippable binary and the installer. The steps live in

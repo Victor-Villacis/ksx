@@ -30,8 +30,9 @@
 //! | Axis routing by name ([`axis`], [`state`]) | **Yes** — pure logic | including a counterfactual that reproduces the phantom-trigger bug |
 //! | Legacy lifecycle scaffold ([`context`]) | **Model only, not the supported upstream lifecycle** | recorded test-double order; it must not back production Play |
 //! | Feedback decode table ([`feedback`]) | **Table pinned, bytes unverified** | fixtures from the audit, incl. the BT length trap |
-//! | Privileged-host protocol ([`host`]) | **Yes — pure framing/state machine only** | all twelve frozen message vectors + encoded in-memory host; no OS transport or SDK calls |
-//! | Host rendezvous policy ([`rendezvous`]) | **Yes — pure identity policy only** | fixed token/name/argv plus exact peer-evidence refusals; no pipe, process or elevation calls |
+//! | Privileged-host protocol ([`host`]) | **Yes — pure framing/state machine only** | all twelve frozen message vectors + encoded in-memory host; no SDK calls |
+//! | Windows host transport ([`windows_transport`]) | **Source complete, fake-host evidence gated** | precreated one-use pipe, authenticated endpoint, bounded framed I/O and fail-closed teardown; production launch remains unreachable without the fixed native bootstrap |
+//! | Host rendezvous policy ([`rendezvous`]) | **Yes — pure identity policy only** | fixed token/name/argv plus exact peer-evidence refusals; this policy module itself has no pipe, process or elevation calls |
 //! | Current custom latch ([`shm`], [`state::HmGamepadState::encode`]) | **Not HIDMaestro wire-compatible** | useful test scaffold; upstream layout is now known but not implemented here |
 //! | Anything touching a real device | **No** | there is no device to touch |
 //!
@@ -52,8 +53,12 @@
 //! - [`feedback`] — the decode table, including the Bluetooth length trap.
 //! - [`host`] — bounded/versioned future process protocol and transport-neutral
 //!   client state machine. It launches nothing and touches no driver.
-//! - [`rendezvous`] — the pure token/name/argv and peer-identity policy a later
+//! - [`rendezvous`] — the pure token/name/argv and peer-identity policy the
 //!   authenticated Windows transport must enforce before using [`host`].
+//! - [`windows_transport`] — the Windows-only one-use named-pipe transport. Its
+//!   only current launcher is the fixed, non-elevating inherited-token fake host
+//!   behind an explicit test feature; no production elevated-host bootstrap is
+//!   reachable yet.
 //! - [`driver`] — availability probe and the honest not-installed driver.
 //! - [`shm`] (Windows) — experimental open-existing file-mapping storage; the
 //!   real writer creates named mappings/events with the upstream security contract.
@@ -71,6 +76,7 @@ pub mod seqlock;
 #[cfg(windows)]
 pub mod shm;
 pub mod state;
+pub mod windows_transport;
 
 pub use axis::{AxisMap, AxisRole, HmAxis};
 pub use context::{HmContext, HmDriverApi, SlotId};

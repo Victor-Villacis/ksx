@@ -26,6 +26,7 @@ pub mod app_paths;
 pub mod autostart;
 pub mod inject;
 pub mod installer;
+pub mod local_pipe;
 pub mod parse;
 pub mod process;
 pub mod report;

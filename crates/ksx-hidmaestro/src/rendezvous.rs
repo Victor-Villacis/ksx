@@ -12,7 +12,7 @@
 //!   facts.
 //!
 //! [`RendezvousToken`] is conversation correlation, not authentication on its
-//! own. The later Windows transport must obtain [`PeerEvidence`] from the
+//! own. A Windows transport must obtain authenticated endpoint evidence from the
 //! connected pipe and the exact process object it holds, not caller-reported
 //! fields or a fresh PID lookup, before it sends or accepts a protocol frame.
 
@@ -333,7 +333,7 @@ impl ExpectedPeerError {
     }
 }
 
-/// Authenticated process facts observed by the future OS transport.
+/// Authenticated process facts observed by an OS transport.
 ///
 /// Its fields are private and construction is crate-private so an external
 /// caller cannot turn matching strings and booleans into evidence. The later
@@ -356,7 +356,7 @@ impl PeerEvidence {
     /// as the exact process object from which all fields were queried.
     #[allow(
         dead_code,
-        reason = "reserved for the next crate-local authenticated Windows transport slice"
+        reason = "retained as the pure rendezvous-policy evidence model"
     )]
     pub(crate) fn from_authenticated_process(
         pid: u32,

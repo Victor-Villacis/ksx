@@ -1,9 +1,9 @@
 # HIDMaestro M8 execution plan
 
-Status: **non-executing catalog source gate implemented with Actions evidence
-pending; host-contract, unsigned-package audit and pure rendezvous policy
-checkpoints complete; live use blocked on authenticated transport, provenance
-and hardware evidence; no HIDMaestro persona is enabled**.
+Status: **non-executing catalog, host-contract, unsigned-package audit and pure
+rendezvous policy checkpoints complete; SDK-free authenticated transport source
+complete with Actions evidence pending; live use blocked on the production
+host, provenance and hardware evidence; no HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -59,12 +59,11 @@ write/delete sharing denied, hashes that handle before parsing, then uses
 `PEReader` / `MetadataReader` on the same file object. It does not ask the CLR
 to load or initialize the target, so target module initializers and lifecycle
 code cannot run through this inventory path. The administrator Actions runner
-is configured to assert the exact version attributes, 22 CLR API signatures,
-228 catalog resources, 130 deployable profiles, catalog hash and three KSX
-personas, then delete every SDK copy before executing the SDK-free protocol
-tests. A green run closes the catalog-reader execution gap; it does **not**
-approve the release for KSX distribution, developer-workstation execution as
-code, or elevated use:
+asserts the exact version attributes, 22 CLR API signatures, 228 catalog
+resources, 130 deployable profiles, catalog hash and three KSX personas, then
+deletes every SDK copy before executing the SDK-free protocol tests. This
+closes the catalog-reader execution gap; it does **not** approve the release for
+KSX distribution, developer-workstation execution as code, or elevated use:
 
 - `HIDMaestro.Core.dll` embeds `signtool.exe`, `Inf2Cat.exe` and dependencies.
   [Microsoft's Windows driver documentation](https://learn.microsoft.com/windows-hardware/drivers/install/installing-a-catalog-file-by-using-signtool)
@@ -130,17 +129,21 @@ code-sign the host or pay the additional engineering cost of a securely
 installed on-demand service; a highest-privilege scheduled task is not an
 acceptable prompt bypass.
 
-The first executable topology remains one host per Play session. The ordinary
-daemon will create a one-use local named pipe *before* launching that host and
-retain the elevated child process object. After the pipe accepts a client, KSX
-must bind the pipe-reported client PID to that exact retained process object,
-not merely reopen and trust a process with the same numeric PID. The child must
-still be alive, have the expected canonical image and run in the daemon's same
-nonzero interactive session. KSX deliberately does **not** require user-SID or
-logon-SID equality between the two processes: over-the-shoulder UAC may launch
-the host under a different administrator account.
+The first executable topology remains one host per Play session. S1.6b now
+implements the dangerous transport boundary against an SDK-free test host: the
+ordinary process creates a one-use local named pipe *before* launching the
+fixed child, retains that child process object, and binds the pipe-reported
+client PID to that exact object before sending `Hello`. It does not merely
+reopen and trust a process with the same numeric PID. The fake inherits the
+test runner's session and privilege state so hosted Actions can exercise the
+kernel path without UAC. Production admission remains stricter: the host must
+still be alive, have the expected canonical image, be elevated and run in the
+daemon's same nonzero interactive session. KSX deliberately does **not**
+require user-SID or logon-SID equality between the two production processes:
+over-the-shoulder UAC may launch the host under a different administrator
+account.
 
-That future pipe has a fixed security contract: first-instance creation,
+The pipe has a fixed security contract: first-instance creation,
 exactly one server instance, remote-client rejection, and a DACL limited to the
 launcher's logon SID plus Administrators and SYSTEM. The elevated client must
 request only `Identification` or `Anonymous` impersonation (with the Windows
@@ -149,16 +152,17 @@ client. The random rendezvous token correlates the launch, pipe name and fixed
 arguments; it is **not authentication** and never substitutes for the kernel
 process-object proof.
 
-Directly elevating a managed .NET host is currently a **no-go**. Startup hooks,
+Directly elevating a managed .NET host is still a **no-go**. Startup hooks,
 additional dependency paths and CLR profiler configuration can affect managed
 execution before the host's own entry point, so a protected executable path is
-not sufficient proof of a clean elevated runtime. The next executable fake host
-is therefore SDK-free and unelevated. A production host will likely require an
+not sufficient proof of a clean elevated runtime. The S1.6b executable is
+therefore SDK-free and inherits its test runner's token without requesting
+elevation. A production host will likely require an
 ACL-protected native bootstrap that neutralizes those injection surfaces before
 initializing a sanitized CoreCLR, or equivalent clean-runner evidence strong
 enough to prove the same property.
 
-The IPC boundary, when built, must reject arbitrary executable paths, driver
+The production IPC boundary must reject arbitrary executable paths, driver
 paths, descriptors, profile files and commands. It accepts only versioned
 operations, allowlisted catalog profile IDs, bounded controller state and exact
 controller handles created by that host. Cleanup is ownership-scoped; KSX must
@@ -191,21 +195,22 @@ Two routing changes prepare S4 without enabling a driver:
 | Slice | Deliverable | Definition of done |
 |---|---|---|
 | S0 — truth reset | Correct credits, source facts and routing decision | **Done.** Existing transport says it is incompatible; personas remain gated; ViGEm behavior is unchanged |
-| S1 — SDK catalog probe | Hash-pinned, non-executing catalog measurement of `HIDMaestro.Core.dll` | **Source complete; Actions proof pending.** The gate hashes and statically parses the same open file object without a target AssemblyRef or CLR load, emits one machine-readable result, and requires 22 exact API signatures plus the DualSense, Switch Pro and Xbox Series catalog candidates. It deletes the SDK before running the pure protocol contracts |
+| S1 — SDK catalog probe | Hash-pinned, non-executing catalog measurement of `HIDMaestro.Core.dll` | **Done.** Actions hashes and statically parses the same open file object without a target AssemblyRef or CLR load, emits one machine-readable result, and proves 22 exact API signatures plus the DualSense, Switch Pro and Xbox Series catalog candidates. It deletes the SDK before running the pure protocol contracts |
 | S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
 | S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
 | S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
 | S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
 | S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | Pending. Pin the KSX signer identity, verify every INF/DLL as a member of its signed catalog, isolate fixed installed helpers, add online revocation and clean-runner install/repair/uninstall proof, and coordinate the upstream security report |
 | S1.6a — pure one-use rendezvous policy | Freeze launch correlation and peer-acceptance rules without acquiring OS authority | **Done.** A 32-byte token has one exact lowercase encoding, pipe names use one fixed prefix, host argv is exactly `serve-v1`, token and daemon PID, and peer policy requires non-forgeable authenticated process evidence. The module does not create a pipe, launch or elevate a process, load the SDK or touch a device |
-| S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | Pending. The ordinary daemon precreates the local-only pipe, launches and retains one exact child object, authenticates the accepted endpoint, and talks to an unelevated SDK-free fake host. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
+| S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Source complete; Actions evidence pending.** The ordinary process precreates the local-only pipe, launches and retains one exact inherited-token child object, authenticates the accepted endpoint, and exchanges the frozen protocol with an SDK-free fake host. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
 | S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |
 | S4 — gated KSX adapter | Production `VirtualPadBackend` implementation behind a default-off gate | `PadState` translation, lifecycle and feedback have contract tests; no accidental persona substitution; missing/mismatched SDK refuses safely; ViGEm tests remain unchanged |
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1, S1.3, S1.5a and S1.6a do not request administrator authority or mutate the
+S1, S1.3, S1.5a, S1.6a and the S1.6b fake do not request administrator
+authority or mutate the
 system. The S1 reader runs on an administrator Actions runner only because that
 is GitHub's hosted Windows topology; the target DLL remains inert bytes. S2 is
 blocked by S1.5b and is intentionally not automated on a developer workstation:
@@ -214,9 +219,9 @@ hardware gate.
 
 ### S1 measured result
 
-Actions is configured to build `tools/hidmaestro-probe` with pinned .NET
-10.0.400 and run its static reader against the hash-pinned release DLL. A green
-run must confirm the following frozen result before S1 is marked complete:
+[Actions run 31845219892](https://github.com/Victor-Villacis/ksx/actions/runs/31845219892)
+built `tools/hidmaestro-probe` with pinned .NET 10.0.400 and ran its static
+reader against the hash-pinned release DLL. It confirmed:
 
 - 228 embedded catalog resources, of which 130 are deployable;
 - catalog SHA-256
@@ -310,10 +315,30 @@ the pure module an authenticator: S1.6b must populate those fields only after
 the named-pipe endpoint has been tied to the exact retained process object by
 authoritative Windows queries.
 
-There is still no named-pipe server or client, process launch in this crate,
-elevation, SDK load, controller lifecycle or enabled persona. S1.6a is the
-policy that the next transport must obey, not evidence that the transport has
-already been built.
+S1.6a itself still has no named-pipe server or client, process launch,
+elevation, SDK load, controller lifecycle or enabled persona. S1.6b consumes
+that policy through a separately gated Windows transport; it does not turn the
+pure policy module into OS authority.
+
+### S1.6b authenticated-transport result
+
+The source now precreates one first-instance, single-client, remote-rejecting
+byte pipe with an explicit launcher-logon-SID, Administrators and SYSTEM DACL.
+It launches only the fixed SDK-free fake apphost beside the Rust test binary,
+retains that exact process object, authenticates the connected client before
+`Hello`, and transfers the 16-byte-header/512-byte-payload `KSXH` frames with
+finite deadlines. One reader owns the pipe, demultiplexes correlated replies
+from request-id-zero feedback, bounds feedback at 64 drop-oldest snapshots, and
+closes and joins on every ambiguous or terminal path.
+
+The fake connects with explicit anonymous SQOS so the ordinary server cannot
+impersonate it. It covers all three allowlisted profile identities and the
+full create/submit/feedback/destroy/shutdown conversation, but creates only
+in-memory fake state. It contains no SDK reference or lifecycle API and cannot
+enable a persona. GitHub Actions is configured to build the fixed apphost,
+delete every SDK input and environment path, run its pure contracts, place it
+beside the Rust test executable, and execute the authenticated cross-language
+test. This checkpoint remains evidence-pending until that workflow is green.
 
 ## Source-derived working answers
 

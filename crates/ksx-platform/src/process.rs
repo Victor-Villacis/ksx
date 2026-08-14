@@ -1520,12 +1520,11 @@ impl ElevatedChild {
         use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::System::Threading::GetProcessId;
 
-        match self
+        if let Some(code) = self
             .wait_timeout(Duration::ZERO)
             .map_err(ElevatedProcessCorrelationError::ChildInspection)?
         {
-            Some(code) => return Err(ElevatedProcessCorrelationError::ChildExited { code }),
-            None => {}
+            return Err(ElevatedProcessCorrelationError::ChildExited { code });
         }
         let child_handle = self.handle.as_raw_handle() as HANDLE;
         // SAFETY: `child_handle` is the retained live process object bracketed

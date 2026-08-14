@@ -34,8 +34,11 @@ use crate::error::OutputError;
 ///
 /// A boxed factory rather than an eagerly-built backend so that the ordinary
 /// cabinet never pays for a driver it does not use.
-pub type HidMaestroFactory =
+pub type BackendFactory =
     Box<dyn FnMut() -> Result<Box<dyn VirtualPadBackend>, OutputError> + Send>;
+
+/// Backwards-compatible name for the second-stack factory.
+pub type HidMaestroFactory = BackendFactory;
 
 struct Entry {
     which: PadBackend,
@@ -54,9 +57,10 @@ struct Entry {
 /// stale handle always resolves to [`OutputError::UnknownHandle`] rather than
 /// aliasing a live pad on the *other* stack — the worst possible failure here.
 pub struct RoutedBackend {
-    vigem: Box<dyn VirtualPadBackend>,
+    vigem: Option<Box<dyn VirtualPadBackend>>,
     hidmaestro: Option<Box<dyn VirtualPadBackend>>,
-    factory: Option<HidMaestroFactory>,
+    vigem_factory: Option<BackendFactory>,
+    hidmaestro_factory: Option<HidMaestroFactory>,
     /// Whether [`Persona::can_plug`] is enforced before anything is dispatched.
     ///
     /// True for the routers ksx builds for itself, where the answer is a fact
@@ -74,9 +78,10 @@ impl RoutedBackend {
     /// A router with only ViGEmBus.
     pub fn vigem_only(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: None,
+            vigem_factory: None,
+            hidmaestro_factory: None,
             enforce_build_capability: true,
             pads: Default::default(),
             next_id: 0,
@@ -98,9 +103,32 @@ impl RoutedBackend {
     /// lights only that route up with nothing else to change.
     pub fn standard(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: Some(Box::new(|| {
+            vigem_factory: None,
+            hidmaestro_factory: Some(Box::new(|| {
+                crate::HidMaestroBackend::connect()
+                    .map(|b| Box::new(b) as Box<dyn VirtualPadBackend>)
+            })),
+            enforce_build_capability: true,
+            pads: Default::default(),
+            next_id: 0,
+        }
+    }
+
+    /// Production factories without opening either driver stack yet.
+    ///
+    /// This is the future HIDMaestro-only session seam: callers may preflight
+    /// the exact personas they need before constructing capture, and a session
+    /// that needs no ViGEm persona never opens ViGEmBus. The existing entry
+    /// points intentionally keep using [`RoutedBackend::standard`] until their
+    /// preflight/error-ordering contract is migrated in the same change.
+    pub fn standard_lazy(vigem: BackendFactory) -> Self {
+        Self {
+            vigem: None,
+            hidmaestro: None,
+            vigem_factory: Some(vigem),
+            hidmaestro_factory: Some(Box::new(|| {
                 crate::HidMaestroBackend::connect()
                     .map(|b| Box::new(b) as Box<dyn VirtualPadBackend>)
             })),
@@ -118,9 +146,24 @@ impl RoutedBackend {
     /// [`RoutedBackend::standard`] for anything a user's config reaches.
     pub fn with_hidmaestro(vigem: Box<dyn VirtualPadBackend>, factory: HidMaestroFactory) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: Some(factory),
+            vigem_factory: None,
+            hidmaestro_factory: Some(factory),
+            enforce_build_capability: false,
+            pads: Default::default(),
+            next_id: 0,
+        }
+    }
+
+    /// Fully lazy two-stack router for driverless contract tests and future
+    /// production preflight wiring.
+    pub fn with_factories(vigem: BackendFactory, hidmaestro: HidMaestroFactory) -> Self {
+        Self {
+            vigem: None,
+            hidmaestro: None,
+            vigem_factory: Some(vigem),
+            hidmaestro_factory: Some(hidmaestro),
             enforce_build_capability: false,
             pads: Default::default(),
             next_id: 0,
@@ -134,6 +177,11 @@ impl RoutedBackend {
         self.hidmaestro.is_some()
     }
 
+    /// Whether ViGEmBus has actually been constructed.
+    pub fn vigem_started(&self) -> bool {
+        self.vigem.is_some()
+    }
+
     /// Which backend a persona routes to. Restates nothing — it is
     /// [`Persona::backend`].
     pub fn backend_for(persona: Persona) -> PadBackend {
@@ -142,11 +190,20 @@ impl RoutedBackend {
 
     fn stack(&mut self, which: PadBackend) -> Result<&mut Box<dyn VirtualPadBackend>, OutputError> {
         match which {
-            PadBackend::Vigem => Ok(&mut self.vigem),
+            PadBackend::Vigem => {
+                if self.vigem.is_none() {
+                    let factory = self
+                        .vigem_factory
+                        .as_mut()
+                        .ok_or(OutputError::BackendUnavailable(PadBackend::Vigem))?;
+                    self.vigem = Some(factory()?);
+                }
+                Ok(self.vigem.as_mut().expect("just built"))
+            }
             PadBackend::HidMaestro => {
                 if self.hidmaestro.is_none() {
                     let factory = self
-                        .factory
+                        .hidmaestro_factory
                         .as_mut()
                         .ok_or(OutputError::BackendUnavailable(PadBackend::HidMaestro))?;
                     self.hidmaestro = Some(factory()?);
@@ -174,7 +231,10 @@ impl RoutedBackend {
             .ok_or(OutputError::UnknownHandle(handle))?;
         let (which, inner) = entry;
         let stack = match which {
-            PadBackend::Vigem => &mut self.vigem,
+            PadBackend::Vigem => self
+                .vigem
+                .as_mut()
+                .ok_or(OutputError::UnknownHandle(handle))?,
             // Already built: a handle cannot exist for a backend that was never
             // constructed.
             PadBackend::HidMaestro => self
@@ -211,7 +271,7 @@ impl VirtualPadBackend for RoutedBackend {
     fn persona(&self, handle: PadHandle) -> Option<Persona> {
         let entry = self.pads.get(&handle.0)?;
         match entry.which {
-            PadBackend::Vigem => self.vigem.persona(entry.inner),
+            PadBackend::Vigem => self.vigem.as_ref()?.persona(entry.inner),
             PadBackend::HidMaestro => self.hidmaestro.as_ref()?.persona(entry.inner),
         }
     }
@@ -219,7 +279,7 @@ impl VirtualPadBackend for RoutedBackend {
     fn user_index(&self, handle: PadHandle) -> Option<u8> {
         let entry = self.pads.get(&handle.0)?;
         match entry.which {
-            PadBackend::Vigem => self.vigem.user_index(entry.inner),
+            PadBackend::Vigem => self.vigem.as_ref()?.user_index(entry.inner),
             PadBackend::HidMaestro => self.hidmaestro.as_ref()?.user_index(entry.inner),
         }
     }
@@ -269,6 +329,24 @@ mod tests {
         (router, builds)
     }
 
+    fn lazy_router() -> (RoutedBackend, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let vigem_builds = Arc::new(AtomicUsize::new(0));
+        let hidmaestro_builds = Arc::new(AtomicUsize::new(0));
+        let vigem_counter = vigem_builds.clone();
+        let hidmaestro_counter = hidmaestro_builds.clone();
+        let router = RoutedBackend::with_factories(
+            Box::new(move || {
+                vigem_counter.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+            }),
+            Box::new(move || {
+                hidmaestro_counter.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+            }),
+        );
+        (router, vigem_builds, hidmaestro_builds)
+    }
+
     #[test]
     fn the_rule_is_derived_from_the_persona_and_nothing_else() {
         assert_eq!(
@@ -309,6 +387,42 @@ mod tests {
         r.plug_persona(Persona::SwitchPro).unwrap();
         assert_eq!(builds.load(Ordering::Relaxed), 1, "built once, reused");
         assert!(r.hidmaestro_started());
+    }
+
+    #[test]
+    fn either_stack_can_start_first_without_constructing_the_other() {
+        let (mut r, vigem_builds, hidmaestro_builds) = lazy_router();
+        assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
+
+        r.plug_persona(Persona::DualSense).unwrap();
+        assert_eq!(hidmaestro_builds.load(Ordering::Relaxed), 1);
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
+        assert!(!r.vigem_started());
+
+        r.plug_persona(Persona::Xbox360).unwrap();
+        assert_eq!(hidmaestro_builds.load(Ordering::Relaxed), 1);
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 1);
+        assert!(r.vigem_started());
+    }
+
+    #[test]
+    fn a_lazy_production_router_refuses_before_opening_either_driver() {
+        let vigem_builds = Arc::new(AtomicUsize::new(0));
+        let counter = vigem_builds.clone();
+        let mut r = RoutedBackend::standard_lazy(Box::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+        }));
+
+        let err = r.plug_persona(Persona::DualSense).unwrap_err();
+        assert!(matches!(
+            err,
+            OutputError::PersonaNotImplemented(Persona::DualSense)
+        ));
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
+        assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
     }
 
     /// Handles from the two stacks must never collide. Both mocks hand out

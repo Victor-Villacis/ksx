@@ -50,6 +50,6 @@ pub use backend::{Feedback, PadHandle, VirtualPadBackend};
 pub use error::OutputError;
 pub use hidmaestro::HidMaestroBackend;
 pub use mock::MockBackend;
-pub use router::{HidMaestroFactory, RoutedBackend};
+pub use router::{BackendFactory, HidMaestroFactory, RoutedBackend};
 #[cfg(windows)]
 pub use vigem::VigemBackend;

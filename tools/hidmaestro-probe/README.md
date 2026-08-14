@@ -1,13 +1,20 @@
 # HIDMaestro SDK conformance probe
 
-This source-only tool answers one bounded question: does the official,
-hash-pinned HIDMaestro v1.6.1 SDK contain the catalog and read API shape KSX is
-planning against?
+This repository carries only the tool's source, not the SDK binary. Its
+inventory command answers one bounded question: does the official, hash-pinned
+HIDMaestro v1.6.1 SDK contain the catalog and read API shape KSX is planning
+against?
 
-The default command is read-only. It hashes `HIDMaestro.Core.dll` before
-loading it, inventories every embedded profile JSON, checks the public catalog
-surface, and pins the `dualsense`, `switch-pro`, and `xbox-series-xs-bt`
-properties KSX depends on. It writes exactly one JSON document to stdout.
+The default command requests only read operations from the SDK. It hashes
+`HIDMaestro.Core.dll` before loading it, inventories every embedded profile
+JSON, checks the public catalog surface, and pins the `dualsense`, `switch-pro`,
+and `xbox-series-xs-bt` properties KSX depends on. Loading a managed assembly
+can execute a module initializer, so the completed non-admin measurement is not
+repeated on the administrator GitHub runner or this development PC. CI uses the
+pin only as compiler metadata, removes it before executing SDK-independent
+contracts, and needs a future non-executing PE/resource reader before it can
+gate the catalog again. The inventory writes exactly one JSON document to
+stdout when deliberately run in an appropriate unprivileged sandbox.
 
 The same executable also carries a pure, nonprivileged simulation of the
 future KSX-to-host data boundary. `protocol` describes the exact
@@ -93,6 +100,12 @@ into this directory or committed. The full machine-readable pin is
 
 The release SDK supports Windows 10/11 x64 and targets .NET 10. Supply a .NET
 10 SDK and the DLL extracted from the official release:
+
+Do not run the assembly-loading inventory on an administrator account or the
+known-unreliable development PC. The command list below is a contract reference
+for a deliberately unprivileged sandbox; Actions currently compiles against
+the pin, deletes it, and runs only `protocol`, `simulate-protocol` and
+`self-test`.
 
 ```powershell
 $dotnet = 'C:\path\to\dotnet.exe'

@@ -149,6 +149,120 @@ jobs:
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
 
+  # Keep the HIDMaestro protocol work off the unreliable development CPU too.
+  # GitHub's Windows runner is an administrator with UAC disabled, so it must
+  # NOT execute the external SDK assembly: CI uses the exact hash-pinned DLL as
+  # compiler metadata, deletes every copied instance, and then runs only the
+  # SDK-independent protocol/self-tests. A future non-executing PE/resource
+  # reader will replace the assembly-loading catalog inventory.
+  hidmaestro-contracts:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Match the SDK used to establish the current probe baseline; do not
+          # let `LangVersion=latest` silently move under this contract.
+          dotnet-version: '10.0.400'
+      - name: Fetch the hash-pinned HIDMaestro SDK input
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content -LiteralPath tools/hidmaestro-probe/sdk.lock.json -Raw |
+            ConvertFrom-Json
+          $archive = Join-Path $env:RUNNER_TEMP $lock.releaseAsset.fileName
+          $expanded = Join-Path $env:RUNNER_TEMP 'hidmaestro-v1.6.1'
+
+          Invoke-WebRequest -Uri $lock.releaseAsset.url -OutFile $archive
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($archiveHash -cne $lock.releaseAsset.sha256) {
+            throw "HIDMaestro release archive hash mismatch: $archiveHash"
+          }
+
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $candidates = @(
+            Get-ChildItem -LiteralPath $expanded -Recurse -File |
+              Where-Object Name -CEQ $lock.coreDll.fileName
+          )
+          $matches = @(
+            $candidates | Where-Object {
+              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -ceq
+                $lock.coreDll.sha256
+            }
+          )
+          if ($matches.Count -ne 1) {
+            throw "Expected exactly one hash-pinned HIDMaestro.Core.dll; found $($matches.Count)."
+          }
+          "HIDMAESTRO_CORE_PATH=$($matches[0].FullName)" >> $env:GITHUB_ENV
+          "HIDMAESTRO_ARCHIVE_PATH=$archive" >> $env:GITHUB_ENV
+          "HIDMAESTRO_EXPANDED_PATH=$expanded" >> $env:GITHUB_ENV
+      - name: Compile against the pin, then execute only SDK-free contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tools/hidmaestro-probe/build.ps1 `
+            -DotNet dotnet `
+            -SdkDll $env:HIDMAESTRO_CORE_PATH `
+            -Configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro probe build failed.' }
+
+          $probe = Resolve-Path `
+            tools/hidmaestro-probe/bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll
+          Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
+            Where-Object Name -CEQ 'HIDMaestro.Core.dll' |
+            Remove-Item -Force
+          $remainingSdk = @(
+            Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
+              Where-Object Name -CEQ 'HIDMaestro.Core.dll'
+          )
+          if ($remainingSdk.Count -ne 0) {
+            throw 'The upstream SDK remained in the executable probe tree.'
+          }
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          foreach ($target in @($env:HIDMAESTRO_ARCHIVE_PATH, $env:HIDMAESTRO_EXPANDED_PATH)) {
+            $resolvedTarget = [IO.Path]::GetFullPath($target)
+            if (!$resolvedTarget.StartsWith(
+                $runnerTemp,
+                [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Refusing to clean HIDMaestro input outside RUNNER_TEMP: $resolvedTarget"
+            }
+          }
+          Remove-Item -LiteralPath $env:HIDMAESTRO_ARCHIVE_PATH -Force
+          Remove-Item -LiteralPath $env:HIDMAESTRO_EXPANDED_PATH -Recurse -Force
+          Remove-Item Env:HIDMAESTRO_CORE_PATH
+          Remove-Item Env:HIDMAESTRO_ARCHIVE_PATH
+          Remove-Item Env:HIDMAESTRO_EXPANDED_PATH
+
+          foreach ($command in @('protocol', 'simulate-protocol', 'self-test')) {
+            $arguments = @($command)
+            $label = $command
+            Write-Host "::group::HIDMaestro $label"
+            $stdout = & dotnet $probe @arguments
+            if ($LASTEXITCODE -ne 0) { throw "HIDMaestro $label failed." }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 100
+              if ($report.schemaVersion -ne 1) {
+                throw "unexpected schemaVersion '$($report.schemaVersion)'"
+              }
+              if ($report.command -cne $label) {
+                throw "unexpected command '$($report.command)'"
+              }
+              if ($report.ok -ne $true) {
+                throw 'the command reported ok=false'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro $label did not emit exactly one JSON document: $_"
+            }
+            Write-Host '::endgroup::'
+          }
+
   # The shippable binary and the installer. The steps live in
   # `build-installer.yml` because `release.yml` needs the SAME build — the file
   # a customer downloads must be the file this gate proved, not a second build
@@ -160,7 +274,7 @@ jobs:
   # walk through the Actions tab. `release.yml` is what turns the same two files
   # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
-    needs: test
+    needs: [test, hidmaestro-contracts]
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

@@ -61,6 +61,11 @@ pub enum ProtectedInstallError {
     NotAbsolute,
     #[error("the recovery-store initializer must be named ksx-winusb-helper.exe")]
     UnexpectedInitializerName,
+    #[error("the protected executable must be named {expected}; found {actual}")]
+    UnexpectedExecutableName {
+        expected: &'static str,
+        actual: String,
+    },
     #[error("the installed sibling is not beside the running executable")]
     NotSibling,
     #[error("the KSX installation is not under a Windows Program Files Known Folder")]
@@ -69,16 +74,47 @@ pub enum ProtectedInstallError {
     KnownFolder(String),
     #[error("the KSX installation path is not protected: {0}")]
     UnsafeAcl(String),
+    #[error("the protected executable could not be sealed to one file object: {0}")]
+    Seal(#[source] std::io::Error),
     #[error("protected installation validation is available only on Windows")]
     Unsupported,
 }
 
-/// Validate and return one canonical executable sibling that is safe to
-/// launch or load with administrator rights.
+/// One fixed executable whose canonical installed path and live ACL were
+/// validated and whose file object is held against writes, deletes and swaps.
+///
+/// There is no public constructor and no `Clone`: callers obtain one only from
+/// [`protected_winusb_helper`] and spend it in [`launch_elevated`]. After
+/// successful launch identity establishment, the token moves into
+/// [`ElevatedChild`], extending the seal across the whole elevated conversation
+/// instead of merely across ShellExecuteEx.
+pub struct ProtectedExecutable {
+    _sealed: crate::sealed::SealedFile,
+    canonical_image: PathBuf,
+}
+
+impl std::fmt::Debug for ProtectedExecutable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProtectedExecutable")
+            .field("canonical_image", &self.canonical_image)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtectedExecutable {
+    /// Handle-derived canonical image which will be passed to ShellExecuteEx.
+    pub fn canonical_image(&self) -> &Path {
+        &self.canonical_image
+    }
+}
+
+/// Validate and return one canonical installed sibling suitable for a
+/// protected load.
 ///
 /// The roots come from `SHGetKnownFolderPath`, never environment variables.
 /// Prefix membership is only the first gate; the live ACL check below is what
-/// catches a Program Files subtree whose permissions were weakened.
+/// catches a Program Files subtree whose permissions were weakened. Elevated
+/// execution requires one of the fixed sealed-token factories above.
 #[cfg(windows)]
 pub fn protected_install_sibling(
     executable: &Path,
@@ -97,6 +133,72 @@ pub fn protected_install_sibling(
     };
     validate_canonical_install_sibling_with(&executable, &sibling, &policy, strong_acl)?;
     Ok(sibling)
+}
+
+#[cfg(windows)]
+fn protected_executable_sibling(
+    executable: &Path,
+    sibling: &Path,
+    expected_name: &'static str,
+) -> Result<ProtectedExecutable, ProtectedInstallError> {
+    let canonical = protected_install_sibling(executable, sibling)?;
+    validate_protected_executable_name(&canonical, expected_name)?;
+    verify_non_reparse_kind(&canonical, false)?;
+    let sealed =
+        crate::sealed::SealedFile::open_strict(&canonical).map_err(ProtectedInstallError::Seal)?;
+    let handle_path = sealed.exec_path().to_path_buf();
+    if !executable_path_eq(&canonical, &handle_path) {
+        return Err(ProtectedInstallError::Seal(std::io::Error::other(
+            "the sealed handle resolves to a different executable path",
+        )));
+    }
+    Ok(ProtectedExecutable {
+        _sealed: sealed,
+        canonical_image: handle_path,
+    })
+}
+
+#[cfg(windows)]
+fn protected_current_executable_sibling(
+    expected_name: &'static str,
+) -> Result<ProtectedExecutable, ProtectedInstallError> {
+    let current = std::env::current_exe()
+        .map_err(|err| ProtectedInstallError::Missing(format!("the current executable: {err}")))?;
+    let parent = current.parent().ok_or(ProtectedInstallError::NotSibling)?;
+    protected_executable_sibling(&current, &parent.join(expected_name), expected_name)
+}
+
+/// Resolve and seal the fixed installed WinUSB recovery helper.
+///
+/// Neither image path nor basename comes from a request, configuration, CWD,
+/// `PATH`, or environment variable.
+#[cfg(windows)]
+pub fn protected_winusb_helper() -> Result<ProtectedExecutable, ProtectedInstallError> {
+    protected_current_executable_sibling("ksx-winusb-helper.exe")
+}
+
+fn validate_protected_executable_name(
+    canonical: &Path,
+    expected_name: &'static str,
+) -> Result<(), ProtectedInstallError> {
+    let actual = canonical
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let expected_path = Path::new(expected_name);
+    if expected_path.file_name() != Some(std::ffi::OsStr::new(expected_name))
+        || !expected_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        || !actual.eq_ignore_ascii_case(expected_name)
+    {
+        Err(ProtectedInstallError::UnexpectedExecutableName {
+            expected: expected_name,
+            actual,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 /// Validate the one temporary executable the installer may use to bootstrap
@@ -193,6 +295,11 @@ pub fn protected_install_sibling(
     Err(ProtectedInstallError::Unsupported)
 }
 
+#[cfg(not(windows))]
+pub fn protected_winusb_helper() -> Result<ProtectedExecutable, ProtectedInstallError> {
+    Err(ProtectedInstallError::Unsupported)
+}
+
 /// Pure policy half, with ACL inspection injected for regression tests.  Both
 /// inputs must already be canonical: production obtains them from
 /// `Path::canonicalize`, while tests can use synthetic Windows paths without
@@ -249,6 +356,13 @@ fn path_eq_ci(left: &Path, right: &Path) -> bool {
     left.as_os_str()
         .to_string_lossy()
         .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
+fn executable_path_eq(left: &Path, right: &Path) -> bool {
+    let left = left.as_os_str().to_string_lossy();
+    let right = right.as_os_str().to_string_lossy();
+    crate::sealed::strip_dos_prefix(&left)
+        .eq_ignore_ascii_case(crate::sealed::strip_dos_prefix(&right))
 }
 
 #[cfg(windows)]
@@ -956,15 +1070,126 @@ pub struct ElevatedExit {
     pub code: u32,
 }
 
+/// One elevated process launched from an already-validated protected image.
+///
+/// The process handle, not the pid, is the identity. The pid is correlation
+/// input only; it must never be treated as endpoint provenance or used by
+/// itself to reopen or control the process. Likewise the handle-derived
+/// canonical image is retained as launch evidence rather than rediscovered
+/// through `PATH`, the current directory, or environment variables.
+///
+/// Dropping this value closes ksx's process and file-seal handles and performs
+/// no process action. In particular there is intentionally no kill/terminate
+/// operation and no raw handle escape: an elevated helper may be in the middle
+/// of a durable driver transaction when its unelevated parent gives up waiting.
+pub struct ElevatedChild {
+    #[cfg(windows)]
+    handle: std::os::windows::io::OwnedHandle,
+    pid: u32,
+    canonical_image: PathBuf,
+    creation_time: u64,
+    session_id: u32,
+    /// Keeps the launched image's no-write/no-delete file seal alive for this
+    /// value's whole lifetime, including the IPC conversation after launch.
+    _image_seal: ProtectedExecutable,
+    /// Cached after the handle is signalled, so repeated waits are stable and
+    /// never ask the OS about a different process with a recycled pid.
+    exit_code: Option<u32>,
+}
+
+impl std::fmt::Debug for ElevatedChild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevatedChild")
+            .field("pid", &self.pid)
+            .field("canonical_image", &self.canonical_image)
+            .field("creation_time", &self.creation_time)
+            .field("session_id", &self.session_id)
+            .field("exit_code", &self.exit_code)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Crate-private evidence that a numeric candidate names the exact elevated
+/// process object retained by [`ElevatedChild`].
+///
+/// The exact-object guarantee is intentionally not a caller-provided boolean:
+/// a value of this type can be produced only while the retained ShellExecute
+/// process handle remains alive and reports the same candidate pid. This does
+/// **not** prove that a connected endpoint supplied that number. S1.6b must
+/// combine the OS pipe-client query and this correlation behind one
+/// non-bypassable transport API. Image, creation time, session, and token
+/// elevation are captured from the retained object rather than from a
+/// cross-account pid reopen.
+#[derive(Debug, PartialEq, Eq)]
+// S1.6b's combined live-pipe authenticator will consume this crate-private
+// evidence. Keep it unreachable to external callers until that provenance
+// boundary exists, and remove the allowance with the consumer.
+#[allow(dead_code)]
+pub(crate) struct ElevatedProcessEvidence {
+    pid: u32,
+    session_id: u32,
+    creation_time: u64,
+    canonical_image: PathBuf,
+    elevated: bool,
+}
+
+#[allow(dead_code)]
+impl ElevatedProcessEvidence {
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub(crate) fn session_id(&self) -> u32 {
+        self.session_id
+    }
+
+    pub(crate) fn creation_time(&self) -> u64 {
+        self.creation_time
+    }
+
+    pub(crate) fn canonical_image(&self) -> &Path {
+        &self.canonical_image
+    }
+
+    /// Authoritative `TokenElevation` result from the retained process object.
+    pub(crate) fn elevated(&self) -> bool {
+        self.elevated
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ElevatedProcessCorrelationError {
+    #[error("the elevated child exited with code {code} during process correlation")]
+    ChildExited { code: u32 },
+    #[error("could not inspect the elevated child during process correlation: {0}")]
+    ChildInspection(#[source] ElevationError),
+    #[error("could not inspect the retained elevated process for candidate pid {pid}: {source}")]
+    ProcessInspection {
+        pid: u32,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("candidate pid {pid} is not the retained elevated process object")]
+    DifferentProcess { pid: u32 },
+    #[error("candidate pid {pid} changed its {field} identity evidence")]
+    EvidenceMismatch { pid: u32, field: &'static str },
+    #[error("candidate pid {pid} is the expected process object but its token is not elevated")]
+    NotElevated { pid: u32 },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ElevationError {
-    #[error("the elevated executable must be an existing absolute file: {0}")]
+    #[error("the elevated executable must be an existing absolute canonical file: {0}")]
     InvalidExecutable(String),
+    #[error("elevated argument {index} contains a NUL character")]
+    InvalidArgument { index: usize },
     #[error("the Windows administrator prompt was cancelled")]
     Cancelled,
     #[error("could not launch the elevated helper: {0}")]
     Launch(#[source] std::io::Error),
-    #[error("could not wait for the elevated helper: {0}")]
+    #[error("the elevated helper launched but its identity could not be established; it was left running: {0}")]
+    Untracked(#[source] std::io::Error),
+    #[error("could not wait for the elevated helper; it may still be running and must not be relaunched until state is re-surveyed: {0}")]
     Wait(#[source] std::io::Error),
     #[error("the elevated helper did not finish within five minutes; it was left running and its durable recovery record must be inspected")]
     Timeout,
@@ -999,47 +1224,423 @@ fn quote_windows_argument(argument: &str) -> String {
     out
 }
 
-/// Launch an exact executable with the `runas` verb, wait for it, and return
-/// only its exit code. The caller deliberately does not trust stdout: driver
-/// state is re-surveyed after this function returns.
+/// ShellExecuteEx flags required to synchronously receive and retain the child
+/// handle.  `NOASYNC` applies only to shell hand-off; [`launch_elevated`]
+/// itself still returns as soon as that handle is available.
 #[cfg(windows)]
-pub fn run_elevated_and_wait(
-    executable: &Path,
-    args: &[String],
-) -> Result<ElevatedExit, ElevationError> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, ERROR_CANCELLED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-    };
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
-    use windows_sys::Win32::UI::Shell::{
-        ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+const ELEVATED_EXECUTE_MASK: u32 = windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS
+    | windows_sys::Win32::UI::Shell::SEE_MASK_NOASYNC;
 
-    if !executable.is_absolute() || !executable.is_file() {
-        return Err(ElevationError::InvalidExecutable(
-            executable.display().to_string(),
+/// `INFINITE` is `u32::MAX`; clamping one below it keeps every public wait
+/// genuinely bounded even when a caller supplies a centuries-long Duration.
+const MAX_BOUNDED_WAIT_MS: u32 = u32::MAX - 1;
+
+fn bounded_wait_millis(timeout: Duration) -> u32 {
+    timeout.as_millis().min(u128::from(MAX_BOUNDED_WAIT_MS)) as u32
+}
+
+fn elevation_parameter_line(args: &[String]) -> Result<String, ElevationError> {
+    args.iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            if argument.contains('\0') {
+                Err(ElevationError::InvalidArgument { index })
+            } else {
+                Ok(quote_windows_argument(argument))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|quoted| quoted.join(" "))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessWait {
+    Exited,
+    TimedOut,
+}
+
+/// Interpret one process wait through injected OS operations.  Keeping this
+/// state machine pure is what lets tests pin timeout/caching/error behavior
+/// without launching anything or displaying a UAC prompt.
+fn observe_elevated_exit(
+    cached: &mut Option<u32>,
+    wait: impl FnOnce() -> std::io::Result<ProcessWait>,
+    read_exit: impl FnOnce() -> std::io::Result<u32>,
+) -> std::io::Result<Option<u32>> {
+    if let Some(code) = *cached {
+        return Ok(Some(code));
+    }
+    if wait()? == ProcessWait::TimedOut {
+        return Ok(None);
+    }
+    let code = read_exit()?;
+    *cached = Some(code);
+    Ok(Some(code))
+}
+
+// Pending S1.6b consumer; on non-Windows the live correlation method is a stub.
+#[allow(dead_code)]
+#[derive(Debug)]
+struct ObservedProcess {
+    pid: u32,
+    session_id: u32,
+    creation_time: u64,
+    canonical_image: PathBuf,
+    retained_object: bool,
+    elevated: bool,
+}
+
+#[allow(dead_code)]
+fn validate_process_observation(
+    expected_pid: u32,
+    expected_session_id: u32,
+    expected_creation_time: u64,
+    expected_image: &Path,
+    observed: ObservedProcess,
+) -> Result<ElevatedProcessEvidence, ElevatedProcessCorrelationError> {
+    if !observed.retained_object || observed.pid != expected_pid {
+        return Err(ElevatedProcessCorrelationError::DifferentProcess { pid: observed.pid });
+    }
+    if observed.session_id != expected_session_id {
+        return Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+            pid: observed.pid,
+            field: "interactive session",
+        });
+    }
+    if observed.creation_time != expected_creation_time {
+        return Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+            pid: observed.pid,
+            field: "creation time",
+        });
+    }
+    if !executable_path_eq(&observed.canonical_image, expected_image) {
+        return Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+            pid: observed.pid,
+            field: "canonical image",
+        });
+    }
+    if !observed.elevated {
+        return Err(ElevatedProcessCorrelationError::NotElevated { pid: observed.pid });
+    }
+    Ok(ElevatedProcessEvidence {
+        pid: observed.pid,
+        session_id: observed.session_id,
+        creation_time: observed.creation_time,
+        canonical_image: expected_image.to_path_buf(),
+        elevated: true,
+    })
+}
+
+#[cfg(windows)]
+fn process_creation_time(handle: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+    let mut created: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exited: FILETIME = unsafe { std::mem::zeroed() };
+    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+    let mut user: FILETIME = unsafe { std::mem::zeroed() };
+    // SAFETY: all out-pointers are valid FILETIMEs and `handle` is borrowed by
+    // the caller for this call's duration.
+    if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+#[cfg(windows)]
+fn process_image(handle: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+
+    // The extended-length Windows path ceiling is 32,767 UTF-16 code units.
+    let mut buffer = vec![0u16; 32_768];
+    let mut length = buffer.len() as u32;
+    // SAFETY: `buffer` is writable for `length` UTF-16 units and `handle` is a
+    // live process handle with query rights.
+    if unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    buffer.truncate(length as usize);
+    Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)))
+}
+
+#[cfg(windows)]
+fn process_session_id(pid: u32) -> std::io::Result<u32> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
+    }
+
+    let mut session_id = 0u32;
+    // SAFETY: `session_id` is a valid writable u32 and the function only reads
+    // the numeric pid.  A zero return is handled as an OS error.
+    if unsafe { ProcessIdToSessionId(pid, &mut session_id) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(session_id)
+    }
+}
+
+#[cfg(windows)]
+fn process_token_is_elevated(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<bool> {
+    use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    let mut raw_token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `raw_token` is a valid out-pointer. The exact process handle is
+    // borrowed by the caller; only TOKEN_QUERY is requested.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw_token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcessToken returned one owned token handle.
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token.cast()) };
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0u32;
+    // SAFETY: `elevation` has the exact TokenElevation layout and the owned
+    // token handle remains live for this call.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle() as HANDLE,
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    if returned < std::mem::size_of::<TOKEN_ELEVATION>() as u32 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "TokenElevation returned a truncated result",
         ));
     }
-    let executable = executable.canonicalize().map_err(ElevationError::Launch)?;
-    let file: Vec<u16> = executable
+    Ok(elevation.TokenIsElevated != 0)
+}
+
+impl ElevatedChild {
+    /// Process id captured from the retained process handle at launch time.
+    /// It is correlation evidence only; the handle remains the identity.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Exact canonical image supplied by the protected-install caller.
+    pub fn canonical_image(&self) -> &Path {
+        &self.canonical_image
+    }
+
+    /// Exit code once a wait or liveness check has observed process exit.
+    pub fn exit_code(&self) -> Option<u32> {
+        self.exit_code
+    }
+
+    /// Wait for at most `timeout`.  `Ok(None)` means the child was still
+    /// running at the deadline; `Ok(Some(code))` is cached forever.
+    #[cfg(windows)]
+    pub fn wait_timeout(&mut self, timeout: Duration) -> Result<Option<u32>, ElevationError> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+
+        let handle = self.handle.as_raw_handle() as HANDLE;
+        observe_elevated_exit(
+            &mut self.exit_code,
+            || {
+                // SAFETY: `handle` is owned by `self` and cannot be closed or
+                // escaped while this borrow is live.
+                let status = unsafe { WaitForSingleObject(handle, bounded_wait_millis(timeout)) };
+                match status {
+                    WAIT_OBJECT_0 => Ok(ProcessWait::Exited),
+                    WAIT_TIMEOUT => Ok(ProcessWait::TimedOut),
+                    WAIT_FAILED => Err(std::io::Error::last_os_error()),
+                    other => Err(std::io::Error::other(format!(
+                        "WaitForSingleObject returned unexpected status {other:#x}"
+                    ))),
+                }
+            },
+            || {
+                let mut code = 0u32;
+                // SAFETY: the same owned process handle remains live.  This is
+                // called only after it was observed signalled.
+                if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(code)
+                }
+            },
+        )
+        .map_err(ElevationError::Wait)
+    }
+
+    #[cfg(not(windows))]
+    pub fn wait_timeout(&mut self, _timeout: Duration) -> Result<Option<u32>, ElevationError> {
+        Err(ElevationError::Unsupported)
+    }
+
+    /// Non-blocking liveness check against the retained handle.
+    pub fn is_alive(&mut self) -> Result<bool, ElevationError> {
+        self.wait_timeout(Duration::ZERO).map(|exit| exit.is_none())
+    }
+
+    /// Correlate a numeric candidate with this exact elevated process object.
+    ///
+    /// A matching number by itself is not endpoint authentication. This
+    /// brackets the check with
+    /// liveness observations on the retained process handle, re-reads that
+    /// handle's pid, and queries creation time, image, interactive SessionId,
+    /// and `TokenElevation` from the same retained object. A pid cannot be
+    /// recycled to another live object while the original retained child stays
+    /// alive; if it exits during evidence collection, the trailing liveness
+    /// check rejects the peer.
+    ///
+    /// User or logon SID equality is deliberately *not* required —
+    /// over-the-shoulder UAC legitimately runs under another administrator's
+    /// identity in the same interactive session. Query failure still fails
+    /// closed, and standard-user/over-the-shoulder behavior remains a native
+    /// release gate for this source-only checkpoint. This method is
+    /// crate-private so only a future combined live-pipe authenticator can turn
+    /// OS-reported client identity into transport trust.
+    #[cfg(windows)]
+    // Pending S1.6b's named-pipe consumer; deliberately not public meanwhile.
+    #[allow(dead_code)]
+    pub(crate) fn correlate_process_pid(
+        &mut self,
+        candidate_pid: u32,
+    ) -> Result<ElevatedProcessEvidence, ElevatedProcessCorrelationError> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::Threading::GetProcessId;
+
+        match self
+            .wait_timeout(Duration::ZERO)
+            .map_err(ElevatedProcessCorrelationError::ChildInspection)?
+        {
+            Some(code) => return Err(ElevatedProcessCorrelationError::ChildExited { code }),
+            None => {}
+        }
+        let child_handle = self.handle.as_raw_handle() as HANDLE;
+        // SAFETY: `child_handle` is the retained live process object bracketed
+        // by the liveness checks in this method.
+        let retained_pid = unsafe { GetProcessId(child_handle) };
+        if retained_pid == 0 {
+            return Err(ElevatedProcessCorrelationError::ProcessInspection {
+                pid: candidate_pid,
+                source: std::io::Error::last_os_error(),
+            });
+        }
+        if candidate_pid != self.pid || retained_pid != self.pid {
+            return Err(ElevatedProcessCorrelationError::DifferentProcess { pid: candidate_pid });
+        }
+        let observed = ObservedProcess {
+            pid: candidate_pid,
+            session_id: process_session_id(retained_pid).map_err(|source| {
+                ElevatedProcessCorrelationError::ProcessInspection {
+                    pid: candidate_pid,
+                    source,
+                }
+            })?,
+            creation_time: process_creation_time(child_handle).map_err(|source| {
+                ElevatedProcessCorrelationError::ProcessInspection {
+                    pid: candidate_pid,
+                    source,
+                }
+            })?,
+            canonical_image: process_image(child_handle).map_err(|source| {
+                ElevatedProcessCorrelationError::ProcessInspection {
+                    pid: candidate_pid,
+                    source,
+                }
+            })?,
+            retained_object: true,
+            elevated: process_token_is_elevated(child_handle).map_err(|source| {
+                ElevatedProcessCorrelationError::ProcessInspection {
+                    pid: candidate_pid,
+                    source,
+                }
+            })?,
+        };
+        let evidence = validate_process_observation(
+            self.pid,
+            self.session_id,
+            self.creation_time,
+            &self.canonical_image,
+            observed,
+        )?;
+
+        // Pin the PID-correlating window at both ends: a peer that exited while
+        // its evidence was being collected is not an authenticated live peer.
+        match self
+            .wait_timeout(Duration::ZERO)
+            .map_err(ElevatedProcessCorrelationError::ChildInspection)?
+        {
+            Some(code) => Err(ElevatedProcessCorrelationError::ChildExited { code }),
+            None => Ok(evidence),
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[allow(dead_code)]
+    pub(crate) fn correlate_process_pid(
+        &mut self,
+        _candidate_pid: u32,
+    ) -> Result<ElevatedProcessEvidence, ElevatedProcessCorrelationError> {
+        Err(ElevatedProcessCorrelationError::ChildInspection(
+            ElevationError::Unsupported,
+        ))
+    }
+}
+
+/// Launch an exact, already-canonical protected executable with the `runas`
+/// verb and return as soon as Windows provides its process handle.
+///
+/// The caller must first obtain `executable` from the fixed protected-image
+/// factory. On success the opaque token is consumed and retained by the child,
+/// so its sealed file object cannot be
+/// swapped for the lifetime of the process/IPC conversation. This function
+/// performs no executable discovery: `PATH`, the process CWD, and
+/// environment-variable expansion are unused. The working directory is fixed
+/// to the handle-derived image parent.
+#[cfg(windows)]
+pub fn launch_elevated(
+    executable: ProtectedExecutable,
+    args: &[String],
+) -> Result<ElevatedChild, ElevationError> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_CANCELLED};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessId};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let canonical = executable.canonical_image.clone();
+    if canonical.as_os_str().encode_wide().any(|unit| unit == 0) {
+        return Err(ElevationError::InvalidExecutable(
+            canonical.display().to_string(),
+        ));
+    }
+    let directory = canonical
+        .parent()
+        .ok_or_else(|| ElevationError::InvalidExecutable(canonical.display().to_string()))?;
+    let parameter_line = elevation_parameter_line(args)?;
+    let file: Vec<u16> = canonical
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let parameters = args
-        .iter()
-        .map(|argument| quote_windows_argument(argument))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let parameters: Vec<u16> = parameters
+    let parameters: Vec<u16> = parameter_line
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let directory: Vec<u16> = executable
-        .parent()
-        .unwrap_or_else(|| Path::new(r"C:\"))
+    let directory: Vec<u16> = directory
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
@@ -1047,7 +1648,7 @@ pub fn run_elevated_and_wait(
     let verb: Vec<u16> = "runas\0".encode_utf16().collect();
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS,
+        fMask: ELEVATED_EXECUTE_MASK,
         lpVerb: verb.as_ptr(),
         lpFile: file.as_ptr(),
         lpParameters: parameters.as_ptr(),
@@ -1055,8 +1656,8 @@ pub fn run_elevated_and_wait(
         nShow: SW_HIDE,
         ..Default::default()
     };
-    // SAFETY: all strings are NUL-terminated and live through the call; the
-    // process handle returned under NOCLOSEPROCESS is closed below.
+    // SAFETY: all strings are NUL-terminated and live through the call.  Under
+    // NOCLOSEPROCESS a successful call transfers one owned handle to `info`.
     if unsafe { ShellExecuteExW(&mut info) } == 0 {
         let code = unsafe { GetLastError() };
         if code == ERROR_CANCELLED {
@@ -1067,40 +1668,75 @@ pub fn run_elevated_and_wait(
         )));
     }
     if info.hProcess.is_null() {
-        return Err(ElevationError::Launch(std::io::Error::other(
+        return Err(ElevationError::Untracked(std::io::Error::other(
             "ShellExecuteExW returned no process handle",
         )));
     }
-    let handle = info.hProcess;
-    let waited = unsafe { WaitForSingleObject(handle, ELEVATED_HELPER_WAIT_MS) };
-    if waited == WAIT_TIMEOUT {
-        // Closing our handle does not terminate the helper. It may be inside a
-        // driver mutation, so the only safe action is to leave it running and
-        // make the caller re-survey/recover rather than launch a second copy.
-        unsafe { CloseHandle(handle) };
-        return Err(ElevationError::Timeout);
+    // SAFETY: NOCLOSEPROCESS gives this call one owned process handle.  It is
+    // stored privately and its only escape is OwnedHandle's close-on-drop.
+    let handle = unsafe { OwnedHandle::from_raw_handle(info.hProcess.cast()) };
+    // SAFETY: `handle` owns the live process handle for this call.
+    let pid = unsafe { GetProcessId(info.hProcess) };
+    if pid == 0 {
+        return Err(ElevationError::Untracked(std::io::Error::last_os_error()));
     }
-    if waited != WAIT_OBJECT_0 {
-        let err = std::io::Error::last_os_error();
-        unsafe { CloseHandle(handle) };
-        return Err(ElevationError::Wait(err));
+    let creation_time = process_creation_time(info.hProcess).map_err(ElevationError::Untracked)?;
+    let observed_image = process_image(info.hProcess).map_err(ElevationError::Untracked)?;
+    if !executable_path_eq(&observed_image, &canonical) {
+        return Err(ElevationError::Untracked(std::io::Error::other(format!(
+            "ShellExecuteEx launched '{}' instead of the sealed image '{}'",
+            observed_image.display(),
+            canonical.display()
+        ))));
     }
-    let mut code = 0u32;
-    if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
-        let err = std::io::Error::last_os_error();
-        unsafe { CloseHandle(handle) };
-        return Err(ElevationError::Wait(err));
+    let session_id = process_session_id(pid).map_err(ElevationError::Untracked)?;
+    // SAFETY: GetCurrentProcessId takes no arguments and has no failure mode.
+    let caller_pid = unsafe { GetCurrentProcessId() };
+    let caller_session = process_session_id(caller_pid).map_err(ElevationError::Untracked)?;
+    if session_id != caller_session {
+        return Err(ElevationError::Untracked(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "elevated child entered session {session_id}, expected interactive session {caller_session}"
+            ),
+        )));
     }
-    unsafe { CloseHandle(handle) };
-    Ok(ElevatedExit { code })
+    Ok(ElevatedChild {
+        handle,
+        pid,
+        canonical_image: canonical,
+        creation_time,
+        session_id,
+        _image_seal: executable,
+        exit_code: None,
+    })
 }
 
 #[cfg(not(windows))]
-pub fn run_elevated_and_wait(
-    _executable: &Path,
+pub fn launch_elevated(
+    _executable: ProtectedExecutable,
     _args: &[String],
-) -> Result<ElevatedExit, ElevationError> {
+) -> Result<ElevatedChild, ElevationError> {
     Err(ElevationError::Unsupported)
+}
+
+/// Launch an exact executable with the `runas` verb, wait for it, and return
+/// only its exit code. The caller deliberately does not trust stdout: driver
+/// state is re-surveyed after this function returns.
+pub fn run_elevated_and_wait(
+    executable: ProtectedExecutable,
+    args: &[String],
+) -> Result<ElevatedExit, ElevationError> {
+    let mut child = launch_elevated(executable, args)?;
+    match child.wait_timeout(Duration::from_millis(u64::from(ELEVATED_HELPER_WAIT_MS)))? {
+        Some(code) => Ok(ElevatedExit { code }),
+        None => {
+            // Dropping `child` closes only our handle.  The helper may be in a
+            // driver mutation, so leave it running and force re-survey/recovery
+            // rather than starting a second copy.
+            Err(ElevationError::Timeout)
+        }
+    }
 }
 
 /// Is this process running with an elevated token?
@@ -1110,39 +1746,11 @@ pub fn run_elevated_and_wait(
 /// admin wastes their time with a UAC-less failure).
 #[cfg(windows)]
 pub fn is_elevated() -> Option<bool> {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_QUERY};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    #[repr(C)]
-    struct TokenElevationRaw {
-        token_is_elevated: u32,
-    }
-
-    let mut token = std::ptr::null_mut();
-    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing;
-    // `token` is closed below on the success path.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return None;
-    }
-    let mut info = TokenElevationRaw {
-        token_is_elevated: 0,
-    };
-    let mut returned = 0u32;
-    // SAFETY: TokenElevation's out-parameter is a TOKEN_ELEVATION, which is
-    // layout-identical to the single-u32 struct above.
-    let ok = unsafe {
-        GetTokenInformation(
-            token,
-            TokenElevation,
-            (&mut info as *mut TokenElevationRaw).cast(),
-            std::mem::size_of::<TokenElevationRaw>() as u32,
-            &mut returned,
-        )
-    } != 0;
-    // SAFETY: `token` came from OpenProcessToken and is not used again.
-    unsafe { CloseHandle(token) };
-    ok.then_some(info.token_is_elevated != 0)
+    // SAFETY: GetCurrentProcess returns a borrowed pseudo-handle valid for the
+    // process lifetime; `process_token_is_elevated` does not close it.
+    process_token_is_elevated(unsafe { GetCurrentProcess() }).ok()
 }
 
 #[cfg(not(windows))]
@@ -1201,6 +1809,46 @@ mod tests {
             },
         );
         assert!(matches!(weakened, Err(ProtectedInstallError::UnsafeAcl(_))));
+    }
+
+    #[test]
+    fn protected_executable_name_is_a_fixed_exe_basename() {
+        let helper = Path::new("ksx-winusb-helper.exe");
+        validate_protected_executable_name(helper, "KSX-WINUSB-HELPER.EXE")
+            .expect("the fixed basename comparison is ASCII case-insensitive");
+
+        for expected in [
+            "other.exe",
+            "subdir/ksx-winusb-helper.exe",
+            "ksx-winusb-helper.dll",
+        ] {
+            assert!(matches!(
+                validate_protected_executable_name(helper, expected),
+                Err(ProtectedInstallError::UnexpectedExecutableName { .. })
+            ));
+        }
+    }
+
+    /// Broken version caught: a public `(current, sibling, name)` token mint
+    /// turned an opaque type back into an arbitrary Program Files elevation
+    /// authority. Only the already-shipped native WinUSB helper is allowlisted
+    /// in this checkpoint; a future HIDMaestro host needs a native bootstrap
+    /// contract before it can gain an elevation factory.
+    #[test]
+    fn only_the_fixed_native_winusb_helper_can_mint_an_elevation_token() {
+        let source = include_str!("process.rs").replace("\r\n", "\n");
+        let fixed_public = ["pub fn ", "protected_winusb_helper()"].concat();
+        let generic_public = ["pub fn ", "protected_executable_sibling("].concat();
+        let managed_public = ["pub fn ", "protected_hidmaestro_host("].concat();
+        let generic_private = ["fn ", "protected_executable_sibling("].concat();
+        assert_eq!(
+            source.matches(fixed_public.as_str()).count(),
+            2,
+            "one Windows implementation and one non-Windows refusal"
+        );
+        assert!(!source.contains(generic_public.as_str()));
+        assert!(!source.contains(managed_public.as_str()));
+        assert_eq!(source.matches(generic_private.as_str()).count(), 1);
     }
 
     #[cfg(windows)]
@@ -1283,6 +1931,13 @@ mod tests {
     #[test]
     fn elevated_helper_wait_is_bounded_without_a_kill_path() {
         assert_eq!(ELEVATED_HELPER_WAIT_MS, 300_000);
+        assert_eq!(bounded_wait_millis(Duration::ZERO), 0);
+        assert_eq!(bounded_wait_millis(Duration::from_millis(37)), 37);
+        assert_eq!(
+            bounded_wait_millis(Duration::MAX),
+            MAX_BOUNDED_WAIT_MS,
+            "a huge Duration must never become Win32 INFINITE"
+        );
         let source = include_str!("process.rs");
         let section = source
             .split("pub fn run_elevated_and_wait")
@@ -1291,6 +1946,266 @@ mod tests {
         let section = section.split("/// Is this process running").next().unwrap();
         assert!(!section.contains("INFINITE"));
         assert!(!section.contains("TerminateProcess"));
+    }
+
+    /// Broken version caught: the original call asked only for a process
+    /// handle. Without NOASYNC, ShellExecuteEx may return before its background
+    /// shell work is complete, which makes immediate pid/pipe correlation race.
+    #[cfg(windows)]
+    #[test]
+    fn elevated_launch_retains_the_process_handle_without_async_shell_handoff() {
+        use windows_sys::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS};
+
+        assert_eq!(
+            ELEVATED_EXECUTE_MASK,
+            SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+        );
+    }
+
+    /// Broken version caught: joining unquoted arguments allowed spaces,
+    /// embedded quotes and trailing backslashes to change the helper's argv.
+    #[test]
+    fn elevated_parameter_line_preserves_the_fixed_argv() {
+        let args = vec![
+            "plain".to_owned(),
+            String::new(),
+            "two words".to_owned(),
+            "say \"hello\"".to_owned(),
+            "C:\\Program Files\\KSX\\".to_owned(),
+        ];
+        assert_eq!(
+            elevation_parameter_line(&args).unwrap(),
+            "plain \"\" \"two words\" \"say \\\"hello\\\"\" \"C:\\Program Files\\KSX\\\\\""
+        );
+
+        let err = elevation_parameter_line(&["ok".to_owned(), "bad\0tail".to_owned()]).unwrap_err();
+        assert!(matches!(err, ElevationError::InvalidArgument { index: 1 }));
+    }
+
+    /// Broken version caught: timeout was terminal state in the wrapper rather
+    /// than an observation, and repeated polls could lose a known exit code.
+    /// These injected operations display no UAC prompt and touch no process.
+    #[test]
+    fn elevated_wait_timeout_and_exit_cache_are_distinct_states() {
+        let mut cached = None;
+        let exit_reads = std::cell::Cell::new(0usize);
+        let first = observe_elevated_exit(
+            &mut cached,
+            || Ok(ProcessWait::TimedOut),
+            || {
+                exit_reads.set(exit_reads.get() + 1);
+                Ok(99)
+            },
+        )
+        .unwrap();
+        assert_eq!(first, None);
+        assert_eq!(cached, None);
+        assert_eq!(exit_reads.get(), 0, "timeout must not read an exit code");
+
+        let second = observe_elevated_exit(
+            &mut cached,
+            || Ok(ProcessWait::Exited),
+            || {
+                exit_reads.set(exit_reads.get() + 1);
+                Ok(37)
+            },
+        )
+        .unwrap();
+        assert_eq!(second, Some(37));
+        assert_eq!(cached, Some(37));
+        assert_eq!(exit_reads.get(), 1);
+
+        let repeated = observe_elevated_exit(
+            &mut cached,
+            || panic!("a cached exit must not wait again"),
+            || panic!("a cached exit must not be read again"),
+        )
+        .unwrap();
+        assert_eq!(repeated, Some(37));
+    }
+
+    /// Broken version caught: a failed wait must not be converted to "still
+    /// alive" or cache a made-up exit code.
+    #[test]
+    fn elevated_wait_errors_remain_errors() {
+        let mut cached = None;
+        let err = observe_elevated_exit(
+            &mut cached,
+            || Err(std::io::Error::other("wait failed")),
+            || panic!("a failed wait cannot have an exit code"),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        assert_eq!(cached, None);
+
+        let err = observe_elevated_exit(
+            &mut cached,
+            || Ok(ProcessWait::Exited),
+            || Err(std::io::Error::other("exit read failed")),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        assert_eq!(cached, None);
+    }
+
+    /// Broken version caught: matching only the numeric pid allowed a reused
+    /// or substituted process to pass. Exact kernel-object identity is
+    /// mandatory even when every descriptive field happens to match.
+    #[test]
+    fn elevated_process_evidence_requires_retained_object_image_time_session_and_token() {
+        let image = Path::new(r"C:\Program Files\KSX\ksx-winusb-helper.exe");
+        let observation =
+            |retained_object, session_id, creation_time, canonical_image: &Path, elevated| {
+                ObservedProcess {
+                    pid: 41,
+                    session_id,
+                    creation_time,
+                    canonical_image: canonical_image.to_path_buf(),
+                    retained_object,
+                    elevated,
+                }
+            };
+
+        let accepted = validate_process_observation(
+            41,
+            2,
+            9001,
+            image,
+            observation(true, 2, 9001, image, true),
+        )
+        .unwrap();
+        assert_eq!(accepted.pid(), 41);
+        assert_eq!(accepted.session_id(), 2);
+        assert_eq!(accepted.creation_time(), 9001);
+        assert_eq!(accepted.canonical_image(), image);
+        assert!(accepted.elevated());
+
+        assert!(matches!(
+            validate_process_observation(
+                41,
+                2,
+                9001,
+                image,
+                observation(false, 2, 9001, image, true),
+            ),
+            Err(ElevatedProcessCorrelationError::DifferentProcess { .. })
+        ));
+        assert!(matches!(
+            validate_process_observation(
+                41,
+                2,
+                9001,
+                image,
+                observation(true, 3, 9001, image, true),
+            ),
+            Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+                field: "interactive session",
+                ..
+            })
+        ));
+        assert!(matches!(
+            validate_process_observation(
+                41,
+                2,
+                9001,
+                image,
+                observation(true, 2, 9002, image, true),
+            ),
+            Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+                field: "creation time",
+                ..
+            })
+        ));
+        assert!(matches!(
+            validate_process_observation(
+                41,
+                2,
+                9001,
+                image,
+                observation(true, 2, 9001, Path::new(r"C:\Windows\notepad.exe"), true,),
+            ),
+            Err(ElevatedProcessCorrelationError::EvidenceMismatch {
+                field: "canonical image",
+                ..
+            })
+        ));
+        assert!(matches!(
+            validate_process_observation(
+                41,
+                2,
+                9001,
+                image,
+                observation(true, 2, 9001, image, false),
+            ),
+            Err(ElevatedProcessCorrelationError::NotElevated { pid: 41 })
+        ));
+    }
+
+    /// Broken versions caught: `runas` intent was converted into
+    /// `elevated: true`, and an alternate-account child was reopened by pid.
+    /// Correlation must use the already-retained ShellExecute process object.
+    #[test]
+    fn elevated_process_correlation_uses_only_the_retained_handle() {
+        let source = include_str!("process.rs").replace("\r\n", "\n");
+        let correlate = source
+            .split("pub(crate) fn correlate_process_pid(")
+            .nth(1)
+            .expect("Windows process correlation")
+            .split("#[cfg(not(windows))]")
+            .next()
+            .unwrap();
+        let retained_pid = correlate
+            .find("GetProcessId(child_handle)")
+            .expect("pid re-read from the retained handle");
+        let token = correlate
+            .find("process_token_is_elevated(child_handle)")
+            .expect("TokenElevation query on the retained handle");
+        assert!(retained_pid < token);
+        assert!(!correlate.contains("OpenProcess("));
+        assert!(!correlate.contains("CompareObjectHandles"));
+        assert!(!correlate.contains("elevated: true"));
+    }
+
+    /// Broken version caught: `launch_elevated(Path, argv)` was a generic UAC
+    /// primitive whose protected-install precondition existed only in prose.
+    /// This source assertion performs no launch and cannot display UAC.
+    #[test]
+    fn elevated_launch_consumes_only_an_opaque_protected_executable() {
+        let source = include_str!("process.rs").replace("\r\n", "\n");
+        let signature = source
+            .split("#[cfg(windows)]\npub fn launch_elevated(")
+            .nth(1)
+            .expect("Windows elevated launcher")
+            .split(") -> Result<ElevatedChild")
+            .next()
+            .unwrap();
+        assert!(signature.contains("executable: ProtectedExecutable"));
+        assert!(!signature.contains("executable: &Path"));
+        assert!(!signature.contains("executable: PathBuf"));
+    }
+
+    #[test]
+    fn elevated_child_has_no_kill_or_raw_handle_escape() {
+        let source = include_str!("process.rs").replace("\r\n", "\n");
+        let section = source
+            .split("pub struct ElevatedChild")
+            .nth(1)
+            .expect("elevated child type")
+            .split("/// Is this process running")
+            .next()
+            .unwrap();
+        for forbidden in [
+            "TerminateProcess",
+            ".kill(",
+            "fn kill",
+            "into_raw_handle",
+            "pub fn raw_handle",
+        ] {
+            assert!(
+                !section.contains(forbidden),
+                "ElevatedChild must not expose process control through '{forbidden}'"
+            );
+        }
     }
 
     #[test]

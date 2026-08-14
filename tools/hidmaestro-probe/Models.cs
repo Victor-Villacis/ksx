@@ -81,7 +81,7 @@ internal sealed record PersonaVerification(
 internal sealed record ContractReport(bool Ok, IReadOnlyList<PersonaVerification> Personas);
 
 internal sealed record SafetyReport(
-    bool ReadOnly,
+    bool RequestsReadOnlySdkOperations,
     bool ConstructsSdkContext,
     bool CallsDriverLifecycleApis,
     string LiveExerciseStatus,

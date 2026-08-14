@@ -31,6 +31,7 @@
 //! | Legacy lifecycle scaffold ([`context`]) | **Model only, not the supported upstream lifecycle** | recorded test-double order; it must not back production Play |
 //! | Feedback decode table ([`feedback`]) | **Table pinned, bytes unverified** | fixtures from the audit, incl. the BT length trap |
 //! | Privileged-host protocol ([`host`]) | **Yes — pure framing/state machine only** | all twelve frozen message vectors + encoded in-memory host; no OS transport or SDK calls |
+//! | Host rendezvous policy ([`rendezvous`]) | **Yes — pure identity policy only** | fixed token/name/argv plus exact peer-evidence refusals; no pipe, process or elevation calls |
 //! | Current custom latch ([`shm`], [`state::HmGamepadState::encode`]) | **Not HIDMaestro wire-compatible** | useful test scaffold; upstream layout is now known but not implemented here |
 //! | Anything touching a real device | **No** | there is no device to touch |
 //!
@@ -51,6 +52,8 @@
 //! - [`feedback`] — the decode table, including the Bluetooth length trap.
 //! - [`host`] — bounded/versioned future process protocol and transport-neutral
 //!   client state machine. It launches nothing and touches no driver.
+//! - [`rendezvous`] — the pure token/name/argv and peer-identity policy a later
+//!   authenticated Windows transport must enforce before using [`host`].
 //! - [`driver`] — availability probe and the honest not-installed driver.
 //! - [`shm`] (Windows) — experimental open-existing file-mapping storage; the
 //!   real writer creates named mappings/events with the upstream security contract.
@@ -63,6 +66,7 @@ pub mod feedback;
 pub mod host;
 pub mod keepalive;
 pub mod profile;
+pub mod rendezvous;
 pub mod seqlock;
 #[cfg(windows)]
 pub mod shm;

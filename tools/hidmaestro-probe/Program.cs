@@ -6,11 +6,11 @@ namespace Ksx.HidMaestroProbe;
 internal static class Program
 {
     private static readonly SafetyReport Safety = new(
-        ReadOnly: true,
+        RequestsReadOnlySdkOperations: true,
         ConstructsSdkContext: false,
         CallsDriverLifecycleApis: false,
         LiveExerciseStatus: "deferred",
-        Reason: "HIDMaestro v1.6.1 has an elevated helper-staging boundary under coordinated security review; this probe never executes lifecycle operations.");
+        Reason: "The inventory loads the exact hash-pinned upstream assembly and requests no lifecycle operation, but assembly initialization can execute. It is therefore not run on the administrator CI runner or the development PC while HIDMaestro v1.6.1's elevated helper-staging boundary remains under coordinated security review.");
 
     public static int Main(string[] args)
     {

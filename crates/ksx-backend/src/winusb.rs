@@ -128,24 +128,7 @@ fn helper_exit_meaning(code: u32) -> &'static str {
 
 impl HelperElevator for SystemHelperElevator {
     fn run(&self, action: HelperMutation, instance_id: &str) -> Result<u32, ApiRefusal> {
-        let current = std::env::current_exe().map_err(|err| {
-            ApiRefusal::with_remedy(
-                "winusb-helper-missing",
-                format!("the running KSX executable could not be located: {err}"),
-                "repair the KSX installation",
-            )
-        })?;
-        let parent = current.parent().ok_or_else(|| {
-            ApiRefusal::new(
-                "winusb-helper-missing",
-                "the running KSX executable has no installation directory",
-            )
-        })?;
-        let helper = ksx_platform::process::protected_install_sibling(
-            &current,
-            &parent.join("ksx-winusb-helper.exe"),
-        )
-        .map_err(|err| {
+        let helper = ksx_platform::process::protected_winusb_helper().map_err(|err| {
             ApiRefusal::with_remedy(
                 "winusb-helper-untrusted",
                 format!("the installed elevated helper could not be trusted: {err}"),
@@ -167,7 +150,7 @@ impl HelperElevator for SystemHelperElevator {
             instance = instance_id,
             "running the elevated WinUSB helper"
         );
-        ksx_platform::process::run_elevated_and_wait(&helper, &args)
+        ksx_platform::process::run_elevated_and_wait(helper, &args)
             .map(|exit| {
                 if exit.code == 0 {
                     tracing::info!(
@@ -196,6 +179,12 @@ impl HelperElevator for SystemHelperElevator {
                     "winusb-helper-timeout",
                     "the elevated driver helper did not finish within five minutes; it was left running",
                     "do not launch it again; wait, then run `ksx winusb status` to read the durable receipt",
+                ),
+                other @ (ksx_platform::process::ElevationError::Untracked(_)
+                | ksx_platform::process::ElevationError::Wait(_)) => ApiRefusal::with_remedy(
+                    "winusb-helper-state-unknown",
+                    other.to_string(),
+                    "do not launch it again; wait, then run `ksx winusb status` to re-survey the device and protected recovery receipt",
                 ),
                 other => ApiRefusal::with_remedy(
                     "winusb-helper-failed",

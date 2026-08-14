@@ -80,14 +80,15 @@ pub enum OutputError {
     )]
     HidMaestroMissing { probe: String },
 
-    /// Any other HIDMaestro client failure.
+    /// This build deliberately has no safe live HIDMaestro host adapter.
     ///
-    /// The source is inlined into the message, not left to `{:#}`: the most
-    /// common occupant is [`ksx_hidmaestro::HmError::NotImplemented`], whose
-    /// whole value is the sentence it carries, and a caller that prints only
-    /// the top-level error would show "operation failed" and nothing else.
-    #[error("HIDMaestro operation failed: {0}")]
-    HidMaestro(#[source] ksx_hidmaestro::HmError),
+    /// Kept separate from [`HidMaestroMissing`](Self::HidMaestroMissing):
+    /// installing a driver cannot add code which this binary does not contain.
+    #[error(
+        "a safe HIDMaestro host adapter is not implemented in this build; \
+         installing HIDMaestro does not change it"
+    )]
+    HidMaestroHostUnavailable,
 
     /// The underlying driver client reported an error.
     #[cfg(windows)]
@@ -109,11 +110,7 @@ impl OutputError {
 
     /// True when the root cause is "HIDMaestro is not installed".
     pub fn is_hidmaestro_missing(&self) -> bool {
-        match self {
-            OutputError::HidMaestroMissing { .. } => true,
-            OutputError::HidMaestro(err) => err.is_not_installed(),
-            _ => false,
-        }
+        matches!(self, OutputError::HidMaestroMissing { .. })
     }
 
     /// True when the root cause is "this build of ksx cannot do that".
@@ -123,11 +120,10 @@ impl OutputError {
     /// the bug: a "not implemented" reported as "not installed" is an
     /// instruction to go and install a driver that will not help.
     pub fn is_not_implemented(&self) -> bool {
-        match self {
-            OutputError::PersonaNotImplemented(_) => true,
-            OutputError::HidMaestro(err) => err.is_not_implemented(),
-            _ => false,
-        }
+        matches!(
+            self,
+            OutputError::PersonaNotImplemented(_) | OutputError::HidMaestroHostUnavailable
+        )
     }
 }
 
@@ -215,16 +211,16 @@ mod tests {
     }
 
     #[test]
-    fn a_wrapped_driver_error_carries_its_own_sentence_to_the_surface() {
-        // `HidMaestro(_)` used to print "HIDMaestro operation failed" and put
-        // the only informative text in a source nothing was obliged to render.
-        let err = OutputError::HidMaestro(ksx_hidmaestro::HmError::NotImplemented {
-            detail: "no section mapper",
-        });
+    fn a_missing_host_adapter_is_a_build_gap_not_an_install_problem() {
+        let err = OutputError::HidMaestroHostUnavailable;
         let msg = err.to_string();
-        assert!(msg.contains("no section mapper"), "{msg}");
+        assert!(msg.contains("host adapter"), "{msg}");
+        assert!(
+            msg.contains("installing HIDMaestro does not change it"),
+            "{msg}"
+        );
         assert!(err.is_not_implemented());
-        assert!(!err.is_hidmaestro_missing(), "{msg}");
+        assert!(!err.is_hidmaestro_missing());
     }
 
     #[test]

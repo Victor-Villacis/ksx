@@ -40,6 +40,42 @@ boundary is fixed upstream or KSX uses a reviewed hardened SDK.
 driver lifecycle calls or context construction. The check is intentionally
 also wired into the project build.
 
+## Structural distribution-candidate audit
+
+`distribution-candidate <directory>` statically audits a proposed sanitized
+package tree. It reads bytes with `PEReader`, hashes every fixed file, parses the
+two INFs and inspects signatures without loading an assembly, starting a
+payload, elevating, installing, signing or changing trust. It emits exactly one
+JSON document, labels its assurance `structural-only-quiescent-tree`, and exits
+nonzero when any check fails.
+
+The candidate root must contain `ksx-hidmaestro-distribution.json` plus exactly
+the ten fixed paths named by `DistributionPolicy.ExpectedFiles`. The manifest
+pins every file by role, path and SHA-256, the v1.6.1 tag/commit, and one
+manifest-pinned `DriverVer`. Reparse points, unexpected files, embedded WDK,
+driver/helper/USB-IP/VR managed-resource names, known provisioning symbols and
+a profile-catalog mismatch all fail closed.
+
+This command is currently an **unsigned structural gate**, not a release
+attestation or a semantic code-safety review. A candidate with
+`candidateState: "unsigned-build"` can prove only the declared tree, byte
+hashes, managed-resource catalog and allow/denylisted metadata names. Renamed or
+arbitrary executable behavior is outside this audit and the candidate must not
+be executed merely because `ok` is true. `candidateState:
+"distribution-ready"` is intentionally rejected even
+when every inspected file has a trusted signature: KSX has not yet pinned its
+release signer identity or implemented catalog-member verification for each
+INF/DLL. Online revocation, clean-VM installation and signed installer evidence
+also remain release gates. The official v1.6.1 package is expected to fail the
+structural audit; the command specifies the runtime-only sanitized package KSX
+needs rather than approving the upstream release unchanged.
+
+The caller must provide a quiescent build tree. This slice does not hold stable
+handles to the entire tree or atomically bind signature, hash and parser reads,
+so another process swapping files during inspection is outside its assurance.
+S1.5b must audit an immutable snapshot or stable file identities before the
+result can participate in release authorization.
+
 ## Pinned upstream input
 
 - Repository: <https://github.com/hifihedgehog/HIDMaestro>
@@ -66,6 +102,7 @@ $sdk = 'C:\path\to\extracted\HIDMaestro.Core.dll'
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll'
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' protocol
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' simulate-protocol
+& $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' distribution-candidate 'C:\path\to\candidate'
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' self-test
 ```
 

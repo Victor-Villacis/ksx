@@ -25,6 +25,7 @@ internal static class Program
                 ["inventory"] => Inventory(),
                 ["protocol"] => Protocol(),
                 ["simulate-protocol"] => SimulateProtocol(),
+                ["distribution-candidate", string candidateRoot] => DistributionCandidate(candidateRoot),
                 ["self-test"] => SelfTest(),
                 ["help"] or ["--help"] or ["-h"] => Help(),
                 _ => InvalidArguments(args),
@@ -125,6 +126,12 @@ internal static class Program
         return (document, document.Ok ? 0 : 1);
     }
 
+    private static (object Document, int ExitCode) DistributionCandidate(string candidateRoot)
+    {
+        DistributionCandidateDocument document = DistributionAudit.Run(candidateRoot, Safety);
+        return (document, document.Ok ? 0 : 1);
+    }
+
     private static (object Document, int ExitCode) Help() =>
         (new
         {
@@ -137,6 +144,7 @@ internal static class Program
                 new { syntax = "ksx-hidmaestro-probe inventory", effect = "Same as the default command." },
                 new { syntax = "ksx-hidmaestro-probe protocol", effect = "Describe the frozen, pure host-protocol simulation contract." },
                 new { syntax = "ksx-hidmaestro-probe simulate-protocol", effect = "Run the deterministic cadence, feedback, and teardown transcript." },
+                new { syntax = "ksx-hidmaestro-probe distribution-candidate <directory>", effect = "Statically audit a caller-supplied, manifest-pinned package candidate without loading or executing it." },
                 new { syntax = "ksx-hidmaestro-probe self-test", effect = "Run pure parser and contract tests." },
             },
             safety = Safety,
@@ -149,7 +157,7 @@ internal static class Program
             command = "invalid",
             ok = false,
             arguments = args,
-            error = new ErrorInfo("invalid_arguments", "Use no arguments, inventory, protocol, simulate-protocol, self-test, or help."),
+            error = new ErrorInfo("invalid_arguments", "Use no arguments, inventory, protocol, simulate-protocol, distribution-candidate <directory>, self-test, or help."),
             safety = Safety,
         }, 2);
 }

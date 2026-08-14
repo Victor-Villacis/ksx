@@ -43,20 +43,20 @@ network/cross-platform endpoint → VIIPER.
 ### E1 status 2026-08-14 — M8 facts supplied, production adapter still absent
 
 **Feasibility check first.** Installation state is not the blocker: this build has no
-production implementation that maps HIDMaestro's shared section. Installing the driver
-would therefore not make these personas usable. In this build, the managed SDK is used
-only as a specification and catalog source; the roadmap's first production boundary is
-a separately hardened SDK host.
+production SDK-backed HIDMaestro host or output adapter. Installing the driver would
+therefore not make these personas usable. In this build, the managed SDK is used only
+as a specification and catalog source; the roadmap's first production boundary is a
+separately hardened SDK host.
 
-So M8 shipped the **client, honestly gated**, and nothing that pretends:
+So M8 has shipped **contracts and truthful gates**, not a controller:
 
-- `crates/ksx-hidmaestro` — the protocol client written against
-  `research/padforge-code-audit.md` §3: seqlocked shared-memory latch, lifecycle in the
-  documented order (sweep → catalog → install; PID pool before enumeration), 16 ms
-  idle-dedup keepalive derived from the three driver watchdogs, axis routing **by role
-  through the profile's map** (never positional), trigger writes mirrored to two keys,
-  and the feedback decode table including the Bluetooth 547→257 length trap.
-- `ksx-output`: `HidMaestroBackend` (adapter) + `RoutedBackend` (persona → stack).
+- `crates/ksx-hidmaestro` retains the source-audited protocol research and now
+  carries a bounded `KSXH` host contract with twelve byte-for-byte Rust/.NET
+  wire vectors, controller/feedback limits, finite deadlines, lease expiry and
+  fail-closed teardown rules. It does not create a controller or call the SDK.
+- `ksx-output`: `HidMaestroBackend` is intentionally a zero-state refusal. The
+  obsolete private-latch/global-lifecycle experiment was removed, and there is
+  no client, transport, SDK object or controller map hidden behind the gate.
 - `ksx-core`: `Persona::{DualSense, SwitchPro, XboxSeries}` + `PadBackend`, with
   `Persona::backend()` as the single statement of the routing rule.
 - **The three personas are not offered until their exact implementations land.**
@@ -78,14 +78,15 @@ mapping/event/config names and pointed KSX to the authoritative MIT sources:
 `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs` for the creator/writer protocol.
 The supported `HMContext` / `HMController` SDK surface is also available.
 
-That does **not** make the present Rust adapter production-ready. It currently models
-a small latch, while the real protocol includes creator-owned mappings and events,
+That does **not** make the removed Rust adapter salvageable. It modeled a small
+private latch, while the real protocol includes creator-owned mappings and events,
 native HID/GIP/extended input payloads, an output ring, PID/feedback state and
-controller configuration. M8 must prototype the supported SDK against an installed
-driver first, pin an upstream version, measure create/update/feedback/teardown across
-the Windows input APIs, and only then decide whether a native Rust transcription is
-worth carrying. The previously cited WGI double-input issue was fixed upstream; KSX
-will test the current release instead of preserving that stale rationale.
+controller configuration. M8 now starts from the supported SDK boundary, but only
+after a runtime-only SDK build, authenticated host transport and signed deterministic
+driver packages exist. It must then measure create/update/feedback/teardown across
+the Windows input APIs before any native Rust transcription is considered. The
+previously cited WGI double-input issue was fixed upstream; KSX will test the current
+release instead of preserving that stale rationale.
 
 HIDMaestro controller creation is privileged. The production shape is a narrow
 installed host/broker with an allowlisted controller-state protocol; the ordinary KSX

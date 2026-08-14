@@ -23,16 +23,17 @@
 //! - `ds4` (Windows) — `PadState` → DualShock 4 report for the PlayStation
 //!   persona. Not a field copy like the Xbox path: Y axes invert, the D-pad
 //!   collapses to a 4-bit hat, and triggers are analog *and* digital.
-//! - [`HidMaestroBackend`] (M8) — HIDMaestro implementation, for the personas
+//! - [`HidMaestroBackend`] (M8) — HIDMaestro output checkpoint for the personas
 //!   ViGEmBus cannot express (DualSense, Switch Pro, Xbox Series). The protocol
-//!   itself lives in `ksx-hidmaestro`; this crate holds only the adapter.
-//!   The production SDK-host adapter is not implemented, so these
-//!   personas remain unavailable regardless of the local install state — see
-//!   that crate's docs for what is verified vs written-to-spec.
-//! - [`RoutedBackend`] — persona → backend selection. X360/DS4 stay on ViGEm
-//!   (slots 1–4 never migrate to HIDMaestro's XInput synthesis layer); the new
-//!   personas select HIDMaestro, lazily, so a cabinet that uses none of them
-//!   never even probes for the driver.
+//!   itself lives in `ksx-hidmaestro`; this crate currently holds only a
+//!   zero-state refusal checkpoint. The obsolete private-latch/global-lifecycle
+//!   adapter was removed, and a safe SDK-host adapter is not implemented, so
+//!   these personas remain unavailable regardless of local install state.
+//! - [`RoutedBackend`] — persona → backend routing rule. X360/DS4 stay on
+//!   ViGEm (slots 1–4 never migrate to HIDMaestro's XInput synthesis layer).
+//!   Rich personas are currently refused by their exact capability gates
+//!   before any factory runs; a future proven persona will build its host
+//!   backend lazily.
 //! - `tests/loopback.rs` — cabinet-only XInput round-trip behind the `cab-tests`
 //!   feature; never runs in CI or on machines without ViGEmBus.
 

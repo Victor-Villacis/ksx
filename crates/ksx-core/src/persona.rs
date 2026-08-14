@@ -509,9 +509,9 @@ mod tests {
 
     #[test]
     fn the_three_hidmaestro_personas_cannot_be_plugged_by_this_build() {
-        // The fact this whole gate exists for: `UnavailableDriver` is the only
-        // `HmDriverApi` implementation that ships, and it refuses to create a
-        // controller. Offering these three anywhere is offering a plug failure.
+        // The fact this gate exists for: the output crate deliberately carries
+        // no safe live HIDMaestro adapter yet. Offering any of these personas
+        // would therefore promise a controller this build cannot create.
         for p in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
             assert!(!p.can_plug(), "{p} must not be offered");
         }

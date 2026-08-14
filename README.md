@@ -453,7 +453,7 @@ crates/ksx-core           pure mapping engine (CI-tested, proptest)
 crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
-crates/ksx-output         VirtualPadBackend: shipped ViGEmBus + gated HIDMaestro adapter
+crates/ksx-output         VirtualPadBackend: shipped ViGEmBus + gated HIDMaestro zero-state seam
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else

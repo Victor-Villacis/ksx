@@ -1,7 +1,8 @@
 # HIDMaestro M8 execution plan
 
-Status: **read-only catalog and host-contract spikes complete; live use blocked
-on hardening; no HIDMaestro persona is enabled**.
+Status: **catalog, host-contract and unsigned-package audit checkpoints
+complete; live use blocked on transport, provenance and hardware evidence; no
+HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -18,13 +19,13 @@ MIT-licensed authoritative sources:
 - [`SharedMemoryIO.cs`](https://github.com/hifihedgehog/HIDMaestro/blob/v1.6.1/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs)
   defines the writer-side object creation, security and seqlock behavior.
 
-That closes the former *unknown facts* blocker. It also proves that the current
-KSX 80-byte experimental latch is not a nearly-finished production client. The
+That closes the former *unknown facts* blocker. It also proved that KSX's former
+80-byte experimental latch was not a nearly-finished production client. The
 v1.6.1 SDK uses a 362-byte input section, a 64-entry output ring, PID state,
 multiple named events, registry configuration and SDK-owned device creation.
-Current source also has a companion-input event for the XUSB path. The existing
-Rust transport remains disabled; adding constants to it would not make it safe
-or compatible.
+Current source also has a companion-input event for the XUSB path. The obsolete
+output adapter that published the private latch was removed; adding constants
+to it would not have made it safe or compatible.
 
 The supported `HMContext` / `HMController` API is therefore the first
 integration boundary. A native Rust transport is a later optimization decision,
@@ -124,10 +125,10 @@ not call HIDMaestro's system-wide `RemoveAllVirtualControllers()` during a
 normal session because another consumer may own controllers too.
 
 The host must implement `VirtualPadBackend` through a dedicated client; it must
-not be squeezed behind the experimental `HmDriverApi`. That trait returns a
-process-local test latch, and the current output adapter encodes KSX's
-non-compatible 80-byte frame into it. The real host owns `HMContext`,
-`HMController` and all SDK objects. It also caches the last full `PadState` and
+not revive the removed `HmDriverApi` experiment. That trait returned a
+process-local test latch and the old output adapter encoded KSX's incompatible
+80-byte frame into it. The real host owns `HMContext`, `HMController` and all
+SDK objects. It also caches the last full `PadState` and
 owns any required idle keepalive pump: KSX's engine emits state changes, so a
 cadence check called only from `VirtualPadBackend::update()` cannot fire while
 the input is held and unchanged. The ordinary client still renews a slower
@@ -139,10 +140,10 @@ Two routing changes prepare S4 without enabling a driver:
 
 - **Done:** capability is gated per persona. A future DualSense proof can no
   longer expose Switch Pro and Xbox Series by flipping one backend-wide bit.
-- **Seam done, production preflight pending:** ViGEm and HIDMaestro can both be
-  factory-backed and either can start first. Existing entry points retain their
-  current eager ViGEm ordering until an exact-persona preflight preserves the
-  rule that output availability is known before keyboard capture is armed.
+- **Routing seam done, adapter absent:** ViGEm and a future HIDMaestro backend
+  can be independently factory-backed. Existing entry points retain their
+  current eager ViGEm ordering until an exact-persona preflight proves output
+  availability before keyboard capture is armed.
 
 ## Current sprint
 
@@ -152,16 +153,19 @@ Two routing changes prepare S4 without enabling a driver:
 | S1 — SDK catalog probe | Pinned, source-only .NET probe using `HIDMaestro.Core.dll` | **Done.** Default run is read-only, emits one machine-readable result, loads the embedded catalog and proves the exact DualSense, Switch Pro and Xbox Series candidates without installing or creating anything |
 | S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
 | S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
-| S1.5 — distribution and elevation hardening | Resolve the embedded WDK-tool license and elevated helper-staging boundary | Upstream contact is open; exact security detail stays private until a reporting channel is available. No non-redistributable Microsoft tool may ship; helper/package identity and ACLs must fail closed; a clean-runner security test must prove elevated execution is isolated from untrusted state |
+| S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
+| S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
+| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | Pending. Pin the KSX signer identity, verify every INF/DLL as a member of its signed catalog, isolate fixed installed helpers, add online revocation and clean-runner install/repair/uninstall proof, and coordinate the upstream security report |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
 | S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |
 | S4 — gated KSX adapter | Production `VirtualPadBackend` implementation behind a default-off gate | `PadState` translation, lifecycle and feedback have contract tests; no accidental persona substitution; missing/mismatched SDK refuses safely; ViGEm tests remain unchanged |
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1 has been reproduced without administrator rights. S2 is blocked by S1.5 and
-is intentionally not automated on a developer workstation: it changes trust,
-driver and device state and needs an explicit supervised hardware gate.
+S1 through S1.5a have been reproduced without administrator rights. S2 is
+blocked by S1.5b and is intentionally not automated on a developer workstation:
+it changes trust, driver and device state and needs an explicit supervised
+hardware gate.
 
 ### S1 measured result
 
@@ -204,6 +208,38 @@ enable a persona. V1 also has no asynchronous lease-expired notification: the
 client treats its controller list as presumed state, and a later operation on
 an expired id fails closed and ends that conversation. A typed expiry event is
 a future UX/recovery refinement, not permission to weaken the watchdog.
+
+### S1.4/S1.5a safety result
+
+An attempted direct output-adapter integration exposed four coupled lifecycle
+requirements that a pipe alone would not solve: a slow serial Create can expire
+an earlier controller's five-second lease; protocol poisoning can trigger host
+EOF cleanup before the supervisor restores keyboard passthrough; a generic
+transport does not promise that Drop produces immediate host EOF cleanup; and
+an idle-service failure can race the interval between output readiness and
+capture arming. The adapter was removed instead of shipping those races behind
+a disabled flag. The next integration must solve and test them at the broker,
+adapter and supervisor boundaries together.
+
+The probe's `distribution-candidate` command now performs a static structural
+audit of a caller-supplied, quiescent candidate directory. It does not load an assembly,
+execute a payload, elevate, install, sign or mutate trust. A structural
+`unsigned-build` can pass; `distribution-ready` is hard-blocked in source until
+KSX pins its release signer identity and verifies INF/DLL membership in both
+signed catalogs. Offline `WinVerifyTrust` plus caller-provided hashes is not
+treated as provenance. Nor does metadata-name inspection prove that renamed or
+arbitrary executable behavior is safe: `ok` means the declared structural
+contract passed, never that the candidate may be executed. The official v1.6.1
+release is expected to fail because it embeds known provisioning resources and
+symbols and carries stale 1.4.7 INF metadata. This checkpoint is a
+specification for a sanitized build, not an approval to redistribute that
+release.
+
+This slice does not atomically bind every hash, signature and parser read while
+another process mutates the tree. Its machine-readable assurance is therefore
+`structural-only-quiescent-tree`. S1.5b must use an immutable snapshot or stable
+file identities before any audit result can authorize signing, packaging or
+execution.
 
 ## Source-derived working answers
 

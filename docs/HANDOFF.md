@@ -138,11 +138,12 @@ change the per-user Windows setting.
 
 **Milestones:** M0–M3, M6.5, M7, M9, M10a are done. M4, M5, M6 are
 code-complete and **cabinet-gate pending** (§4). M8 has an honestly gated
-HIDMaestro research client, but not a wire-compatible production adapter; the
-upstream facts are now known and an SDK-backed conformance spike is next. M8.1
-adds VIIPER later as a complementary virtual-USB/network/Linux lane while
-ViGEmBus remains the shipped X360/DS4 fallback. See `docs/ARCHITECTURE.md` and
-`docs/ENHANCEMENTS.md` E1.
+HIDMaestro catalog probe, bounded host contract and structural package audit,
+but no production adapter; the incompatible latch adapter was removed.
+Authenticated transport, a sanitized runtime-only SDK, signed packages and a
+supervised controller lifecycle are next. M8.1 adds VIIPER later as a
+complementary virtual-USB/network/Linux lane while ViGEmBus remains the shipped
+X360/DS4 fallback. See `docs/HIDMAESTRO.md` and `docs/ENHANCEMENTS.md` E1.
 
 ---
 

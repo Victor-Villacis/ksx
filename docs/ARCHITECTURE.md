@@ -28,11 +28,11 @@ remain under `docs/research/`; product decisions belong here.
 
 The diagram is the **currently shipped path**, not a permanent single-driver
 restriction. Output routing is capability-based: ViGEmBus remains the X360/DS4
-compatibility foundation; M8 adds HIDMaestro for rich local Windows profiles; a
-later VIIPER lane provides software-defined virtual USB, network endpoints and
-Linux reach. Backends do not silently substitute one controller identity for
-another. The engine continues to produce normalized state while each backend
-owns its native report and feedback protocol.
+compatibility foundation; M8 is building HIDMaestro support for rich local
+Windows profiles; a later VIIPER lane provides software-defined virtual USB,
+network endpoints and Linux reach. Backends do not silently substitute one
+controller identity for another. The engine continues to produce normalized
+state while each backend owns its native report and feedback protocol.
 
 Rules that keep us honest (each maps to a captured failure mode):
 
@@ -68,7 +68,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M6 | 🔨 code done, cabinet gate pending | Installed WinUSB preparation/release: exact-device UAC helper/provider, journaled rollback/uninstall, capture backend and keystroke re-injection | prepare/release round trip, then the same session with Interception uninstalled and a 14-day soak — **GATE 2 and GATE 3 phase 3: NOT RUN** |
 | M6.5 | ✅ done | DS4 spike: a second ViGEm target type | measured in `research/m6.5-ds4-findings.md` — six DS4 targets enumerated alongside four X360 with the XInput count unmoved, which is how players 5+ exist |
 | M7 | ✅ done | UI: controller editing without a text editor | met by Studio's mapper (`/map`), full staged first-run reuse, and live button check (`/check`), not by the egui surface the original entry assumed. Remaining work is polish and physical acceptance, not a missing editor |
-| M8 | 🔨 research client done; production adapter not started | HIDMaestro rich-profile Windows backend: DualSense, Switch Pro, Xbox Series and catalog expansion | Upstream names/layout sources are now known, but the current crate's latch is not the real creator/input/output protocol. First ship a pinned SDK-backed spike, measure lifecycle + feedback + Windows API behavior, then choose SDK bridge or native Rust. Personas remain gated until the packaged path passes — see `docs/ENHANCEMENTS.md` E1 |
+| M8 | 🔨 catalog/host contracts and structural package gate done; production adapter absent | HIDMaestro rich-profile Windows backend: DualSense, Switch Pro, Xbox Series and catalog expansion | The incompatible latch adapter was removed. A pinned SDK catalog probe, bounded host contract and structural unsigned-candidate audit now exist; authenticated transport, a sanitized runtime-only SDK, signed packages and disposable-machine lifecycle evidence remain. Personas stay gated until that complete path passes — see `docs/HIDMAESTRO.md` |
 | M8.1 | planned | VIIPER complementary virtual-USB/network/Linux lane | Separate-process prototype creates a virtual keyboard and controller locally and across Windows/Linux; licensing, USB/IP installation, authentication, feedback, reconnect and clean uninstall are acceptance work. It does not replace HIDMaestro or ViGEmBus |
 | M9 | ✅ done, **re-decided** | "ksx is a real Windows application" | Was an egui config UI; cancelled 2026-08-06 because Studio had already shipped the mapper E7 wanted a native UI for (`docs/M9-DECISION.md`). Delivered instead: an owned icon, an installer, a tray "Open ksx", and `ksx open` — daemon up, wait for the port, then a chrome-less window |
 | M10a | ✅ done | `ksx-api`: the typed, transport-free contract every surface consumes | `crates/ksx-api`. Studio and the cabinet depend on it and **not** on the backend crate, which is what makes `SURFACES.md` §1 checkable |

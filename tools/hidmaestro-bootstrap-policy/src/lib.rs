@@ -566,12 +566,13 @@ mod tests {
 
     #[test]
     fn suspended_child_is_contained_and_identified_before_its_only_resume() {
+        let launch = CHILD_LAUNCH_CONTRACT;
         let contract = CHILD_IDENTITY_CONTRACT;
-        assert!(CHILD_LAUNCH_CONTRACT.create_primary_thread_suspended);
-        assert!(CHILD_LAUNCH_CONTRACT.create_kill_on_close_job_before_child);
-        assert!(CHILD_LAUNCH_CONTRACT.assign_job_in_creation_attribute_list);
-        assert!(!CHILD_LAUNCH_CONTRACT.inherit_job_handle);
-        assert!(CHILD_LAUNCH_CONTRACT.resume_only_after_job_and_identity);
+        assert!(launch.create_primary_thread_suspended);
+        assert!(launch.create_kill_on_close_job_before_child);
+        assert!(launch.assign_job_in_creation_attribute_list);
+        assert!(!launch.inherit_job_handle);
+        assert!(launch.resume_only_after_job_and_identity);
         assert!(contract.use_returned_process_handle_as_identity);
         assert!(contract.compare_image_to_retained_seal);
         assert!(contract.compare_pid_to_returned_process_handle);

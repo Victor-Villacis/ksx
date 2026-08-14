@@ -15,12 +15,12 @@
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(HIDMaestroCorePath)')">
-    <!-- This compile-time reference is always supplied from an extracted,
-         hash-pinned upstream release. The SDK binary is never vendored. -->
-    <Reference Include="HIDMaestro.Core">
-      <HintPath>$(HIDMaestroCorePath)</HintPath>
-      <Private>true</Private>
-    </Reference>
+    <!-- The target is copied as inert input data, never referenced as a CLR
+         assembly. Static metadata/resource parsing is the only runtime path. -->
+    <None Include="$(HIDMaestroCorePath)"
+          Link="HIDMaestro.Core.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="Never" />
   </ItemGroup>
 
   <ItemGroup>

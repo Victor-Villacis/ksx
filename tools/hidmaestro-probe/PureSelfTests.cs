@@ -12,6 +12,9 @@ internal static class PureSelfTests
             Run("contract accepts the pinned three-persona shape", ContractAcceptsPinnedShape),
             Run("contract rejects a property drift", ContractRejectsDrift),
             Run("contract rejects a missing persona", ContractRejectsMissingPersona),
+            Run("managed resource extraction is length bounded", ManagedResourceExtractionIsBounded),
+            Run("custom-attribute string parsing is strict", CustomAttributeStringParsingIsStrict),
+            Run("catalog contract pins all aggregate facts", CatalogContractPinsAggregateFacts),
         };
         tests.AddRange(ProtocolSelfTests.Run());
         tests.AddRange(DistributionSelfTests.Run());
@@ -72,6 +75,59 @@ internal static class PureSelfTests
         Require(!report.Ok && missing.Mismatches.Contains("profile.missing"), "Missing persona was accepted.");
     }
 
+    private static void ManagedResourceExtractionIsBounded()
+    {
+        // Catches the broken reader that trusted a resource-row offset/length
+        // and sliced beyond the CLR resource directory.
+        byte[] directory = [2, 0, 0, 0, 0xAA, 0x55];
+        byte[] payload = ManagedPeReader.ExtractLengthPrefixedResource(directory, 0, "fixture");
+        Require(payload.SequenceEqual(new byte[] { 0xAA, 0x55 }), "Valid resource bytes changed.");
+
+        byte[] truncated = [3, 0, 0, 0, 0xAA, 0x55];
+        ExpectThrows<InvalidDataException>(
+            () => ManagedPeReader.ExtractLengthPrefixedResource(truncated, 0, "fixture"),
+            "An out-of-bounds managed resource was accepted.");
+        ExpectThrows<InvalidDataException>(
+            () => ManagedPeReader.ExtractLengthPrefixedResource(directory, -1, "fixture"),
+            "A negative managed-resource offset was accepted.");
+    }
+
+    private static void CustomAttributeStringParsingIsStrict()
+    {
+        // Catches the broken version reader that accepted a prefix and ignored
+        // trailing named arguments or malformed serialized-string data.
+        byte[] valid = [1, 0, 5, (byte)'1', (byte)'.', (byte)'6', (byte)'.', (byte)'1', 0, 0];
+        string parsed = ManagedPeReader.ParseSingleStringCustomAttribute(valid, "fixture");
+        Require(parsed == "1.6.1", $"Version attribute parsed as '{parsed}'.");
+
+        byte[] trailing = [.. valid, 0];
+        ExpectThrows<BadImageFormatException>(
+            () => ManagedPeReader.ParseSingleStringCustomAttribute(trailing, "fixture"),
+            "A custom attribute with trailing bytes was accepted.");
+        byte[] invalidUtf8 = [1, 0, 1, 0xFF, 0, 0];
+        ExpectThrows<BadImageFormatException>(
+            () => ManagedPeReader.ParseSingleStringCustomAttribute(invalidUtf8, "fixture"),
+            "A custom attribute with invalid UTF-8 was accepted.");
+    }
+
+    private static void CatalogContractPinsAggregateFacts()
+    {
+        // Catches the broken inventory that reported individual personas but
+        // never gated total-resource, deployable-resource, or catalog-hash drift.
+        var pinned = new CatalogReport(
+            CatalogInspection.ExpectedResourceCount,
+            CatalogInspection.ExpectedDeployableCount,
+            CatalogInspection.ExpectedCatalogSha256,
+            []);
+        Require(CatalogInspection.MatchesPinnedContract(pinned), "Pinned aggregate facts were rejected.");
+        Require(!CatalogInspection.MatchesPinnedContract(
+                pinned with { DeployableCount = pinned.DeployableCount - 1 }),
+            "Deployable-count drift was accepted.");
+        Require(!CatalogInspection.MatchesPinnedContract(
+                pinned with { CatalogSha256 = new string('0', 64) }),
+            "Catalog-hash drift was accepted.");
+    }
+
     private static List<CatalogProfile> PinnedProfiles() =>
     [
         Profile("dualsense", "DualSense (PS5)", "Sony", "0x054C", "0x0CE6", "DualSense Wireless Controller", "usb", null, null, 64),
@@ -113,5 +169,19 @@ internal static class PureSelfTests
     {
         if (!condition)
             throw new InvalidOperationException(message);
+    }
+
+    private static void ExpectThrows<TException>(Action action, string message)
+        where TException : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+        throw new InvalidOperationException(message);
     }
 }

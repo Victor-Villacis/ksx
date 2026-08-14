@@ -5,16 +5,26 @@ inventory command answers one bounded question: does the official, hash-pinned
 HIDMaestro v1.6.1 SDK contain the catalog and read API shape KSX is planning
 against?
 
-The default command requests only read operations from the SDK. It hashes
-`HIDMaestro.Core.dll` before loading it, inventories every embedded profile
-JSON, checks the public catalog surface, and pins the `dualsense`, `switch-pro`,
-and `xbox-series-xs-bt` properties KSX depends on. Loading a managed assembly
-can execute a module initializer, so the completed non-admin measurement is not
-repeated on the administrator GitHub runner or this development PC. CI uses the
-pin only as compiler metadata, removes it before executing SDK-independent
-contracts, and needs a future non-executing PE/resource reader before it can
-gate the catalog again. The inventory writes exactly one JSON document to
-stdout when deliberately run in an appropriate unprivileged sandbox.
+The default command is a non-executing static reader. It opens
+`HIDMaestro.Core.dll` once with a read-only handle, hashes that handle before it
+parses anything, and rejects a hash mismatch without inspecting the file any
+further. For the exact pin it uses `PEReader`/`MetadataReader` to decode assembly
+version plus the `AssemblyFileVersionAttribute` and
+`AssemblyInformationalVersionAttribute`, exact public CLR signatures and raw
+managed-resource blobs. (`sdkPin.actualFileVersion` therefore names the static
+assembly attribute; the fixed v1.6.1 hash also fixes the matching native version
+resource, but this command does not reopen the path to read it.) It never
+uses the CLR assembly loader, reflection activation, `ResourceManager`, or an
+upstream SDK type.
+
+The reader parses and hashes every embedded profile JSON and requires the
+measured v1.6.1 aggregate contract: 228 resources, 130 deployable profiles and
+catalog SHA-256
+`8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A`.
+It also pins the exact `dualsense`, `switch-pro`, and `xbox-series-xs-bt`
+properties KSX depends on. Because the target remains inert data, `inventory`
+is safe to run on the administrator GitHub runner. Like every command, it owns
+stdout and writes exactly one JSON document.
 
 The same executable also carries a pure, nonprivileged simulation of the
 future KSX-to-host data boundary. `protocol` describes the exact
@@ -38,14 +48,17 @@ the OS transport remain deliberately unspecified.
 ## Safety boundary
 
 This probe deliberately has no install, create-device, cleanup, or live-input
-command. It never constructs `HMContext`; v1.6.1 performs background payload
-work from that constructor. Its elevated helper-staging boundary is under
-coordinated security review, so a live conformance run is deferred until that
-boundary is fixed upstream or KSX uses a reviewed hardened SDK.
+command. It never references or constructs `HMContext`; v1.6.1 performs
+background payload work from that constructor. The target DLL is copied beside
+the probe as input data, not added as a managed assembly reference. Its elevated
+helper-staging boundary remains under coordinated security review, so live SDK
+exercise is still deferred until that boundary is fixed upstream or KSX uses a
+reviewed hardened SDK.
 
 `test-safety.ps1` scans every C# source before compilation and rejects SDK
-driver lifecycle calls or context construction. The check is intentionally
-also wired into the project build.
+driver lifecycle calls, context construction, runtime assembly-loading APIs,
+reflection activation and resource-manager fallbacks. The check is
+intentionally also wired into the project build.
 
 ## Structural distribution-candidate audit
 
@@ -101,11 +114,11 @@ into this directory or committed. The full machine-readable pin is
 The release SDK supports Windows 10/11 x64 and targets .NET 10. Supply a .NET
 10 SDK and the DLL extracted from the official release:
 
-Do not run the assembly-loading inventory on an administrator account or the
-known-unreliable development PC. The command list below is a contract reference
-for a deliberately unprivileged sandbox; Actions currently compiles against
-the pin, deletes it, and runs only `protocol`, `simulate-protocol` and
-`self-test`.
+The known-unreliable development PC is not the build gate. GitHub Actions builds
+the probe from a clean checkout, runs the static inventory while the pinned DLL
+is present as data, then removes that external input before running the
+SDK-independent commands. These commands are also useful in an ordinary local
+sandbox when a trustworthy machine is available:
 
 ```powershell
 $dotnet = 'C:\path\to\dotnet.exe'
@@ -119,6 +132,8 @@ $sdk = 'C:\path\to\extracted\HIDMaestro.Core.dll'
 & $dotnet './bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll' self-test
 ```
 
-The build fails before compilation when the external DLL hash differs from
-the v1.6.1 pin. `bin/`, `obj/`, archives, executables, and DLLs are ignored
-locally as a second guard against vendoring upstream binaries.
+The build fails before compilation when the external DLL hash differs from the
+v1.6.1 pin. It does not compile against that DLL; it copies it as inert
+`HIDMaestro.Core.dll` input beside the probe so the default inventory can read
+it. `bin/`, `obj/`, archives, executables, and DLLs are ignored locally as a
+second guard against vendoring upstream binaries.

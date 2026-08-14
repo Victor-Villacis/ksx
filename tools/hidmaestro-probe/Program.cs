@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 
 namespace Ksx.HidMaestroProbe;
@@ -6,11 +5,11 @@ namespace Ksx.HidMaestroProbe;
 internal static class Program
 {
     private static readonly SafetyReport Safety = new(
-        RequestsReadOnlySdkOperations: true,
+        RequestsReadOnlySdkOperations: false,
         ConstructsSdkContext: false,
         CallsDriverLifecycleApis: false,
-        LiveExerciseStatus: "deferred",
-        Reason: "The inventory loads the exact hash-pinned upstream assembly and requests no lifecycle operation, but assembly initialization can execute. It is therefore not run on the administrator CI runner or the development PC while HIDMaestro v1.6.1's elevated helper-staging boundary remains under coordinated security review.");
+        LiveExerciseStatus: "static-only",
+        Reason: "The inventory opens the exact hash-pinned upstream DLL as inert bytes and parses it with PEReader/MetadataReader. It never asks the CLR to load, initialize, construct, or execute the target assembly and is safe to run on an administrator CI runner.");
 
     public static int Main(string[] args)
     {
@@ -72,8 +71,8 @@ internal static class Program
     private static (object Document, int ExitCode) Inventory()
     {
         SdkLock sdkLock = SdkInspection.LoadLock();
-        (PinReport pin, Assembly? assembly) = SdkInspection.LoadPinnedAssembly(sdkLock);
-        if (!pin.Ok || assembly is null)
+        (PinReport pin, StaticSdkImage? image) = SdkInspection.InspectPinnedFile(sdkLock);
+        if (!pin.Ok || image is null)
         {
             var failed = new InventoryDocument(
                 1,
@@ -89,10 +88,13 @@ internal static class Program
             return (failed, 2);
         }
 
-        ApiReport api = SdkInspection.InspectReadOnlyApi(assembly);
-        CatalogReport catalog = CatalogInspection.ReadEmbeddedCatalog(assembly);
+        ApiReport api = image.Api;
+        CatalogReport catalog = image.Catalog;
         ContractReport contract = PersonaContract.Verify(catalog.Profiles);
-        bool ok = pin.Ok && api.Ok && contract.Ok;
+        bool ok = pin.Ok
+            && api.Ok
+            && CatalogInspection.MatchesPinnedContract(catalog)
+            && contract.Ok;
 
         var document = new InventoryDocument(
             1,
@@ -140,7 +142,7 @@ internal static class Program
             ok = true,
             commands = new[]
             {
-                new { syntax = "ksx-hidmaestro-probe", effect = "Read and verify the pinned SDK's embedded profile catalog." },
+                new { syntax = "ksx-hidmaestro-probe", effect = "Statically read and verify the pinned SDK metadata and embedded profile catalog without loading it." },
                 new { syntax = "ksx-hidmaestro-probe inventory", effect = "Same as the default command." },
                 new { syntax = "ksx-hidmaestro-probe protocol", effect = "Describe the frozen, pure host-protocol simulation contract." },
                 new { syntax = "ksx-hidmaestro-probe simulate-protocol", effect = "Run the deterministic cadence, feedback, and teardown transcript." },

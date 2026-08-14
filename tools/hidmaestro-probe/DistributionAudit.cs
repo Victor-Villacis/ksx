@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-using System.Collections.Immutable;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
@@ -282,13 +280,17 @@ internal static class ManagedPeInspection
             string? assemblyVersion = metadata.IsAssembly
                 ? metadata.GetAssemblyDefinition().Version.ToString()
                 : null;
-            IReadOnlyDictionary<string, byte[]> resources = ReadEmbeddedResources(pe, metadata);
+            IReadOnlyDictionary<string, byte[]> resources =
+                ManagedPeReader.ReadEmbeddedResources(
+                    pe,
+                    metadata,
+                    CatalogInspection.IsProfileResource);
             string[] profiles = resources.Keys
                 .Where(name => name.StartsWith(ProfilePrefix, StringComparison.Ordinal)
                     && name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
-            string catalogHash = HashCatalog(resources, profiles);
+            string catalogHash = ManagedPeReader.HashCatalog(resources, profiles);
             string[] forbiddenResources = resources.Keys
                 .Where(name => name.StartsWith("HIDMaestro.Resources.", StringComparison.Ordinal)
                     || name.StartsWith("HIDMaestro.VR.", StringComparison.Ordinal))
@@ -305,7 +307,7 @@ internal static class ManagedPeInspection
             foreach (TypeDefinitionHandle handle in metadata.TypeDefinitions)
             {
                 TypeDefinition type = metadata.GetTypeDefinition(handle);
-                string typeName = QualifiedName(metadata, type);
+                string typeName = ManagedPeReader.QualifiedName(metadata, type);
                 if (ForbiddenTypes.Contains(typeName))
                     forbiddenMembers.Add(typeName);
                 var methods = new HashSet<string>(StringComparer.Ordinal);
@@ -358,57 +360,6 @@ internal static class ManagedPeInspection
         }
     }
 
-    private static IReadOnlyDictionary<string, byte[]> ReadEmbeddedResources(
-        PEReader pe,
-        MetadataReader metadata)
-    {
-        DirectoryEntry directory = pe.PEHeaders.CorHeader!.ResourcesDirectory;
-        if (directory.RelativeVirtualAddress == 0 || directory.Size == 0)
-            return new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        ImmutableArray<byte> content = pe
-            .GetSectionData(directory.RelativeVirtualAddress)
-            .GetContent(0, directory.Size);
-        ReadOnlySpan<byte> bytes = content.AsSpan();
-        var resources = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (ManifestResourceHandle handle in metadata.ManifestResources)
-        {
-            ManifestResource resource = metadata.GetManifestResource(handle);
-            string name = metadata.GetString(resource.Name);
-            if (!resource.Implementation.IsNil)
-                throw new InvalidDataException($"Linked manifest resource is forbidden: {name}");
-            if (resource.Offset > int.MaxValue)
-                throw new InvalidDataException($"Manifest resource offset is too large: {name}");
-            int offset = checked((int)resource.Offset);
-            if (offset < 0 || offset > bytes.Length - sizeof(int))
-                throw new InvalidDataException($"Manifest resource offset is outside the resource directory: {name}");
-            int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(offset, sizeof(int)));
-            if (length < 0 || length > bytes.Length - offset - sizeof(int))
-                throw new InvalidDataException($"Manifest resource length is invalid: {name}");
-            if (!resources.TryAdd(name, bytes.Slice(offset + sizeof(int), length).ToArray()))
-                throw new InvalidDataException($"Duplicate manifest resource name: {name}");
-        }
-        return resources;
-    }
-
-    private static string HashCatalog(IReadOnlyDictionary<string, byte[]> resources, string[] profiles)
-    {
-        using IncrementalHash hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (string name in profiles)
-        {
-            hasher.AppendData(Encoding.UTF8.GetBytes(name));
-            hasher.AppendData([0]);
-            hasher.AppendData(resources[name]);
-            hasher.AppendData([0]);
-        }
-        return Convert.ToHexString(hasher.GetHashAndReset());
-    }
-
-    private static string QualifiedName(MetadataReader metadata, TypeDefinition type)
-    {
-        string name = metadata.GetString(type.Name);
-        string ns = metadata.GetString(type.Namespace);
-        return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-    }
 }
 
 internal static class InfInspection

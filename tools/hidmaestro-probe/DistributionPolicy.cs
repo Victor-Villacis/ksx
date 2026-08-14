@@ -8,9 +8,9 @@ internal static partial class DistributionPolicy
     internal const string ManifestFileName = "ksx-hidmaestro-distribution.json";
     internal const string ExpectedTag = "v1.6.1";
     internal const string ExpectedCommit = "2a0dac0857901a63d365a36dcf99cf50114ca954";
-    internal const int ExpectedProfileCount = 228;
+    internal const int ExpectedProfileCount = CatalogInspection.ExpectedResourceCount;
     internal const string ExpectedProfileCatalogSha256 =
-        "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A";
+        CatalogInspection.ExpectedCatalogSha256;
     internal const string ExpectedLicenseSha256 =
         "EDB0AE8061250BDE3FFBDA1B62AC63757FBEBE452C861C47FA11FADDFA506F56";
 

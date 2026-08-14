@@ -1,6 +1,4 @@
-using System.Reflection;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace Ksx.HidMaestroProbe;
@@ -8,32 +6,27 @@ namespace Ksx.HidMaestroProbe;
 internal static class CatalogInspection
 {
     private const string ProfilePrefix = "HIDMaestro.Profiles.";
+    internal const int ExpectedResourceCount = 228;
+    internal const int ExpectedDeployableCount = 130;
+    internal const string ExpectedCatalogSha256 =
+        "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A";
 
-    internal static CatalogReport ReadEmbeddedCatalog(Assembly assembly)
+    internal static bool IsProfileResource(string name) =>
+        name.StartsWith(ProfilePrefix, StringComparison.Ordinal)
+        && name.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+
+    internal static CatalogReport ReadEmbeddedCatalog(
+        IReadOnlyDictionary<string, byte[]> embeddedResources)
     {
-        string[] resources = assembly.GetManifestResourceNames()
-            .Where(name => name.StartsWith(ProfilePrefix, StringComparison.Ordinal)
-                           && name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        string[] resources = embeddedResources.Keys
+            .Where(IsProfileResource)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
         var profiles = new List<CatalogProfile>(resources.Length);
-        var catalogHasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
         foreach (string resourceName in resources)
         {
-            using Stream stream = assembly.GetManifestResourceStream(resourceName)
-                ?? throw new InvalidOperationException($"Embedded profile resource disappeared: {resourceName}");
-            using var memory = new MemoryStream();
-            stream.CopyTo(memory);
-            byte[] json = memory.ToArray();
-
-            byte[] nameBytes = Encoding.UTF8.GetBytes(resourceName);
-            catalogHasher.AppendData(nameBytes);
-            catalogHasher.AppendData([0]);
-            catalogHasher.AppendData(json);
-            catalogHasher.AppendData([0]);
-
+            byte[] json = embeddedResources[resourceName];
             profiles.Add(ParseProfile(json, resourceName));
         }
 
@@ -49,9 +42,14 @@ internal static class CatalogInspection
         return new CatalogReport(
             profiles.Count,
             profiles.Count(profile => profile.IsDeployable),
-            Convert.ToHexString(catalogHasher.GetHashAndReset()),
+            ManagedPeReader.HashCatalog(embeddedResources, resources),
             profiles);
     }
+
+    internal static bool MatchesPinnedContract(CatalogReport report) =>
+        report.ResourceCount == ExpectedResourceCount
+        && report.DeployableCount == ExpectedDeployableCount
+        && report.CatalogSha256.Equals(ExpectedCatalogSha256, StringComparison.OrdinalIgnoreCase);
 
     internal static CatalogProfile ParseProfile(byte[] json, string resourceName)
     {

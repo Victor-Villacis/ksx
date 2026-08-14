@@ -1,8 +1,9 @@
 # HIDMaestro M8 execution plan
 
-Status: **catalog, host-contract, unsigned-package audit and pure rendezvous
-policy checkpoints complete; live use blocked on authenticated transport,
-provenance and hardware evidence; no HIDMaestro persona is enabled**.
+Status: **non-executing catalog source gate implemented with Actions evidence
+pending; host-contract, unsigned-package audit and pure rendezvous policy
+checkpoints complete; live use blocked on authenticated transport, provenance
+and hardware evidence; no HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -43,23 +44,27 @@ The spike uses the official [HIDMaestro v1.6.1 release](https://github.com/hifih
 | `HIDMaestro.Core.dll` SHA-256 | `adadd9e2604b7b6b047f386ebdd03879feef48009c6290281e4c665e2190f6d5` |
 | Managed target | .NET 10, Windows x64 |
 
-The repository does not carry the release binary. The probe accepts an external
-path, checks the exact digest, and keeps downloaded/build output outside version
-control. Pinning is evidence for this spike, not a declaration that HIDMaestro's
+The repository does not carry the release binary. Actions downloads the release
+to its disposable runner, proves the archive and DLL digests, and copies the DLL
+only as inert input to the probe. The build has no CLR reference to
+`HIDMaestro.Core`; CI also rejects that name in the probe's runtime dependency
+graph. Pinning is evidence for this spike, not a declaration that HIDMaestro's
 internal shared-memory layout is a stable third-party ABI.
 
 ### Live-use blocker in the pinned SDK
 
-The v1.6.1 release was used only as the exact hash-pinned input to the completed
-**non-admin catalog measurement**. That inventory loads the managed assembly to
-reflect its public API and resources; a module initializer could therefore
-execute during load. “Read-only” describes the probe's requested SDK operations,
-not a proof that arbitrary upstream assembly initialization cannot run. GitHub's
-Windows runners are administrators with UAC disabled, so CI does not repeat that
-inventory: it compiles against the pin, deletes it, and executes only the
-SDK-independent contracts. The next catalog gate must use a non-executing
-PE/metadata/resource reader. The release is not approved for KSX distribution,
-developer-workstation execution, or elevated execution as-is:
+The v1.6.1 release is now used only as the exact hash-pinned input to a
+**non-executing static catalog measurement**. The probe opens the DLL once with
+write/delete sharing denied, hashes that handle before parsing, then uses
+`PEReader` / `MetadataReader` on the same file object. It does not ask the CLR
+to load or initialize the target, so target module initializers and lifecycle
+code cannot run through this inventory path. The administrator Actions runner
+is configured to assert the exact version attributes, 22 CLR API signatures,
+228 catalog resources, 130 deployable profiles, catalog hash and three KSX
+personas, then delete every SDK copy before executing the SDK-free protocol
+tests. A green run closes the catalog-reader execution gap; it does **not**
+approve the release for KSX distribution, developer-workstation execution as
+code, or elevated use:
 
 - `HIDMaestro.Core.dll` embeds `signtool.exe`, `Inf2Cat.exe` and dependencies.
   [Microsoft's Windows driver documentation](https://learn.microsoft.com/windows-hardware/drivers/install/installing-a-catalog-file-by-using-signtool)
@@ -186,7 +191,7 @@ Two routing changes prepare S4 without enabling a driver:
 | Slice | Deliverable | Definition of done |
 |---|---|---|
 | S0 — truth reset | Correct credits, source facts and routing decision | **Done.** Existing transport says it is incompatible; personas remain gated; ViGEm behavior is unchanged |
-| S1 — SDK catalog probe | Hash-pinned .NET catalog measurement using `HIDMaestro.Core.dll` | **Done.** The completed non-admin measurement loaded the pinned assembly, emitted one machine-readable result and proved the exact DualSense, Switch Pro and Xbox Series catalog candidates without requesting install or controller creation. It is not repeated on the administrator Actions runner; a non-executing reader is the next gate |
+| S1 — SDK catalog probe | Hash-pinned, non-executing catalog measurement of `HIDMaestro.Core.dll` | **Source complete; Actions proof pending.** The gate hashes and statically parses the same open file object without a target AssemblyRef or CLR load, emits one machine-readable result, and requires 22 exact API signatures plus the DualSense, Switch Pro and Xbox Series catalog candidates. It deletes the SDK before running the pure protocol contracts |
 | S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
 | S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
 | S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
@@ -200,15 +205,18 @@ Two routing changes prepare S4 without enabling a driver:
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1 through S1.5a have been reproduced without administrator rights, and S1.6a
-is likewise pure source policy. S2 is blocked by S1.5b and is intentionally not
-automated on a developer workstation: it changes trust, driver and device state
-and needs an explicit supervised hardware gate.
+S1, S1.3, S1.5a and S1.6a do not request administrator authority or mutate the
+system. The S1 reader runs on an administrator Actions runner only because that
+is GitHub's hosted Windows topology; the target DLL remains inert bytes. S2 is
+blocked by S1.5b and is intentionally not automated on a developer workstation:
+it changes trust, driver and device state and needs an explicit supervised
+hardware gate.
 
 ### S1 measured result
 
-`tools/hidmaestro-probe` was built with a temporary, non-system .NET 10 SDK and
-run against the hash-pinned release DLL. It reported:
+Actions is configured to build `tools/hidmaestro-probe` with pinned .NET
+10.0.400 and run its static reader against the hash-pinned release DLL. A green
+run must confirm the following frozen result before S1 is marked complete:
 
 - 228 embedded catalog resources, of which 130 are deployable;
 - catalog SHA-256
@@ -217,15 +225,17 @@ run against the hash-pinned release DLL. It reported:
 - exact contract matches for `dualsense`, `switch-pro` and
   `xbox-series-xs-bt`.
 
-Its pure parser/contract tests also passed. KSX's probe source contains no path
-that constructs `HMContext` or calls install, create-controller,
-USB/IP-install or global cleanup APIs; a source scanner enforces that boundary
-before every build. It does not inspect or suppress arbitrary upstream module
-initializers, so the assembly-loading inventory is not repeated on either the
-development PC or the administrator Actions runner. Actions uses the SDK only
-as compiler metadata, removes it before executing the protocol/self-tests, and
-will resume catalog gating only after a non-executing reader lands. This result
-proves catalog/API compatibility only.
+The reader checks the `AssemblyFileVersionAttribute` and informational version
+directly from metadata; it does not reopen the path for native version APIs. It
+decodes exact public type/member signatures and reads only bounded raw embedded
+resource blobs, rejecting linked, duplicate, overlapping or inconsistent
+resource records. A defense-in-depth source guard rejects the known loader,
+activation, `ResourceManager` / `ResourceReader` and native-loader API patterns
+in this threat model. Actions then removes the DLL, archive, extracted release
+and environment paths before running the pure parser/protocol tests. This
+proves compatibility of the exact pinned API/catalog bytes only; it does not
+prove arbitrary SDK code safe, establish release provenance, or authorize a
+controller lifecycle.
 
 ### S1.3 host-contract result
 

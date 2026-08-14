@@ -149,12 +149,11 @@ jobs:
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
 
-  # Keep the HIDMaestro protocol work off the unreliable development CPU too.
+  # Keep the HIDMaestro contract work off the unreliable development CPU too.
   # GitHub's Windows runner is an administrator with UAC disabled, so it must
-  # NOT execute the external SDK assembly: CI uses the exact hash-pinned DLL as
-  # compiler metadata, deletes every copied instance, and then runs only the
-  # SDK-independent protocol/self-tests. A future non-executing PE/resource
-  # reader will replace the assembly-loading catalog inventory.
+  # never load or initialize the external SDK assembly. The probe hashes one
+  # retained file handle, parses that same image with PEReader/MetadataReader,
+  # then deletes every copied SDK byte before running the pure host contracts.
   hidmaestro-contracts:
     runs-on: windows-2022
     timeout-minutes: 20
@@ -197,21 +196,112 @@ jobs:
           "HIDMAESTRO_CORE_PATH=$($matches[0].FullName)" >> $env:GITHUB_ENV
           "HIDMAESTRO_ARCHIVE_PATH=$archive" >> $env:GITHUB_ENV
           "HIDMAESTRO_EXPANDED_PATH=$expanded" >> $env:GITHUB_ENV
-      - name: Compile against the pin, then execute only SDK-free contracts
+      - name: Build, statically inventory the pin, then execute SDK-free contracts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & tools/hidmaestro-probe/build.ps1 `
-            -DotNet dotnet `
-            -SdkDll $env:HIDMAESTRO_CORE_PATH `
-            -Configuration Release
-          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro probe build failed.' }
+          $lock = Get-Content -LiteralPath tools/hidmaestro-probe/sdk.lock.json -Raw |
+            ConvertFrom-Json
+          $probe = $null
 
-          $probe = Resolve-Path `
-            tools/hidmaestro-probe/bin/Release/net10.0-windows10.0.26100.0/win-x64/ksx-hidmaestro-probe.dll
-          Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
-            Where-Object Name -CEQ 'HIDMaestro.Core.dll' |
-            Remove-Item -Force
+          try {
+            & tools/hidmaestro-probe/build.ps1 `
+              -DotNet dotnet `
+              -SdkDll $env:HIDMAESTRO_CORE_PATH `
+              -Configuration Release
+            if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro probe build failed.' }
+
+            $outputRoot = 'tools/hidmaestro-probe/bin/Release/net10.0-windows10.0.26100.0/win-x64'
+            $probe = Resolve-Path (Join-Path $outputRoot 'ksx-hidmaestro-probe.dll')
+            $deps = Get-Content -LiteralPath `
+              (Join-Path $outputRoot 'ksx-hidmaestro-probe.deps.json') -Raw
+            if ($deps.Contains('HIDMaestro.Core', [StringComparison]::Ordinal)) {
+              throw 'The probe runtime graph contains the upstream SDK assembly.'
+            }
+
+            Write-Host '::group::HIDMaestro static inventory'
+            $stdout = & dotnet $probe inventory
+            $inventoryExit = $LASTEXITCODE
+            if ($inventoryExit -ne 0) {
+              throw "HIDMaestro static inventory failed with exit $inventoryExit."
+            }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 100
+              if ($report.schemaVersion -ne 1 -or $report.command -cne 'inventory' -or
+                  $report.ok -ne $true) {
+                throw 'unexpected inventory envelope'
+              }
+              if ($report.sdkPin.ok -ne $true -or
+                  $report.sdkPin.expectedSha256 -cne $lock.coreDll.sha256 -or
+                  $report.sdkPin.actualSha256 -cne $lock.coreDll.sha256 -or
+                  $report.sdkPin.expectedFileVersion -cne $lock.coreDll.fileVersion -or
+                  $report.sdkPin.actualFileVersion -cne $lock.coreDll.fileVersion -or
+                  $report.sdkPin.expectedInformationalVersion -cne
+                    $lock.coreDll.informationalVersion -or
+                  $report.sdkPin.actualInformationalVersion -cne
+                    $lock.coreDll.informationalVersion -or
+                  @($report.sdkPin.mismatches).Count -ne 0) {
+                throw 'the SDK pin report did not match the exact lock'
+              }
+              $apiChecks = @($report.api.checks)
+              if ($report.api.ok -ne $true -or $apiChecks.Count -ne 22 -or
+                  @($apiChecks | Where-Object present -ne $true).Count -ne 0) {
+                throw 'the exact 22-member CLR API contract did not pass'
+              }
+              if ($report.catalog.resourceCount -ne 228 -or
+                  $report.catalog.deployableCount -ne 130 -or
+                  @($report.catalog.profiles).Count -ne 228 -or
+                  $report.catalog.catalogSha256 -cne
+                    '8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A') {
+                throw 'the profile catalog did not match the pinned contract'
+              }
+              $personas = @($report.ksxPersonaContract.personas)
+              if ($report.ksxPersonaContract.ok -ne $true -or
+                  $personas.Count -ne 3 -or
+                  @($personas | Where-Object { $_.present -ne $true -or $_.passed -ne $true }).Count -ne 0) {
+                throw 'the three KSX persona contracts did not pass'
+              }
+              if ($report.safety.requestsReadOnlySdkOperations -ne $false -or
+                  $report.safety.constructsSdkContext -ne $false -or
+                  $report.safety.callsDriverLifecycleApis -ne $false -or
+                  $report.safety.liveExerciseStatus -cne 'static-only') {
+                throw 'the static-only safety contract drifted'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro inventory did not emit the exact static contract: $_"
+            }
+            Write-Host '::endgroup::'
+          } finally {
+            if (Test-Path -LiteralPath tools/hidmaestro-probe/bin) {
+              Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
+                Where-Object Name -CEQ 'HIDMaestro.Core.dll' |
+                Remove-Item -Force
+            }
+
+            $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+            foreach ($target in @($env:HIDMAESTRO_ARCHIVE_PATH, $env:HIDMAESTRO_EXPANDED_PATH)) {
+              if ([String]::IsNullOrWhiteSpace($target)) { continue }
+              $resolvedTarget = [IO.Path]::GetFullPath($target)
+              if (!$resolvedTarget.StartsWith(
+                  $runnerTemp,
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to clean HIDMaestro input outside RUNNER_TEMP: $resolvedTarget"
+              }
+              if (Test-Path -LiteralPath $resolvedTarget) {
+                Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+              }
+            }
+            Remove-Item Env:HIDMAESTRO_CORE_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:HIDMAESTRO_ARCHIVE_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:HIDMAESTRO_EXPANDED_PATH -ErrorAction SilentlyContinue
+          }
+
           $remainingSdk = @(
             Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
               Where-Object Name -CEQ 'HIDMaestro.Core.dll'
@@ -219,20 +309,6 @@ jobs:
           if ($remainingSdk.Count -ne 0) {
             throw 'The upstream SDK remained in the executable probe tree.'
           }
-          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
-          foreach ($target in @($env:HIDMAESTRO_ARCHIVE_PATH, $env:HIDMAESTRO_EXPANDED_PATH)) {
-            $resolvedTarget = [IO.Path]::GetFullPath($target)
-            if (!$resolvedTarget.StartsWith(
-                $runnerTemp,
-                [StringComparison]::OrdinalIgnoreCase)) {
-              throw "Refusing to clean HIDMaestro input outside RUNNER_TEMP: $resolvedTarget"
-            }
-          }
-          Remove-Item -LiteralPath $env:HIDMAESTRO_ARCHIVE_PATH -Force
-          Remove-Item -LiteralPath $env:HIDMAESTRO_EXPANDED_PATH -Recurse -Force
-          Remove-Item Env:HIDMAESTRO_CORE_PATH
-          Remove-Item Env:HIDMAESTRO_ARCHIVE_PATH
-          Remove-Item Env:HIDMAESTRO_EXPANDED_PATH
 
           foreach ($command in @('protocol', 'simulate-protocol', 'self-test')) {
             $arguments = @($command)

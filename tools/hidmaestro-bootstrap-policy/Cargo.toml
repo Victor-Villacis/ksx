@@ -1,0 +1,13 @@
+[package]
+name = "ksx-hidmaestro-bootstrap-policy"
+description = "Pure, non-launching policy model for KSX's future native HIDMaestro bootstrap"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# This policy harness is deliberately outside the KSX workspace. It has no
+# binary target and cannot become an installed/elevated artifact accidentally.
+[workspace]

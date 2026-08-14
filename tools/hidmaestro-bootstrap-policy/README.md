@@ -65,6 +65,9 @@ implementation needs all of the following before production wiring:
 2. In the bootstrap, derive its protected directory from its own module handle,
    reject reparse points, and verify the fixed managed apphost plus its entire
    self-contained runtime/dependency manifest against the S1.5b signed pins.
+   Parse the pinned runtime config and dependency graph too: they must contain
+   no startup hook, additional probing root, external runtime path, roll-forward
+   escape, or asset outside that protected manifest.
 3. Open the pre-created pipe with `SECURITY_SQOS_PRESENT` plus Anonymous QoS;
    retain and bracket a handle to the kernel-reported server PID; require the
    exact daemon PID, same nonzero session, fixed protected KSX image, and

@@ -680,6 +680,37 @@ Assert-Check 'runner.pathmap-msbuild-switch-escaping' `
      (Has-Literal $runner '"-p:PathMap=$pathMapSwitchValue"') -and
      (Has-Literal $runner "PathMap = (`$CandidateRoot + '=/_/candidate,'")) `
     'The MSBuild switch escapes comma separators while evaluated PathMap remains a comma list.'
+Assert-Check 'runner.generated-files-root-has-no-trailing-separator' `
+    ((Has-Literal $runner "`$compilerGeneratedFilesRoot = Join-Path `$ObjectRoot 'generated'") -and
+     (Has-Literal $runner '"-p:CompilerGeneratedFilesOutputPath=$compilerGeneratedFilesRoot"') -and
+     (Has-Literal $runner "CompilerGeneratedFilesOutputPath = (Get-FullPath (Join-Path `$ObjectRoot 'generated'))") -and
+     (Has-Literal $runner "elseif (`$_.Key -eq 'CompilerGeneratedFilesOutputPath')") -and
+     (Has-Literal $runner "'object/generated'") -and
+     -not (Has-Literal $runner '"-p:CompilerGeneratedFilesOutputPath=$($ObjectRoot.TrimEnd(''\''))\generated\"')) `
+    'The generated-source root is passed without the Roslyn-invalid trailing separator and remains evaluated and redacted.'
+Assert-Check 'runner.strict-evaluation-diff-diagnostics' `
+    ((Has-Literal $runner 'if ($evaluationA.Sha256 -cne $evaluationB.Sha256)') -and
+     (Has-Literal $runner 'function Get-EvaluationManifestFieldDifferences') -and
+     (Has-Literal $runner 'function Get-SafeImportDiagnostic') -and
+     (Has-Literal $runner "'^(candidate|build|object|targeting-pack|dotnet)/[^|]+\|semanticSha256=([A-F0-9]{64})$'") -and
+     (Has-Literal $runner "'role=' + `$match.Groups[1].Value") -and
+     (Has-Literal $runner "'|semanticSha256=' + `$match.Groups[2].Value") -and
+     (Has-Literal $runner 'An evaluated import cannot be reduced to its safe role and semantic hash.') -and
+     (Has-Literal $runner '$manifestFields = @(') -and
+     (Has-Literal $runner '-not $Left.Manifest.Contains($field)') -and
+     (Has-Literal $runner '@($Left.Manifest[$field])') -and
+     (Has-Literal $runner "@(`$Left.Manifest['imports'])") -and
+     (Has-Literal $runner "`$differentFields -ccontains 'imports'") -and
+     (Has-Literal $runner 'Compare-Object') -and
+     (Has-Literal $runner '$safe = Get-SafeImportDiagnostic -Entry ([string]$difference.InputObject)') -and
+     (Has-Literal $runner 'EVALUATION-IMPORT-DIFF {0} {1} {2}') -and
+     (Has-Literal $runner '$Label, [string]$difference.SideIndicator, $safe') -and
+     (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'pre-a-vs-pre-b'") -and
+     (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-a-vs-pre-a'") -and
+     (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-b-vs-pre-b'") -and
+     (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-a-vs-post-b'") -and
+     (Has-Literal $runner 'The normalized evaluated compiler-input inventories differ in fields:')) `
+    'Pre/post A/B equality remains strict while import diagnostics expose only a role and semantic hash.'
 Assert-Check 'runner.targeting-pack-sanitization' `
     ((Has-Literal $runner 'function ConvertTo-AnalyzerFreeTargetingPack') -and
      (Has-Literal $runner "GetAttribute('Type').Equals('Analyzer'") -and

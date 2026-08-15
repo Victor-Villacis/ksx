@@ -1167,6 +1167,7 @@ function Get-MsbuildProperties {
         $ObjectRoot + '=/_/object,' + $OutputRoot + '=/_/output,' +
         $TempRoot + '=/_/temp'
     $pathMapSwitchValue = $pathMap.Replace(',', '%2C')
+    $compilerGeneratedFilesRoot = Join-Path $ObjectRoot 'generated'
     $properties = @(
         '-p:Configuration=Release',
         '-p:RuntimeIdentifier=win-x64',
@@ -1197,7 +1198,7 @@ function Get-MsbuildProperties {
         '-p:AppendRuntimeIdentifierToOutputPath=false',
         '-p:EmitCompilerGeneratedFiles=true',
         '-p:ProvideCommandLineArgs=true',
-        "-p:CompilerGeneratedFilesOutputPath=$($ObjectRoot.TrimEnd('\'))\generated\",
+        "-p:CompilerGeneratedFilesOutputPath=$compilerGeneratedFilesRoot",
         '-p:ImportDirectoryBuildProps=false',
         '-p:ImportDirectoryBuildTargets=false',
         '-p:ImportDirectoryPackagesProps=false',
@@ -1426,6 +1427,7 @@ function Get-EvaluatedManifest {
         AppendRuntimeIdentifierToOutputPath = 'false'
         EmitCompilerGeneratedFiles = 'true'
         ProvideCommandLineArgs = 'true'
+        CompilerGeneratedFilesOutputPath = (Get-FullPath (Join-Path $ObjectRoot 'generated'))
         ImportDirectoryBuildProps = 'false'
         ImportDirectoryBuildTargets = 'false'
         CustomBeforeMicrosoftCommonTargets = ''
@@ -1607,6 +1609,8 @@ function Get-EvaluatedManifest {
             'candidate=>/_/candidate,object=>/_/object,output=>/_/output,temp=>/_/temp'
         } elseif ($_.Key -eq 'NetCoreTargetingPackRoot') {
             'targeting-pack/'
+        } elseif ($_.Key -eq 'CompilerGeneratedFilesOutputPath') {
+            'object/generated'
         } else { [string]$_.Value }
         ([string]$_.Key) + '=' + $value
     })
@@ -1626,6 +1630,64 @@ function Get-EvaluatedManifest {
         Sha256 = Get-RawSha256 -Path $ManifestPath
         Manifest = $manifest
         RawImports = $rawImports
+    }
+}
+
+function Get-EvaluationManifestFieldDifferences {
+    param(
+        [Parameter(Mandatory)] $Left,
+        [Parameter(Mandatory)] $Right
+    )
+    $manifestFields = @(
+        'compileItems', 'embeddedResources', 'referencePaths', 'analyzers',
+        'generatedCompilerSources', 'imports', 'compilerArguments'
+    )
+    $differences = [Collections.Generic.List[string]]::new()
+    foreach ($field in $manifestFields) {
+        if (-not $Left.Manifest.Contains($field) -or
+            -not $Right.Manifest.Contains($field)) {
+            throw 'An evaluated manifest is missing a fixed field.'
+        }
+        $leftText = [string]::Join("`n", [string[]]@($Left.Manifest[$field]))
+        $rightText = [string]::Join("`n", [string[]]@($Right.Manifest[$field]))
+        if ($leftText -cne $rightText) { $differences.Add($field) }
+    }
+    return $differences.ToArray()
+}
+
+function Get-SafeImportDiagnostic {
+    param([Parameter(Mandatory)][string] $Entry)
+    $match = [regex]::Match(
+        $Entry,
+        '^(candidate|build|object|targeting-pack|dotnet)/[^|]+\|semanticSha256=([A-F0-9]{64})$',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) {
+        throw 'An evaluated import cannot be reduced to its safe role and semantic hash.'
+    }
+    return 'role=' + $match.Groups[1].Value +
+        '|semanticSha256=' + $match.Groups[2].Value
+}
+
+function Write-EvaluationManifestDifference {
+    param(
+        [Parameter(Mandatory)][string] $Label,
+        [Parameter(Mandatory)] $Left,
+        [Parameter(Mandatory)] $Right
+    )
+    $differentFields = @(Get-EvaluationManifestFieldDifferences -Left $Left -Right $Right)
+    if ($differentFields.Count -eq 0) {
+        throw 'The normalized evaluated manifest hashes differ without a field difference.'
+    }
+    Write-Host ('EVALUATION-DIFF {0} fields={1}' -f
+        $Label, [string]::Join(',', $differentFields))
+    if ($differentFields -ccontains 'imports') {
+        foreach ($difference in @(Compare-Object `
+            @($Left.Manifest['imports']) @($Right.Manifest['imports']) `
+            -CaseSensitive)) {
+            $safe = Get-SafeImportDiagnostic -Entry ([string]$difference.InputObject)
+            Write-Host ('EVALUATION-IMPORT-DIFF {0} {1} {2}' -f
+                $Label, [string]$difference.SideIndicator, $safe)
+        }
     }
 }
 
@@ -2435,7 +2497,11 @@ try {
         -PackagesRoot $packagesB `
         -Properties $builtB.Properties -ManifestPath $evalBPath
     if ($evaluationA.Sha256 -cne $evaluationB.Sha256) {
-        throw 'The normalized evaluated compiler-input inventories differ.'
+        Write-EvaluationManifestDifference -Label 'pre-a-vs-pre-b' `
+            -Left $evaluationA -Right $evaluationB
+        throw ('The normalized evaluated compiler-input inventories differ in fields: ' +
+            [string]::Join(',', @(
+                Get-EvaluationManifestFieldDifferences -Left $evaluationA -Right $evaluationB)))
     }
 
     $script:Phase = 'isolated-build-a'
@@ -2483,6 +2549,18 @@ try {
     if ($evaluationPostA.Sha256 -cne $evaluationA.Sha256 -or
         $evaluationPostB.Sha256 -cne $evaluationB.Sha256 -or
         $evaluationPostA.Sha256 -cne $evaluationPostB.Sha256) {
+        if ($evaluationPostA.Sha256 -cne $evaluationA.Sha256) {
+            Write-EvaluationManifestDifference -Label 'post-a-vs-pre-a' `
+                -Left $evaluationPostA -Right $evaluationA
+        }
+        if ($evaluationPostB.Sha256 -cne $evaluationB.Sha256) {
+            Write-EvaluationManifestDifference -Label 'post-b-vs-pre-b' `
+                -Left $evaluationPostB -Right $evaluationB
+        }
+        if ($evaluationPostA.Sha256 -cne $evaluationPostB.Sha256) {
+            Write-EvaluationManifestDifference -Label 'post-a-vs-post-b' `
+                -Left $evaluationPostA -Right $evaluationPostB
+        }
         throw 'The analyzer-free compiler-input closure changed across compilation.'
     }
 

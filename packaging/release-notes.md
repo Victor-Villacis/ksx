@@ -16,34 +16,40 @@
 
 ## New in this release
 
-- **One plain-USB DualSense is now a real installed output option.** A game
-  profile can request a DualSense instead of an Xbox 360 or DS4 controller.
-  ksx sends the complete controller state through a fixed HIDMaestro host and
-  receives bounded rumble feedback, while the ordinary ksx process remains
-  non-administrative.
+- **Studio is now one guided journey from hardware to Play.** Hardware,
+  controller, mapping, and gameplay are four visible stages instead of a set
+  of bulky pages the user has to interpret. Each stage shows what is complete,
+  what is blocked, and the one useful action to take next.
 
-- **DualSense setup is part of the installer.** The wizard offers a separate,
-  clearly labelled HIDMaestro task. If selected, setup downloads the exact
-  official v1.6.1 archive, verifies its pinned bytes before using it, installs
-  the driver, and removes the temporary SDK. Normal Play never downloads or
-  installs a package.
+- **Mapping is now a live visual workspace.** Physical keys and controller
+  inputs illuminate as they move. Click-to-bind, multi-key binding, conflict
+  resolution, undo, turbo, and macros stay in one focused surface, with clear
+  Save and Play actions and no hidden capture state.
 
-- **The new controller has a fail-safe lifetime.** ksx authenticates the one
-  elevated helper it launches, permits one owned virtual device, renews a
-  short lease while Play is healthy, and neutralizes and removes that device
-  on normal stop, a broken connection, or an expired lease.
+- **Every route shares the same polished Studio shell.** The responsive
+  light/dark interface carries consistent navigation, focus behavior, status,
+  and feedback from first setup through an active session. Controller choices
+  and readiness remain backend-owned, including the distinct ViGEmBus and
+  HIDMaestro requirements.
 
 ## Fixed in this release
 
-- **A DualSense request no longer depends on ViGEmBus.** Controller backends
-  are opened only when a profile needs them. A missing HIDMaestro driver is
-  reported before ksx blocks a keyboard, while Xbox 360 and DS4 profiles keep
-  their existing ViGEmBus path.
+- **HIDMaestro setup no longer tries to delete a library while it is still
+  loaded.** Version 0.4.0 could complete the driver call and then show exit code
+  8 because its own process still held the verified temporary SDK open. The
+  driver call now runs in an isolated worker; only after that worker exits does
+  the coordinator remove the pinned temporary files. A repair also removes an
+  exact hash-verified staging directory left by version 0.4.0 and refuses to
+  delete anything unexpected.
 
-- **Unsupported rich-controller requests now refuse plainly.** The live lane
-  is exactly one USB DualSense. A second HIDMaestro controller, Switch Pro, and
-  Xbox Series requests fail instead of silently changing controller identity
-  or pretending a gated path works.
+- **A cleanup result now says what actually happened.** Exit code 8 was not a
+  download failure and was not proof that DualSense was unavailable. Setup now
+  distinguishes installation from cleanup instead of blaming the internet or
+  asking the user to repeat a driver install that may already have succeeded.
+
+- **Overlapping key-learning requests cannot bind an old key to a new
+  control.** Each capture and cancellation is tied to its exact generation, so
+  a late result is retired instead of being applied to the current target.
 
 ## Get it
 
@@ -55,9 +61,11 @@ The wizard offers two controller-driver tasks. **Install the bundled ViGEmBus
 controller driver** enables Xbox 360 and DS4 outputs. Its installer is bundled,
 nothing is downloaded, and ksx checks its SHA-256 and signature before running
 it. **Download and install the pinned HIDMaestro v1.6.1 controller driver**
-enables the new USB DualSense output and requires internet access. Its official
+enables the USB DualSense output and requires internet access. Its official
 archive and required assemblies are hash-checked before the installer API is
-called. You can clear either task and re-run this installer later.
+called. The install call finishes in its own worker before the verified
+temporary SDK is removed. You can clear either task and re-run this installer
+later.
 
 The HIDMaestro lane deliberately supports one plain-USB DualSense. It does not
 claim Switch Pro, Xbox Series, Bluetooth, or a second HIDMaestro controller.

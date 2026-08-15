@@ -103,11 +103,12 @@ residue result still need the supervised hardware gate below.
 
 The installer is the only provisioning authority. Its checked setup task runs a
 single-purpose self-contained bootstrap which downloads and verifies the pinned
-upstream archive at install time, calls `InstallDriver()` under the installer's
-existing elevation, then deletes the temporary SDK. The ordinary daemon and
-runtime host have no network or package-install authority. The host and
-bootstrap are omitted from portable packages. Current release signing and the
-supervised clean Windows/hardware matrix remain release acceptance work, not
+upstream archive at install time, calls `InstallDriver()` in an isolated worker
+under the installer's existing elevation, waits for that worker to exit, then
+deletes the temporary SDK. The ordinary daemon and runtime host have no network
+or package-install authority. The host and bootstrap are omitted from portable
+packages. Current release signing and the supervised clean Windows/hardware
+matrix remain release acceptance work, not
 missing product code.
 
 ## Delivery state

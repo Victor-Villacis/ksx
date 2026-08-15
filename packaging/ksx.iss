@@ -81,7 +81,7 @@
 ; installed there. The first `iscc` run is the check.
 
 #define AppName        "ksx"
-#define AppVersion     "0.4.0"
+#define AppVersion     "0.4.1"
 #define AppPublisher   "Victor Villacis"
 #define AppURL         "https://github.com/Victor-Villacis/ksx"
 #define AppExe         "ksx.exe"
@@ -725,8 +725,10 @@ end;
 // package. Setup is already elevated and this checked task is the one bounded
 // place that can download, verify, and invoke the exact pinned upstream v1.6.1
 // installer API. Exit 4 means network/download failure; exit 5 means a pin
-// mismatch; 6/7 are API/install failures; 8 means temporary cleanup failed;
-// 9 means setup was redirected outside the protected Program Files boundary.
+// mismatch; 6/7 are API/install failures; 8 means InstallDriver returned
+// successfully but verified temporary cleanup is still pending; 9 means setup
+// was redirected outside the protected Program Files boundary; 10 means exact
+// residue from an earlier run could not be verified and removed before install.
 function HidMaestroFailureReason(ResultCode: Integer): String;
 begin
   case ResultCode of
@@ -736,10 +738,26 @@ begin
     5: Result := 'the downloaded archive or a required assembly did not match its pinned hash';
     6: Result := 'the pinned installer API was not exact';
     7: Result := 'the upstream driver installation failed';
-    8: Result := 'the verified temporary SDK could not be removed';
+    8: Result := 'the driver installed, but verified temporary SDK cleanup is pending';
     9: Result := 'the helper was not running from protected Program Files';
+    10: Result := 'an earlier KSX staging directory could not be safely verified or removed';
   else
     Result := 'an unexpected installer error occurred';
+  end;
+end;
+
+function HidMaestroFailureAdvice(ResultCode: Integer): String;
+begin
+  case ResultCode of
+    3: Result := 'Let the other HIDMaestro setup finish, then run this installer again.';
+    4: Result := 'Check the internet connection, then run this installer again with the HIDMaestro task selected.';
+    5: Result := 'The upstream download no longer matches this release. Install a newer KSX release instead of bypassing the verification.';
+    6: Result := 'This KSX release could not prove the pinned installer API. Install a newer KSX release instead of bypassing the verification.';
+    7: Result := 'Restart Windows, then run this installer again with the HIDMaestro task selected.';
+    9: Result := 'Install KSX under protected Program Files, then run the HIDMaestro task again.';
+    10: Result := 'Close KSX and Setup, restart Windows, then run this installer again. Nothing unexpected was deleted.';
+  else
+    Result := 'Restart Windows, then run this installer again with the HIDMaestro task selected.';
   end;
 end;
 
@@ -752,7 +770,7 @@ begin
   begin
     HidMaestroNote :=
       'The HIDMaestro controller driver was NOT installed because its installer could not start.' + #13#10 +
-       'DualSense will remain unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+      'Existing DualSense availability did not change. Restart Windows, then run this installer again with the HIDMaestro task selected.';
     exit;
   end;
   if ResultCode = 0 then
@@ -760,10 +778,21 @@ begin
     HidMaestroNote := '';
     exit;
   end;
+  if ResultCode = 8 then
+  begin
+    HidMaestroNote :=
+      'The HIDMaestro controller driver installed, but Setup could not remove its verified temporary SDK files ' +
+      '(installer exit code 8).' + #13#10 +
+      'DualSense may already be available. Close KSX and Setup, wait at least two minutes (or restart Windows), then run this installer again; ' +
+      'it removes only exact hash-verified KSX staging residue.';
+    if not WizardSilent then
+      MsgBox(HidMaestroNote, mbInformation, MB_OK);
+    exit;
+  end;
   HidMaestroNote :=
     'The HIDMaestro controller driver install did not complete (installer exit code ' +
     IntToStr(ResultCode) + ': ' + HidMaestroFailureReason(ResultCode) + ').' + #13#10 +
-    'DualSense will remain unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+    'KSX could not confirm current DualSense readiness. ' + HidMaestroFailureAdvice(ResultCode);
   if not WizardSilent then
     MsgBox(HidMaestroNote, mbError, MB_OK);
 end;
@@ -818,13 +847,13 @@ begin
     except
       HidMaestroNote :=
         'The HIDMaestro controller driver step could not be run: ' + GetExceptionMessage + #13#10 +
-       'DualSense remains unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+        'KSX could not confirm current DualSense readiness. Restart Windows, then run this installer again with the HIDMaestro task selected.';
     end;
   end
   else
     HidMaestroNote :=
-      'You chose not to install the HIDMaestro controller driver. DualSense will stay unavailable.' + #13#10 +
-      'Run this installer again with the HIDMaestro box ticked whenever you want it.';
+      'You chose not to install or repair the HIDMaestro controller driver. Existing DualSense availability did not change.' + #13#10 +
+      'Run this installer again with the HIDMaestro box ticked whenever you want to install or repair it.';
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

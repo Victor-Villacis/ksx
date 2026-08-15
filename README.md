@@ -61,8 +61,9 @@ because one backend is unavailable. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMEN
 
 The checked HIDMaestro setup task clearly requires internet: setup downloads
 the exact official v1.6.1 archive, verifies pinned hashes before executing it,
-installs the package, and removes the temporary SDK. Normal Play has no driver
-download or package-install authority.
+installs the package in an isolated worker, waits for that worker to exit, and
+then removes the temporary SDK. Normal Play has no driver download or
+package-install authority.
 
 The driver analysis and dated prior-art survey live in [`docs/research/`](docs/research/).
 
@@ -440,20 +441,24 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.4.0 release line**. Its software workflow covers
-guided setup, controller mapping, saved games, Play, recovery, packaging, and
-one installed USB DualSense through the bounded HIDMaestro backend. The
-supervised cabinet and controller checks in [`docs/GATES.md`](docs/GATES.md)
-remain the authority for physical hardware evidence. Current implementation
-state and known limits are in [`docs/HANDOFF.md`](docs/HANDOFF.md); future ideas
-are tracked in [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).
+The current tree is the **KSX 0.4.1 release line**. Studio now carries one
+guided Hardware -> Controller -> Mapping -> Play workspace, with live input
+feedback, controller-aware readiness, conflict-safe binding, and a responsive
+light/dark interface across every route. The same release retains saved games,
+recovery, packaging, and one installed USB DualSense through the bounded
+HIDMaestro backend. The supervised cabinet and controller checks in
+[`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware
+evidence. Current implementation state and known limits are in
+[`docs/HANDOFF.md`](docs/HANDOFF.md); future ideas are tracked in
+[`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).
 
 CI now exercises the clean-runner provider smoke, the exact HIDMaestro A/B
-build and byte-only artifact inspection, the portable distribution, and the
-installer's safety and repeat-install paths. A pushed release tag repeats that
-whole pipeline before publishing. Those results are software and distribution
-evidence; a local build is not, and physical Gates 1–4 remain open until their
-ledgers name supervised hardware results.
+build and byte-only artifact inspection, the portable distribution, the
+installer's safety and repeat-install paths, and Studio's eight-route browser
+matrix. A pushed release tag repeats that whole pipeline before publishing.
+Those results are software and distribution evidence; a local build is not,
+and physical Gates 1–4 remain open until their ledgers name supervised hardware
+results.
 
 ## Workspace
 

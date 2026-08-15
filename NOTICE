@@ -141,9 +141,10 @@ The Windows installer builds a fixed elevated runtime host for one DualSense
 from the exact reviewed v1.6.1 source. Its separate installer-only bootstrap
 contains no upstream binary. After explicit setup consent it downloads the
 official v1.6.1 archive, verifies the archive and all three managed assemblies
-by pinned length and SHA-256, invokes HIDMaestro's package installation, and
-deletes the temporary SDK. The ordinary ksx daemon and runtime host neither
-embed driver-install authority nor download HIDMaestro.
+by pinned length and SHA-256, invokes HIDMaestro's package installation in an
+isolated worker, waits for that worker to exit, and deletes the temporary SDK.
+The ordinary ksx daemon and runtime host neither embed driver-install authority
+nor download HIDMaestro.
 
 The official release also contains Microsoft SDK/WDK dependencies governed by
 their own terms. They are fetched from upstream only for the explicit setup

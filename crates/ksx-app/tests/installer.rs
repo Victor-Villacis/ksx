@@ -1314,6 +1314,30 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     assert!(build.contains("bundledUpstreamAssemblyCount -ne 0"));
     assert!(build.contains("requiresNetworkAtInstall -ne $true"));
 
+    let dispatch = build
+        .split(
+            "- name: Exercise HIDMaestro installer private dispatch without loading SDK",
+        )
+        .nth(1)
+        .expect("compiled private-dispatch smoke")
+        .split("- name: Build release")
+        .next()
+        .expect("private-dispatch smoke boundary");
+    for required in [
+        "ksx-hidmaestro-installer-contract-",
+        "install-worker-v1",
+        "C:\\not-a-ksx-staging-directory",
+        "$worker.ExitCode -ne 5",
+        "unexpected-command",
+        "$unknown.ExitCode -ne 2",
+        "Refusing reparse-point HIDMaestro dispatch probe cleanup",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "compiled private-dispatch smoke lost `{required}`"
+        );
+    }
+
     let portable = build
         .split("- name: Package portable distribution with license material")
         .nth(1)
@@ -1330,6 +1354,153 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
             "portable ZIP must omit installed-only {forbidden}"
         );
     }
+}
+
+/// Exit 8 is reached only after the pinned `InstallDriver` call returned.
+///
+/// Version 0.4.0 folded that cleanup result into the generic failure paragraph,
+/// blamed the network and told the user DualSense was unavailable even when the
+/// package had just been installed. Keep the cleanup-only branch separate and
+/// non-destructive in its claims.
+#[test]
+fn hidmaestro_cleanup_pending_is_not_reported_as_install_failure() {
+    let code = section(&script(), "[Code]").join("\n");
+    let cleanup_tail = code
+        .split("if ResultCode = 8 then")
+        .nth(1)
+        .expect("exit 8 has a dedicated cleanup-only branch");
+    let (cleanup, _) = cleanup_tail
+        .split_once("HidMaestroNote :=\n'The HIDMaestro controller driver install did not complete")
+        .expect("cleanup-only branch ends before generic failure handling");
+
+    for required in [
+        "The HIDMaestro controller driver installed",
+        "verified temporary SDK files",
+        "DualSense may already be available",
+        "wait at least two minutes (or restart Windows)",
+        "exact hash-verified KSX staging residue",
+        "mbInformation",
+    ] {
+        assert!(
+            cleanup.contains(required),
+            "cleanup-only message lost `{required}`: {cleanup}"
+        );
+    }
+    for forbidden in [
+        "did not complete",
+        "NOT installed",
+        "will remain unavailable",
+        "Check the internet connection",
+    ] {
+        assert!(
+            !cleanup.contains(forbidden),
+            "cleanup-only result regained false failure claim `{forbidden}`: {cleanup}"
+        );
+    }
+}
+
+/// The v0.4.0 cleanup failure was structural: the process deleting the SDK was
+/// also the process that still had `HIDMaestro.Core.dll` loaded. More retries in
+/// that process merely make the same race longer. The coordinator must wait for
+/// a separately validated worker to exit, and only then remove pinned staging.
+#[test]
+fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
+    let source = read("tools/hidmaestro-driver-installer/Program.cs");
+    for required in [
+        "install-worker-v1",
+        "ProcessStartInfo",
+        "startInfo.ArgumentList.Add(WorkerCommand)",
+        "worker.WaitForExit()",
+        "IsExactWorkingDirectoryPath",
+        "IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)",
+        "IsStrictWorkingDirectoryName",
+        "MaxPriorWorkDirectories",
+        "WorkerMutexName",
+        "IsWorkerActive()",
+        "PriorWorkDirectoryMinimumAge",
+        "IsPriorWorkingDirectoryOldEnough",
+        "DeleteWorkingDirectory(workDirectory, requirePins: stagingComplete)",
+        "if (!cleaned && result == 0)",
+        "return 10;",
+    ] {
+        assert!(
+            source.contains(required),
+            "process-isolated HIDMaestro cleanup lost `{required}`"
+        );
+    }
+
+    let coordinator = source
+        .split_once("private static int RunCoordinator()")
+        .expect("coordinator exists")
+        .1
+        .split_once("private static int RunWorker")
+        .expect("worker follows coordinator")
+        .0;
+    let invoke = coordinator
+        .find("result = InvokePinnedInstallerWorker(workDirectory)")
+        .expect("coordinator invokes worker");
+    let cleanup = coordinator
+        .find("DeleteWorkingDirectory(workDirectory, requirePins: stagingComplete)")
+        .expect("coordinator performs exact cleanup");
+    assert!(
+        invoke < cleanup,
+        "coordinator must wait for worker result before staging cleanup"
+    );
+    let worker_probe = coordinator
+        .find("if (IsWorkerActive())")
+        .expect("coordinator checks for an orphaned worker");
+    let prior_sweep = coordinator
+        .find("if (!RemovePriorWorkingDirectories())")
+        .expect("coordinator has a bounded prior-staging sweep");
+    assert!(
+        worker_probe < prior_sweep,
+        "coordinator must refuse a live orphaned worker before touching staging"
+    );
+
+    let worker = source
+        .split_once("private static int RunWorker")
+        .expect("worker exists")
+        .1
+        .split_once("private static async Task<byte[]> DownloadArchiveAsync")
+        .expect("worker has a bounded source section")
+        .0;
+    let verify = worker
+        .find("IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)")
+        .expect("worker verifies its complete pinned input");
+    let lease = worker
+        .find("TryAcquireMutex(workerLease)")
+        .expect("worker acquires its process-lifetime lease");
+    let load = worker
+        .find("InvokePinnedInstaller(workDirectory)")
+        .expect("worker invokes the pinned API");
+    let release = worker
+        .find("workerLease.ReleaseMutex()")
+        .expect("worker releases its lease only while returning");
+    assert!(
+        lease < verify && verify < load && load < release,
+        "worker lease must surround pinned verification and SDK execution"
+    );
+
+    let sweep = source
+        .split_once("private static bool RemovePriorWorkingDirectories()")
+        .expect("prior-staging sweep exists")
+        .1
+        .split_once("private static bool IsPriorWorkingDirectoryOldEnough")
+        .expect("age predicate follows sweep")
+        .0;
+    let age = sweep
+        .find("!IsPriorWorkingDirectoryOldEnough(path)")
+        .expect("prior staging is quarantined by age");
+    let pinned = sweep
+        .find("!IsVerifiedWorkingDirectory(path, requireComplete: false)")
+        .expect("prior staging remains byte-pinned");
+    let remove = sweep
+        .find("DeleteWorkingDirectory(path, requirePins: true)")
+        .expect("prior staging uses exact nonrecursive cleanup");
+    assert!(
+        age < pinned && pinned < remove,
+        "recent staging must be refused before pinned prior-residue cleanup"
+    );
 }
 
 /// **The install goes through the verb that verifies it.**

@@ -25,10 +25,11 @@ Deep dives: [`research/virtual-gamepad-2026.md`](research/virtual-gamepad-2026.m
   packages a fixed NativeAOT privileged host and an explicit v1.6.1
   installer-only bootstrap. The checked setup task discloses its network use,
   downloads the exact official archive, verifies pinned lengths and SHA-256
-  identities, invokes only `HMContext.InstallDriver()`, and deletes the
-  temporary SDK. Neither KSX nor its installer redistributes the upstream
-  embedded WDK tools. It supports exactly one plain-USB DualSense per session;
-  Switch Pro and Xbox Series remain independently gated.
+  identities, invokes only `HMContext.InstallDriver()` in an isolated worker,
+  waits for that worker to exit, and deletes the temporary SDK. Neither KSX nor
+  its installer redistributes the upstream embedded WDK tools. It supports
+  exactly one plain-USB DualSense per session; Switch Pro and Xbox Series remain
+  independently gated.
 - **VIIPER is the complementary virtual-USB/network/Linux lane.** It is for
   software-defined controllers, keyboards and mice, including remote endpoints—not a
   replacement profile catalog. Its GPL core stays across a deliberate process boundary

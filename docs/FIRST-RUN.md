@@ -132,10 +132,11 @@ Two things must be said on that screen, not buried:
   runs an installer-only, version- and hash-pinned bootstrap from the protected
   installed directory. Its label discloses that internet is required; it
   downloads the exact official release only during setup, verifies every
-  assembly it executes, and deletes the temporary SDK. The ordinary daemon and
-  its elevated runtime host have no network or package install/update authority;
-  clearing this task leaves only DualSense unavailable and the wizard explains
-  how to retry.
+  assembly it executes, performs the package call in an isolated worker, waits
+  for that worker to exit, and then deletes the temporary SDK. The ordinary
+  daemon and its elevated runtime host have no network or package install/update
+  authority; clearing this task does not install or repair HIDMaestro and leaves
+  any existing DualSense availability unchanged.
 - **Desktop icon by default.** Not `Flags: unchecked`. The audit's finding: a
   user who declines the launch prompt has to go hunting through a Start menu.
 - **Offer to launch ksx**, not to run a diagnostic. `ksx doctor` is a developer

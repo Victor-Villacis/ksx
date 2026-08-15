@@ -189,6 +189,72 @@ jobs:
           }
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $($parsed.executableSha256)"
 
+      # Exercise the compiled private-command boundary without downloading the
+      # SDK or touching the Driver Store. The copy must run from Program Files
+      # to cross the same protected-installation gate as the shipping helper.
+      - name: Exercise HIDMaestro installer private dispatch without loading SDK
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $programFilesRoot = [IO.Path]::TrimEndingDirectorySeparator(
+            [IO.Path]::GetFullPath($env:ProgramFiles))
+          $probeRoot = Join-Path $programFilesRoot (
+            'ksx-hidmaestro-installer-contract-' + [Guid]::NewGuid().ToString('N'))
+          $resolvedProbe = [IO.Path]::GetFullPath($probeRoot)
+          $programFilesPrefix = $programFilesRoot + [IO.Path]::DirectorySeparatorChar
+          if (-not $resolvedProbe.StartsWith(
+              $programFilesPrefix,
+              [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'HIDMaestro dispatch probe escaped Program Files.'
+          }
+
+          try {
+            New-Item -ItemType Directory -Path $resolvedProbe | Out-Null
+            $attributes = [IO.File]::GetAttributes($resolvedProbe)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'HIDMaestro dispatch probe directory is a reparse point.'
+            }
+            $probeExe = Join-Path $resolvedProbe 'ksx-hidmaestro-driver-installer.exe'
+            Copy-Item `
+              -LiteralPath 'target/release/ksx-hidmaestro-driver-installer.exe' `
+              -Destination $probeExe
+
+            $worker = Start-Process `
+              -FilePath $probeExe `
+              -ArgumentList @('install-worker-v1', 'C:\not-a-ksx-staging-directory') `
+              -Wait `
+              -PassThru `
+              -WindowStyle Hidden
+            if ($worker.ExitCode -ne 5) {
+              throw "Invalid private worker path returned $($worker.ExitCode), expected 5."
+            }
+
+            $unknown = Start-Process `
+              -FilePath $probeExe `
+              -ArgumentList @('unexpected-command') `
+              -Wait `
+              -PassThru `
+              -WindowStyle Hidden
+            if ($unknown.ExitCode -ne 2) {
+              throw "Unknown private command returned $($unknown.ExitCode), expected 2."
+            }
+          }
+          finally {
+            $cleanupTarget = [IO.Path]::GetFullPath($resolvedProbe)
+            if (-not $cleanupTarget.StartsWith(
+                $programFilesPrefix,
+                [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Refusing unsafe HIDMaestro dispatch probe cleanup.'
+            }
+            if (Test-Path -LiteralPath $cleanupTarget) {
+              $cleanupAttributes = [IO.File]::GetAttributes($cleanupTarget)
+              if (($cleanupAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Refusing reparse-point HIDMaestro dispatch probe cleanup.'
+              }
+              Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
+            }
+          }
+
       # cabinet + studio is the shipping combination: the egui panel UI plus the
       # local web config server. The launcher is deliberately a separate package:
       # ksx.exe stays a console application for its development CLI, while the

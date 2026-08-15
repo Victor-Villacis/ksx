@@ -503,6 +503,27 @@ Assert-Check 'program.net10-metadata-api-shape' `
      -not (Has-Literal $program 'ParameterDefinition') -and
      -not (Has-Literal $program 'signature.Header.IsExplicitThis')) `
     'The inspector uses the released .NET 10 System.Reflection.Metadata API and unambiguous local names.'
+Assert-Check 'program.target-framework-attribute-shape' `
+    ($lock.artifactExpectation.targetFramework -ceq '.NETCoreApp,Version=v10.0' -and
+     $lock.artifactExpectation.targetFrameworkDisplayName -ceq '.NET 10.0' -and
+     (Has-Literal $program 'ReadAssemblyTargetFrameworkAttribute(metadata)') -and
+     (Has-Literal $program 'TargetFrameworkAttributeValue ParseTargetFrameworkAttribute(') -and
+     (Has-Literal $program 'EnsureFrameworkSingleStringAttributeConstructor(') -and
+     (Has-Literal $program 'reference.Parent.Kind != HandleKind.TypeReference') -and
+     (Has-Literal $program 'type.ResolutionScope.Kind != HandleKind.AssemblyReference') -and
+     (Has-Literal $program 'metadata.GetString(scope.Name) != "System.Runtime"') -and
+     (Has-Literal $program 'new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }') -and
+     (Has-Literal $program 'signature.Header.HasExplicitThis') -and
+     (Has-Literal $program 'signature.RequiredParameterCount != 1') -and
+     (Has-Literal $program 'signature.ParameterTypes[0] != "System.String"') -and
+     (Has-Literal $program 'reader.ReadUInt16() != 1') -and
+     (Has-Literal $program 'reader.ReadByte() != 0x54') -and
+     (Has-Literal $program 'reader.ReadByte() != 0x0E') -and
+     (Has-Literal $program 'propertyName != "FrameworkDisplayName"') -and
+     (Has-Literal $program 'reader.RemainingBytes != 0') -and
+     (Has-Literal $program '"assembly.targetFrameworkDisplayName"') -and
+     -not (Has-Literal $program 'ReadAssemblyStringAttribute(metadata, TargetFrameworkAttribute)')) `
+    'The target-framework attribute decoder requires the exact one-property ECMA payload.'
 
 $runner = Get-Content -LiteralPath (Join-Path $leafRoot 'run-actions-proof.ps1') -Raw
 $absoluteDrivePattern = '(?i)(?<![a-z])[a-z]:[\\/]'

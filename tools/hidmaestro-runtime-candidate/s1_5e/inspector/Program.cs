@@ -113,7 +113,8 @@ internal static class Program
         string? fileVersion = ReadAssemblyStringAttribute(metadata, FileVersionAttribute);
         string? informationalVersion =
             ReadAssemblyStringAttribute(metadata, InformationalVersionAttribute);
-        string? targetFramework = ReadAssemblyStringAttribute(metadata, TargetFrameworkAttribute);
+        TargetFrameworkAttributeValue? targetFramework =
+            ReadAssemblyTargetFrameworkAttribute(metadata);
 
         Require(
             checks,
@@ -138,8 +139,13 @@ internal static class Program
         Require(
             checks,
             "assembly.targetFramework",
-            targetFramework,
+            targetFramework?.FrameworkName,
             artifactExpectation.GetProperty("targetFramework").GetString());
+        Require(
+            checks,
+            "assembly.targetFrameworkDisplayName",
+            targetFramework?.FrameworkDisplayName,
+            artifactExpectation.GetProperty("targetFrameworkDisplayName").GetString());
         Require(checks, "pe.machine", pe.PEHeaders.CoffHeader.Machine.ToString(), "Amd64");
         Require(checks, "pe.magic", peHeader.Magic.ToString(), "PE32Plus");
         Require(checks, "clr.ilOnly", (corHeader.Flags & CorFlags.ILOnly) != 0, true);
@@ -250,7 +256,7 @@ internal static class Program
                 assemblyVersion,
                 fileVersion,
                 informationalVersion,
-                targetFramework,
+                targetFramework?.FrameworkName,
                 metadata.GetGuid(metadata.GetModuleDefinition().Mvid).ToString("D"),
                 pe.PEHeaders.CoffHeader.Machine.ToString(),
                 peHeader.Magic.ToString(),
@@ -1668,6 +1674,10 @@ internal static class Program
             CustomAttribute attribute = metadata.GetCustomAttribute(handle);
             if (CustomAttributeType(metadata, attribute) != expectedAttributeType)
                 continue;
+            EnsureFrameworkSingleStringAttributeConstructor(
+                metadata,
+                attribute,
+                expectedAttributeType);
             values.Add(ManagedPeReader.ParseSingleStringCustomAttribute(
                 metadata.GetBlobBytes(attribute.Value),
                 expectedAttributeType));
@@ -1679,6 +1689,115 @@ internal static class Program
             _ => throw new BadImageFormatException(
                 $"The assembly has duplicate {expectedAttributeType} attributes."),
         };
+    }
+
+    private static TargetFrameworkAttributeValue? ReadAssemblyTargetFrameworkAttribute(
+        MetadataReader metadata)
+    {
+        var values = new List<TargetFrameworkAttributeValue>();
+        foreach (CustomAttributeHandle handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            CustomAttribute attribute = metadata.GetCustomAttribute(handle);
+            if (CustomAttributeType(metadata, attribute) != TargetFrameworkAttribute)
+                continue;
+            EnsureFrameworkSingleStringAttributeConstructor(
+                metadata,
+                attribute,
+                TargetFrameworkAttribute);
+            values.Add(ParseTargetFrameworkAttribute(metadata, attribute));
+        }
+        return values.Count switch
+        {
+            0 => null,
+            1 => values[0],
+            _ => throw new BadImageFormatException(
+                $"The assembly has duplicate {TargetFrameworkAttribute} attributes."),
+        };
+    }
+
+    private static TargetFrameworkAttributeValue ParseTargetFrameworkAttribute(
+        MetadataReader metadata,
+        CustomAttribute attribute)
+    {
+        BlobReader reader = metadata.GetBlobReader(attribute.Value);
+        if (reader.RemainingBytes < sizeof(ushort) || reader.ReadUInt16() != 1)
+            throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} has an invalid custom-attribute prolog.");
+
+        string frameworkName = reader.ReadSerializedString()
+            ?? throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} contains a null framework name.");
+        if (reader.RemainingBytes < sizeof(ushort) || reader.ReadUInt16() != 1)
+            throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} must have exactly one named argument.");
+        if (reader.RemainingBytes < 2
+            || reader.ReadByte() != 0x54
+            || reader.ReadByte() != 0x0E)
+        {
+            throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} named argument must be a string property.");
+        }
+
+        string propertyName = reader.ReadSerializedString()
+            ?? throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} contains a null property name.");
+        if (propertyName != "FrameworkDisplayName")
+            throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} named property is not exact.");
+        string frameworkDisplayName = reader.ReadSerializedString()
+            ?? throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} contains a null display name.");
+        if (reader.RemainingBytes != 0)
+            throw new BadImageFormatException(
+                $"{TargetFrameworkAttribute} has trailing payload bytes.");
+
+        return new TargetFrameworkAttributeValue(frameworkName, frameworkDisplayName);
+    }
+
+    private static void EnsureFrameworkSingleStringAttributeConstructor(
+        MetadataReader metadata,
+        CustomAttribute attribute,
+        string attributeType)
+    {
+        if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            throw new BadImageFormatException($"{attributeType} has an invalid constructor handle.");
+        MemberReference reference = metadata.GetMemberReference(
+            (MemberReferenceHandle)attribute.Constructor);
+        if (reference.Parent.Kind != HandleKind.TypeReference)
+            throw new BadImageFormatException($"{attributeType} has an invalid declaring type.");
+        TypeReference type = metadata.GetTypeReference((TypeReferenceHandle)reference.Parent);
+        if (FullTypeReferenceName(metadata, (TypeReferenceHandle)reference.Parent) != attributeType
+            || type.ResolutionScope.Kind != HandleKind.AssemblyReference)
+        {
+            throw new BadImageFormatException($"{attributeType} has an invalid framework type.");
+        }
+
+        AssemblyReference scope = metadata.GetAssemblyReference(
+            (AssemblyReferenceHandle)type.ResolutionScope);
+        if (metadata.GetString(scope.Name) != "System.Runtime"
+            || !metadata.GetBlobBytes(scope.PublicKeyOrToken).SequenceEqual(
+                new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }))
+        {
+            throw new BadImageFormatException($"{attributeType} has invalid framework provenance.");
+        }
+
+        MethodSignature<string> signature = reference.DecodeMethodSignature(
+            MetadataTypeNameProvider.Instance,
+            genericContext: null);
+        if (metadata.GetString(reference.Name) != ".ctor"
+            || !signature.Header.IsInstance
+            || signature.Header.HasExplicitThis
+            || signature.Header.Kind != SignatureKind.Method
+            || signature.Header.CallingConvention != SignatureCallingConvention.Default
+            || signature.GenericParameterCount != 0
+            || signature.RequiredParameterCount != 1
+            || signature.ReturnType != "System.Void"
+            || signature.ParameterTypes.Length != 1
+            || signature.ParameterTypes[0] != "System.String")
+        {
+            throw new BadImageFormatException(
+                $"{attributeType} does not use the expected .ctor(string) signature.");
+        }
     }
 
     private static string CustomAttributeType(
@@ -1940,6 +2059,10 @@ internal static class Program
     private sealed record EvaluatedResourceBinding(
         string RawSha256,
         string CanonicalSha256);
+
+    private sealed record TargetFrameworkAttributeValue(
+        string FrameworkName,
+        string FrameworkDisplayName);
 
     private sealed record ParsedInstruction(int Offset, string OpCode, int? MetadataToken);
 }

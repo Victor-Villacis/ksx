@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 282,
+  "expectedSourceVerifierCheckCount": 283,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -177,6 +177,7 @@
     "fileVersion": "1.6.1.0",
     "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
     "targetFramework": ".NETCoreApp,Version=v10.0",
+    "targetFrameworkDisplayName": ".NET 10.0",
     "machine": "Amd64",
     "peMagic": "PE32Plus",
     "managedEntryPointTokenOrRva": 0,
@@ -278,7 +279,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
-      "sha256": "C893E9E25C0B838F176EE3D15DED79D785DE3C64BC252BB0C14E74934D90E4B6"
+      "sha256": "282A14982191D229FE9044C1DC71169128960B4D98EDF8DD7A7E03A60682A4EE"
     },
     {
       "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
@@ -296,7 +297,7 @@
     },
     {
       "path": "inspector/Program.cs",
-      "sha256": "C893E9E25C0B838F176EE3D15DED79D785DE3C64BC252BB0C14E74934D90E4B6"
+      "sha256": "282A14982191D229FE9044C1DC71169128960B4D98EDF8DD7A7E03A60682A4EE"
     },
     {
       "path": "run-actions-proof.ps1",
@@ -304,7 +305,7 @@
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "D97FEF6BC48CB5E0D4BE99E5C88D4127F66999A349365971B1C7F12173E4A54C"
+      "sha256": "D5610A321BA4BF1739F26DF48BAE898BB4C600A5E30D3E0B0E590177FBAA95BC"
     }
   ],
   "gateState": {

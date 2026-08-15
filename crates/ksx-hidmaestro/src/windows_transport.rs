@@ -1,11 +1,9 @@
 //! Fail-closed Windows transport for one HIDMaestro host conversation.
 //!
-//! The public transport type deliberately has no public constructor. A future
-//! production constructor must resolve and seal one fixed native bootstrap,
-//! launch it elevated, and hand its retained process object to
-//! `ksx-platform`'s elevated-only admission path. Until that exists, the only
-//! constructor is compiled behind `hidmaestro-fake-host-tests` and launches the
-//! fixed, non-elevating, inherited-token fake host supplied by that test seam.
+//! The production constructor resolves and seals exactly the installed sibling
+//! `ksx-hidmaestro-host.exe`, launches it elevated, and hands the retained
+//! process object to `ksx-platform`'s elevated-only admission path. The separate
+//! `hidmaestro-fake-host-tests` constructor remains available only to tests.
 //!
 //! The rendezvous token and protocol Hello nonce are independent CSPRNG draws.
 //! The pipe listener exists before either launcher runs, and an authenticated
@@ -20,6 +18,9 @@ use crate::host::{
     Direction, Frame, HostTransportError, MessageKind, ProtocolError, HEADER_BYTES,
     MAX_PAYLOAD_BYTES, MAX_QUEUED_FEEDBACK, PROTOCOL_MAGIC, PROTOCOL_VERSION,
 };
+
+#[cfg(windows)]
+pub use windows::ProductionHostConnectError;
 
 /// Read the one length field which must be trusted before the body is read.
 ///
@@ -359,6 +360,10 @@ mod tests {
             "reader_thread: ReaderWorker",
             "writer.close();",
             "self.reader_thread.join();",
+            "pub fn connect_production(",
+            "protected_hidmaestro_host()",
+            "launch_elevated(executable, &launch.argv())",
+            ".accept_elevated(child, crate::host::HELLO_TIMEOUT)",
         ] {
             assert!(
                 production.contains(required),
@@ -369,8 +374,6 @@ mod tests {
             "accept_fake(",
             "accept_hidmaestro_fake(",
             "launch_hidmaestro_fake_host(",
-            "launch_elevated(",
-            "accept_elevated(",
             "std::process::Command",
             "pub fn from_authenticated_halves(",
             "pub(crate) fn from_authenticated_halves(",
@@ -380,6 +383,14 @@ mod tests {
                 "production transport gained an unfixed launcher/admission path: {forbidden}"
             );
         }
+        let create = production.find("OneUsePipeServer::create").unwrap();
+        let seal = production.find("protected_hidmaestro_host()").unwrap();
+        let launch = production
+            .find("launch_elevated(executable, &launch.argv())")
+            .unwrap();
+        let accept = production.find(".accept_elevated(child").unwrap();
+        let hello = production.find("HostClient::connect(transport").unwrap();
+        assert!(create < seal && seal < launch && launch < accept && accept < hello);
 
         let fake = &source[fake_marker..];
         let create = fake.find("OneUsePipeServer::create").unwrap();

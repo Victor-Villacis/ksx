@@ -15,10 +15,13 @@ raw-feedback managed-host experiment without building or loading HIDMaestro:
 
 S1.5d now supplies every planned replacement and required new source unit in a
 separately hash-frozen inert candidate. Its project names exactly 11 compile
-inputs and 228 resources, but it has not been built or loaded. The artifact
-compile allowlist, build authorization, and execution authorization therefore
-remain false; source/project closure is not evidence of compiled metadata or
-behavior.
+inputs and 228 resources, and the S1.5d/API source verifiers build and load
+nothing. The exact S1.5e observation infrastructure is now source-frozen. Its
+GitHub Actions build is authorized but the observation is not established; its
+artifact-built and metadata-match facts remain false. Source-verifier, local and product build authorization remain
+false, as do every load and execution authorization. Source/project closure is
+not evidence of compiled metadata or behavior, and all six artifact, driver
+and distribution gates remain false.
 
 ## Exact public closure
 

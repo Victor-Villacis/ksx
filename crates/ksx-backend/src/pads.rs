@@ -247,6 +247,20 @@ pub fn run(
         }
         std::process::exit(EXIT_REFUSED);
     }
+    if let Some(limit) = persona.instance_limit() {
+        if usize::from(count) > limit {
+            let message = format!(
+                "this release can create at most {limit} {} pad(s); ask for one or choose another supported persona",
+                persona.label()
+            );
+            if json {
+                println!("{}", error_json("persona-capacity", &message));
+            } else {
+                eprintln!("error: {message}");
+            }
+            std::process::exit(EXIT_REFUSED);
+        }
+    }
 
     // BEFORE the bus is opened, so the sentence arrives while the answer is
     // still "don't", not as a post-mortem over eight pads that are already
@@ -261,27 +275,26 @@ pub fn run(
         eprint!("{warning}");
     }
 
-    let vigem = match VigemBackend::connect() {
-        Ok(backend) => backend,
-        Err(err) if err.is_bus_missing() => {
-            if json {
-                println!("{}", error_json("vigembus-missing", &err.to_string()));
-            } else {
-                eprintln!("error: {err}");
-            }
-            std::process::exit(EXIT_DRIVER_MISSING);
-        }
-        Err(err) => return Err(err).context("connecting to ViGEmBus"),
-    };
     // Routed, so `ksx pads --persona dualsense` is a real test of the M8 path
     // rather than a `PersonaUnsupported` from the wrong backend.
-    let mut backend = RoutedBackend::standard(Box::new(vigem));
+    let mut backend = RoutedBackend::standard_lazy(Box::new(|| {
+        VigemBackend::connect()
+            .map(|backend| Box::new(backend) as Box<dyn ksx_output::VirtualPadBackend>)
+    }));
 
     let mut handles = Vec::new();
     let mut rows = Vec::new();
     for slot in 1..=count {
         let handle = match backend.plug_persona(persona) {
             Ok(handle) => handle,
+            Err(err) if err.is_bus_missing() => {
+                if json {
+                    println!("{}", error_json("vigembus-missing", &err.to_string()));
+                } else {
+                    eprintln!("error: {err}");
+                }
+                std::process::exit(EXIT_DRIVER_MISSING);
+            }
             // A missing HIDMaestro is its own exit code path, not a generic
             // failure: the fix is "install HIDMaestro", and the cabinet's own
             // personas are unaffected.
@@ -359,7 +372,9 @@ pub fn run(
     _hold_secs: u64,
     _json: bool,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("`ksx pads` is Windows-only (it drives the ViGEmBus kernel driver)")
+    anyhow::bail!(
+        "`ksx pads` is Windows-only (it drives the installed virtual-controller backends)"
+    )
 }
 
 /// Polls feedback briefly after a plug so the bus's initial LED notification is
@@ -708,6 +723,13 @@ pub mod surface {
         /// This build cannot create that persona at all
         /// ([`Persona::can_plug`]) — a driver install does not change it.
         PersonaNotImplemented { persona: Persona },
+        /// The persona is live, but its production runtime has a smaller
+        /// fixed device capacity than the general pad-test ceiling.
+        PersonaCapacity {
+            persona: Persona,
+            requested: u8,
+            limit: usize,
+        },
         /// Outside `1..=MAX_SLOTS`.
         BadCount { given: u8 },
         /// Outside `1..=MAX_HOLD_SECS`.
@@ -765,6 +787,15 @@ pub mod surface {
         if !persona.can_plug() {
             return SpawnPlan::PersonaNotImplemented { persona };
         }
+        if let Some(limit) = persona.instance_limit() {
+            if usize::from(count) > limit {
+                return SpawnPlan::PersonaCapacity {
+                    persona,
+                    requested: count,
+                    limit,
+                };
+            }
+        }
         if on_bus.saturating_add(usize::from(count)) > usize::from(MAX_SLOTS) {
             return SpawnPlan::BusFull {
                 on_bus,
@@ -807,6 +838,7 @@ pub mod surface {
             match self {
                 SpawnPlan::SessionRunning => Some("session-running"),
                 SpawnPlan::PersonaNotImplemented { .. } => Some("persona-not-implemented"),
+                SpawnPlan::PersonaCapacity { .. } => Some("persona-capacity"),
                 SpawnPlan::BadCount { .. } => Some("bad-count"),
                 SpawnPlan::BadHold { .. } => Some("bad-hold"),
                 SpawnPlan::BusFull { .. } => Some("bus-full"),
@@ -825,6 +857,14 @@ pub mod surface {
                 SpawnPlan::PersonaNotImplemented { persona } => {
                     format!("this build of ksx cannot create a {} pad", persona.label())
                 }
+                SpawnPlan::PersonaCapacity {
+                    persona,
+                    requested,
+                    limit,
+                } => format!(
+                    "this release can create at most {limit} {} pad(s), not {requested}",
+                    persona.label()
+                ),
                 SpawnPlan::BadCount { given } => {
                     format!("pad count must be 1..={MAX_SLOTS}, got {given}")
                 }
@@ -867,6 +907,9 @@ pub mod surface {
             match self {
                 SpawnPlan::SessionRunning => Some("run `ksx session stop`".to_owned()),
                 SpawnPlan::PersonaNotImplemented { .. } => None,
+                SpawnPlan::PersonaCapacity { .. } => {
+                    Some("ask for one pad, or choose another supported persona".to_owned())
+                }
                 SpawnPlan::BadCount { .. } | SpawnPlan::BadHold { .. } => {
                     Some("pick a value from the list".to_owned())
                 }
@@ -1251,7 +1294,7 @@ pub mod surface {
         /// problem (the same ordering `run` keeps).
         #[test]
         fn an_unimplementable_persona_is_refused_and_not_offered() {
-            let plan = plan_spawn(1, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
+            let plan = plan_spawn(1, Persona::SwitchPro, 30, false, IDLE.0, IDLE.1);
             assert_eq!(plan.code(), Some("persona-not-implemented"));
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
                 .personas
@@ -1259,10 +1302,25 @@ pub mod surface {
                 .map(|o| o.value)
                 .collect();
             assert!(
-                !offered.iter().any(|v| v == "dualsense"),
+                !offered.iter().any(|v| v == "switchpro"),
                 "a menu must not offer what the plan refuses: {offered:?}"
             );
             assert!(offered.iter().any(|v| v == "xbox360"), "{offered:?}");
+            assert!(offered.iter().any(|v| v == "dualsense"), "{offered:?}");
+        }
+
+        #[test]
+        fn the_dualsense_test_surface_enforces_the_one_host_capacity() {
+            assert!(matches!(
+                plan_spawn(1, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
+                SpawnPlan::Plug { .. }
+            ));
+            let refused = plan_spawn(2, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
+            assert_eq!(refused.code(), Some("persona-capacity"));
+            assert!(refused.message().contains("at most 1"));
+            assert!(refused
+                .remedy()
+                .is_some_and(|text| text.contains("one pad")));
         }
 
         #[test]
@@ -1593,8 +1651,10 @@ pub mod surface {
         if !persona.can_plug() {
             return Err(OutputError::PersonaNotImplemented(persona).into());
         }
-        let vigem = VigemBackend::connect()?;
-        let mut backend = RoutedBackend::standard(Box::new(vigem));
+        let mut backend = RoutedBackend::standard_lazy(Box::new(|| {
+            VigemBackend::connect()
+                .map(|backend| Box::new(backend) as Box<dyn ksx_output::VirtualPadBackend>)
+        }));
         let mut handles = Vec::with_capacity(usize::from(count));
         for _ in 0..count {
             match backend.plug_persona(persona) {

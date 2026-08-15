@@ -181,7 +181,10 @@ impl SessionRunner for LiveRunner {
         // Same persona → backend routing as `ksx run`, from the same
         // constructor: a daemon that selected stacks differently would be a
         // second, untested output path.
-        let pads = RoutedBackend::standard(Box::new(VigemBackend::connect()?));
+        let pads = RoutedBackend::standard_lazy(Box::new(|| {
+            VigemBackend::connect()
+                .map(|backend| Box::new(backend) as Box<dyn ksx_output::VirtualPadBackend>)
+        }));
         // Same per-device backend selection as `ksx run`, from the same place:
         // a daemon that chose backends differently would be a second, untested
         // capture path (see `crate::capture`). The one difference is the claim:

@@ -174,7 +174,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           function Get-NormalizedTextSha256([string] $path) {
-            $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path))
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
             $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
             $sha = [Security.Cryptography.SHA256]::Create()
             try {
@@ -208,7 +217,7 @@ jobs:
           $s1dLockPath = 'tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json'
           $s1dVerifierPath = 'tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1'
           $expectedLockHash = 'F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC'
-          $expectedContractHash = 'EAEC16372ADDDF25A8EBFCA449BCEE0BCDD76DA5E570382125E8F6B9C53000BF'
+          $expectedContractHash = '755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne $expectedLockHash -or
               (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash -or
               (Get-NormalizedTextSha256 $runtimeVerifierPath) -cne
@@ -216,9 +225,9 @@ jobs:
             throw 'The complete runtime source lock or inert candidate contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $apiLockPath) -cne
-                'C065E01871987A1C8AC9DA72167B9EFAB82AEBF7E0D5D4B965DBAB2DC883239E' -or
+                '1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5' -or
               (Get-NormalizedTextSha256 $apiVerifierPath) -cne
-                '279D2064876A2429600B62FF48E39C8B2A194FED636E6BCA611C13444EAC2FE8' -or
+                '6735CD5847FCA178D24027BFFD7D2D6D17233B01F22AA0521DC943735385748D' -or
               (Get-NormalizedTextSha256 $profileLockPath) -cne
                 'CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80' -or
               (Get-NormalizedTextSha256 $profileVerifierPath) -cne
@@ -250,9 +259,9 @@ jobs:
             throw 'A frozen S1.5c/S1.5d API, profile, feedback, or input source contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
-                'AF06C4E05CE28A91AC86967B1D098ABE548B6DF17134F3687ECCE39B61A3FC97' -or
+                '01DD327F4C280FC996484141A8E664B1E415A12BE748587A9670287FBD0401EA' -or
               (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
-                '4E39AF2DD66E1E8F843370E9C9D9C6CF2BF8D15731FA994D022808708C2302D6') {
+                '9B7FBEF83B420F1143EEEF9EF31FEF923EE8F36CC15F9DE0B94198EB7BBF3861') {
             throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
           }
           $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
@@ -325,8 +334,25 @@ jobs:
                 throw 'the exact 82-check source contract did not pass'
               }
               if ($contract.schemaVersion -ne 1 -or
-                  $contract.status -cne 's1.5d-source-candidate-present-hash-frozen-not-built-or-loaded' -or
+                  $contract.status -cne 's1.5e-source-frozen-observation-not-established-not-built-or-loaded' -or
                   $contract.upstreamCommit -cne $lock.commit -or
+                  $contract.artifact.observation.phase -cne 's1.5e' -or
+                  $contract.artifact.observation.contractPath -cne 's1_5e/contract.lock.json' -or
+                  $contract.artifact.observation.contractId -cne
+                    'hidmaestro-s1.5e-actions-static-artifact-observation' -or
+                  $contract.artifact.observation.contractReferenceState -cne
+                    'source-frozen-observation-not-established' -or
+                  $contract.artifact.observation.actionsObservationBuildAuthorized -ne $true -or
+                  $contract.artifact.observation.sourceVerifierBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.localBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.productBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.loadAuthorized -ne $false -or
+                  $contract.artifact.observation.executionAuthorized -ne $false -or
+                  $contract.artifact.observation.observationEstablished -ne $false -or
+                  $contract.artifact.observation.actionsObservationArtifactBuilt -ne $false -or
+                  $contract.artifact.observation.metadataMatched -ne $false -or
+                  $contract.artifact.observation.compileClosureMatched -ne $false -or
+                  $contract.artifact.observation.resourceCatalogMatched -ne $false -or
                   $contract.conformanceScope.maximumLiveControllers -ne 1 -or
                   $contract.conformanceScope.controllerIndex -ne 0 -or
                   $contract.conformanceScope.profile.id -cne 'dualsense' -or
@@ -345,7 +371,8 @@ jobs:
                   $contract.gateState.distributionReady -ne $false -or
                   $contract.sourceContracts.publicApi.publicTypeCount -ne 9 -or
                   $contract.sourceContracts.publicApi.logicalMemberCount -ne 100 -or
-                  $contract.sourceContracts.publicApi.artifactMetadataVerified -ne $false -or
+                  $contract.sourceContracts.publicApi.actionsObservationMetadataMatched -ne $false -or
+                  $contract.sourceContracts.publicApi.artifactMetadataAllowlistAdopted -ne $false -or
                   $contract.sourceContracts.compilationDisposition.upstreamUnitCount -ne 51 -or
                   $contract.sourceContracts.compilationDisposition.retainedUnchangedCount -ne 1 -or
                   $contract.sourceContracts.compilationDisposition.replacementRequiredCount -ne 13 -or
@@ -355,8 +382,9 @@ jobs:
                   $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 11 -or
                   $contract.sourceContracts.managedSourceCandidate.embeddedResourceCount -ne 228 -or
                   $contract.sourceContracts.managedSourceCandidate.sourceAndProjectXmlFrozen -ne $true -or
-                  $contract.sourceContracts.managedSourceCandidate.artifactBuilt -ne $false -or
-                  $contract.sourceContracts.managedSourceCandidate.artifactLoaded -ne $false -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuildAuthorized -ne $false -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuiltArtifact -ne $false -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierLoadedArtifact -ne $false -or
                   $contract.sourceContracts.profileCatalog.profileTreeFileCount -ne 231 -or
                   $contract.sourceContracts.profileCatalog.embeddedProfileSourceCount -ne 228 -or
                   $contract.sourceContracts.profileCatalog.deployableProfileSourceCount -ne 130 -or
@@ -960,6 +988,340 @@ jobs:
             throw 'The authenticated HIDMaestro fake-host transport test failed.'
           }
 
+  # S1.5e is deliberately separate from the source-contract job. It is the
+  # only scope authorized to compile the inert candidate, and it never loads,
+  # executes, uploads, packages, or grants product authority to that output.
+  hidmaestro-artifact-observation:
+    needs: hidmaestro-contracts
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.400'
+      - name: Verify the frozen S1.5e observation infrastructure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-NormalizedTextSha256([string] $path) {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
+            $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+              $dashed = [BitConverter]::ToString(
+                $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)))
+              return $dashed.Replace('-', '')
+            } finally {
+              $sha.Dispose()
+            }
+          }
+          function ConvertFrom-SingleJsonObject([object[]] $lines, [string] $label) {
+            $json = (@($lines | ForEach-Object { [string]$_ }) -join "`n")
+            $document = [Text.Json.JsonDocument]::Parse($json)
+            try {
+              if ($document.RootElement.ValueKind -ne [Text.Json.JsonValueKind]::Object) {
+                throw "$label root must be a JSON object."
+              }
+              return $json | ConvertFrom-Json -Depth 100
+            } finally {
+              $document.Dispose()
+            }
+          }
+          function Assert-SixClosedGates([object] $gateState, [string] $label) {
+            $expected = @(
+              'artifactPublicApiAllowlistFrozen',
+              'artifactCompileAllowlistFrozen',
+              'profileSourceCatalogBound',
+              'rawFeedbackDecoderFrozen',
+              'driverRuntimeAbiBound',
+              'distributionReady'
+            )
+            $actual = @($gateState.PSObject.Properties.Name)
+            if ($actual.Count -ne $expected.Count -or
+                @(Compare-Object $expected $actual -CaseSensitive).Count -ne 0) {
+              throw "$label gate set is not exact."
+            }
+            foreach ($name in $expected) {
+              if ($gateState.$name -ne $false) {
+                throw "$label advanced gate '$name'."
+              }
+            }
+          }
+
+          $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
+          $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
+          if ((Get-NormalizedTextSha256 $lockPath) -cne
+                '2F693C2B240963DE8FDB1118138B2D92414F6B4A8ECA9A0A9604C67EFFAAE872' -or
+              (Get-NormalizedTextSha256 $verifierPath) -cne
+                'E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D') {
+            throw 'The frozen S1.5e observation contract or verifier drifted.'
+          }
+
+          $stdout = @(& $verifierPath -WorkspaceRoot $env:GITHUB_WORKSPACE)
+          $report = ConvertFrom-SingleJsonObject $stdout 'S1.5e source verifier'
+          if ($report.schemaVersion -ne 1 -or
+              $report.assurance -cne 'static-source-only-s1.5e-observation-infrastructure' -or
+              $report.ok -ne $true -or
+              $report.checkCount -ne 291 -or
+              $report.passedCount -ne 291 -or
+              $report.failedCount -ne 0 -or
+              @($report.checks).Count -ne 291 -or
+              @($report.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
+              $report.observationEstablished -ne $false -or
+              $report.candidateBuilt -ne $false -or
+              $report.candidateLoaded -ne $false -or
+              $report.candidateExecuted -ne $false) {
+            throw 'The S1.5e source-only verifier receipt is not exact.'
+          }
+          Assert-SixClosedGates $report.gateState 'S1.5e source verifier'
+
+      - name: Build twice and inspect inert candidate bytes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function ConvertFrom-SingleJsonObject([object[]] $lines, [string] $label) {
+            $json = (@($lines | ForEach-Object { [string]$_ }) -join "`n")
+            $document = [Text.Json.JsonDocument]::Parse($json)
+            try {
+              if ($document.RootElement.ValueKind -ne [Text.Json.JsonValueKind]::Object) {
+                throw "$label root must be a JSON object."
+              }
+              return [pscustomobject]@{
+                Json = $json
+                Value = ($json | ConvertFrom-Json -Depth 100)
+              }
+            } finally {
+              $document.Dispose()
+            }
+          }
+          function Assert-SixClosedGates([object] $gateState, [string] $label) {
+            $expected = @(
+              'artifactPublicApiAllowlistFrozen',
+              'artifactCompileAllowlistFrozen',
+              'profileSourceCatalogBound',
+              'rawFeedbackDecoderFrozen',
+              'driverRuntimeAbiBound',
+              'distributionReady'
+            )
+            $actual = @($gateState.PSObject.Properties.Name)
+            if ($actual.Count -ne $expected.Count -or
+                @(Compare-Object $expected $actual -CaseSensitive).Count -ne 0) {
+              throw "$label gate set is not exact."
+            }
+            foreach ($name in $expected) {
+              if ($gateState.$name -ne $false) {
+                throw "$label advanced gate '$name'."
+              }
+            }
+          }
+          function Assert-ExactRemovedAnalyzers(
+              [object[]] $actual,
+              [string[]] $expected,
+              [string] $label) {
+            $observed = @($actual | ForEach-Object {
+              if ([string]::IsNullOrWhiteSpace([string]$_.relativePath) -or
+                  [long]$_.byteLength -le 0 -or
+                  [string]$_.sha256 -cnotmatch '^[A-F0-9]{64}$') {
+                throw "$label contains an invalid analyzer identity."
+              }
+              "{0}|{1}" -f [string]$_.relativePath, [string]$_.sha256
+            })
+            if ($observed.Count -ne $expected.Count -or
+                [string]::Join("`n", $observed) -cne [string]::Join("`n", $expected)) {
+              throw "$label does not match the exact removed-analyzer sequence."
+            }
+          }
+
+          $runner = 'tools/hidmaestro-runtime-candidate/s1_5e/run-actions-proof.ps1'
+          $captured = ConvertFrom-SingleJsonObject `
+            @(& $runner -WorkspaceRoot $env:GITHUB_WORKSPACE) `
+            'S1.5e Actions observation'
+          $receipt = $captured.Value
+          # Preserve the path-redacted receipt for both success and failure.
+          Write-Host $captured.Json
+          if ($receipt.schemaVersion -ne 1 -or
+              $receipt.ok -ne $true -or
+              $receipt.phase -cne 's1.5e-actions-static-artifact-observation' -or
+              $receipt.observationEstablished -ne $true -or
+              $receipt.actionsRunner.os -cne 'Windows' -or
+              $receipt.actionsRunner.dotnetSdk -cne '10.0.400' -or
+              $receipt.actionsRunner.upstreamCommit -cne
+                '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
+              $receipt.actionsRunner.infrastructureNetworkUsedForPinnedFetch -ne $true -or
+              $receipt.stage.fileCountPerBuild -ne 241 -or
+              $receipt.stage.upstreamSelectedFileCount -ne 229 -or
+              $receipt.stage.preRawTreeSha256 -cne $receipt.stage.postRawTreeSha256 -or
+              $receipt.stage.preNormalizedTreeSha256 -cne
+                $receipt.stage.postNormalizedTreeSha256 -or
+              $receipt.stage.upstreamPreRawTreeSha256 -cne
+                $receipt.stage.upstreamPostRawTreeSha256 -or
+              $receipt.stage.upstreamPreNormalizedTreeSha256 -cne
+                $receipt.stage.upstreamPostNormalizedTreeSha256 -or
+              $receipt.stage.rootsWereQuiescentAndHashBound -ne $true -or
+              $receipt.stage.rootsClaimedImmutable -ne $false -or
+              $receipt.determinism.buildCount -ne 2 -or
+              $receipt.determinism.exactArtifactByteEquality -ne $true -or
+              $receipt.inspectorHost.runtimeTarget -cne
+                '.NETCoreApp,Version=v10.0/win-x64' -or
+              $receipt.inspectorHost.frameworkName -cne 'Microsoft.NETCore.App' -or
+              $receipt.inspectorHost.frameworkVersion -cne '10.0.11' -or
+              $receipt.candidateBuilt -ne $true -or
+              $receipt.candidateLoaded -ne $false -or
+              $receipt.candidateExecuted -ne $false -or
+              $receipt.driverTouched -ne $false -or
+              $receipt.deviceTouched -ne $false -or
+              $receipt.artifactsRetained -ne $false -or
+              $receipt.cleanupCompleted -ne $true) {
+            throw 'The top-level S1.5e Actions observation receipt is not exact.'
+          }
+          $packs = $receipt.targetingPacks
+          if ($packs.sdkVersionFileSha256 -cne
+                '89D0157FDF8D6ACD8A76EA6FC0E3A110BE7BCA5FF2001D0436ADE70DD0A7ADC7' -or
+              $packs.sdkToolsetVersionFileSha256 -cne
+                '45D078105738431B70271E857D5CE409B8E6F0F891FF9F864CB5FC92546CDDCC' -or
+              $packs.sdkBundledVersionsSha256 -cne
+                '2D6C1879967A87460C1C712B54B9FE378281DE4D4F7301ECBB8AF923B47C40DD' -or
+              $packs.netCoreAppRefVersion -cne '10.0.11' -or
+              $packs.netCoreAppRefOriginalFileCount -ne 348 -or
+              $packs.netCoreAppRefOriginalRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePreRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefSourcePostRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePostRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefOriginalFrameworkListByteLength -ne 36320 -or
+              $packs.netCoreAppRefOriginalFrameworkListSha256 -cne
+                '0527031269FF47FCEB1518ECCD9992E75F924881A362754957676C18988263B4' -or
+              $packs.netCoreAppRefSanitizedFileCount -ne 342 -or
+              $packs.netCoreAppRefSanitizedRawByteLength -ne 41745862 -or
+              $packs.netCoreAppRefSanitizedFrameworkListByteLength -ne 34752 -or
+              $packs.netCoreAppRefSanitizedFrameworkListSha256 -cne
+                'C23E017A615E74F8CD94DAA2FCA3B9F5EDDBDC4C6636A47D6CB4FC5A61EF9006' -or
+              $packs.netCoreAppRefSanitizedRawTreeSha256 -cne
+                'EF000B960364CC8C39255D3619BA7BF95DA97C0E07B4C029FC9B578E9C1C8276' -or
+              $packs.windowsSdkNetRefVersion -cne '10.0.26100.57' -or
+              $packs.windowsPackageSha256 -cne
+                'EAA0E3B938319F75BEAC5C046C84EF57212C2743E9263E0DB33B2019AB70B524' -or
+              $packs.windowsEvidenceFileCount -ne 97 -or
+              $packs.windowsEvidenceRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePreRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsEvidencePostRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePostRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsOriginalFrameworkListByteLength -ne 942 -or
+              $packs.windowsOriginalFrameworkListSha256 -cne
+                '5F5DC88A217A01FAD154279EF8760C49C4FF9819E33AD0671D0F110D0B641D04' -or
+              $packs.windowsSanitizedFileCount -ne 96 -or
+              $packs.windowsSanitizedRawByteLength -ne 66953308 -or
+              $packs.windowsSanitizedFrameworkListByteLength -ne 702 -or
+              $packs.windowsSanitizedFrameworkListSha256 -cne
+                '78770AD71BD625A18FB1128CF0FF1030C4B1594060931246AB68F94A28921388' -or
+              $packs.windowsSanitizedRawTreeSha256 -cne
+                'E9F9791056DEABD9763FCA005F8604668FF23ACFA875BAB61285CA978BB1D6BA' -or
+              $packs.overlayFileCount -ne 438 -or
+              $packs.overlayRawByteLength -ne 108699170 -or
+              $packs.overlayPreRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.overlayPostFileCount -ne 438 -or
+              $packs.overlayPostRawByteLength -ne 108699170 -or
+              $packs.overlayPostRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.effectiveCompilerAnalyzerItemCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerConfigArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAdditionalFileArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscResponseFileArgumentCount -ne 0 -or
+              $packs.effectiveCompilerAuxiliaryItemCount -ne 0 -or
+              $packs.sourceGeneratorExecutionAuthorized -ne $false -or
+              $packs.analyzerClosureCheckedPreAndPostForCandidateAndInspector -ne $true -or
+              $packs.candidatePackageDownloadFallbacksDisabled -ne $true -or
+              $packs.candidatePackageSourcesConfigured -ne 0 -or
+              $packs.workloadResolverEnabled -ne $false -or
+              $packs.candidateNetworkAuthorized -ne $false) {
+            throw 'The exact released-SDK targeting-pack observation is not exact.'
+          }
+          Assert-ExactRemovedAnalyzers `
+            @($packs.netCoreAppRefRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/Microsoft.Interop.ComInterfaceGenerator.dll|6AD171126DF1AE4DB0420EDFA9791C2CE2599AF758C506BEAB1F29CC9219FE2B',
+              'analyzers/dotnet/cs/Microsoft.Interop.JavaScript.JSImportGenerator.dll|6C06555039E10929673A5EA53CB5CFF7324D292C989D77F0D10DDD56198D6DE1',
+              'analyzers/dotnet/cs/Microsoft.Interop.LibraryImportGenerator.dll|AE1A7C7BEE96FCD69C66FF4FC1CD4D5E2C2474E1644EA9547A11048CF648871C',
+              'analyzers/dotnet/cs/Microsoft.Interop.SourceGeneration.dll|5EFC03100F5C544F64ACE8D240BB73661D1BDA8B01BD69BC4D1FB24D605F8BB5',
+              'analyzers/dotnet/cs/System.Text.Json.SourceGeneration.dll|82CA672F31AD099C9E823B646C27F3A1DA249E3C5574B1DBC4DC76DEE234BD12',
+              'analyzers/dotnet/cs/System.Text.RegularExpressions.Generator.dll|D5B18010ED85ABA3C8807BD3CFA01097BF99E1B6460E99B9A26EB74BFCE12B10'
+            ) `
+            'Core targeting-pack removal evidence'
+          Assert-ExactRemovedAnalyzers `
+            @($packs.windowsRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/WinRT.SourceGenerator.dll|A23601B11FBB36A2DE48960AAD942FBAB26D2F0835F98086CC764F97EA81CBC8'
+            ) `
+            'Windows targeting-pack removal evidence'
+          if ($receipt.inspectorRuntime.version -cne '10.0.11' -or
+              $receipt.inspectorRuntime.fileCount -le 0 -or
+              $receipt.inspectorRuntime.rawByteLength -le 0 -or
+              $receipt.inspectorRuntime.versionFileSha256 -cne
+                '13B770DFE2DFC0294F8C5A9CD60198F365745A219878910A572FD85784D3B733' -or
+              $receipt.inspectorRuntime.preRawTreeSha256 -cnotmatch '^[A-F0-9]{64}$' -or
+              $receipt.inspectorRuntime.preLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.postLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.pathRedacted -ne $true) {
+            throw 'The exact byte-inspector runtime observation is not exact.'
+          }
+          $outputs = @($receipt.determinism.outputs.PSObject.Properties)
+          $expectedOutputs = @(
+            'HIDMaestro.Core.deps.json',
+            'HIDMaestro.Core.dll',
+            'HIDMaestro.Core.pdb'
+          )
+          if ($outputs.Count -ne 3 -or
+              @(Compare-Object $expectedOutputs @($outputs.Name) -CaseSensitive).Count -ne 0 -or
+              @($outputs | Where-Object {
+                $_.Value.byteLength -le 0 -or
+                $_.Value.sha256 -cnotmatch '^[0-9A-F]{64}$'
+              }).Count -ne 0) {
+            throw 'The deterministic output inventory is not exact.'
+          }
+          if ($receipt.observation.ok -ne $true -or
+              $receipt.observation.phase -cne 's1.5e-actions-static-artifact-observation' -or
+              $receipt.observation.candidateBuilt -ne $true -or
+              $receipt.observation.candidateLoaded -ne $false -or
+              $receipt.observation.candidateExecuted -ne $false -or
+              $receipt.observation.driverTouched -ne $false -or
+              $receipt.observation.deviceTouched -ne $false -or
+              $receipt.observation.networkUsedByCandidate -ne $false -or
+              $receipt.observation.publicApi.declaredTypeCount -ne 9 -or
+              $receipt.observation.publicApi.logicalEntryCount -ne 100 -or
+              @($receipt.observation.publicApi.missingTypes).Count -ne 0 -or
+              @($receipt.observation.publicApi.unexpectedTypes).Count -ne 0 -or
+              @($receipt.observation.publicApi.missingEntries).Count -ne 0 -or
+              @($receipt.observation.publicApi.unexpectedEntries).Count -ne 0 -or
+              $receipt.observation.publicApi.structuralContractMatched -ne $false -or
+              $receipt.observation.resources.count -ne 228 -or
+              $receipt.observation.resources.deployableCount -ne 130 -or
+              @($receipt.observation.checks | Where-Object { $_.ok -ne $true }).Count -ne 0) {
+            throw 'The nested byte-only artifact observation is not exact.'
+          }
+          Assert-SixClosedGates $receipt.gateState 'S1.5e Actions observation'
+          Assert-SixClosedGates $receipt.observation.gateState 'S1.5e byte inspector'
+
   # The shippable binary and the installer. The steps live in
   # `build-installer.yml` because `release.yml` needs the SAME build — the file
   # a customer downloads must be the file this gate proved, not a second build
@@ -971,7 +1333,7 @@ jobs:
   # walk through the Actions tab. `release.yml` is what turns the same two files
   # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
-    needs: [test, hidmaestro-contracts]
+    needs: [test, hidmaestro-contracts, hidmaestro-artifact-observation]
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

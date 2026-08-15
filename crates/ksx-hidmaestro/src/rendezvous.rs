@@ -1,8 +1,8 @@
-//! Pure policy for one future per-Play HIDMaestro host rendezvous.
+//! Pure policy for one production per-Play HIDMaestro host rendezvous.
 //!
 //! This module grants no authority. It contains no named-pipe calls, process
 //! launch, elevation, SDK loading, filesystem access or device lifecycle. It
-//! freezes the values which those later OS-facing layers may carry:
+//! freezes the values which the OS-facing transport carries:
 //!
 //! - one 32-byte token, represented only as exactly 64 lowercase hex digits;
 //! - one pipe name derived internally from that token and a fixed V1 prefix;
@@ -144,7 +144,7 @@ impl TokenParseError {
     }
 }
 
-/// The complete caller-controlled input to the future host launch.
+/// The complete caller-controlled input to the production host launch.
 ///
 /// It intentionally has no executable, working-directory, pipe-path, profile,
 /// descriptor or command field. The OS layer resolves the one installed host

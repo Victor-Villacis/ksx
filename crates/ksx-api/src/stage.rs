@@ -1832,13 +1832,9 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .personas
             .iter()
             .find(|p| p.name == "dualsense")
-            .expect("the roster lists it even though it cannot plug");
-        assert!(!dualsense.can_plug);
-        assert!(dualsense
-            .gap
-            .as_deref()
-            .unwrap()
-            .contains("installing HIDMaestro does not change it"));
+            .expect("the roster lists the production DualSense persona");
+        assert!(dualsense.can_plug);
+        assert_eq!(dualsense.gap, None);
     }
 
     /// An unreachable daemon renders as an unreachable daemon, with the reason
@@ -1987,7 +1983,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
 
         let refused = StageEdit::AddSlot {
             number: None,
-            persona: "dualsense".into(),
+            persona: "switchpro".into(),
             preset: "P1".into(),
             layout: None,
         }
@@ -1997,7 +1993,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert!(
             refused
                 .message
-                .contains("installing HIDMaestro does not change it"),
+                .contains("has not yet completed its independent production runtime"),
             "{refused}"
         );
 

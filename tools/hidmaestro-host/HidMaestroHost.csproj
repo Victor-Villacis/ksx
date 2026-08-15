@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ksx-hidmaestro-host</AssemblyName>
+    <RootNamespace>Ksx.HidMaestroHost</RootNamespace>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <StripSymbols>false</StripSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <CandidateRoot>$(MSBuildThisFileDirectory)..\hidmaestro-runtime-candidate\candidate</CandidateRoot>
+  </PropertyGroup>
+
+  <Target Name="RequirePinnedHidMaestroSource" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(HidMaestroSourceRoot)' == ''" Text="HidMaestroSourceRoot is required." />
+    <Error Condition="!Exists('$(HidMaestroSourceRoot)\sdk\HIDMaestro.Core\HMOutputPacket.cs')" Text="The pinned HIDMaestro source tree is incomplete." />
+  </Target>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="LaunchArguments.cs" />
+    <Compile Include="PipeClient.cs" />
+    <Compile Include="RuntimeHostSession.cs" />
+    <Compile Include="WindowsDeviceManager.cs" />
+    <Compile Include="SharedMemoryEndpoint.cs" />
+    <Compile Include="StateMapper.cs" />
+    <Compile Include="..\hidmaestro-probe\HostProtocolCodec.cs" Link="HostProtocolCodec.cs" />
+    <Compile Include="..\hidmaestro-fake-host\PipeFrameStream.cs" Link="PipeFrameStream.cs" />
+    <Compile Include="$(CandidateRoot)\HMContext.cs" Link="Candidate\HMContext.cs" />
+    <Compile Include="$(CandidateRoot)\HMController.cs" Link="Candidate\HMController.cs" />
+    <Compile Include="$(CandidateRoot)\HMGamepadState.cs" Link="Candidate\HMGamepadState.cs" />
+    <Compile Include="$(CandidateRoot)\HMProfile.cs" Link="Candidate\HMProfile.cs" />
+    <Compile Include="$(CandidateRoot)\Internal\*.cs" Link="Candidate\Internal\%(Filename)%(Extension)" />
+    <Compile Include="$(HidMaestroSourceRoot)\sdk\HIDMaestro.Core\HMOutputPacket.cs" Link="Candidate\HMOutputPacket.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(HidMaestroSourceRoot)\profiles\**\*.json"
+                      Exclude="$(HidMaestroSourceRoot)\profiles\linux-kernel-fixed-descriptors.json;$(HidMaestroSourceRoot)\profiles\schema.json;$(HidMaestroSourceRoot)\profiles\scraped_descriptors.json">
+      <LogicalName>HIDMaestro.Profiles.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="runtime-contract.json" LogicalName="KSX.HIDMaestro.runtime-contract.json" />
+  </ItemGroup>
+</Project>

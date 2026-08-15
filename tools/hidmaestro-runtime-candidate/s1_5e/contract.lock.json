@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "UTF-8 without BOM; CRLF and bare CR become LF before normalized SHA-256; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 197,
+  "expectedSourceVerifierCheckCount": 198,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -164,11 +164,11 @@
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "D52ECBBBCDD601E80A74A7E9F9E18FA23DFA08E9E957687DA2E44423229CA28B"
+      "sha256": "A7B28F72B313FE1B7C93CEB02BA5705DD97767AA2287002196B630B9CA8EF2EA"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "C190169C484F64644A761924E2AAAFE70DC9DC0800E668C06954F0539EBB7871"
+      "sha256": "93665EC68B72D794C4E28022D4E8E1EA3E5D9BCC475AB58C8762D9253BB49494"
     }
   ],
   "gateState": {

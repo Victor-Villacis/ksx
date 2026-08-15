@@ -355,6 +355,29 @@ Assert-Check 'runner.sdk-selected-before-first-dotnet' `
         "Invoke-Captured -File `$dotnet -Arguments @('--version')",
         [StringComparison]::Ordinal)) `
     'An exact environment-root global.json selects the SDK before the first dotnet invocation.'
+Assert-Check 'runner.tool-discovery-before-environment-seal' `
+    ((Has-Literal $runner "`$dotnet = Resolve-FirstApplicationPath -Name 'dotnet'") -and
+     (Has-Literal $runner "`$git = Resolve-FirstApplicationPath -Name 'git'") -and
+     (Has-Literal $runner "`$pwsh = Resolve-FirstApplicationPath -Name 'pwsh'") -and
+     $runner.IndexOf(
+        "`$dotnet = Resolve-FirstApplicationPath -Name 'dotnet'",
+        [StringComparison]::Ordinal) -lt
+     $runner.IndexOf(
+        'Set-HardenedProcessEnvironment -DotnetHome',
+        [StringComparison]::Ordinal) -and
+     $runner.IndexOf(
+        "`$git = Resolve-FirstApplicationPath -Name 'git'",
+        [StringComparison]::Ordinal) -lt
+     $runner.IndexOf(
+        'Set-HardenedProcessEnvironment -DotnetHome',
+        [StringComparison]::Ordinal) -and
+     $runner.IndexOf(
+        "`$pwsh = Resolve-FirstApplicationPath -Name 'pwsh'",
+        [StringComparison]::Ordinal) -lt
+     $runner.IndexOf(
+        'Set-HardenedProcessEnvironment -DotnetHome',
+        [StringComparison]::Ordinal)) `
+    'The first validated application paths are scalar before the child environment is sealed.'
 Assert-Check 'runner.no-source-parameter' `
     (-not (Has-Regex $runner '(?m)^\s*\[string\]\s+\$(SourceRoot|Repository|Commit)\b')) `
     'Runner exposes no caller-selected source/repository/commit parameter.'

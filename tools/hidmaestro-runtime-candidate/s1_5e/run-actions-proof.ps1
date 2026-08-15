@@ -26,6 +26,28 @@ function Get-OrdinalSorted {
     return ,$copy
 }
 
+function Resolve-FirstApplicationPath {
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $ExpectedFileName
+    )
+    $applications = @(Get-Command $Name -CommandType Application -All -ErrorAction Stop)
+    if ($applications.Count -eq 0) { throw 'A required application was not resolved.' }
+    $source = [string]$applications[0].Source
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        throw 'The first resolved application has no source path.'
+    }
+    $full = Get-FullPath $source
+    if (-not [IO.File]::Exists($full) -or
+        [IO.Path]::GetFileName($full) -ine $ExpectedFileName) {
+        throw 'The first resolved application path is not the expected executable.'
+    }
+    if ((Get-Item -LiteralPath $full -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw 'A resolved application executable is a reparse point.'
+    }
+    return $full
+}
+
 function Assert-ChildPath {
     param(
         [Parameter(Mandatory)][string] $Parent,
@@ -1251,13 +1273,13 @@ try {
     [void][IO.Directory]::CreateDirectory($emptyHooks)
     New-ExactGlobalJson -Path (Join-Path $environmentRoot 'global.json') `
         -SdkVersion ([string]$contract.toolchain.dotnetSdk)
+    $dotnet = Resolve-FirstApplicationPath -Name 'dotnet' -ExpectedFileName 'dotnet.exe'
+    $git = Resolve-FirstApplicationPath -Name 'git' -ExpectedFileName 'git.exe'
+    $pwsh = Resolve-FirstApplicationPath -Name 'pwsh' -ExpectedFileName 'pwsh.exe'
     Set-HardenedProcessEnvironment -DotnetHome (Join-Path $environmentRoot 'dotnet-home') `
         -PackagesRoot $inspectorPackages -NugetCacheRoot (Join-Path $environmentRoot 'nuget-cache') `
         -GitGlobalConfig $gitGlobal -GitTemplateRoot $emptyTemplate
     [void][IO.Directory]::CreateDirectory($env:DOTNET_CLI_HOME)
-    $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
-    $git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
-    $pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
     $dotnetRoot = [IO.Path]::GetDirectoryName($dotnet)
     Initialize-IsolatedChildEnvironment -EnvironmentRoot $environmentRoot `
         -DotnetPath $dotnet -GitPath $git -PwshPath $pwsh

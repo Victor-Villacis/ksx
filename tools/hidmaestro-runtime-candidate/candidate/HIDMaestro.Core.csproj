@@ -1,0 +1,273 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- S1.5d source-only candidate: the fixed staging directory is absent, and this project is not evaluated, built, loaded, or run by the source freeze. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputType>Library</OutputType>
+    <AssemblyName>HIDMaestro.Core</AssemblyName>
+    <RootNamespace>HIDMaestro</RootNamespace>
+    <Version>1.6.1</Version>
+    <AssemblyVersion>1.6.1.0</AssemblyVersion>
+    <FileVersion>1.6.1.0</FileVersion>
+    <InformationalVersion>1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954</InformationalVersion>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="HMContext.cs" />
+    <Compile Include="HMController.cs" />
+    <Compile Include="HMGamepadState.cs" />
+    <Compile Include="HMProfile.cs" />
+    <Compile Include="Internal/RawDualSenseFeedbackAdapter.cs" />
+    <Compile Include="Internal/RuntimeDualSenseInputEncoder.cs" />
+    <Compile Include="Internal/RuntimeProfileCatalog.cs" />
+    <Compile Include="Internal/RuntimeExactDeviceManager.cs" />
+    <Compile Include="Internal/RuntimeOwnedSharedMemoryIO.cs" />
+    <Compile Include="Internal/RuntimePlainHidLifecycle.cs" />
+    <Compile Include=".pinned-upstream-v1.6.1/sdk/HIDMaestro.Core/HMOutputPacket.cs" Link="HMOutputPacket.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/8bitdo/pro-2.json" LogicalName="HIDMaestro.Profiles.8bitdo/pro-2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/8bitdo/sn30-pro.json" LogicalName="HIDMaestro.Profiles.8bitdo/sn30-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/8bitdo/ultimate-wired.json" LogicalName="HIDMaestro.Profiles.8bitdo/ultimate-wired.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/amazon/luna-ble.json" LogicalName="HIDMaestro.Profiles.amazon/luna-ble.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/amazon/luna-usb.json" LogicalName="HIDMaestro.Profiles.amazon/luna-usb.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-forte-pedals.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-forte-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-forte.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-forte.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-invicta-pedals.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-invicta-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-invicta.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-invicta.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-la-prima.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-la-prima.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/asetek/asetek-tony-kanaan.json" LogicalName="HIDMaestro.Profiles.asetek/asetek-tony-kanaan.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/cammus/cammus-c12.json" LogicalName="HIDMaestro.Profiles.cammus/cammus-c12.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/cammus/cammus-c5.json" LogicalName="HIDMaestro.Profiles.cammus/cammus-c5.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/combatstick.json" LogicalName="HIDMaestro.Profiles.ch-products/combatstick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/f16-combat-stick.json" LogicalName="HIDMaestro.Profiles.ch-products/f16-combat-stick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/fighterstick.json" LogicalName="HIDMaestro.Profiles.ch-products/fighterstick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/flight-sim-yoke.json" LogicalName="HIDMaestro.Profiles.ch-products/flight-sim-yoke.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/pro-pedals.json" LogicalName="HIDMaestro.Profiles.ch-products/pro-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/pro-throttle.json" LogicalName="HIDMaestro.Profiles.ch-products/pro-throttle.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/ch-products/throttle-quadrant.json" LogicalName="HIDMaestro.Profiles.ch-products/throttle-quadrant.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/clubsport-handbrake.json" LogicalName="HIDMaestro.Profiles.fanatec/clubsport-handbrake.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/clubsport-pedals-v3.json" LogicalName="HIDMaestro.Profiles.fanatec/clubsport-pedals-v3.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/clubsport-shifter.json" LogicalName="HIDMaestro.Profiles.fanatec/clubsport-shifter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/clubsport-v2.json" LogicalName="HIDMaestro.Profiles.fanatec/clubsport-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/clubsport-v25.json" LogicalName="HIDMaestro.Profiles.fanatec/clubsport-v25.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-dd.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-dd.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-elite-pedals-lc.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-elite-pedals-lc.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-elite-pedals-v2.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-elite-pedals-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-elite-ps4.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-elite-ps4.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-elite.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-elite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csl-pedals.json" LogicalName="HIDMaestro.Profiles.fanatec/csl-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/csr-elite.json" LogicalName="HIDMaestro.Profiles.fanatec/csr-elite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/podium-dd1.json" LogicalName="HIDMaestro.Profiles.fanatec/podium-dd1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/fanatec/podium-dd2.json" LogicalName="HIDMaestro.Profiles.fanatec/podium-dd2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/flydigi/vader-4-pro.json" LogicalName="HIDMaestro.Profiles.flydigi/vader-4-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/google/stadia-bt.json" LogicalName="HIDMaestro.Profiles.google/stadia-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/google/stadia-usb.json" LogicalName="HIDMaestro.Profiles.google/stadia-usb.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/heusinkveld/handbrake-v2.json" LogicalName="HIDMaestro.Profiles.heusinkveld/handbrake-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/heusinkveld/sequential-shifter.json" LogicalName="HIDMaestro.Profiles.heusinkveld/sequential-shifter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/heusinkveld/sprint-pedals.json" LogicalName="HIDMaestro.Profiles.heusinkveld/sprint-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/heusinkveld/ultimate-pedals.json" LogicalName="HIDMaestro.Profiles.heusinkveld/ultimate-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/honeycomb/alpha.json" LogicalName="HIDMaestro.Profiles.honeycomb/alpha.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/honeycomb/bravo.json" LogicalName="HIDMaestro.Profiles.honeycomb/bravo.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/fighting-stick-alpha.json" LogicalName="HIDMaestro.Profiles.hori/fighting-stick-alpha.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/horipad-steam.json" LogicalName="HIDMaestro.Profiles.hori/horipad-steam.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/horipad-switch.json" LogicalName="HIDMaestro.Profiles.hori/horipad-switch.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/pcengine-mini.json" LogicalName="HIDMaestro.Profiles.hori/pcengine-mini.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/pokken-controller.json" LogicalName="HIDMaestro.Profiles.hori/pokken-controller.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/racing-wheel-apex.json" LogicalName="HIDMaestro.Profiles.hori/racing-wheel-apex.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/hori/rap-v-kai.json" LogicalName="HIDMaestro.Profiles.hori/rap-v-kai.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/driving-force-gt.json" LogicalName="HIDMaestro.Profiles.logitech/driving-force-gt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/driving-force-pro.json" LogicalName="HIDMaestro.Profiles.logitech/driving-force-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/driving-force.json" LogicalName="HIDMaestro.Profiles.logitech/driving-force.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/extreme-3d-pro.json" LogicalName="HIDMaestro.Profiles.logitech/extreme-3d-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/f310.json" LogicalName="HIDMaestro.Profiles.logitech/f310.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/f710.json" LogicalName="HIDMaestro.Profiles.logitech/f710.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/formula-vibration.json" LogicalName="HIDMaestro.Profiles.logitech/formula-vibration.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g-pro-ps.json" LogicalName="HIDMaestro.Profiles.logitech/g-pro-ps.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g-pro-xbox.json" LogicalName="HIDMaestro.Profiles.logitech/g-pro-xbox.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g25.json" LogicalName="HIDMaestro.Profiles.logitech/g25.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g27.json" LogicalName="HIDMaestro.Profiles.logitech/g27.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g29-ps4.json" LogicalName="HIDMaestro.Profiles.logitech/g29-ps4.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g29.json" LogicalName="HIDMaestro.Profiles.logitech/g29.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g920.json" LogicalName="HIDMaestro.Profiles.logitech/g920.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g923-ps.json" LogicalName="HIDMaestro.Profiles.logitech/g923-ps.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/g923-xbox.json" LogicalName="HIDMaestro.Profiles.logitech/g923-xbox.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/gt-force.json" LogicalName="HIDMaestro.Profiles.logitech/gt-force.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/momo-force.json" LogicalName="HIDMaestro.Profiles.logitech/momo-force.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/momo-racing.json" LogicalName="HIDMaestro.Profiles.logitech/momo-racing.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/rs-pedals.json" LogicalName="HIDMaestro.Profiles.logitech/rs-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/speed-force-wireless.json" LogicalName="HIDMaestro.Profiles.logitech/speed-force-wireless.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/wingman-formula-gp.json" LogicalName="HIDMaestro.Profiles.logitech/wingman-formula-gp.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/x52-pro.json" LogicalName="HIDMaestro.Profiles.logitech/x52-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/logitech/x52.json" LogicalName="HIDMaestro.Profiles.logitech/x52.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/sidewinder-force-feedback-2.json" LogicalName="HIDMaestro.Profiles.microsoft/sidewinder-force-feedback-2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-arcade-stick.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-arcade-stick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-dance-pad.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-dance-pad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-flight-stick.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-flight-stick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-guitar-v1.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-guitar-v1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-guitar-v2.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-guitar-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-type2.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-type2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-wheel-v1.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-wheel-v1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-wheel-v2.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-wheel-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-wired.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-wired.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-360-wireless.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-360-wireless.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-adaptive.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-adaptive.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-elite-v1.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-elite-v1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-elite-v2-bt-v2.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-elite-v2-bt-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-elite-v2-bt.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-elite-v2-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-elite-v2.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-elite-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-one-original.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-one-original.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-one-rev1.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-one-rev1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-one-s-bt-djm00n.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-one-s-bt-djm00n.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-one-s-bt.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-one-s-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-one-s.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-one-s.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-series-xs-bt.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-series-xs-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/microsoft/xbox-series-xs.json" LogicalName="HIDMaestro.Profiles.microsoft/xbox-series-xs.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/circuitpython-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/circuitpython-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/daemonbite-genesis.json" LogicalName="HIDMaestro.Profiles.misc/daemonbite-genesis.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/daemonbite-nes.json" LogicalName="HIDMaestro.Profiles.misc/daemonbite-nes.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/daemonbite-snes.json" LogicalName="HIDMaestro.Profiles.misc/daemonbite-snes.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/dragonrise-0006-twin-shock.json" LogicalName="HIDMaestro.Profiles.misc/dragonrise-0006-twin-shock.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/dragonrise-0006.json" LogicalName="HIDMaestro.Profiles.misc/dragonrise-0006.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/dragonrise-js19.json" LogicalName="HIDMaestro.Profiles.misc/dragonrise-js19.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/ffbeast-joystick.json" LogicalName="HIDMaestro.Profiles.misc/ffbeast-joystick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/ffbeast-rudder.json" LogicalName="HIDMaestro.Profiles.misc/ffbeast-rudder.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/ffbeast-wheel.json" LogicalName="HIDMaestro.Profiles.misc/ffbeast-wheel.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/generic-dinput-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/generic-dinput-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/ibuffalo-snes.json" LogicalName="HIDMaestro.Profiles.misc/ibuffalo-snes.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/joypad-gc-adapter.json" LogicalName="HIDMaestro.Profiles.misc/joypad-gc-adapter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/joypad-generic-hid.json" LogicalName="HIDMaestro.Profiles.misc/joypad-generic-hid.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/joypad-steam-input.json" LogicalName="HIDMaestro.Profiles.misc/joypad-steam-input.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/joypad-xac.json" LogicalName="HIDMaestro.Profiles.misc/joypad-xac.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/leo-bodnar-pedals.json" LogicalName="HIDMaestro.Profiles.misc/leo-bodnar-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/mmos-ffb.json" LogicalName="HIDMaestro.Profiles.misc/mmos-ffb.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/mpg-hid-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/mpg-hid-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/nicohood-arduino-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/nicohood-arduino-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/oddor-handbrake.json" LogicalName="HIDMaestro.Profiles.misc/oddor-handbrake.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/openffboard.json" LogicalName="HIDMaestro.Profiles.misc/openffboard.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/p5general-activtor.json" LogicalName="HIDMaestro.Profiles.misc/p5general-activtor.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/phoenixrc.json" LogicalName="HIDMaestro.Profiles.misc/phoenixrc.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/ps3-alt-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/ps3-alt-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/retrolink-snes-0011.json" LogicalName="HIDMaestro.Profiles.misc/retrolink-snes-0011.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/shanwan-gioteck.json" LogicalName="HIDMaestro.Profiles.misc/shanwan-gioteck.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/tinyusb-gamepad-noid.json" LogicalName="HIDMaestro.Profiles.misc/tinyusb-gamepad-noid.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/tinyusb-gamepad.json" LogicalName="HIDMaestro.Profiles.misc/tinyusb-gamepad.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/vrc2.json" LogicalName="HIDMaestro.Profiles.misc/vrc2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/vrs-dfp-pedals.json" LogicalName="HIDMaestro.Profiles.misc/vrs-dfp-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/misc/vrs-dfp-wheel.json" LogicalName="HIDMaestro.Profiles.misc/vrs-dfp-wheel.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/moza/moza-r12.json" LogicalName="HIDMaestro.Profiles.moza/moza-r12.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/moza/moza-r16.json" LogicalName="HIDMaestro.Profiles.moza/moza-r16.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/moza/moza-r3.json" LogicalName="HIDMaestro.Profiles.moza/moza-r3.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/moza/moza-r5.json" LogicalName="HIDMaestro.Profiles.moza/moza-r5.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/moza/moza-r9.json" LogicalName="HIDMaestro.Profiles.moza/moza-r9.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nacon/bigben-ps4.json" LogicalName="HIDMaestro.Profiles.nacon/bigben-ps4.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/gamecube-adapter-hid.json" LogicalName="HIDMaestro.Profiles.nintendo/gamecube-adapter-hid.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/gamecube-adapter.json" LogicalName="HIDMaestro.Profiles.nintendo/gamecube-adapter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/genesis-nso.json" LogicalName="HIDMaestro.Profiles.nintendo/genesis-nso.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/joycon-charging-grip.json" LogicalName="HIDMaestro.Profiles.nintendo/joycon-charging-grip.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/joycon-l.json" LogicalName="HIDMaestro.Profiles.nintendo/joycon-l.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/joycon-r.json" LogicalName="HIDMaestro.Profiles.nintendo/joycon-r.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/n64-nso.json" LogicalName="HIDMaestro.Profiles.nintendo/n64-nso.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/snes-nso.json" LogicalName="HIDMaestro.Profiles.nintendo/snes-nso.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/switch-pro.json" LogicalName="HIDMaestro.Profiles.nintendo/switch-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/switch2-joycon-l.json" LogicalName="HIDMaestro.Profiles.nintendo/switch2-joycon-l.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/switch2-joycon-r.json" LogicalName="HIDMaestro.Profiles.nintendo/switch2-joycon-r.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/nintendo/switch2-pro.json" LogicalName="HIDMaestro.Profiles.nintendo/switch2-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/pxn/litestar-gt987.json" LogicalName="HIDMaestro.Profiles.pxn/litestar-gt987.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/pxn/pxn-v10.json" LogicalName="HIDMaestro.Profiles.pxn/pxn-v10.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/pxn/pxn-v12-lite.json" LogicalName="HIDMaestro.Profiles.pxn/pxn-v12-lite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/pxn/pxn-v12.json" LogicalName="HIDMaestro.Profiles.pxn/pxn-v12.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/pxn/pxn-vd6.json" LogicalName="HIDMaestro.Profiles.pxn/pxn-vd6.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/razer/panthera-ps4.json" LogicalName="HIDMaestro.Profiles.razer/panthera-ps4.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/razer/wolverine-v3-pro.json" LogicalName="HIDMaestro.Profiles.razer/wolverine-v3-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sega/astro-city-mini.json" LogicalName="HIDMaestro.Profiles.sega/astro-city-mini.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sega/mega-drive-mini.json" LogicalName="HIDMaestro.Profiles.sega/mega-drive-mini.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simagic/simagic-alpha.json" LogicalName="HIDMaestro.Profiles.simagic/simagic-alpha.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simagic/simagic-gt-neo.json" LogicalName="HIDMaestro.Profiles.simagic/simagic-gt-neo.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simucube/simucube-1.json" LogicalName="HIDMaestro.Profiles.simucube/simucube-1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simucube/simucube-2-pro.json" LogicalName="HIDMaestro.Profiles.simucube/simucube-2-pro.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simucube/simucube-2-sport.json" LogicalName="HIDMaestro.Profiles.simucube/simucube-2-sport.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/simucube/simucube-2-ultimate.json" LogicalName="HIDMaestro.Profiles.simucube/simucube-2-ultimate.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/snk/neogeo-mini.json" LogicalName="HIDMaestro.Profiles.snk/neogeo-mini.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-bt-full.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-bt-full.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-bt.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-composite.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-composite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-edge-bt.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-edge-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-edge-composite.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-edge-composite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense-edge.json" LogicalName="HIDMaestro.Profiles.sony/dualsense-edge.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualsense.json" LogicalName="HIDMaestro.Profiles.sony/dualsense.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-3.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-3.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-4-v1-full.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-4-v1-full.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-4-v1.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-4-v1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-4-v2-bt.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-4-v2-bt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-4-v2-composite.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-4-v2-composite.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/dualshock-4-v2.json" LogicalName="HIDMaestro.Profiles.sony/dualshock-4-v2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/ps-classic.json" LogicalName="HIDMaestro.Profiles.sony/ps-classic.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/ps-move.json" LogicalName="HIDMaestro.Profiles.sony/ps-move.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/sony/ps3-remote.json" LogicalName="HIDMaestro.Profiles.sony/ps3-remote.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/steelseries/srws1.json" LogicalName="HIDMaestro.Profiles.steelseries/srws1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/taito/egret-ii-mini.json" LogicalName="HIDMaestro.Profiles.taito/egret-ii-mini.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-flight-hotas-4.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-flight-hotas-4.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-flight-hotas-one.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-flight-hotas-one.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-flight-hotas-x.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-flight-hotas-x.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-flight-rudder-pedals.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-flight-rudder-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-gt.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-gt.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-lcm-pedals.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-lcm-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t-rudder-pedals.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t-rudder-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t150.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t150.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t16000m.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t16000m.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t248.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t248.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t300rs-ps3-adv.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t300rs-ps3-adv.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t300rs-ps3.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t300rs-ps3.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t300rs.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t300rs.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t500rs.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t500rs.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/t80.json" LogicalName="HIDMaestro.Profiles.thrustmaster/t80.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/th8a-shifter.json" LogicalName="HIDMaestro.Profiles.thrustmaster/th8a-shifter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/tpr-pedals.json" LogicalName="HIDMaestro.Profiles.thrustmaster/tpr-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/ts-pc-racer.json" LogicalName="HIDMaestro.Profiles.thrustmaster/ts-pc-racer.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/ts-xw.json" LogicalName="HIDMaestro.Profiles.thrustmaster/ts-xw.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/thrustmaster/tx-xbox.json" LogicalName="HIDMaestro.Profiles.thrustmaster/tx-xbox.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/turtle-beach/flightstick.json" LogicalName="HIDMaestro.Profiles.turtle-beach/flightstick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/turtle-beach/race.json" LogicalName="HIDMaestro.Profiles.turtle-beach/race.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/turtle-beach/throttle.json" LogicalName="HIDMaestro.Profiles.turtle-beach/throttle.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/valve/steam-controller.json" LogicalName="HIDMaestro.Profiles.valve/steam-controller.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/valve/steam-deck.json" LogicalName="HIDMaestro.Profiles.valve/steam-deck.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/constellation-alpha-cm2.json" LogicalName="HIDMaestro.Profiles.virpil/constellation-alpha-cm2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/constellation-alpha-cm3.json" LogicalName="HIDMaestro.Profiles.virpil/constellation-alpha-cm3.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/constellation-alpha-warbrd.json" LogicalName="HIDMaestro.Profiles.virpil/constellation-alpha-warbrd.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/control-panel-1.json" LogicalName="HIDMaestro.Profiles.virpil/control-panel-1.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/control-panel-2.json" LogicalName="HIDMaestro.Profiles.virpil/control-panel-2.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/mongoost-50cm2-throttle.json" LogicalName="HIDMaestro.Profiles.virpil/mongoost-50cm2-throttle.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/virpil/mongoost-50cm3-throttle.json" LogicalName="HIDMaestro.Profiles.virpil/mongoost-50cm3-throttle.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gladiator-evo-l.json" LogicalName="HIDMaestro.Profiles.vkbsim/gladiator-evo-l.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gladiator-evo-r.json" LogicalName="HIDMaestro.Profiles.vkbsim/gladiator-evo-r.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gladiator-k-l.json" LogicalName="HIDMaestro.Profiles.vkbsim/gladiator-k-l.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gladiator-k-r.json" LogicalName="HIDMaestro.Profiles.vkbsim/gladiator-k-r.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gladiator-mcp.json" LogicalName="HIDMaestro.Profiles.vkbsim/gladiator-mcp.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gunfighter-sce-l.json" LogicalName="HIDMaestro.Profiles.vkbsim/gunfighter-sce-l.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gunfighter-sce-r.json" LogicalName="HIDMaestro.Profiles.vkbsim/gunfighter-sce-r.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/gunfighter.json" LogicalName="HIDMaestro.Profiles.vkbsim/gunfighter.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/sem-thq.json" LogicalName="HIDMaestro.Profiles.vkbsim/sem-thq.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/vkbsim/stecs.json" LogicalName="HIDMaestro.Profiles.vkbsim/stecs.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/winwing/orion2-f16ex.json" LogicalName="HIDMaestro.Profiles.winwing/orion2-f16ex.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/winwing/orion2-f18.json" LogicalName="HIDMaestro.Profiles.winwing/orion2-f18.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/winwing/orion2-joystick.json" LogicalName="HIDMaestro.Profiles.winwing/orion2-joystick.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/winwing/skywalker-pedals.json" LogicalName="HIDMaestro.Profiles.winwing/skywalker-pedals.json" />
+    <EmbeddedResource Include=".pinned-upstream-v1.6.1/profiles/winwing/ursa-minor.json" LogicalName="HIDMaestro.Profiles.winwing/ursa-minor.json" />
+  </ItemGroup>
+</Project>

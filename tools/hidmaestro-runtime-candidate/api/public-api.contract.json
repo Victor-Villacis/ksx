@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "hidmaestro-s1.5c-dualsense-host-public-api",
-  "status": "exact-candidate-allowlist-source-derived-replacements-absent",
+  "status": "exact-candidate-allowlist-source-present-not-built-or-metadata-verified",
   "upstream": {
     "repository": "https://github.com/hifihedgehog/HIDMaestro",
     "tag": "v1.6.1",
@@ -458,7 +458,7 @@
     "HIDMaestro.Internal.PidReportIdExtractor"
   ],
   "limitations": [
-    "This contract is an exact target allowlist, not a claim that replacement sources or a conforming assembly exist.",
+    "The S1.5d replacement sources exist and are hash-frozen by a separate static verifier, but no conforming assembly or artifact metadata has been produced or inspected.",
     "It covers only the one-DualSense raw-feedback host boundary and deliberately omits touch, IMU, battery, decoded-output, PID, USB/IP, VR, builder and provisioning surfaces.",
     "A future metadata gate must reject every public type or member not listed here, including public types under HIDMaestro.Internal.",
     "Passing the source-only verifier proves provenance and closure of this contract, not compilation, behavior, binary identity, driver ABI, signing, installation or hardware operation."

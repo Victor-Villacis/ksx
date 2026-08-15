@@ -13,11 +13,12 @@ raw-feedback managed-host experiment without building or loading HIDMaestro:
    byte-for-byte. Thirteen upstream units require narrowed replacements and 37
    are excluded.
 
-This is intentionally not a compilable source manifest. Every planned
-replacement is marked `replacementPresent: false`, the future compile
-allowlist remains false, and build/execution authorization remains false. The
-planned filenames describe what must eventually exist; they are not evidence
-that code exists behind those names.
+S1.5d now supplies every planned replacement and required new source unit in a
+separately hash-frozen inert candidate. Its project names exactly 11 compile
+inputs and 228 resources, but it has not been built or loaded. The artifact
+compile allowlist, build authorization, and execution authorization therefore
+remain false; source/project closure is not evidence of compiled metadata or
+behavior.
 
 ## Exact public closure
 
@@ -61,10 +62,10 @@ entire CRLF checkout byte sequence is pinned. The replacement groups cover:
 - the new raw DualSense feedback adapter.
 
 The last adapter has no direct upstream source unit, so it appears under
-`requiredNewUnits`. No replacement hash can be frozen until the implementation
-exists. At that point a later checkpoint must prove dependency closure, pin
-every new byte, and switch the compile gate only after metadata inspection of
-the resulting assembly.
+`requiredNewUnits`. Its source and every replacement byte are now frozen by the
+S1.5d candidate verifier. A later checkpoint must build in isolated Actions,
+prove dependency closure, and switch the compile gate only after static
+metadata inspection of the resulting assembly.
 
 ## Static verification
 
@@ -96,7 +97,8 @@ The verifier performs only text, Git-tree, and SHA-256 reads. It checks:
 verifier topology, so adding or removing an assurance requires an explicit
 lock update.
 
-A pass proves only those static facts. It does not prove replacement code,
-compilation, API metadata of a built artifact, input encoding, raw feedback,
-device ownership, shared-memory behavior, driver ABI, signing, installation,
-cleanup, latency, or operation against hardware.
+A pass proves only those static facts. Replacement sources now exist under the
+separate S1.5d gate, but this verifier still does not prove compilation, API
+metadata of a built artifact, input encoding, raw feedback, device ownership,
+shared-memory behavior, driver ABI, signing, installation, cleanup, latency,
+or operation against hardware.

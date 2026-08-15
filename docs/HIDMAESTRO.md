@@ -303,7 +303,7 @@ another process mutates the tree. Its machine-readable assurance is therefore
 file identities before any audit result can authorize signing, packaging or
 execution.
 
-### S1.5b/S1.5c runtime-candidate checkpoint
+### S1.5b/S1.5c/S1.5d runtime-candidate checkpoint
 
 S1.5b's first checkpoint pinned the exact upstream v1.6.1 source baseline and
 the pure native-bootstrap policy without building or loading upstream code.
@@ -322,6 +322,20 @@ The green S1.5c gate records four completed source-only facts:
   47-byte-data boundary and conservative effective-motor policy frozen in one
   dependency-free Rust reducer and 16 golden vectors.
 
+S1.5d then materializes the complete inert managed-source candidate named by
+those contracts: 10 candidate C# units, one explicit project, and one staging
+ignore. The project lists exactly 11 compile inputs and 228 profile resources,
+disables default item discovery, and references only a fixed, deliberately
+absent `.pinned-upstream-v1.6.1` staging directory. Its source verifier freezes
+the 12-file tree and 453 static relationships without invoking MSBuild or
+loading the candidate.
+
+The same checkpoint adds a source-derived DualSense input contract over 12
+pinned upstream blobs, six descriptor groups, nine scenarios, and 37 complete
+64-byte reports. The candidate encoder uses report ID `0x01` at byte zero, and
+the legacy shared-state seam passes exactly bytes 1 through 63. Those are
+source relations only; the candidate has not executed the vectors.
+
 These are source contracts, not artifact evidence. The aggregate contract
 therefore still keeps all six runtime/distribution gates false:
 
@@ -332,22 +346,24 @@ therefore still keeps all six runtime/distribution gates false:
 - `driverRuntimeAbiBound`; and
 - `distributionReady`.
 
-Closing those gates still requires reviewed replacement sources, a built
-runtime-only assembly whose metadata, compile closure and 228 resources match
-the source contracts, a managed feedback adapter passing the same 16 vectors,
+Closing those gates still requires an Actions-built runtime-only assembly whose
+metadata, compile closure and 228 resources match the source contracts, managed
+input and feedback artifact checks passing the 37 and 16 frozen vectors,
 binding the source layout to the exact signed installed driver binary/catalog,
 the production native-bootstrap/managed-host graph, signer/catalog/revocation
 proof and clean-VM lifecycle evidence.
 
-The next source-only slice is S1.5d: materialize and hash-pin the candidate tree
-named by `api/source-compilation.contract.json`, including its explicit project
-and resource manifest. That slice must not build or load the candidate and must
-leave every artifact, driver, distribution and hardware gate false.
+S1.5d leaves every artifact, driver, distribution and hardware gate false. The
+next slice is S1.5e in GitHub Actions: populate only the fixed staged inputs in
+an immutable runner directory, build without executing the candidate, then use
+non-executing PE/metadata inspection to prove the nine-type/100-entry public
+surface, exact compile/resource closure, absence of an entry point or module
+initializer, and bounded MemberRef/P/Invoke authority.
 
 The source contract also requires transactional exact-device ownership: capture
-the parent identity immediately after registration, retain partial-owned state
-across later failures, and roll back only those exact identities before creation
-can fail cleanly.
+the parent identity immediately after registration, retain exact-owned recovery
+state and a serialized retry action across later failures, and remove only
+those exact identities after state teardown succeeds.
 
 The separate `tools/hidmaestro-bootstrap-policy` harness freezes the future
 elevation topology without containing a binary target, dependency, unsafe code

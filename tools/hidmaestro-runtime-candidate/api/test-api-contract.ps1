@@ -303,14 +303,21 @@ try {
             'api/source-compilation.contract.json') `
         'legacy safety and hazard lists explicitly defer to the exhaustive source-disposition contract'
     Add-Check 'aggregate.gatesRemainInert' `
-        ($candidate.status -ceq 'design-contract-only' -and
+        ($candidate.status -ceq 's1.5d-source-candidate-present-hash-frozen-not-built-or-loaded' -and
          $candidate.gateState.sourcePublicApiContractFrozen -eq $true -and
          $candidate.gateState.sourceCompilationDispositionFrozen -eq $true -and
          $candidate.gateState.profileSourceManifestFrozen -eq $true -and
          $candidate.gateState.rawFeedbackContractFrozen -eq $true -and
+         $candidate.gateState.rawInputContractFrozen -eq $true -and
          $candidate.sourceContracts.rawDualSenseFeedback.goldenVectorCount -eq 16 -and
-         $candidate.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -eq $false -and
+         $candidate.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -eq $true -and
          $candidate.sourceContracts.rawDualSenseFeedback.hardwareVerified -eq $false -and
+         $candidate.sourceContracts.rawDualSenseInput.sourceFileCount -eq 12 -and
+         $candidate.sourceContracts.rawDualSenseInput.descriptorGroupCount -eq 6 -and
+         $candidate.sourceContracts.rawDualSenseInput.goldenScenarioCount -eq 9 -and
+         $candidate.sourceContracts.rawDualSenseInput.goldenFrameCount -eq 37 -and
+         $candidate.sourceContracts.rawDualSenseInput.managedRuntimeEncoderPresent -eq $true -and
+         $candidate.sourceContracts.rawDualSenseInput.artifactBehaviorVerified -eq $false -and
          $candidate.gateState.artifactPublicApiAllowlistFrozen -eq $false -and
          $candidate.gateState.artifactCompileAllowlistFrozen -eq $false -and
          $candidate.gateState.profileSourceCatalogBound -eq $false -and
@@ -388,19 +395,22 @@ try {
          $candidate.sourceContracts.compilationDisposition.retainedUnchangedCount -eq $retained.Count -and
          $candidate.sourceContracts.compilationDisposition.replacementRequiredCount -eq $replacement.Count -and
          $candidate.sourceContracts.compilationDisposition.excludedCount -eq $excluded.Count -and
-         $candidate.sourceContracts.compilationDisposition.replacementSourcesPresent -eq $false) `
+         $candidate.sourceContracts.compilationDisposition.replacementSourcesPresent -eq $true) `
         'aggregate 51/1/13/37 source-disposition counts derive from the exhaustive manifest'
     Add-Check 'source.onlyPacketRetained' `
         ($retained.Count -eq 1 -and $retained[0] -ceq 'sdk/HIDMaestro.Core/HMOutputPacket.cs') `
         'only HMOutputPacket.cs is copied byte-for-byte into the planned candidate'
 
     $replacementFlags = @($source.classification.replacementRequired | ForEach-Object { [bool]$_.replacementPresent })
-    $allReplacementFlagsFalse = @($replacementFlags | Where-Object { $_ -ne $false }).Count -eq 0
-    Add-Check 'source.replacementsTruthfullyAbsent' `
-        ($allReplacementFlagsFalse -and $source.futureCompileManifest.allReplacementUnitsPresent -eq $false) `
-        'every planned replacement is explicitly absent'
+    $allReplacementFlagsTrue = @($replacementFlags | Where-Object { $_ -ne $true }).Count -eq 0
+    $newUnitFlags = @($source.requiredNewUnits | ForEach-Object { [bool]$_.present })
+    $allNewUnitFlagsTrue = @($newUnitFlags | Where-Object { $_ -ne $true }).Count -eq 0
+    Add-Check 'source.replacementsTruthfullyPresent' `
+        ($allReplacementFlagsTrue -and $allNewUnitFlagsTrue -and
+         $source.futureCompileManifest.allReplacementUnitsPresent -eq $true) `
+        'every planned replacement and required new source unit is explicitly present'
     Add-Check 'source.buildRemainsBlocked' `
-        ($source.futureCompileManifest.state -ceq 'blocked-missing-reviewed-replacements' -and
+        ($source.futureCompileManifest.state -ceq 'source-candidate-present-hash-frozen-not-built-or-loaded' -and
          $source.futureCompileManifest.artifactCompileAllowlistFrozen -eq $false -and
          $api.artifact.buildAuthorized -eq $false -and
          $api.artifact.executionAuthorized -eq $false) `
@@ -570,7 +580,7 @@ try {
         logicalMemberCount = $logicalMemberCount
         upstreamUnitCount = $treeUnits.Count
         checks = $checks
-        note = 'Passing proves source provenance, exact API closure, exhaustive source disposition, and Rust enum-value agreement only. Replacement code and a conforming assembly do not exist and no SDK code was built, loaded or executed.'
+        note = 'Passing proves pinned upstream provenance, exact API contract closure, exhaustive source disposition, and Rust enum-value agreement only. Replacement sources exist under a separate static S1.5d candidate gate, but no candidate or SDK assembly was built, loaded or executed and no conforming artifact is proven.'
     } | ConvertTo-Json -Depth 10
     if (!$ok) { exit 1 }
 }

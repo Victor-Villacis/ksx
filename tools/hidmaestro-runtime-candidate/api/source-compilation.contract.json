@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "hidmaestro-s1.5c-dualsense-source-compilation",
-  "status": "exhaustive-upstream-classification-future-replacements-absent",
+  "status": "exhaustive-upstream-classification-source-candidate-present-not-built-or-loaded",
   "upstream": {
     "repository": "https://github.com/hifihedgehog/HIDMaestro",
     "tag": "v1.6.1",
@@ -76,37 +76,37 @@
         "upstreamUnits": ["sdk/HIDMaestro.Core/HIDMaestro.Core.csproj"],
         "plannedCandidateUnits": ["candidate/HIDMaestro.Core.csproj"],
         "reason": "Explicit compile/resource items, no upstream targets, downloads, packers, provisioning payloads or implicit globs.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/HMContext.cs"],
         "plannedCandidateUnits": ["candidate/HMContext.cs"],
         "reason": "Preserve only the five allowlisted lifecycle/catalog methods and remove constructor prewarm, install and global cleanup.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/HMController.cs"],
         "plannedCandidateUnits": ["candidate/HMController.cs"],
         "reason": "Preserve only exact-owned input/raw-output/dispose behavior and the four allowlisted logical members.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/HMGamepadState.cs"],
         "plannedCandidateUnits": ["candidate/HMGamepadState.cs"],
         "reason": "Preserve exact enum values and only Axes, Buttons and Hat; omit helpers and unrelated sensor/touch/battery fields from the public surface.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/HMProfile.cs"],
         "plannedCandidateUnits": ["candidate/HMProfile.cs"],
         "reason": "Expose only Id, Name, VendorId and ProductId; omit builder/layout/descriptor and arbitrary catalog surfaces.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/ControllerProfile.cs"],
         "plannedCandidateUnits": ["candidate/Internal/RuntimeProfileCatalog.cs"],
         "reason": "Replace the generic public profile database/types with a hash-pinned immutable catalog over all 228 source-manifest-selected profiles; the S2 create guard still accepts only DualSense.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": [
@@ -119,7 +119,7 @@
           "candidate/Internal/RuntimePlainHidLifecycle.cs"
         ],
         "reason": "Replace global enumeration/removal and INF update capability with preinstalled-package creation plus captured exact-instance ownership and rollback.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": [
@@ -129,13 +129,13 @@
         ],
         "plannedCandidateUnits": ["candidate/Internal/RuntimeDualSenseInputEncoder.cs"],
         "reason": "Replace the broad generic/public encoder graph with the fixed 64-byte DualSense USB report encoder required by the conformance slice.",
-        "replacementPresent": false
+        "replacementPresent": true
       },
       {
         "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs"],
         "plannedCandidateUnits": ["candidate/Internal/RuntimeOwnedSharedMemoryIO.cs"],
         "reason": "Replace process-global dictionaries and broad cleanup with one-controller owned handles, bounded output and exact teardown.",
-        "replacementPresent": false
+        "replacementPresent": true
       }
     ],
     "excluded": [
@@ -182,7 +182,7 @@
     {
       "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
       "purpose": "Validate HMOutputSource, report ID and exact length, then produce complete effective feedback snapshots from separate ReportId/Data coordinates.",
-      "present": false
+      "present": true
     }
   ],
   "nonCompilationInputs": [
@@ -203,7 +203,7 @@
     }
   ],
   "futureCompileManifest": {
-    "state": "blocked-missing-reviewed-replacements",
+    "state": "source-candidate-present-hash-frozen-not-built-or-loaded",
     "compileUnits": [
       "candidate/HMContext.cs",
       "candidate/HMController.cs",
@@ -226,15 +226,15 @@
       "deployableProfileCount": 130,
       "releaseDllCatalogBinding": "unresolved"
     },
-    "allReplacementUnitsPresent": false,
+    "allReplacementUnitsPresent": true,
     "artifactCompileAllowlistFrozen": false,
-    "reason": "The planned paths are a design manifest only. No candidate/replacement source exists in this checkpoint, so hashes and dependency closure cannot yet be frozen."
+    "reason": "Every planned source path exists and is hash-frozen by the S1.5d static source/project verifier. The project has not been built or loaded, so artifact compile closure and metadata remain unproven."
   },
   "assuranceBoundary": [
     "The classification is exhaustive over the pinned upstream Core .cs/.csproj tree and says exactly which upstream bytes may be copied unchanged.",
-    "It does not assert that any planned candidate unit exists, compiles, implements its requirement, or is safe to execute.",
-    "The future compile allowlist remains false until every replacement is present, reviewed, hash-pinned and shown to close without an implicit compile item.",
+    "Every planned candidate unit now exists and is hash-frozen, but source presence does not prove compilation, behavior, metadata closure, or safety to execute.",
+    "The artifact compile allowlist remains false until an isolated build proves the explicit project items close without an implicit or generated authority-bearing unit.",
     "The full 228-resource input set is authoritative only through the hash-pinned profile source manifest; the one-DualSense S2 restriction applies to CreateController, not catalog inclusion.",
-    "No upstream project, target, assembly, helper or driver is loaded or executed by the verifier."
+    "Neither the candidate nor any upstream project, target, assembly, helper or driver is built, loaded or executed by the source verifier."
   ]
 }

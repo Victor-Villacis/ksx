@@ -1714,17 +1714,10 @@ internal static class Program
 
     private static byte[] CanonicalizeText(byte[] payload, string name)
     {
-        if (payload.Length >= 3
-            && payload[0] == 0xEF
-            && payload[1] == 0xBB
-            && payload[2] == 0xBF)
-        {
-            throw new InvalidDataException($"UTF-8 BOM is forbidden in resource {name}.");
-        }
         string text = StrictUtf8.GetString(payload);
-        string normalized = text
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace("\r", "\n", StringComparison.Ordinal);
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (normalized.IndexOf('\r') >= 0)
+            throw new InvalidDataException($"Bare carriage return in resource {name}.");
         return StrictUtf8.GetBytes(normalized);
     }
 

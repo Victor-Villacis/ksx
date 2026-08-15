@@ -19,6 +19,11 @@ bytes after their raw/canonical checks:
   path; and
 - 228 profile JSON resources selected by `profiles/catalog.lock.json`.
 
+The upstream profile contract preserves an existing UTF-8 BOM while replacing
+CRLF with LF and rejecting bare CR. At pinned commit `2a0dac0`, the exact
+selected BOM set contains only `profiles/nintendo/switch-pro.json`; the runner
+checks that one-path set before staging and preserves its raw bytes.
+
 The runner rejects extra files, reparse points, submodules, changed raw bytes,
 changed normalized bytes, generated compiler sources, unexpected evaluated
 items, packages, analyzers outside the pinned .NET root, generated C# output,

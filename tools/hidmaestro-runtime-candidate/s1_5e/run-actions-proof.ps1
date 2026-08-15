@@ -99,11 +99,11 @@ function Get-RawSha256 {
 function Get-CanonicalTextBytes {
     param([Parameter(Mandatory)][string] $Path)
     $bytes = [System.IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        throw 'UTF-8 BOM is forbidden.'
-    }
     $text = $script:Utf8NoBom.GetString($bytes)
-    $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $text = $text.Replace("`r`n", "`n")
+    if ($text.IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+        throw 'Bare carriage return is forbidden in canonical text.'
+    }
     return ,$script:Utf8NoBom.GetBytes($text)
 }
 
@@ -1375,6 +1375,17 @@ try {
     if ($upstreamSelectedPaths.Count -ne 229 -or
         @($upstreamSelectedPaths | Select-Object -Unique).Count -ne 229) {
         throw 'The selected upstream input closure is not exactly 229 files.'
+    }
+    $actualUtf8BomPaths = Get-OrdinalSorted -Values @($upstreamSelectedPaths | Where-Object {
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $sourceRoot $_.Replace('/', '\')))
+        $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+            $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    })
+    $expectedUtf8BomPaths = Get-OrdinalSorted -Values @(
+        $contract.sourceCandidate.upstreamSelectedUtf8BomPaths | ForEach-Object { [string]$_ })
+    if ([string]::Join("`n", $actualUtf8BomPaths) -cne
+        [string]::Join("`n", $expectedUtf8BomPaths)) {
+        throw 'The selected upstream UTF-8 BOM path set is not exact.'
     }
     foreach ($relative in $upstreamSelectedPaths) {
         if (-not [IO.File]::Exists((Join-Path $sourceRoot $relative.Replace('/', '\')))) {

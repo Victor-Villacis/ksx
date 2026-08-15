@@ -46,14 +46,22 @@ function Assert-Check {
     Add-Check -Code $Code -Passed $Condition -Detail $Detail
 }
 
+function ConvertTo-NormalizedTextBytes {
+    param([byte[]] $Bytes)
+    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and
+        $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        throw 'BOM is forbidden in workspace-authored text.'
+    }
+    $text = $utf8.GetString($Bytes).Replace("`r`n", "`n")
+    if ($text.IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+        throw 'Bare carriage return is forbidden in workspace-authored text.'
+    }
+    return ,$utf8.GetBytes($text)
+}
+
 function Get-NormalizedBytes {
     param([string] $Path)
-    $bytes = [IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        throw "BOM is forbidden: $Path"
-    }
-    $text = $utf8.GetString($bytes).Replace("`r`n", "`n").Replace("`r", "`n")
-    return ,$utf8.GetBytes($text)
+    return ,(ConvertTo-NormalizedTextBytes -Bytes ([IO.File]::ReadAllBytes($Path)))
 }
 
 function Get-NormalizedSha256 {
@@ -91,6 +99,16 @@ function Get-LeafRelativePath {
     $pathUri = [Uri]$pathFull
     return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString())
 }
+
+$bareCrRejected = $false
+try {
+    [void](ConvertTo-NormalizedTextBytes -Bytes $utf8.GetBytes("left`rright"))
+} catch {
+    $bareCrRejected = $_.Exception.Message -ceq
+        'Bare carriage return is forbidden in workspace-authored text.'
+}
+Assert-Check 'verifier.rejects-bare-cr' $bareCrRejected `
+    'Workspace-authored normalized hashing rejects bare carriage returns.'
 
 $expectedLeafFiles = @(
     'README.md',
@@ -139,6 +157,13 @@ Assert-Check 'lock.inspector-runtime' `
 Assert-Check 'lock.build-count' ($lock.toolchain.buildCount -eq 2) 'Two builds are required.'
 Assert-Check 'lock.staged-count' ($lock.sourceCandidate.stagedInputFileCount -eq 241) `
     'Twelve candidate, one retained, and 228 profiles are staged.'
+Assert-Check 'lock.upstream-bom-canonicalization' `
+    ($lock.canonicalization -ceq
+        'workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL' -and
+     @($lock.sourceCandidate.upstreamSelectedUtf8BomPaths).Count -eq 1 -and
+     [string]$lock.sourceCandidate.upstreamSelectedUtf8BomPaths[0] -ceq
+        'profiles/nintendo/switch-pro.json') `
+    'The canonical source contract preserves the one exact upstream profile BOM.'
 Assert-Check 'lock.candidate-tree' `
     ($lock.sourceCandidate.normalizedTreeSha256 -ceq
         '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393') `
@@ -286,6 +311,7 @@ foreach ($literal in @(
     'MethodSpecificationHandle', 'StandaloneSignatureHandle', 'TypeSpecificationHandle',
     'ParseInstructions(il)', 'MethodBodySha256', 'ExceptionRegionEntry',
     'ImplementationMapCount', 'ModuleInitializerAttribute',
+    'Bare carriage return in resource',
     'StructuralContractMatched: false', 'candidateLoaded = false',
     'UserString:length=', 'RawCatalogSha256', 'CanonicalCatalogSha256'
 )) {
@@ -324,6 +350,7 @@ foreach ($literal in @(
     'System.Reflection.Metadata.MetadataUpdater.IsSupported',
     '-noAutoResponse', '--depth=1', '--no-tags', 'Assert-NoReparsePoints',
     'Stage-ExactCandidate', '$expectedPaths.Count -ne 241', 'Get-FramedTreeSha256',
+    '$actualUtf8BomPaths',
     "-ByteMode Raw", "-ByteMode Normalized", 'Invoke-CandidateBuild',
     "-Name 'ksx-hm-s15e-build-a'", "-Name 'ksx-hm-s15e-build-b'",
     'EnableNETAnalyzers=false', 'RunAnalyzersDuringBuild=false',
@@ -386,6 +413,7 @@ $readme = Get-Content -LiteralPath (Join-Path $leafRoot 'README.md') -Raw
 $readmeAnchorIndex = 0
 foreach ($literal in @(
     'observation infrastructure only', 'All six aggregate',
+    'profiles/nintendo/switch-pro.json',
     'environment-root `global.json`', 'runtime `10.0.11`',
     'AddressOfEntryPoint', 'EntryPointTokenOrRelativeVirtualAddress == 0',
     'does not interpret the entry-point machine-code trampoline',

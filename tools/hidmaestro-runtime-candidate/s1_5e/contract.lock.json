@@ -3,9 +3,9 @@
   "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
   "status": "observation-infrastructure-source-present-actions-not-run",
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
-  "canonicalization": "UTF-8 without BOM; CRLF and bare CR become LF before normalized SHA-256; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
+  "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 198,
+  "expectedSourceVerifierCheckCount": 203,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -40,6 +40,9 @@
     "upstreamStagingBytes": "exact-observed-windows-checkout-raw-bytes-after-raw-or-canonical-verification",
     "retainedSourcePath": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
     "retainedSourceRawSha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+    "upstreamSelectedUtf8BomPaths": [
+      "profiles/nintendo/switch-pro.json"
+    ],
     "profileRawCatalogSha256": null,
     "profileCanonicalCatalogSha256": null
   },
@@ -142,7 +145,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
-      "sha256": "88B79BB4BE829096A8910A57A7361D4BFC48A06B28334CA4501EA864328F029C"
+      "sha256": "D3583A68537969031C17EE4EDD2B628E54A0D49505D9C90130637E0536078728"
     },
     {
       "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
@@ -152,7 +155,7 @@
   "leafFiles": [
     {
       "path": "README.md",
-      "sha256": "9E4B94CCBC6904A23D9BB2097F37374BEFFC1D8E40631579C6AB2A7E672FA79B"
+      "sha256": "61EFBE8E8E9460A0FB3F6F832676AD62AC9EC59C962D79C4866D13732A786C80"
     },
     {
       "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
@@ -160,15 +163,15 @@
     },
     {
       "path": "inspector/Program.cs",
-      "sha256": "88B79BB4BE829096A8910A57A7361D4BFC48A06B28334CA4501EA864328F029C"
+      "sha256": "D3583A68537969031C17EE4EDD2B628E54A0D49505D9C90130637E0536078728"
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "A7B28F72B313FE1B7C93CEB02BA5705DD97767AA2287002196B630B9CA8EF2EA"
+      "sha256": "03F39EF3415B1C3AE248D423CDF30BD8440AB00D4F902CC86B82AE4987345B99"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "93665EC68B72D794C4E28022D4E8E1EA3E5D9BCC475AB58C8762D9253BB49494"
+      "sha256": "802E22547DEF3C9DAA0B9C9233F3FAFACE5FCB797BB53EB105AF7D8196C2C3EE"
     }
   ],
   "gateState": {

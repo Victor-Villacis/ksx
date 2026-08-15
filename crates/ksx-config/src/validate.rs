@@ -1872,7 +1872,7 @@ preset = "default"
         );
         let msg = issues[0].to_string();
         assert!(msg.contains("Bloodborne"), "{msg}");
-        assert!(msg.contains("playstation"), "{msg}");
+        assert!(msg.contains("xbox360"), "{msg}");
     }
 
     /// The trap, stated as a test: this check may never consult the machine.

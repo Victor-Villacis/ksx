@@ -251,7 +251,7 @@ internal sealed unsafe class HostSharedMemoryEndpoint : IRuntimeOwnedSharedMemor
         handle = 0;
     }
 
-    private static Win32Exception Last(string message) => new(message, Marshal.GetLastWin32Error());
+    private static Win32Exception Last(string message) => new(Marshal.GetLastWin32Error(), message);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern nint CreateFileMappingW(nint file, nint attributes, uint protect, uint high, uint low, string name);

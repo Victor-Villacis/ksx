@@ -288,7 +288,7 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             throw new InvalidOperationException("The exact owned device could not be removed.");
     }
 
-    private static Win32Exception Last(string message) => new(message, Marshal.GetLastWin32Error());
+    private static Win32Exception Last(string message) => new(Marshal.GetLastWin32Error(), message);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SpDevinfoData { internal uint Size; internal Guid ClassGuid; internal uint DevInst; internal nuint Reserved; }

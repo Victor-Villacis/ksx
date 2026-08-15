@@ -113,7 +113,7 @@ internal static class PipeClient
         return Path.GetFullPath(new string(buffer, 0, checked((int)size)));
     }
 
-    private static Win32Exception Last(string message) => new(message, Marshal.GetLastWin32Error());
+    private static Win32Exception Last(string message) => new(Marshal.GetLastWin32Error(), message);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint pid);

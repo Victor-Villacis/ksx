@@ -170,6 +170,10 @@ run on an isolated disposable machine.
 
 ## GitHub Actions plan
 
+[Actions run 31863647868](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
+passed the complete S1.5d source-only gate, including all 453 inert-candidate
+checks. It did not build or load this candidate.
+
 Keep all expensive and mutating work off the development PC:
 
 1. On an ephemeral Windows build job, fetch the upstream source at the exact

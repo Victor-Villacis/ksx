@@ -127,7 +127,31 @@ disclaimer accompany every installed copy.
 
 
 --------------------------------------------------------------------------
-5. Forma runtime and Rust integration (MIT)
+5. HIDMaestro v1.6.1 integration (MIT upstream material)
+--------------------------------------------------------------------------
+
+    Upstream: https://github.com/hifihedgehog/HIDMaestro/releases/tag/v1.6.1
+    Source revision: 2a0dac0857901a63d365a36dcf99cf50114ca954
+    License: MIT
+    Full text: THIRD-PARTY-LICENSES/HIDMaestro.txt
+    Used in: ksx-hidmaestro-host.exe
+             optional setup-time official download
+
+The Windows installer builds a fixed elevated runtime host for one DualSense
+from the exact reviewed v1.6.1 source. Its separate installer-only bootstrap
+contains no upstream binary. After explicit setup consent it downloads the
+official v1.6.1 archive, verifies the archive and all three managed assemblies
+by pinned length and SHA-256, invokes HIDMaestro's package installation, and
+deletes the temporary SDK. The ordinary ksx daemon and runtime host neither
+embed driver-install authority nor download HIDMaestro.
+
+The official release also contains Microsoft SDK/WDK dependencies governed by
+their own terms. They are fetched from upstream only for the explicit setup
+operation and are not redistributed in a KSX artifact.
+
+
+--------------------------------------------------------------------------
+6. Forma runtime and Rust integration (MIT)
 --------------------------------------------------------------------------
 
     Upstream: https://github.com/getforma-dev/formajs
@@ -149,7 +173,7 @@ generated Studio JavaScript. Its full license is installed as
 
 
 --------------------------------------------------------------------------
-6. libwdi 1.5.1 prepare provider (LGPL-3.0-or-later)
+7. libwdi 1.5.1 prepare provider (LGPL-3.0-or-later)
 --------------------------------------------------------------------------
 
     Upstream: https://github.com/pbatard/libwdi
@@ -176,7 +200,7 @@ and corresponding source together because WinUSB preparation is installed-only.
 
 
 --------------------------------------------------------------------------
-7. Locked Rust release dependency graph
+8. Locked Rust release dependency graph
 --------------------------------------------------------------------------
 
     Full reports: THIRD-PARTY-LICENSES/Rust-dependencies.html

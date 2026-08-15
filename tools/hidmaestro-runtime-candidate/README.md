@@ -1,9 +1,12 @@
-# HIDMaestro S1.5b runtime candidate contract
+# HIDMaestro S1.5d/S1.5e source freezes; observation not established
 
-This directory freezes the smallest source-backed runtime slice that can
-legitimately unblock the supervised S2 experiment. It is a **static design and
-input contract**, not a built SDK, executable host, driver package, or approval
-to run HIDMaestro on a developer workstation.
+This directory contains the smallest complete managed-source candidate for the
+supervised S2 experiment. S1.5d freezes source and literal project XML only:
+its verifier does not build or load the candidate. The exact S1.5e observation
+infrastructure is also source-frozen, and its GitHub Actions build is authorized,
+but no observation has yet been established and no artifact has been built under that scope.
+Local and product builds remain unauthorized; loading, hosting, packaging and
+executing any observation output are also unauthorized.
 
 The candidate is deliberately narrower than the eventual product backend: one
 plain USB DualSense profile (`dualsense`, `054C:0CE6`), one live controller at
@@ -14,31 +17,44 @@ to answer S2's first lifecycle question. Xbox Series needs an SWD companion;
 composite profiles need the USB/IP lane. Adding either now would enlarge the
 ownership and provisioning problem before the first proof exists.
 
-`source.lock.json` pins the exact upstream v1.6.1 commit and every source unit
-used to derive this decision. Its hashes deliberately describe a Windows
-checkout made with `core.autocrlf=true`; CI sets that conversion explicitly so
-runner-global Git configuration cannot change the audited bytes.
-`test-source-contract.ps1` verifies those bytes and the relevant source facts
-without building or loading any assembly. A pass means only that the reviewed
-baseline is present; it intentionally does not mean the upstream project is
-safe to execute. `candidate-contract.json` is an inert design input for the
-fork. Its `gateState` values deliberately keep artifact construction and
-distribution blocked until the exhaustive API, compile-source, profile-source
-and package-graph contracts named there are frozen.
+`source.lock.json` pins the exact upstream v1.6.1 commit and the original
+decision inputs. The `api/` and `profiles/` directories now add an exhaustive
+nine-type public target, a classification of all 51 upstream Core source units,
+and a canonical manifest for all 231 profile-tree files. The separate
+`../hidmaestro-feedback-contract/` directory freezes the raw plain-USB
+DualSense feedback envelope and 16 golden vectors. Their verifiers read and
+hash source only; they do not build or load upstream code.
+
+The separate `../hidmaestro-input-contract/` directory freezes the active
+legacy USB input path from 12 pinned upstream blobs: six descriptor groups,
+nine scenarios, and 37 complete 64-byte reports. The report ID is byte zero;
+the future legacy shared-memory endpoint receives exactly bytes 1 through 63.
+That source-derived contract does not prove compiled candidate behavior.
+
+The original source hashes deliberately describe a Windows checkout made with
+`core.autocrlf=true`; CI sets that conversion explicitly so runner-global Git
+configuration cannot change the audited bytes. A pass means only that the
+reviewed source contracts and inert candidate bytes are present.
+`candidate-contract.json` distinguishes those completed source freezes from
+the narrowly authorized, source-frozen but not-yet-established Actions observation and the
+still-false artifact, driver, distribution, and hardware gates. No current
+pass proves an artifact build or authorizes loading or execution.
 
 ## Smallest implementable slice
 
 Keep the assembly identity `HIDMaestro.Core`, the frozen 1.6.1-derived version
 contract and its .NET 10 Windows x64 target so the host boundary does not fork
-unnecessarily. The desired candidate keeps the entire pinned profile catalog
-as inert JSON resources so the existing 228-resource / 130-deployable /
-catalog-hash evidence remains reproducible. The current source lock does not
-yet bind all 228 source JSON files to that digest, so
-`profileSourceCatalogBound` remains false and no artifact may be built from
-this design checkpoint. Runtime creation is limited to the exact `dualsense`
-identity for the first conformance experiment.
+unnecessarily. The source catalog is now fully pinned: 231 JSON files, exactly
+three source-data exclusions, 228 intended embedded profiles, 130 deployable
+descriptors, and zero duplicate IDs. That source manifest deliberately does
+not claim byte-for-byte equivalence to the official release DLL's CLR resources;
+`profileSourceCatalogBound` remains false until a built candidate proves the
+resource names and bytes. The future candidate resource contract includes all
+228 manifest-selected profile sources; only `CreateController` remains limited
+to the exact `dualsense` identity for the first conformance experiment.
 
-The public surface needed by the real host is only:
+`api/public-api.contract.json` freezes the exact nine-type, 100-entry public
+surface needed by the real host:
 
 - `HMContext()` with no background work;
 - `LoadDefaultProfiles()` and `GetProfile(string)`;
@@ -51,26 +67,43 @@ The public surface needed by the real host is only:
 
 The intended feedback boundary is raw `HMController.OutputReceived` data
 through `HMOutputPacket`/`HMOutputSource`; the broader decoded-output event
-surface is not required for this checkpoint. That adapter is not frozen yet:
-`HMOutputPacket.ReportId` is separate from `HMOutputPacket.Data`, and `Data`
-does not contain the report-ID byte. A future source-frozen adapter must prove
-its exact valid-flag, motor and optional-field coordinates with cross-language
-golden vectors before `rawFeedbackDecoderFrozen` can become true.
-`candidate-contract.json.requiredHostApiMinimum` records the necessary floor,
-not an exhaustive public API allowlist. A future artifact gate must freeze every
-reachable public type and member before `artifactPublicApiAllowlistFrozen` can
-become true.
+surface is not required. The pure feedback contract now proves that
+`HMOutputPacket.ReportId` is separate from its exact 47-byte `Data`, freezes the
+validity and motor coordinates, and reduces partial commands into complete
+effective snapshots. KSX's Rust model mirrors that reducer. The managed adapter
+source now exists in the inert candidate, so `rawFeedbackContractFrozen` is
+true. The source verifiers do not compile or execute it, and the source-frozen
+S1.5e observation will not execute the 16 vectors, so `rawFeedbackDecoderFrozen`
+remains false. A later cross-language artifact test must apply all 16 golden
+vectors before that gate can change.
 
-The future build must use an explicit compile allowlist and embed only
-`HIDMaestro.Profiles.*.json`. That exact list is not frozen yet, so
-`artifactCompileAllowlistFrozen` remains false. The project must not import the
-upstream default source or resource globs. In particular, the runtime assembly
-must not contain
+The managed input encoder source likewise emits a complete 64-byte report and
+the source seam strips the report ID before the planned 63-byte legacy data
+submission. A later artifact test must reproduce all 37 frozen input frames
+and prove that exact boundary; source anchors alone are not behavior proof.
+
+The exact source target likewise does not prove a built assembly. The source-frozen,
+not-yet-established S1.5e observation must show that every reachable public member equals the
+frozen contract, but observation evidence is not yet established or adopted
+and `artifactPublicApiAllowlistFrozen` remains false.
+
+The source-disposition contract classifies all 51 upstream `.cs`/`.csproj`
+units exactly once: one may remain byte-for-byte unchanged, 13 require narrowed
+replacement, and 37 are excluded. S1.5d now contains ten candidate C# files,
+one explicit project, and a `.gitignore` for the deliberately absent fixed
+upstream staging directory. The project names exactly 11 compile inputs and
+228 literal resource inputs with default item discovery disabled. This is
+source/project closure only: `artifactCompileAllowlistFrozen` remains false
+before the isolated observation build, and an observation result will still require
+an explicit later adoption decision before that gate can change.
+In particular, a future runtime assembly must not contain
 `DriverBuilder`, `EmbeddedManifest`, `PnputilHelper`, `SwdDeviceFactory`, the
 USB/IP subtree, `VrDriverBuilder`, WDK tools, drivers, INFs, catalogs, helpers,
 USB/IP installers, VR payloads, or third-party executables.
 
-Four source units must be forked rather than copied unchanged:
+`api/source-compilation.contract.json` is the exhaustive authority for every
+upstream disposition and planned candidate unit. The following five items are
+only a non-authoritative summary of the safety-critical implementation themes:
 
 1. `HMContext` becomes a side-effect-free object owner. Install, driver probe,
    arbitrary-directory profile loading, global cleanup, USB/IP, bulk parallel
@@ -78,15 +111,19 @@ Four source units must be forked rather than copied unchanged:
 2. A small `RuntimePlainHidLifecycle` replaces the large all-persona
    `DeviceOrchestrator` for this slice. It assumes the signed package is already
    present, creates only the one plain-HID parent, and captures its exact
-   identity immediately after registration. A partial-owned transaction record
-   survives every later failure until exact-identity rollback succeeds or a
-   recovery-required error is reported. It has no fallback to driver deployment
-   or repair.
+   identity immediately after registration. Exact-owned recovery state and a
+   serialized retry action survive later teardown failure until exact-identity
+   rollback succeeds or a recovery-required error is reported. It has no
+   fallback to driver deployment or repair.
 3. `HMController` retains that immutable owned-device record. Dispose
    neutralizes the controller and closes process-owned mappings/pumps before it
    removes only those exact device IDs.
 4. The project file has no pre-build resource packer, download target or
    implicit compile/resource items.
+5. The managed `RawDualSenseFeedbackAdapter` source mirrors the frozen pure reducer:
+   source 0, report ID `0x02`, exactly 47 data bytes, distinct legacy/v2
+   validity combinations, owned complete snapshots, and all-zero/valid-zero
+   stop behavior. It remains unbuilt and unexecuted.
 
 The current `DeviceNodeCreator` cannot simply be copied: it calls
 `UpdateDriverForPlugAndPlayDevicesW` with an INF path, which is a runtime
@@ -112,7 +149,7 @@ The hazards are coupled into executable code, not only embedded resources:
   companions by global `ControllerIndex` scans and runs an orphan sweep.
 
 Removing resource blobs from the release DLL leaves all of those paths in
-metadata/IL and turns some into late runtime failures. S1.5b therefore needs a
+metadata/IL and turns some into late runtime failures. S1.5c therefore needs a
 source build with the unwanted units absent, not post-build surgery.
 
 ## Broader runtime after S2
@@ -140,23 +177,30 @@ run on an isolated disposable machine.
 
 ## GitHub Actions plan
 
+[Actions run 31863647868](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
+passed the complete S1.5d source-only gate, including all 453 inert-candidate
+checks. It did not build or load this candidate.
+
 Keep all expensive and mutating work off the development PC:
 
 1. On an ephemeral Windows build job, fetch the upstream source at the exact
-   commit and run `test-source-contract.ps1`. GitHub's hosted Windows token is
-   not a security boundary, so the upstream project, targets and payloads are
-   never executed. No release DLL is an input. Only after a reviewed explicit
-   compile list and complete profile-source manifest are pinned may a later job
-   copy those files into an immutable candidate staging tree and build the
-   runtime-only assembly with pinned .NET 10.0.400.
-2. Run the existing non-executing PE/metadata reader on the candidate. Require
+   commit and run the baseline, API/source-disposition, profile-manifest,
+   raw-input, raw-feedback, and inert-candidate source verifiers. GitHub's hosted Windows token is not a
+   security boundary, so the upstream project, targets and payloads are never
+   executed. No release DLL is an input to these checks. The separately
+   authorized, source-frozen S1.5e observation will copy only the frozen
+   allowlist into a fixed, quiescent staging tree, verify it before and after
+   the build, and compile the runtime-only assembly with pinned .NET 10.0.400
+   without loading or executing it.
+2. Extend the existing non-executing PE/metadata reader for the candidate. Require
    assembly version 1.6.1.0, the exact profile catalog, the small runtime API,
    no forbidden type/member names, and no resource outside the profile catalog.
    Extend the gate to inspect MemberRefs/P/Invoke targets so source units cannot
    hide driver-store, certificate-store, process-launch, download or global-
    sweep capability behind renamed methods.
 3. Build HID and host artifacts in separate jobs. Generate catalogs from a
-   quiescent immutable tree, then sign outside the runtime build. Never put WDK
+   fixed quiescent tree whose identities are checked before and after use, then
+   sign outside the runtime build. Never put WDK
    signing tools, a signing key or a certificate-install path in a shipped
    payload.
 4. Verify each INF/DLL as a member of the expected signed catalog, pin the
@@ -190,7 +234,7 @@ future-shape manifest.
   Windows Hardware Compatibility Program lane rather than assuming a locally
   signed catalog is sufficient. Catalog membership must also be verified, not
   inferred from a trusted catalog signature; Microsoft documents the exact
-  `SignTool verify /c CatalogFile.cat DriverFile` form in its [catalog-member
+  `SignTool verify /v /pa /c CatalogFileName.cat DriverFileName` form in its [catalog-member
   verification guidance](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/verifying-the-signature-of-a-test-signed-catalog-file).
 - The production native bootstrap/managed-host package does not exist yet, so
   its exact file graph and signer pins cannot be frozen in this SDK-only slice.
@@ -204,8 +248,8 @@ future-shape manifest.
 
 ## Static use
 
-From a clean checkout of the exact upstream source, the only supported local
-operation in this directory is the source-byte audit:
+From a clean checkout of the exact upstream source, the supported operations
+in this checkpoint are static source-byte and project-XML audits:
 
 ```powershell
 ./tools/hidmaestro-runtime-candidate/test-source-contract.ps1 `
@@ -214,3 +258,9 @@ operation in this directory is the source-byte audit:
 
 It hashes and reads text only. It does not compile, load the SDK, launch a
 helper, elevate, install, sign, create a controller or touch hardware.
+
+The candidate-tree verifier is likewise non-executing:
+
+```powershell
+./tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1
+```

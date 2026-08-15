@@ -1,0 +1,506 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-s1.5d-inert-managed-source-candidate",
+  "status": "source-frozen-verifier-does-not-build-or-load",
+  "assurance": "hash-pinned-static-candidate-source-and-project-xml-closure-only",
+  "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
+  "expectedVerifierCheckCount": 453,
+  "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
+  "candidateTreeSha256": "4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393",
+  "expectedCounts": {
+    "candidateFileCount": 12,
+    "compileItemCount": 11,
+    "embeddedResourceCount": 228,
+    "deployableProfileCount": 130,
+    "candidateApiTypeCount": 7,
+    "candidateApiEntryCount": 91,
+    "goldenVectorCount": 16,
+    "inputSourceBlobCount": 12,
+    "inputDescriptorGroupCount": 6,
+    "inputScenarioCount": 9,
+    "inputFrameCount": 37,
+    "inputSourceVerifierCheckCount": 538
+  },
+  "sourceInputs": [
+    {
+      "id": "aggregate-contract",
+      "path": "../candidate-contract.json",
+      "format": "json",
+      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
+    },
+    {
+      "id": "api-lock",
+      "path": "../api/contract.lock.json",
+      "format": "json",
+      "sha256": "1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5"
+    },
+    {
+      "id": "public-api-contract",
+      "path": "../api/public-api.contract.json",
+      "format": "json",
+      "sha256": "FC9DF9A192831385A7BE56C2B8B9E9B4DD52D4DF854D798F4F1A63FC9B333D2E"
+    },
+    {
+      "id": "source-compilation-contract",
+      "path": "../api/source-compilation.contract.json",
+      "format": "json",
+      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
+    },
+    {
+      "id": "profile-catalog-lock",
+      "path": "../profiles/catalog.lock.json",
+      "format": "json",
+      "sha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80"
+    },
+    {
+      "id": "feedback-contract",
+      "path": "../../hidmaestro-feedback-contract/contract.json",
+      "format": "json",
+      "sha256": "854B0006809AC69CA5BA9CE94DFF097146AAE9E5D9A3C66DA6C56A662DF4D803"
+    },
+    {
+      "id": "feedback-vectors",
+      "path": "../../hidmaestro-feedback-contract/golden-vectors.tsv",
+      "format": "text",
+      "sha256": "8047FA9C913FE8BE416796DFE8A2C81CBAB4643EA959613331FEC01D8326701D"
+    },
+    {
+      "id": "rust-feedback-reducer",
+      "path": "../../../crates/ksx-hidmaestro/src/dualsense_feedback.rs",
+      "format": "text",
+      "sha256": "32C4B46DD36B8E9421FCEF34823C7199C9ADC2155D1609F2D3A58DBE97E0949D"
+    },
+    {
+      "id": "input-contract",
+      "path": "../../hidmaestro-input-contract/contract.json",
+      "format": "json",
+      "sha256": "D0E59B710B23A464221675D50CFD1160423480487148A59DD3BD4769E229D001"
+    },
+    {
+      "id": "input-vectors",
+      "path": "../../hidmaestro-input-contract/golden-vectors.json",
+      "format": "json",
+      "sha256": "D7A312A21353CE4F32DF5E1EA60B0E6F8DF6155D69259D10BC6D7C753834342E"
+    },
+    {
+      "id": "input-source-lock",
+      "path": "../../hidmaestro-input-contract/source-lock.json",
+      "format": "json",
+      "sha256": "1068AB3A80CD290FFD1C2FF789C5CB6006828F9DB53807AEB31374D156199BA8"
+    },
+    {
+      "id": "input-source-verifier",
+      "path": "../../hidmaestro-input-contract/verify-source-contract.ps1",
+      "format": "text",
+      "sha256": "FE657CB353CA5C7E88B9D82C19A7FFD3EC9CF93D300EE93AA1D86ACE1F2D7321"
+    }
+  ],
+  "candidateFiles": [
+    {
+      "path": "candidate/.gitignore",
+      "sha256": "7548257B8D8E70DB810317F158DCBBF16F96848EBD35DB543B625E4DEEE46EC7"
+    },
+    {
+      "path": "candidate/HIDMaestro.Core.csproj",
+      "sha256": "F8FA6FA337EDDD16499F36F376D534680FCAEE8F239DA525B63B081641A6844E"
+    },
+    {
+      "path": "candidate/HMContext.cs",
+      "sha256": "7020E298B206295C24AD72AE9DB7C96C5FA8240A1BFDF3D19FA2D63BFDE2B21A"
+    },
+    {
+      "path": "candidate/HMController.cs",
+      "sha256": "34EC5839DB775EB46B8BB802FC06090067284A2BCC4CB4B8BDE0419711163359"
+    },
+    {
+      "path": "candidate/HMGamepadState.cs",
+      "sha256": "0ED78A8A245EAAE257C5407172C8FC3DB3FDE2A0AF831D3A3B1BE9C340C7BAB9"
+    },
+    {
+      "path": "candidate/HMProfile.cs",
+      "sha256": "F0D82B9A2544186AE3D8A63667F11FA72B38E5D377640A7FCE79618BA026217C"
+    },
+    {
+      "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
+      "sha256": "75B3C4DF6025D564F9E212EA27FEDF45361CA535BB8B21C10B9742FF87DE5200"
+    },
+    {
+      "path": "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
+      "sha256": "CDDBAF4F89DE7DAB7839D50F7414C2013C81B5A43341C05028D99F95C97E126D"
+    },
+    {
+      "path": "candidate/Internal/RuntimeExactDeviceManager.cs",
+      "sha256": "CEE2C77EEE36F7032E8969EFE65F31E1FA18E07D22760745718B23C1E3F52682"
+    },
+    {
+      "path": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
+      "sha256": "AA2B7CC6B8550A9AFC77DC82CEAECB8DAC29708DA8075E62156FCA03556C3602"
+    },
+    {
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "sha256": "3831AAD96E3C5F9ACBA665A5C52E7B4C4B380A1E37D22AF3020C218150D736ED"
+    },
+    {
+      "path": "candidate/Internal/RuntimeProfileCatalog.cs",
+      "sha256": "35EBDC00D721E7987C562B54B640FF1111542497BC6E3D939D39C3A54DB436EC"
+    }
+  ],
+  "project": {
+    "path": "candidate/HIDMaestro.Core.csproj",
+    "sdk": "Microsoft.NET.Sdk",
+    "fixedStagingPrefix": ".pinned-upstream-v1.6.1/",
+    "stagingIgnoreLine": "/.pinned-upstream-v1.6.1/",
+    "assemblyAttributeSource": "candidate/HMContext.cs",
+    "targetFrameworkAttribute": "[assembly: TargetFramework(\".NETCoreApp,Version=v10.0\", FrameworkDisplayName = \".NET 10.0\")]",
+    "requiredProperties": [
+      { "name": "PlatformTarget", "value": "x64" },
+      { "name": "OutputType", "value": "Library" },
+      { "name": "RootNamespace", "value": "HIDMaestro" },
+      { "name": "Version", "value": "1.6.1" },
+      { "name": "LangVersion", "value": "14.0" },
+      { "name": "Nullable", "value": "enable" },
+      { "name": "ImplicitUsings", "value": "disable" },
+      { "name": "EnableDefaultItems", "value": "false" },
+      { "name": "EnableDefaultCompileItems", "value": "false" },
+      { "name": "EnableDefaultEmbeddedResourceItems", "value": "false" },
+      { "name": "EnableDefaultNoneItems", "value": "false" },
+      { "name": "GenerateAssemblyInfo", "value": "false" },
+      { "name": "GenerateTargetFrameworkAttribute", "value": "false" },
+      { "name": "Deterministic", "value": "true" },
+      { "name": "ContinuousIntegrationBuild", "value": "true" },
+      { "name": "AllowUnsafeBlocks", "value": "false" },
+      { "name": "SelfContained", "value": "false" }
+    ],
+    "forbiddenElementNames": [
+      "PackageReference",
+      "ProjectReference",
+      "Reference",
+      "Import",
+      "Target",
+      "UsingTask",
+      "Exec",
+      "DownloadFile",
+      "MSBuild",
+      "CallTarget",
+      "Copy",
+      "WriteLinesToFile",
+      "Content",
+      "None",
+      "Analyzer"
+    ]
+  },
+  "apiMemberAnchors": [
+    { "typeId": "HIDMaestro.HMContext", "memberId": ".ctor()", "text": "public HMContext()" },
+    { "typeId": "HIDMaestro.HMContext", "memberId": "LoadDefaultProfiles()", "text": "public int LoadDefaultProfiles()" },
+    { "typeId": "HIDMaestro.HMContext", "memberId": "GetProfile(System.String)", "text": "public HMProfile? GetProfile(string id)" },
+    { "typeId": "HIDMaestro.HMContext", "memberId": "CreateController(HIDMaestro.HMProfile)", "text": "public HMController CreateController(HMProfile profile)" },
+    { "typeId": "HIDMaestro.HMContext", "memberId": "Dispose()", "text": "public void Dispose()" },
+    { "typeId": "HIDMaestro.HMController", "memberId": "Profile", "text": "public HMProfile Profile { get; }" },
+    { "typeId": "HIDMaestro.HMController", "memberId": "OutputReceived", "text": "public event Action<HMController, HMOutputPacket>? OutputReceived;" },
+    { "typeId": "HIDMaestro.HMController", "memberId": "SubmitState(in HIDMaestro.HMGamepadState)", "text": "public void SubmitState(in HMGamepadState state)" },
+    { "typeId": "HIDMaestro.HMController", "memberId": "Dispose()", "text": "public void Dispose()" },
+    { "typeId": "HIDMaestro.HMProfile", "memberId": "Id", "text": "public string Id { get; }" },
+    { "typeId": "HIDMaestro.HMProfile", "memberId": "Name", "text": "public string Name { get; }" },
+    { "typeId": "HIDMaestro.HMProfile", "memberId": "VendorId", "text": "public ushort VendorId { get; }" },
+    { "typeId": "HIDMaestro.HMProfile", "memberId": "ProductId", "text": "public ushort ProductId { get; }" },
+    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Axes", "text": "public Dictionary<HMAxis, float>? Axes;" },
+    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Buttons", "text": "public HMButton Buttons;" },
+    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Hat", "text": "public HMHat Hat;" }
+  ],
+  "forbiddenCapabilityFamilies": [
+    {
+      "id": "process-launch",
+      "description": "process, shell, or command execution",
+      "pattern": "\\b(?:Process|ProcessStartInfo|ShellExecute|CreateProcess|WinExec)\\b"
+    },
+    {
+      "id": "driver-package-mutation",
+      "description": "driver-store installation, update, repair, or removal",
+      "pattern": "\\b(?:DiInstallDriver|UpdateDriverForPlugAndPlayDevices|SetupCopyOEMInf|Pnputil|DriverStore|DriverPackage)\\w*\\b"
+    },
+    {
+      "id": "certificate-signing",
+      "description": "certificate-store or driver-signing capability",
+      "pattern": "\\b(?:X509Certificate|X509Store|CertificateRequest|CertAddStore|CertDelete|SignTool|Inf2Cat|MakeCat)\\w*\\b"
+    },
+    {
+      "id": "network-download",
+      "description": "network, socket, or download capability",
+      "pattern": "\\b(?:HttpClient|WebClient|WebRequest|DownloadFile|TcpClient|Socket|FtpWebRequest)\\w*\\b"
+    },
+    {
+      "id": "payload-extraction",
+      "description": "archive extraction, temporary executable, or file-write capability",
+      "pattern": "\\b(?:ZipArchive|ExtractToDirectory|GetTempFileName|WriteAllBytes|WriteAllText)\\w*\\b|\\b(?:File|Directory)\\s*\\.\\s*(?:Write|Create|Delete|Move|Copy)\\w*\\b"
+    },
+    {
+      "id": "usbip-vr",
+      "description": "USB/IP, VHCI, VR, or USB-audio family",
+      "pattern": "\\b(?:Usbip|Vhci|HMVR|HMUsbAudio)\\w*\\b"
+    },
+    {
+      "id": "broad-device-sweep",
+      "description": "global, orphan, or ghost-device sweeping",
+      "pattern": "\\b(?:RemoveAll|CleanupGhost|RemoveOrphan|EnumerateAll|DetachAllOwned|DisableGhost)\\w*\\b"
+    },
+    {
+      "id": "elevation-service",
+      "description": "elevation, token, service, or administrator authority",
+      "pattern": "\\b(?:WindowsPrincipal|WindowsIdentity|WindowsBuiltInRole|TokenElevation|AdjustTokenPrivileges|runas|ServiceController|OpenSCManager|CreateService|StartService|ControlService)\\w*\\b"
+    },
+    {
+      "id": "registry-mutation",
+      "description": "registry access or mutation backend",
+      "pattern": "\\b(?:Registry|RegistryKey|RegCreateKey|RegSetValue|RegDelete)\\w*\\b"
+    },
+    {
+      "id": "native-device-backend",
+      "description": "direct native device-registration, HID, or shared-memory backend",
+      "pattern": "\\b(?:SetupDi|CM_|SwDevice|HidD_|OpenFileMapping|MapViewOfFile|MemoryMappedFile|CreateEvent|OpenEvent|WaitForSingleObject)\\w*\\b"
+    },
+    {
+      "id": "dynamic-native-load",
+      "description": "dynamic assembly or native-library loading",
+      "pattern": "\\b(?:AssemblyLoadContext|DllImport|LibraryImport|NativeLibrary)\\w*\\b|\\b(?:Assembly|Activator)\\s*\\.\\s*(?:Load|CreateInstance)\\w*\\b"
+    }
+  ],
+  "ownershipAnchors": [
+    {
+      "id": "context-constructor-inert",
+      "unit": "HMContext",
+      "requirement": "Constructor performs no background work, process launch, file extraction, driver probe, service mutation or global cleanup.",
+      "path": "candidate/HMContext.cs",
+      "anchors": [
+        { "id": "unavailable-backends", "text": "public HMContext() : this( RuntimeExactDeviceManager.CreateUnavailable(), RuntimeOwnedSharedMemoryFactory.CreateUnavailable())" }
+      ]
+    },
+    {
+      "id": "context-one-exact-profile",
+      "unit": "HMContext",
+      "requirement": "CreateController accepts only the exact conformance profile and refuses a second live controller.",
+      "path": "candidate/HMContext.cs",
+      "anchors": [
+        { "id": "one-live", "text": "if (_controller is not null)" },
+        { "id": "dualsense-lookup", "text": "HMProfile? frozenProfile = _catalog.GetProfile(\"dualsense\");" },
+        { "id": "reference-identity", "text": "if (!ReferenceEquals(profile, frozenProfile))" }
+      ]
+    },
+    {
+      "id": "context-retains-pending-recovery",
+      "unit": "HMContext",
+      "requirement": "A failed creation leaves its exact recovery action owned by the context, blocks another create, and is retried by Dispose.",
+      "path": "candidate/HMContext.cs",
+      "anchors": [
+        { "id": "pending-field", "text": "private RuntimeExactRecovery? _pendingRecovery;" },
+        { "id": "block-create", "text": "if (_pendingRecovery is not null) { throw new InvalidOperationException(" },
+        { "id": "outer-recovery-catch", "text": "catch (RuntimeRecoveryRequiredException recoveryFailure)" },
+        { "id": "retain-recovery", "text": "_pendingRecovery = recoveryFailure.Recovery;" },
+        { "id": "snapshot-for-dispose", "text": "pendingRecovery = _pendingRecovery;" },
+        { "id": "retry-from-dispose", "text": "pendingRecovery?.Retry();" },
+        { "id": "clear-only-same-recovery", "text": "if (ReferenceEquals(_pendingRecovery, pendingRecovery)) { _pendingRecovery = null; }" }
+      ]
+    },
+    {
+      "id": "context-exact-owned-dispose",
+      "unit": "HMContext",
+      "requirement": "Dispose tears down only the exact owned device set returned by create.",
+      "path": "candidate/HMController.cs",
+      "anchors": [
+        { "id": "owned-record", "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;" },
+        { "id": "remove-owned", "text": "_lifecycle.RemoveOwned(_ownedDevice);" }
+      ]
+    },
+    {
+      "id": "lifecycle-preinstalled-first",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "Create only the one plain-HID parent required by dualsense after proving the signed package was preinstalled.",
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "anchors": [
+        { "id": "exact-profile", "text": "EnsureExactDualSense(profile);" },
+        { "id": "proof-before-register", "text": "RuntimePreinstalledPackageProof proof = _deviceManager.ProvePreinstalledDualSensePackage(); RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof);" }
+      ]
+    },
+    {
+      "id": "lifecycle-parent-captured-first",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "Capture the exact parent instance identity immediately when registration succeeds, before any later fallible binding or child-discovery step.",
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "anchors": [
+        { "id": "capture-before-binding", "text": "RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof); var partial = new RuntimePartialOwnedDevice(registration.ParentInstanceId); try { _deviceManager.ProveExactParentBound(registration);" }
+      ]
+    },
+    {
+      "id": "lifecycle-exact-recovery-state",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "Retain exact-owned recovery state and a serialized retry action until creation either commits or exact-identity rollback completes.",
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "anchors": [
+        { "id": "partial-field", "text": "private readonly RuntimePartialOwnedDevice _partialOwnedDevice;" },
+        { "id": "partial-retained", "text": "_partialOwnedDevice = partialOwnedDevice;" },
+        { "id": "partial-rollback", "text": "IReadOnlyList<Exception> rollbackFailures = _lifecycle.Rollback(_partialOwnedDevice, _statePath);" },
+        { "id": "serialized-recovery", "text": "internal void Retry() { lock (_gate)" },
+        { "id": "recovery-reference-identity", "text": "if (statePath is not null && !ReferenceEquals(statePath.OwnedDevice, ownedDevice))" },
+        { "id": "retry-order", "text": "StatePath?.NeutralizeAndStop(); _lifecycle.RemoveOwned(OwnedDevice); _completed = true;" },
+        { "id": "rollback-retains-action", "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _statePath)" }
+      ]
+    },
+    {
+      "id": "lifecycle-error-rollback",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "On every error after registration, neutralize any started state path and roll back only the exact captured parent and child identities; report rollback failure explicitly instead of discarding ownership state.",
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "anchors": [
+        { "id": "registration-catch", "text": "catch (Exception creationFailure) { IReadOnlyList<Exception> rollbackFailures = Rollback(partial, statePath: null);" },
+        { "id": "neutralize-first", "text": "statePath.NeutralizeAndStop();" },
+        { "id": "state-path-retained", "text": "StatePath = statePath;" },
+        { "id": "state-path-recovery-property", "text": "internal RuntimeOwnedSharedMemoryIO? StatePath { get; }" },
+        { "id": "state-failure-blocks-removal", "text": "catch (Exception error) { failures.Add(error); return failures; }" },
+        { "id": "exact-removal", "text": "foreach (Exception failure in RemoveExactIdentities(ownedDevice))" },
+        { "id": "recovery-error", "text": "throw new RuntimeRecoveryRequiredException(" }
+      ]
+    },
+    {
+      "id": "lifecycle-immutable-owned-record",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "Return an immutable owned-device record containing the exact parent instance ID and exact child IDs observed from that parent.",
+      "path": "candidate/Internal/RuntimeExactDeviceManager.cs",
+      "anchors": [
+        { "id": "child-copy", "text": "_childInstanceIds = new string[childInstanceIds.Count];" },
+        { "id": "readonly-copy", "text": "_readOnlyChildInstanceIds = Array.AsReadOnly(_childInstanceIds);" },
+        { "id": "parent-id", "text": "internal string ParentInstanceId { get; }" },
+        { "id": "child-ids", "text": "internal IReadOnlyList<string> ChildInstanceIds => _readOnlyChildInstanceIds;" }
+      ]
+    },
+    {
+      "id": "lifecycle-no-broad-sweep",
+      "unit": "RuntimePlainHidLifecycle",
+      "requirement": "Never enumerate or delete devices by ControllerIndex, VID/PID, HIDMaestro token, profile family or global orphan status.",
+      "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "anchors": [
+        { "id": "parent-scoped-children", "text": "_deviceManager.ReadExactChildInstanceIds(registration);" },
+        { "id": "exact-remove", "text": "_deviceManager.RemoveExactInstance(exactInstanceId);" }
+      ]
+    },
+    {
+      "id": "controller-retains-owned-record",
+      "unit": "HMController",
+      "requirement": "Retain the immutable owned-device record for the controller lifetime.",
+      "path": "candidate/HMController.cs",
+      "anchors": [
+        { "id": "readonly-field", "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;" },
+        { "id": "constructor-retain", "text": "_ownedDevice = ownedDevice ?? throw new ArgumentNullException(nameof(ownedDevice));" }
+      ]
+    },
+    {
+      "id": "controller-neutralize-before-remove",
+      "unit": "HMController",
+      "requirement": "Dispose first neutralizes and stops owned shared-memory pumps, then removes only retained exact instance IDs.",
+      "path": "candidate/HMController.cs",
+      "anchors": [
+        { "id": "ordered-teardown", "text": "_sharedState.NeutralizeAndStop(); _lifecycle.RemoveOwned(_ownedDevice);" },
+        { "id": "state-path-retained-on-wrapper", "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _sharedState)" }
+      ]
+    }
+  ],
+  "feedbackAdapter": {
+    "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
+    "numericAnchors": [
+      { "id": "data-length", "contractPath": "sourceFacts.dataLength", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+OutputDataLength\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "report-id", "contractPath": "sourceFacts.reportId", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+OutputReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "valid-flag-0", "contractPath": "sourceFacts.dataOffsets.validFlag0", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag0Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "right-small-motor", "contractPath": "sourceFacts.dataOffsets.rightSmallMotor", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+RightSmallMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "left-large-motor", "contractPath": "sourceFacts.dataOffsets.leftLargeMotor", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+LeftLargeMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "valid-flag-2", "contractPath": "sourceFacts.dataOffsets.validFlag2", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag2Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "legacy-mask", "contractPath": "sourceFacts.validityMasks.validFlag0CompatibleVibration", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "selector-mask", "contractPath": "sourceFacts.validityMasks.validFlag0HapticsSelect", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+HapticsSelectMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "v2-mask", "contractPath": "sourceFacts.validityMasks.validFlag2CompatibleVibrationV2", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationV2Mask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" }
+    ],
+    "requiredAnchors": [
+      { "id": "source-envelope", "text": "if (packet.Source != HMOutputSource.HidOutput)" },
+      { "id": "report-envelope", "text": "if (packet.ReportId != OutputReportId)" },
+      { "id": "length-envelope", "text": "if (packet.Data.Length != OutputDataLength)" },
+      { "id": "separate-data", "text": "ReadOnlySpan<byte> data = packet.Data.Span;" },
+      { "id": "all-zero-stop", "text": "if (IsAllZero(data)) { _largeMotor = 0; _smallMotor = 0; disposition = RawDualSenseDisposition.StopAllZero;" },
+      { "id": "legacy-select", "text": "if (selector && legacy && !v2)" },
+      { "id": "v2-select", "text": "else if (selector && !legacy && v2)" },
+      { "id": "conflict-preserve", "text": "else if (legacy && v2)" },
+      { "id": "selector-preserve", "text": "else if (selector)" },
+      { "id": "missing-selector-preserve", "text": "else if (legacy || v2)" },
+      { "id": "complete-snapshot", "text": "new RawDualSenseFeedbackSnapshot(_largeMotor, _smallMotor, packet.SeqNo)" },
+      { "id": "motor-coordinates", "text": "_smallMotor = data[RightSmallMotorOffset]; _largeMotor = data[LeftLargeMotorOffset];" }
+    ],
+    "dispositions": [
+      { "vectorValue": "apply-legacy", "sourceName": "RawDualSenseDisposition.ApplyLegacy" },
+      { "vectorValue": "apply-v2", "sourceName": "RawDualSenseDisposition.ApplyV2" },
+      { "vectorValue": "stop-legacy", "sourceName": "RawDualSenseDisposition.StopLegacy" },
+      { "vectorValue": "stop-v2", "sourceName": "RawDualSenseDisposition.StopV2" },
+      { "vectorValue": "stop-all-zero", "sourceName": "RawDualSenseDisposition.StopAllZero" },
+      { "vectorValue": "preserve-no-motor-validity", "sourceName": "RawDualSenseDisposition.PreserveNoMotorValidity" },
+      { "vectorValue": "preserve-selector-only", "sourceName": "RawDualSenseDisposition.PreserveSelectorOnly" },
+      { "vectorValue": "preserve-missing-selector", "sourceName": "RawDualSenseDisposition.PreserveMissingSelector" },
+      { "vectorValue": "preserve-conflicting-variants", "sourceName": "RawDualSenseDisposition.PreserveConflictingVariants" },
+      { "vectorValue": "reject-source", "sourceName": "RawDualSenseRejectReason.Source" },
+      { "vectorValue": "reject-report-id", "sourceName": "RawDualSenseRejectReason.ReportId" },
+      { "vectorValue": "reject-length", "sourceName": "RawDualSenseRejectReason.Length" }
+    ]
+  },
+  "inputBinding": {
+    "encoderPath": "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
+    "sharedMemoryPath": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
+    "controllerPath": "candidate/HMController.cs",
+    "numericAnchors": [
+      { "id": "report-id", "contractPath": "report.reportId", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+ReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
+      { "id": "wire-byte-length", "contractPath": "report.wireByteLength", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+EncodedReportSize\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" }
+    ],
+    "axisLocals": [
+      { "stateKey": "X", "localName": "x" },
+      { "stateKey": "Y", "localName": "y" },
+      { "stateKey": "Z", "localName": "z" },
+      { "stateKey": "Rz", "localName": "rz" },
+      { "stateKey": "Rx", "localName": "rx" },
+      { "stateKey": "Ry", "localName": "ry" }
+    ],
+    "requiredEncoderAnchors": [
+      { "id": "exact-destination-length", "text": "if (destination.Length != EncodedReportSize)" },
+      { "id": "clear-complete-frame", "text": "destination.Clear();" },
+      { "id": "write-report-id", "text": "destination[0] = ReportId;" },
+      { "id": "axes-source", "text": "Dictionary<HMAxis, float>? axes = state.Axes;" },
+      { "id": "missing-axis-zero", "text": "if (axes is null || !axes.TryGetValue(axis, out float value)) { return 0.0f; }" },
+      { "id": "finite-axis-only", "text": "if (!float.IsFinite(value))" },
+      { "id": "clamp-axis", "text": "return Math.Clamp(value, 0.0f, 1.0f);" },
+      { "id": "truncate-scale", "text": "return (byte)(int)Math.Truncate((double)normalized * 255.0);" },
+      { "id": "button-mask-source", "text": "uint buttons = (uint)state.Buttons;" },
+      { "id": "button-mask-test", "text": "if ((buttons & (uint)button) != 0)" },
+      { "id": "button-write", "text": "destination[wireByte] |= mask;" }
+    ],
+    "requiredSharedMemoryAnchors": [
+      { "id": "endpoint-data-only-surface", "text": "void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId);" },
+      { "id": "full-wire-entry", "text": "internal void SubmitFullWireInput(ReadOnlySpan<byte> fullWireReport)" },
+      { "id": "exact-full-length", "text": "if (fullWireReport.Length != RuntimeDualSenseInputEncoder.EncodedReportSize)" },
+      { "id": "exact-report-id", "text": "if (fullWireReport[0] != RuntimeDualSenseInputEncoder.ReportId)" },
+      { "id": "unavailable-endpoint-fail-closed", "text": "public void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId) { _ = dataWithoutReportId; throw new NotSupportedException(" }
+    ],
+    "sharedMemorySlicePattern": "(?m)_endpoint\\.SubmitLegacyInputData\\(fullWireReport\\.Slice\\(\\s*(?<offset>\\d+)\\s*,\\s*(?<length>\\d+)\\s*\\)\\s*\\)\\s*;",
+    "requiredControllerAnchors": [
+      { "id": "encoder-field", "text": "private readonly RuntimeDualSenseInputEncoder _inputEncoder = new();" },
+      { "id": "exact-report-buffer", "text": "private readonly byte[] _inputReport = new byte[RuntimeDualSenseInputEncoder.EncodedReportSize];" },
+      { "id": "encode-then-publish", "text": "_inputEncoder.Encode(in state, _inputReport); _sharedState.SubmitFullWireInput(_inputReport);" }
+    ],
+    "expectedDirectDestinationIndexes": [0, 1, 2, 3, 4, 5, 6, 8, 9]
+  },
+  "gateState": {
+    "artifactPublicApiAllowlistFrozen": false,
+    "artifactCompileAllowlistFrozen": false,
+    "profileSourceCatalogBound": false,
+    "rawFeedbackDecoderFrozen": false,
+    "driverRuntimeAbiBound": false,
+    "distributionReady": false
+  },
+  "limitations": [
+    "This lock proves reviewed source identity and static project/source relationships only; it does not prove compilation, metadata, behavior, binary identity, or runtime safety.",
+    "The fixed .pinned-upstream-v1.6.1 staging directory is absent and ignored. The verifier checks only literal project-to-manifest identities and never reads staged upstream bytes.",
+    "The S1.5d verifier does not compile or execute the DualSense encoder or 64-to-63-byte seam against the 37 frames; the separately authorized S1.5e observation infrastructure is source-frozen, its Actions observation is not established, and no artifact or runtime gate changes.",
+    "The S1.5d verifier does not compile or execute the source-present managed feedback adapter against the 16 vectors, so rawFeedbackDecoderFrozen remains false.",
+    "This verifier builds, loads, inspects and exercises no SDK, candidate assembly, release DLL, signed driver, device, registry, service, process, network, elevation, hardware, or distribution path."
+  ]
+}

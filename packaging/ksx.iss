@@ -30,6 +30,13 @@
 ; bottom for why it is that verb and not the .exe, and why a failure there
 ; cannot fail this install.
 ;
+; DOES: offer HIDMaestro as its own checked task for the DualSense persona.
+; That task runs the pinned installer-only bootstrap packaged beside the fixed
+; runtime host. The bootstrap downloads the exact official v1.6.1 archive at
+; install time and rejects any byte or API-shape mismatch, so this task requires
+; internet access. Neither the ordinary daemon nor the runtime host can install,
+; download, or update a driver package.
+;
 ; This is a reversal, and the reasoning it replaces is worth keeping: "an
 ; installer that silently installed a kernel driver would throw away both pins
 ; and the consent". Both objections are answered rather than ignored. The pins
@@ -80,6 +87,8 @@
 #define AppExe         "ksx.exe"
 #define LauncherExe    "ksx-launcher.exe"
 #define WinUsbHelper   "ksx-winusb-helper.exe"
+#define HidMaestroHost "ksx-hidmaestro-host.exe"
+#define HidMaestroInstaller "ksx-hidmaestro-driver-installer.exe"
 #define LibwdiDll      "libwdi.dll"
 #define RepoRoot       ".."
 
@@ -173,8 +182,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; explicit that installing a kernel driver silently throws away the consent —
 ; and it is right. What it must NOT be is a checkbox whose label makes the
 ; consequence unguessable: "install drivers" tells a first-time user nothing,
-; so the label names the driver, says what it is for, and says it is bundled
-; rather than downloaded.
+; so the label names the driver, says what it is for, and says whether setup
+; downloads anything.
 ;
 ; A user who clears it gets a ksx that installs, runs, configures and maps and
 ; cannot plug a pad. That is a legitimate choice (an existing ViGEmBus from
@@ -184,7 +193,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ;
 ; ASCII ONLY: this file has no UTF-8 BOM, so user-visible text is interpreted
 ; in the system code page. Comments may keep their punctuation.
-Name: "vigembus"; Description: "Install the ViGEmBus controller driver (required to create virtual controllers)"; GroupDescription: "Controller driver - bundled with ksx, nothing is downloaded:"
+Name: "vigembus"; Description: "Install the bundled ViGEmBus controller driver (required to create virtual controllers; no download)"; GroupDescription: "Controller drivers:"
+Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense; internet required)"; GroupDescription: "Controller drivers:"
 ; CHECKED, deliberately — docs/FIRST-RUN.md §4 bullet 1. It used to carry
 ; `Flags: unchecked`, and the audit's finding was concrete: this installer's
 ; only other hand-off is the "run it now" checkbox at the end, so a user who
@@ -214,6 +224,15 @@ Source: "{#RepoRoot}\target\release\{#LauncherExe}"; DestDir: "{app}"; Flags: ig
 ; Elevated, console-free exact-device prepare/release/owned-cleanup boundary,
 ; and its dynamically replaceable LGPL prepare provider.
 Source: "{#RepoRoot}\target\release\{#WinUsbHelper}"; DestDir: "{app}"; Flags: ignoreversion
+; Fixed elevated one-controller HIDMaestro host. The daemon will seal and
+; launch this sibling only from a protected Program Files installation.
+Source: "{#RepoRoot}\target\release\{#HidMaestroHost}"; DestDir: "{app}"; Flags: ignoreversion
+; Installer-only, pinned upstream bootstrap. It downloads the exact official
+; v1.6.1 archive only when the user selects the task, verifies every byte it
+; executes, and removes the temporary SDK afterward. The ordinary daemon and
+; runtime host never call this executable and have no package/certificate or
+; download authority.
+Source: "{#RepoRoot}\target\release\{#HidMaestroInstaller}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\target\release\{#LibwdiDll}";    DestDir: "{app}"; Flags: ignoreversion
 ; The bundled ViGEmBus setup. It must land in `<exe dir>\drivers\` for
 ; `ksx install-drivers` to find it — and `<exe dir>` must be under Program
@@ -306,6 +325,7 @@ Type: dirifempty; Name: "{commonappdata}\KSX"
 // on, so it is not the place to bet on "accepted".
 var
   DriverNote: string;
+  HidMaestroNote: string;
 
 // ---------------------------------------------------------------------------
 // The fixed ProgramData WinUSB recovery store
@@ -697,6 +717,57 @@ begin
     MsgBox(DriverNote, mbError, MB_OK);
 end;
 
+// ---------------------------------------------------------------------------
+// The explicit HIDMaestro install/repair boundary
+// ---------------------------------------------------------------------------
+//
+// The runtime host is intentionally unable to install, update or repair a
+// package. Setup is already elevated and this checked task is the one bounded
+// place that can download, verify, and invoke the exact pinned upstream v1.6.1
+// installer API. Exit 4 means network/download failure; exit 5 means a pin
+// mismatch; 6/7 are API/install failures; 8 means temporary cleanup failed;
+// 9 means setup was redirected outside the protected Program Files boundary.
+function HidMaestroFailureReason(ResultCode: Integer): String;
+begin
+  case ResultCode of
+    2: Result := 'the fixed install command was rejected';
+    3: Result := 'another HIDMaestro install is already running';
+    4: Result := 'the official v1.6.1 archive could not be downloaded';
+    5: Result := 'the downloaded archive or a required assembly did not match its pinned hash';
+    6: Result := 'the pinned installer API was not exact';
+    7: Result := 'the upstream driver installation failed';
+    8: Result := 'the verified temporary SDK could not be removed';
+    9: Result := 'the helper was not running from protected Program Files';
+  else
+    Result := 'an unexpected installer error occurred';
+  end;
+end;
+
+procedure InstallHidMaestroDriver;
+var
+  ResultCode: Integer;
+begin
+  if not Exec(ExpandConstant('{app}\{#HidMaestroInstaller}'), 'install-v1',
+              ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    HidMaestroNote :=
+      'The HIDMaestro controller driver was NOT installed because its installer could not start.' + #13#10 +
+       'DualSense will remain unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+    exit;
+  end;
+  if ResultCode = 0 then
+  begin
+    HidMaestroNote := '';
+    exit;
+  end;
+  HidMaestroNote :=
+    'The HIDMaestro controller driver install did not complete (installer exit code ' +
+    IntToStr(ResultCode) + ': ' + HidMaestroFailureReason(ResultCode) + ').' + #13#10 +
+    'DualSense will remain unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+  if not WizardSilent then
+    MsgBox(HidMaestroNote, mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
@@ -737,13 +808,36 @@ begin
       'You chose not to install the ViGEmBus controller driver. Everything else in ksx works;' + #13#10 +
       'it cannot create a controller until that driver is in. Run this installer again with the' + #13#10 +
       'driver box ticked whenever you want it.';
+
+  if WizardIsTaskSelected('hidmaestro') then
+  begin
+    if not WizardSilent then
+      WizardForm.StatusLabel.Caption := 'Installing the HIDMaestro controller driver...';
+    try
+      InstallHidMaestroDriver;
+    except
+      HidMaestroNote :=
+        'The HIDMaestro controller driver step could not be run: ' + GetExceptionMessage + #13#10 +
+       'DualSense remains unavailable. Check the internet connection and re-run this installer with the HIDMaestro task selected.';
+    end;
+  end
+  else
+    HidMaestroNote :=
+      'You chose not to install the HIDMaestro controller driver. DualSense will stay unavailable.' + #13#10 +
+      'Run this installer again with the HIDMaestro box ticked whenever you want it.';
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
   // The last page the user sees, and the only place a note about something
   // that already happened can still reach them.
-  if (CurPageID = wpFinished) and (DriverNote <> '') then
-    WizardForm.FinishedLabel.Caption :=
-      WizardForm.FinishedLabel.Caption + #13#10#13#10 + DriverNote;
+  if CurPageID = wpFinished then
+  begin
+    if DriverNote <> '' then
+      WizardForm.FinishedLabel.Caption :=
+        WizardForm.FinishedLabel.Caption + #13#10#13#10 + DriverNote;
+    if HidMaestroNote <> '' then
+      WizardForm.FinishedLabel.Caption :=
+        WizardForm.FinishedLabel.Caption + #13#10#13#10 + HidMaestroNote;
+  end;
 end;

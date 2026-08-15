@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-s1.5c-dualsense-source-compilation",
+  "status": "exhaustive-upstream-classification-s1.5e-source-frozen-observation-not-established",
+  "upstream": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro",
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "checkoutBytes": "windows-crlf-core.autocrlf-true"
+  },
+  "coverage": {
+    "root": "sdk/HIDMaestro.Core",
+    "includedExtensions": [".cs", ".csproj"],
+    "expectedUpstreamUnitCount": 51,
+    "everyUpstreamUnitClassifiedExactlyOnce": true
+  },
+  "unitSha256": {
+    "sdk/HIDMaestro.Core/HIDMaestro.Core.csproj": "5A477A82A5CF9D6A5B4BA103AA88A9FD6CD35A96736097A3EE6D54534E65DDFA",
+    "sdk/HIDMaestro.Core/HMContext.cs": "9C2DFA766961DE1608E2F12E51B89439E15B1F6C62CD4F40F6ADF83A6A3915C5",
+    "sdk/HIDMaestro.Core/HMController.cs": "0750DE36C54F89B2B64734D10D3DFD417F3A8BF3A06D50D2E10DF953630CC7FD",
+    "sdk/HIDMaestro.Core/HMDeviceExtractor.cs": "25793B5EB05876B669CE37FD9E9B98EFF427A91559FCD2128414F13098EE2763",
+    "sdk/HIDMaestro.Core/HMGamepadState.cs": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79",
+    "sdk/HIDMaestro.Core/HMHidDeviceInfo.cs": "5A309C84258B5C6C552945B2E06ED26742B2520BEC5DD52CB561112479E67EFB",
+    "sdk/HIDMaestro.Core/HMLayout.cs": "DCF6243987FC6A0D7F135557067DDD2998876B7FAD6A5CF104B4A0C9A79E4B8F",
+    "sdk/HIDMaestro.Core/HMOemNameOverride.cs": "C3FD2AC7444214DF5E0899EC261A436BE72CF340C2741A2C8B49297A7A5C1122",
+    "sdk/HIDMaestro.Core/HMOutputDecodedEventArgs.cs": "8028278D660A5579A24B32A1803E0FCECD507ACA8BC434C6C50B9E37813080CD",
+    "sdk/HIDMaestro.Core/HMOutputEncoder.cs": "568A486E3E1277C1BB2780C18BA2CD7216BC30945080E142102F04DC23ED7DFB",
+    "sdk/HIDMaestro.Core/HMOutputPacket.cs": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+    "sdk/HIDMaestro.Core/HMPidState.cs": "D0E908C09561D9059F9F6D2A018BFE735BEE055052657605D16BC891F729D4F0",
+    "sdk/HIDMaestro.Core/HMProfile.cs": "08C7373401BD986DFE34DD160CBA38B21A10FC2C040E230326DF03E6A568D94F",
+    "sdk/HIDMaestro.Core/HMProfileBuilder.cs": "D6DACEA1992C6986AFD5838D886C3A6D142575DB0052ED1C569A36F792E358CE",
+    "sdk/HIDMaestro.Core/HMUsbAudio.cs": "37F61D98560B5032348BAF05647E6B3E3792484A82B4F2B5B55B49FB74CA5FC7",
+    "sdk/HIDMaestro.Core/HMVR.cs": "C5EDBB83DBEACB17CA6CE702BD0AFCBE67CA91FEA87D642779B5420F5C30749E",
+    "sdk/HIDMaestro.Core/HMVRController.cs": "87C93286C4436E4DA2BC0656F8054D0855978B20CCAC5465C14E3244A8B360D1",
+    "sdk/HIDMaestro.Core/HidDescriptorBuilder.cs": "5492AED7A10355094F7967B6B47690BA4DEDF5346046885618A98970BC0C3BD7",
+    "sdk/HIDMaestro.Core/Internal/AssemblyInfo.cs": "A17F49167476184BE31BF913B4050FDF09FC98A6940036264904BF9746A1AAAB",
+    "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs": "ECA1A6DF9E4DC763B7B10972C2AE8EF45B4931159D1E8B4DE7CB26ECA8D58F5C",
+    "sdk/HIDMaestro.Core/Internal/DeviceManager.cs": "24EB7D60FF64AC39275CA551165AFF5D71628B4E1E63DAC3F1273BF6998D310E",
+    "sdk/HIDMaestro.Core/Internal/DeviceNodeCreator.cs": "7A5DC2C96840006990036B074C9E92A2914D3E99941176644BBAAE68468B4748",
+    "sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs": "1A6BA29B0EEC2A1151903FA2F67174DA1B08D1066323FB70463EDB1AC0294FDC",
+    "sdk/HIDMaestro.Core/Internal/DeviceProperties.cs": "1CB72E7DE59D473AD64B73F45E194B185C66D7BF35B2FEE73B921572711CF50A",
+    "sdk/HIDMaestro.Core/Internal/DriverBuilder.cs": "38BD4C943FA098CA4FCA80ECCEB73040F76755815A6EA644832DE2FECFFDF8C9",
+    "sdk/HIDMaestro.Core/Internal/EmbeddedManifest.cs": "ECEE8360EE021521384A2D014626C1442D5B72CAFEB7DBE72C4BE6A88999CEE4",
+    "sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs": "9E2205F791B63E45C54D9F881F0788B8E56DA77F6BF8D556BE526361E02587E0",
+    "sdk/HIDMaestro.Core/Internal/HidDescriptorReconstructor.cs": "EA82E3A579D7D8F9774BEA31CED4915C065F393A80C74A8D5A5D10F3144EBCD6",
+    "sdk/HIDMaestro.Core/Internal/HidDeviceEnumerator.cs": "7CC5A5B723EA6E8123BC93CAB79EB2C3354644D0F35D487C6BCD5B082B002482",
+    "sdk/HIDMaestro.Core/Internal/HidPreparsedData.cs": "5AC5243AAB19C92E3DBCA7B584AB539F807E1A8F07B1DB4D4AD0A68AC017C18B",
+    "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs": "D831EE4AAC15A3D187BED3EF422DE70D150D7FEA6DBC96FC289522A841B06C18",
+    "sdk/HIDMaestro.Core/Internal/OemNameOverrideStore.cs": "0B888F496BDBE6C66C2F849E1D2284701C95A138F3768E7022133B11864D98F2",
+    "sdk/HIDMaestro.Core/Internal/PidReportIdExtractor.cs": "14CEBBD871D4BD98F6C548205C008FEBD9373EF182018B36E3EA1CBB4BC0FAD2",
+    "sdk/HIDMaestro.Core/Internal/PnputilHelper.cs": "96932BEB0E940D59DFD61904B1A9CCC040DCA3110A0E7BD9817B1A6AD078B07D",
+    "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs": "FB2367A582C16C597192C0768B762EDBE02EFD738A3A1AA8E26A5551964C2D14",
+    "sdk/HIDMaestro.Core/Internal/SwdDeviceFactory.cs": "72387CB648662140B8E6488B897D09C1A3533C969DC597E64A686503799F8A9D",
+    "sdk/HIDMaestro.Core/Internal/SwitchProPacker.cs": "B57F0E387C4AC1011A92B9B8E081D8A7833A5D1F6E5F167846915423C1DE9104",
+    "sdk/HIDMaestro.Core/Internal/TimeoutScale.cs": "FC1681FF543042481CFB070918C2F89D10E4A321495EE2E0CBFCFF72CE8F26EA",
+    "sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs": "BD1B3901ADF5442936217B405F92447F600535AB898890A2A4B3CD8B9E9A2A81",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbAudioEngine.cs": "399195CE62427C971CD2FBA963B58DB5CD6A1E5853C4E6A88272B79A0749A362",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs": "0E29D40074B095FE093B5D4F5BC4A818DA50E0774C0A85F11CE10C5B3EDDCB9A",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs": "D641727ADA747966257862E88199712F717189FCAFA85A8FAD4559EE32428308",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs": "B5934817C8984B0EFFFC8CCC3AD94ACA4495194AFDBADC0A2A7ECFDE2C4D37B8",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs": "9F48141FE353A2103BA52AF0B30D28B24852794CF601B8963DF5D6858A740CBF",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbipProtocol.cs": "1493CE989FE0E96C1E3428B9D4A3D6D551D7265428BFA4C4C929C465666B3D0D",
+    "sdk/HIDMaestro.Core/Internal/Usbip/UsbipServer.cs": "E2FE59FE3AE42C4E1C204E1F605641F30D7F7555E6B2E6AE6CCAE6AFEB181878",
+    "sdk/HIDMaestro.Core/Internal/Usbip/VhciClient.cs": "D663566B7DB81C54C7082F78CFF02FA017D0BB2A3868E58D6A544FF145DED3CB",
+    "sdk/HIDMaestro.Core/Internal/VendorBlobCodec.cs": "05DC4CB4EA683DEF263BC49ED639F7771E501C1C78F957E484D031898E185A88",
+    "sdk/HIDMaestro.Core/Internal/VendorBlobProgram.cs": "7DF6EDB9087141391BD1DC23027861C6F1D128DE5DC4FF23081C2681BA5CA7B2",
+    "sdk/HIDMaestro.Core/Internal/VrDriverBuilder.cs": "539EFB83CD183CB07E0263740B75C931BCEB0409D7C85DCE6896C7765A3B2D72",
+    "sdk/HIDMaestro.Core/Internal/VrSharedMemory.cs": "4557BB11DCB9C26BA5AB32E3BF9E4FCB0AFFAB7864381A8572207B44A1D42CF6"
+  },
+  "classification": {
+    "retainUnchanged": [
+      "sdk/HIDMaestro.Core/HMOutputPacket.cs"
+    ],
+    "replacementRequired": [
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/HIDMaestro.Core.csproj"],
+        "plannedCandidateUnits": ["candidate/HIDMaestro.Core.csproj"],
+        "reason": "Explicit compile/resource items, no upstream targets, downloads, packers, provisioning payloads or implicit globs.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/HMContext.cs"],
+        "plannedCandidateUnits": ["candidate/HMContext.cs"],
+        "reason": "Preserve only the five allowlisted lifecycle/catalog methods and remove constructor prewarm, install and global cleanup.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/HMController.cs"],
+        "plannedCandidateUnits": ["candidate/HMController.cs"],
+        "reason": "Preserve only exact-owned input/raw-output/dispose behavior and the four allowlisted logical members.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/HMGamepadState.cs"],
+        "plannedCandidateUnits": ["candidate/HMGamepadState.cs"],
+        "reason": "Preserve exact enum values and only Axes, Buttons and Hat; omit helpers and unrelated sensor/touch/battery fields from the public surface.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/HMProfile.cs"],
+        "plannedCandidateUnits": ["candidate/HMProfile.cs"],
+        "reason": "Expose only Id, Name, VendorId and ProductId; omit builder/layout/descriptor and arbitrary catalog surfaces.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/ControllerProfile.cs"],
+        "plannedCandidateUnits": ["candidate/Internal/RuntimeProfileCatalog.cs"],
+        "reason": "Replace the generic public profile database/types with a hash-pinned immutable catalog over all 228 source-manifest-selected profiles; the S2 create guard still accepts only DualSense.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/Internal/DeviceManager.cs",
+          "sdk/HIDMaestro.Core/Internal/DeviceNodeCreator.cs",
+          "sdk/HIDMaestro.Core/Internal/DeviceProperties.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/Internal/RuntimeExactDeviceManager.cs",
+          "candidate/Internal/RuntimePlainHidLifecycle.cs"
+        ],
+        "reason": "Replace global enumeration/removal and INF update capability with preinstalled-package creation plus captured exact-instance ownership and rollback.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs",
+          "sdk/HIDMaestro.Core/Internal/VendorBlobCodec.cs",
+          "sdk/HIDMaestro.Core/Internal/VendorBlobProgram.cs"
+        ],
+        "plannedCandidateUnits": ["candidate/Internal/RuntimeDualSenseInputEncoder.cs"],
+        "reason": "Replace the broad generic/public encoder graph with the fixed 64-byte DualSense USB report encoder required by the conformance slice.",
+        "replacementPresent": true
+      },
+      {
+        "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs"],
+        "plannedCandidateUnits": ["candidate/Internal/RuntimeOwnedSharedMemoryIO.cs"],
+        "reason": "Replace process-global dictionaries and broad cleanup with one-controller owned handles, bounded output and exact teardown.",
+        "replacementPresent": true
+      }
+    ],
+    "excluded": [
+      "sdk/HIDMaestro.Core/HMDeviceExtractor.cs",
+      "sdk/HIDMaestro.Core/HMHidDeviceInfo.cs",
+      "sdk/HIDMaestro.Core/HMLayout.cs",
+      "sdk/HIDMaestro.Core/HMOemNameOverride.cs",
+      "sdk/HIDMaestro.Core/HMOutputDecodedEventArgs.cs",
+      "sdk/HIDMaestro.Core/HMOutputEncoder.cs",
+      "sdk/HIDMaestro.Core/HMPidState.cs",
+      "sdk/HIDMaestro.Core/HMProfileBuilder.cs",
+      "sdk/HIDMaestro.Core/HMUsbAudio.cs",
+      "sdk/HIDMaestro.Core/HMVR.cs",
+      "sdk/HIDMaestro.Core/HMVRController.cs",
+      "sdk/HIDMaestro.Core/HidDescriptorBuilder.cs",
+      "sdk/HIDMaestro.Core/Internal/AssemblyInfo.cs",
+      "sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs",
+      "sdk/HIDMaestro.Core/Internal/DriverBuilder.cs",
+      "sdk/HIDMaestro.Core/Internal/EmbeddedManifest.cs",
+      "sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs",
+      "sdk/HIDMaestro.Core/Internal/HidDescriptorReconstructor.cs",
+      "sdk/HIDMaestro.Core/Internal/HidDeviceEnumerator.cs",
+      "sdk/HIDMaestro.Core/Internal/HidPreparsedData.cs",
+      "sdk/HIDMaestro.Core/Internal/OemNameOverrideStore.cs",
+      "sdk/HIDMaestro.Core/Internal/PidReportIdExtractor.cs",
+      "sdk/HIDMaestro.Core/Internal/PnputilHelper.cs",
+      "sdk/HIDMaestro.Core/Internal/SwdDeviceFactory.cs",
+      "sdk/HIDMaestro.Core/Internal/SwitchProPacker.cs",
+      "sdk/HIDMaestro.Core/Internal/TimeoutScale.cs",
+      "sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbAudioEngine.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbipProtocol.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/UsbipServer.cs",
+      "sdk/HIDMaestro.Core/Internal/Usbip/VhciClient.cs",
+      "sdk/HIDMaestro.Core/Internal/VrDriverBuilder.cs",
+      "sdk/HIDMaestro.Core/Internal/VrSharedMemory.cs"
+    ]
+  },
+  "requiredNewUnits": [
+    {
+      "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
+      "purpose": "Validate HMOutputSource, report ID and exact length, then produce complete effective feedback snapshots from separate ReportId/Data coordinates.",
+      "present": true
+    }
+  ],
+  "nonCompilationInputs": [
+    {
+      "path": "profiles/sony/dualsense.json",
+      "sha256": "DBD33E713FAFA6670610E75CC247AECE5BBAEB51591521A41AF6275D7808A4C5",
+      "disposition": "conformance-identity-evidence-and-member-of-full-profile-resource-manifest"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "7DC6524E5E31D606A2109CCFFF42D37E4596DBB64206A45DEA362B77590D5B0F",
+      "disposition": "retain-unchanged-license-input-not-embedded-code"
+    },
+    {
+      "path": "Directory.Build.props",
+      "sha256": "504997271FB02F0EDB63971FD6F0AF55667AD0F3F88433A93D2AC48F600BFA8C",
+      "disposition": "version-provenance-only-excluded-from-candidate-build"
+    }
+  ],
+  "futureCompileManifest": {
+    "state": "source-candidate-present-hash-frozen-s1.5e-source-frozen-observation-not-established",
+    "observation": {
+      "contractPath": "../s1_5e/contract.lock.json",
+      "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+      "contractReferenceState": "source-frozen-observation-not-established",
+      "actionsObservationBuildAuthorized": true,
+      "sourceVerifierBuildAuthorized": false,
+      "localBuildAuthorized": false,
+      "productBuildAuthorized": false,
+      "loadAuthorized": false,
+      "executionAuthorized": false,
+      "observationEstablished": false,
+      "actionsObservationArtifactBuilt": false,
+      "metadataMatched": false,
+      "compileClosureMatched": false
+    },
+    "compileUnits": [
+      "candidate/HMContext.cs",
+      "candidate/HMController.cs",
+      "candidate/HMGamepadState.cs",
+      "candidate/HMProfile.cs",
+      "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
+      "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
+      "candidate/Internal/RuntimeProfileCatalog.cs",
+      "candidate/Internal/RuntimeExactDeviceManager.cs",
+      "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
+      "candidate/Internal/RuntimePlainHidLifecycle.cs",
+      "sdk/HIDMaestro.Core/HMOutputPacket.cs"
+    ],
+    "projectUnit": "candidate/HIDMaestro.Core.csproj",
+    "resourceUnits": {
+      "manifestPathRelativeToRuntimeCandidateRoot": "profiles/catalog.lock.json",
+      "manifestCanonicalSha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80",
+      "selection": "all entries whose classification is embedded-profile-source",
+      "count": 228,
+      "deployableProfileCount": 130,
+      "releaseDllCatalogBinding": "unresolved"
+    },
+    "allReplacementUnitsPresent": true,
+    "artifactCompileAllowlistFrozen": false,
+    "reason": "Every planned source path exists and is hash-frozen by the S1.5d static source/project verifier, and the exact S1.5e observation infrastructure is source-frozen. Its bounded GitHub Actions build is authorized, but no observation has yet been established, no artifact has been built or loaded under that scope, and artifact compile closure remains unproven and unadopted."
+  },
+  "assuranceBoundary": [
+    "The classification is exhaustive over the pinned upstream Core .cs/.csproj tree and says exactly which upstream bytes may be copied unchanged.",
+    "Every planned candidate unit now exists and is hash-frozen, but source presence does not prove compilation, behavior, metadata closure, or safety to execute.",
+    "The source-frozen S1.5e GitHub Actions observation may build the staged candidate and parse its inert bytes; the source verifier, local workstation and product paths remain unauthorized to build it, and every load or execution path remains unauthorized.",
+    "The artifact compile allowlist remains false before the observation and requires a later explicit evidence-adoption decision even after an isolated build proves the explicit project items close without an implicit or generated authority-bearing unit.",
+    "The full 228-resource input set is authoritative only through the hash-pinned profile source manifest; the one-DualSense S2 restriction applies to CreateController, not catalog inclusion.",
+    "Neither the candidate nor any upstream project, target, assembly, helper or driver is built, loaded or executed by the source verifier."
+  ]
+}

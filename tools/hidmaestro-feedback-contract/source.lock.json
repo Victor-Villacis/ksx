@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Source-only provenance for the inert DualSense raw-feedback contract; none of these projects or binaries are built or loaded.",
+  "hidMaestro": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro",
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "license": "MIT",
+    "files": [
+      {
+        "path": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+        "gitBlobSha1": "134a9eaaed0b31776ddc838571de4dd8a57d23e2"
+      },
+      {
+        "path": "sdk/HIDMaestro.Core/HMController.cs",
+        "gitBlobSha1": "65d1378680b7d19d89202abaa0bbb28e66005d5a"
+      },
+      {
+        "path": "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs",
+        "gitBlobSha1": "c29f75012ca7a6be489a65b0d763558fc442a5ee"
+      },
+      {
+        "path": "profiles/sony/dualsense.json",
+        "gitBlobSha1": "ffdf2c2b99c4a8315c65fde9e7096c5780580760"
+      },
+      {
+        "path": "driver/driver.c",
+        "gitBlobSha1": "6d48b888dd95534098af6b8c78cc84ca0547c9fe"
+      },
+      {
+        "path": "driver/driver.h",
+        "gitBlobSha1": "5c7abc3bb4962d16ca06469bafaadc85be2fee45"
+      },
+      {
+        "path": "test/probes/usbip_server_check/Program.cs",
+        "gitBlobSha1": "1e9230d881ab2a34d12e2dd0d1d1874935b4741f"
+      }
+    ]
+  },
+  "layoutReferences": [
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "commit": "dac3e89a2c90c2feeb471e1f22a2512ad424b792",
+      "path": "drivers/hid/hid-playstation.c",
+      "sha256": "48A08DDDF8D276A611195311A29CD4F113A949A1F5431ECC84B0396B106EC896",
+      "license": "GPL-2.0-or-later",
+      "use": "Numeric layout and validity-bit facts only; no source is vendored or linked."
+    },
+    {
+      "repository": "https://github.com/libsdl-org/SDL",
+      "commit": "b669ac244e10fbab4734c7389151f7a4e8ac725f",
+      "path": "src/joystick/hidapi/SDL_hidapi_ps5.c",
+      "sha256": "C535231BF9EC785E4E7DC1805C5D989D534CA5B9A3F47B1FE354B224FAF22A16",
+      "license": "Zlib",
+      "use": "Observed producer behavior for selector-only start and the all-zero restore/stop idiom; no source is vendored or linked."
+    }
+  ]
+}

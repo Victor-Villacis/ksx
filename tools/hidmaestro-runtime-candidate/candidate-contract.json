@@ -1,31 +1,113 @@
 {
   "schemaVersion": 1,
-  "candidate": "s1.5b-dualsense-conformance",
-  "status": "design-contract-only",
+  "candidate": "s1.5c-dualsense-conformance",
+  "status": "s1.5e-source-frozen-observation-not-established-not-built-or-loaded",
   "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
   "artifact": {
     "assemblyName": "HIDMaestro.Core",
     "versionContract": {
       "assemblyVersion": "1.6.1.0",
       "fileVersion": "1.6.1.0",
-      "informationalVersion": "1.6.1-ksx-s1.5b+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954"
+      "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954"
     },
     "targetFramework": "net10.0-windows10.0.26100.0",
     "runtimeIdentifier": "win-x64",
+    "observation": {
+      "phase": "s1.5e",
+      "contractPath": "s1_5e/contract.lock.json",
+      "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+      "contractReferenceState": "source-frozen-observation-not-established",
+      "actionsObservationBuildAuthorized": true,
+      "sourceVerifierBuildAuthorized": false,
+      "localBuildAuthorized": false,
+      "productBuildAuthorized": false,
+      "loadAuthorized": false,
+      "executionAuthorized": false,
+      "observationEstablished": false,
+      "actionsObservationArtifactBuilt": false,
+      "metadataMatched": false,
+      "compileClosureMatched": false,
+      "resourceCatalogMatched": false
+    },
     "embeddedResourcePolicy": {
       "allowedPrefix": "HIDMaestro.Profiles.",
       "resourceCount": 228,
       "deployableProfileCount": 130,
-      "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A"
+      "sourceManifestPath": "profiles/catalog.lock.json",
+      "sourceManifestCanonicalSha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80",
+      "sourceManifestSelection": "all entries whose classification is embedded-profile-source",
+      "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A",
+      "sourceToReleaseCatalogBinding": "unresolved"
     }
   },
   "gateState": {
+    "sourcePublicApiContractFrozen": true,
+    "sourceCompilationDispositionFrozen": true,
+    "profileSourceManifestFrozen": true,
+    "rawFeedbackContractFrozen": true,
+    "rawInputContractFrozen": true,
     "artifactPublicApiAllowlistFrozen": false,
     "artifactCompileAllowlistFrozen": false,
     "profileSourceCatalogBound": false,
     "rawFeedbackDecoderFrozen": false,
     "driverRuntimeAbiBound": false,
     "distributionReady": false
+  },
+  "sourceContracts": {
+    "publicApi": {
+      "path": "api/public-api.contract.json",
+      "publicTypeCount": 9,
+      "logicalMemberCount": 100,
+      "actionsObservationMetadataMatched": false,
+      "artifactMetadataAllowlistAdopted": false
+    },
+    "compilationDisposition": {
+      "path": "api/source-compilation.contract.json",
+      "upstreamUnitCount": 51,
+      "retainedUnchangedCount": 1,
+      "replacementRequiredCount": 13,
+      "excludedCount": 37,
+      "replacementSourcesPresent": true
+    },
+    "managedSourceCandidate": {
+      "path": "s1_5d/contract.lock.json",
+      "candidateRoot": "candidate",
+      "candidateFileCount": 12,
+      "compileItemCount": 11,
+      "embeddedResourceCount": 228,
+      "sourceAndProjectXmlFrozen": true,
+      "sourceVerifierBuildAuthorized": false,
+      "sourceVerifierBuiltArtifact": false,
+      "sourceVerifierLoadedArtifact": false
+    },
+    "profileCatalog": {
+      "path": "profiles/catalog.lock.json",
+      "profileTreeFileCount": 231,
+      "embeddedProfileSourceCount": 228,
+      "deployableProfileSourceCount": 130,
+      "duplicateProfileIdCount": 0,
+      "manifestCanonicalSha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80",
+      "releaseDllCatalogBinding": "unresolved"
+    },
+    "rawDualSenseFeedback": {
+      "path": "../hidmaestro-feedback-contract/contract.json",
+      "goldenVectorCount": 16,
+      "pureRustDecoderFrozen": true,
+      "managedRuntimeAdapterPresent": true,
+      "hardwareVerified": false
+    },
+    "rawDualSenseInput": {
+      "path": "../hidmaestro-input-contract/contract.json",
+      "sourceFileCount": 12,
+      "descriptorGroupCount": 6,
+      "goldenScenarioCount": 9,
+      "goldenFrameCount": 37,
+      "managedRuntimeEncoderPresent": true,
+      "fullWireReportByteCount": 64,
+      "legacySharedDataByteCount": 63,
+      "artifactBehaviorVerified": false,
+      "hardwareVerified": false
+    }
   },
   "conformanceScope": {
     "maximumLiveControllers": 1,
@@ -78,69 +160,88 @@
     ],
     "HIDMaestro.HMOutputSource": "required raw-feedback source enum"
   },
-  "feedbackBoundary": "The intended boundary is raw HMController.OutputReceived packets and a future source-frozen DualSense adapter; HMOutputPacket.ReportId is separate and HMOutputPacket.Data excludes that report-ID byte. The broader OutputDecoded surface is not required for this checkpoint.",
-  "requiredSourceReplacements": [
-    {
-      "unit": "HMContext",
-      "requirements": [
-        "Constructor performs no background work, process launch, file extraction, driver probe, service mutation or global cleanup.",
-        "CreateController accepts only the exact conformance profile and refuses a second live controller.",
-        "Dispose tears down only the exact owned device set returned by create."
-      ]
-    },
-    {
-      "unit": "RuntimePlainHidLifecycle",
-      "requirements": [
-        "Create only the one plain-HID parent required by dualsense after proving the signed package was preinstalled.",
-        "Capture the exact parent instance identity immediately when registration succeeds, before any later fallible binding or child-discovery step.",
-        "Retain a partial-owned transaction record until creation either commits or exact-identity rollback completes.",
-        "On every error after registration, neutralize any started state path and roll back only the exact captured parent and child identities; report rollback failure explicitly instead of discarding ownership state.",
-        "Return an immutable owned-device record containing the exact parent instance ID and exact child IDs observed from that parent.",
-        "Never enumerate or delete devices by ControllerIndex, VID/PID, HIDMaestro token, profile family or global orphan status."
-      ]
-    },
-    {
-      "unit": "HMController",
-      "requirements": [
-        "Retain the immutable owned-device record for the controller lifetime.",
-        "Dispose first neutralizes and stops owned shared-memory pumps, then removes only retained exact instance IDs."
-      ]
-    },
-    {
-      "unit": "RawDualSenseFeedbackAdapter",
-      "requirements": [
-        "Accept HMOutputPacket.ReportId and HMOutputPacket.Data as separate inputs; never index Data as though it contains the report-ID byte.",
-        "Validate source, report ID and exact packet length before reading valid flags, motor bytes or optional fields.",
-        "Freeze every byte coordinate against the pinned upstream encoder/decoder source and cross-language golden vectors, including motor-stop and partial-validity cases.",
-        "Emit a complete effective feedback snapshot so bounded queue loss cannot resurrect stale motor state."
-      ]
-    },
-    {
-      "unit": "HIDMaestro.Core.csproj",
-      "requirements": [
-        "Disable default compile and resource globs.",
-        "Compile an explicit source allowlist.",
-        "Embed only the hash-pinned profile catalog; never run PackResources or DownloadFile."
-      ]
-    }
-  ],
-  "sourceUnitsExcludedFromRuntimeAssembly": [
-    "Internal/DeviceOrchestrator.cs",
-    "Internal/DeviceNodeCreator.cs",
-    "Internal/DeviceManager.cs",
-    "Internal/DriverBuilder.cs",
-    "Internal/EmbeddedManifest.cs",
-    "Internal/PnputilHelper.cs",
-    "Internal/SwdDeviceFactory.cs",
-    "Internal/Usbip/**",
-    "Internal/VrDriverBuilder.cs",
-    "HMDeviceExtractor.cs",
-    "HMOemNameOverride.cs",
-    "HMProfileBuilder.cs",
-    "HMUsbAudio.cs",
-    "HMVR.cs",
-    "HMVRController.cs"
-  ],
+  "feedbackBoundary": "The intended boundary is raw HMController.OutputReceived packets. The pure DualSense reduction contract and managed adapter source are frozen, HMOutputPacket.ReportId is separate, and HMOutputPacket.Data excludes that report-ID byte. The source verifiers do not compile or execute the adapter against the 16 vectors, the S1.5e observation leaf is source-frozen but its Actions observation is not established, and no behavior proof is claimed. The broader OutputDecoded surface is not required for this checkpoint.",
+  "implementationSafetySummary": {
+    "nonAuthoritative": true,
+    "authoritativeSourceDisposition": "api/source-compilation.contract.json",
+    "note": "Selected safety requirements only. The authoritative manifest exhaustively classifies every upstream unit and every planned candidate unit.",
+    "selectedRequirements": [
+      {
+        "unit": "HMContext",
+        "requirements": [
+          "Constructor performs no background work, process launch, file extraction, driver probe, service mutation or global cleanup.",
+          "CreateController accepts only the exact conformance profile and refuses a second live controller.",
+          "A failed creation leaves its exact recovery action owned by the context, blocks another create, and is retried by Dispose.",
+          "Dispose tears down only the exact owned device set returned by create."
+        ]
+      },
+      {
+        "unit": "RuntimePlainHidLifecycle",
+        "requirements": [
+          "Create only the one plain-HID parent required by dualsense after proving the signed package was preinstalled.",
+          "Capture the exact parent instance identity immediately when registration succeeds, before any later fallible binding or child-discovery step.",
+          "Retain exact-owned recovery state and a serialized retry action until creation either commits or exact-identity rollback completes.",
+          "On every error after registration, neutralize any started state path and roll back only the exact captured parent and child identities; report rollback failure explicitly instead of discarding ownership state.",
+          "Return an immutable owned-device record containing the exact parent instance ID and exact child IDs observed from that parent.",
+          "Never enumerate or delete devices by ControllerIndex, VID/PID, HIDMaestro token, profile family or global orphan status."
+        ]
+      },
+      {
+        "unit": "HMController",
+        "requirements": [
+          "Retain the immutable owned-device record for the controller lifetime.",
+          "Dispose first neutralizes and stops owned shared-memory pumps, then removes only retained exact instance IDs."
+        ]
+      },
+      {
+        "unit": "RawDualSenseFeedbackAdapter",
+        "requirements": [
+          "Accept HMOutputPacket.ReportId and HMOutputPacket.Data as separate inputs; never index Data as though it contains the report-ID byte.",
+          "Validate source, report ID and exact packet length before reading valid flags, motor bytes or optional fields.",
+          "Freeze every byte coordinate against the pinned upstream encoder/decoder source and cross-language golden vectors, including motor-stop and partial-validity cases.",
+          "Emit a complete effective feedback snapshot so bounded queue loss cannot resurrect stale motor state."
+        ]
+      },
+      {
+        "unit": "RuntimeDualSenseInputEncoder",
+        "requirements": [
+          "Encode a complete 64-byte legacy USB input report with report ID 0x01 at byte zero from the frozen source-derived DualSense input contract.",
+          "Clear every report before encoding, reject non-finite axes, clamp finite axes to [0,1], multiply by 255 and truncate, and preserve the frozen hat, button and analog-trigger-to-digital-trigger mapping.",
+          "Pass only bytes 1 through 63 to the legacy shared-memory endpoint; the configured driver prepends the report-ID byte."
+        ]
+      },
+      {
+        "unit": "HIDMaestro.Core.csproj",
+        "requirements": [
+          "Disable default compile and resource globs.",
+          "Compile an explicit source allowlist.",
+          "Embed only the hash-pinned profile catalog; never run PackResources or DownloadFile."
+        ]
+      }
+    ]
+  },
+  "excludedSourceHazardSummary": {
+    "nonAuthoritative": true,
+    "authoritativeSourceDisposition": "api/source-compilation.contract.json",
+    "note": "Selected high-risk upstream units and families only; this is not the exhaustive exclusion or replacement list.",
+    "selectedUnits": [
+      "Internal/DeviceOrchestrator.cs",
+      "Internal/DeviceNodeCreator.cs",
+      "Internal/DeviceManager.cs",
+      "Internal/DriverBuilder.cs",
+      "Internal/EmbeddedManifest.cs",
+      "Internal/PnputilHelper.cs",
+      "Internal/SwdDeviceFactory.cs",
+      "Internal/Usbip/**",
+      "Internal/VrDriverBuilder.cs",
+      "HMDeviceExtractor.cs",
+      "HMOemNameOverride.cs",
+      "HMProfileBuilder.cs",
+      "HMUsbAudio.cs",
+      "HMVR.cs",
+      "HMVRController.cs"
+    ]
+  },
   "forbiddenTypeOrMemberNames": [
     "DriverBuilder",
     "EmbeddedManifest",
@@ -171,10 +272,13 @@
     "on-demand installation or repair"
   ],
   "notAuthorized": [
-    "building a runtime artifact from this incomplete design contract",
-    "treating requiredHostApiMinimum as an exhaustive public API allowlist",
+    "building outside the exact source-frozen S1.5e GitHub Actions observation",
+    "loading or executing any candidate artifact, including an S1.5e observation output",
+    "treating the frozen source API target as proof of a built artifact's metadata",
+    "treating source/project closure as proof that the candidate compiles or that its artifact contains only the intended members and resources",
     "treating the release-DLL catalog hash as a source-tree catalog binding",
-    "treating raw OutputReceived packets as decoded feedback before rawFeedbackDecoderFrozen is true",
+    "treating the source-present managed feedback adapter as behavior proof while rawFeedbackDecoderFrozen is false",
+    "treating the source-present managed input encoder and 64-to-63-byte seam as compiled or executed behavior proof",
     "treating source-level driver layouts as proof of the installed signed driver binary/catalog ABI",
     "distribution or signing while any gateState value is false",
     "product enablement",
@@ -186,10 +290,11 @@
     "execution on a developer workstation"
   ],
   "unresolvedArtifactGates": [
-    "Freeze every public type/member reachable from the chosen host API, or fork the exposed DTO/profile types to that exact allowlist.",
-    "Freeze the complete explicit compile-source allowlist for the runtime fork.",
-    "Pin a canonical manifest and digest for all profile source JSON and prove the candidate's 228 raw resources derive from those exact bytes.",
-    "Freeze and test the raw DualSense feedback adapter over the separate HMOutputPacket ReportId and Data coordinates.",
+    "Build the frozen replacement-source candidate in an isolated Actions directory and prove the assembly's public metadata exactly matches the nine-type source API contract.",
+    "Inspect the built artifact and prove its compile closure contains exactly the frozen explicit source allowlist and no implicit or generated authority-bearing unit.",
+    "Prove the candidate's 228 raw manifest resources derive from the frozen profile-source manifest and reproduce the required catalog framing.",
+    "Execute an isolated cross-language artifact check proving the managed raw DualSense feedback adapter matches all 16 frozen Rust golden vectors over separate ReportId and Data coordinates.",
+    "Execute an isolated artifact check proving the managed DualSense input encoder matches all 37 source-derived frames and that the shared endpoint receives exactly wire bytes 1 through 63.",
     "Bind driver.h and driver.c layout/lifecycle facts to the exact signed installed HID driver binary and catalog consumed by the runtime.",
     "Freeze the complete native-bootstrap, managed-host, runtimeconfig, deps and self-contained runtime file graph with stable file identities, hashes and signer policy."
   ]

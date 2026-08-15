@@ -672,6 +672,7 @@ fn game_title_of(issue: &Issue) -> Option<&str> {
         // `ksx run --game X` would build a plan for slots that cannot plug.
         | Issue::GameTooManyXinputSlots { game, .. }
         | Issue::GamePersonaNotImplemented { game, .. }
+        | Issue::GamePersonaCapacity { game, .. }
         | Issue::GameUserIndexOutOfRange { game, .. } => Some(game),
         _ => None,
     }
@@ -899,7 +900,7 @@ fn yes_no(b: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ksx_core::Key;
+    use ksx_core::{Key, Persona};
 
     /// **Resolution happens at the seam start and reload SHARE.**
     ///
@@ -1231,14 +1232,11 @@ preset = "nope"
         assert!(err.to_string().contains("refusing to start"), "{err}");
     }
 
-    /// A slot that can never plug is caught by `--dry-run`, not by the plug.
-    ///
-    /// Without this the plan builds, the session starts, and the run dies
-    /// mid-teardown with an error naming a driver the user does not need. The
-    /// file is still *accepted* — it parses, `dualsense` is a real persona —
-    /// and it is refused with the reason and the fix in the same sentence.
+    /// The production DualSense persona reaches the same run plan as every
+    /// other live controller instead of being rejected by the old placeholder
+    /// gate before the HIDMaestro backend can start.
     #[test]
-    fn a_slot_whose_persona_cannot_plug_refuses_the_run_and_names_the_fix() {
+    fn a_dualsense_slot_reaches_the_live_run_plan() {
         let cfg = config(
             r#"
 schema_version = 1
@@ -1249,17 +1247,11 @@ preset = "default"
 persona = "dualsense"
 "#,
         );
-        let err = build_plan(&cfg, &GamesFile::default(), &presets(), None).unwrap_err();
-        let PlanError::Issues(issues) = &err else {
-            panic!("expected Issues, got {err:?}");
-        };
-        assert!(issues
-            .iter()
-            .any(|i| matches!(i, Issue::PersonaNotImplemented { slot: 1, .. })));
-        let text = err.to_string();
-        assert!(text.contains("dualsense"), "{text}");
-        assert!(text.contains("playstation"), "{text}");
-        assert!(text.contains("refusing to start"), "{text}");
+        let plan = build_plan(&cfg, &GamesFile::default(), &presets(), None)
+            .expect("the production DualSense persona must reach the live backend");
+        assert_eq!(plan.slots.len(), 1);
+        assert_eq!(plan.slots[0].spec.number, 1);
+        assert_eq!(plan.slots[0].spec.persona, Persona::DualSense);
     }
 
     /// A chord layered over already-bound keys is a legitimate choice with a

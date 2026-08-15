@@ -1,0 +1,25 @@
+[package]
+name = "ksx-hidmaestro-feedback-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+build = false
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]
+
+[dependencies]
+
+[package.metadata.contract]
+sdk-loading = false
+driver-access = false
+hardware-access = false
+
+[package.metadata.cargo-machete]
+ignored = []

@@ -14,6 +14,7 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 vigem-client.workspace = true
+ksx-hidmaestro.workspace = true
 # Slot identity is resolved by active correlation through XInput read-back
 # (docs/research/m2-xinput-findings.md) — a runtime dep, not just tests.
 rusty-xinput.workspace = true

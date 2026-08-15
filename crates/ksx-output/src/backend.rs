@@ -45,6 +45,17 @@ pub struct Feedback {
 /// - Dropping the backend must unplug every pad it still owns.
 /// - `poll_feedback` never blocks; it drains one queued [`Feedback`] per call.
 pub trait VirtualPadBackend: Send {
+    /// Perform bounded backend maintenance without blocking for new input.
+    ///
+    /// Most backends need no service work. HIDMaestro uses this hook to renew
+    /// its elevated-host lease and drain asynchronous feedback while a game is
+    /// idle. An error is handled exactly like an update failure: the supervisor
+    /// restores keyboard passthrough before it asks the output thread to tear
+    /// devices down.
+    fn service(&mut self) -> Result<(), OutputError> {
+        Ok(())
+    }
+
     /// Plugs a new virtual pad and waits until it accepts updates.
     ///
     /// Equivalent to [`plug_persona`](Self::plug_persona) with

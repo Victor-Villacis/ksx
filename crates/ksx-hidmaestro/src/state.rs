@@ -1,5 +1,5 @@
-//! `HMGamepadState` — the frame published into the shared latch, and the
-//! `PadState` → frame routing.
+//! `HMGamepadState` — the private, non-wire-compatible frame published into the
+//! test latch, and the `PadState` → frame routing.
 //!
 //! Two properties this module owes the submit path, both enforced by its shape
 //! rather than by discipline:
@@ -22,14 +22,12 @@ use crate::axis::{AxisMap, AxisRole, HmAxis};
 /// making the frame cache-hostile.
 pub const MAX_AXES: usize = 12;
 
-/// Buttons as HIDMaestro's `[Flags] uint`: bits 0..=12 are the named face /
-/// shoulder / stick / system buttons, and bits beyond map to descriptor button
-/// positions, so a 128-button profile rides the same mask.
+/// Buttons as HIDMaestro v1.6.1's `[Flags] uint`.
 ///
-/// Named per the audit's "bits 0..12 named A..Share" ordering
-/// (`padforge-code-audit.md` §3.1). **Written to spec, not verified against a
-/// live driver** — if a real install shows a different order, this table is the
-/// single place to fix it.
+/// These values are transcribed from the source-pinned `HMButton` declaration
+/// at commit `2a0dac0857901a63d365a36dcf99cf50114ca954`. Triggers deliberately
+/// are not members: HIDMaestro's report builder derives any profile-declared
+/// trigger buttons from the analog trigger axes.
 pub mod button {
     pub const A: u32 = 1 << 0;
     pub const B: u32 = 1 << 1;
@@ -37,29 +35,39 @@ pub mod button {
     pub const Y: u32 = 1 << 3;
     pub const LEFT_SHOULDER: u32 = 1 << 4;
     pub const RIGHT_SHOULDER: u32 = 1 << 5;
-    pub const LEFT_TRIGGER: u32 = 1 << 6;
-    pub const RIGHT_TRIGGER: u32 = 1 << 7;
-    pub const BACK: u32 = 1 << 8;
-    pub const START: u32 = 1 << 9;
-    pub const LEFT_THUMB: u32 = 1 << 10;
-    pub const RIGHT_THUMB: u32 = 1 << 11;
-    pub const GUIDE: u32 = 1 << 12;
+    pub const BACK: u32 = 1 << 6;
+    pub const START: u32 = 1 << 7;
+    pub const LEFT_THUMB: u32 = 1 << 8;
+    pub const RIGHT_THUMB: u32 = 1 << 9;
+    pub const GUIDE: u32 = 1 << 10;
+    pub const TOUCHPAD: u32 = 1 << 11;
+    pub const SHARE: u32 = 1 << 12;
+    pub const RIGHT_PADDLE: u32 = 1 << 13;
+    pub const LEFT_PADDLE: u32 = 1 << 14;
+    pub const MISC1: u32 = 1 << 15;
+    pub const RIGHT_PADDLE2: u32 = 1 << 16;
+    pub const LEFT_PADDLE2: u32 = 1 << 17;
+
+    pub const CROSS: u32 = A;
+    pub const CIRCLE: u32 = B;
+    pub const SQUARE: u32 = X;
+    pub const TRIANGLE: u32 = Y;
 }
 
-/// The 8-way hat, plus centered.
+/// The 8-way hat, plus centered (`HMHat.None` upstream).
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HmHat {
-    North = 0,
-    NorthEast = 1,
-    East = 2,
-    SouthEast = 3,
-    South = 4,
-    SouthWest = 5,
-    West = 6,
-    NorthWest = 7,
     #[default]
-    Centered = 8,
+    Centered = 0,
+    North = 1,
+    NorthEast = 2,
+    East = 3,
+    SouthEast = 4,
+    South = 5,
+    SouthWest = 6,
+    West = 7,
+    NorthWest = 8,
 }
 
 impl HmHat {
@@ -92,7 +100,7 @@ impl HmHat {
     }
 }
 
-/// One published frame.
+/// One private conformance-model frame, not HIDMaestro wire data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HmGamepadState {
     axes: [(HmAxis, f32); MAX_AXES],
@@ -112,8 +120,8 @@ impl Default for HmGamepadState {
     }
 }
 
-/// Fixed wire size of an encoded frame: buttons(4) + hat(1) + len(1) + pad(2)
-/// + MAX_AXES × (usage u16 + value f32).
+/// Fixed size of the encoded private test frame: buttons(4) + hat(1) + len(1)
+/// + pad(2) + MAX_AXES × (usage u16 + value f32).
 pub const FRAME_BYTES: usize = 4 + 1 + 1 + 2 + MAX_AXES * 6;
 
 impl HmGamepadState {
@@ -128,7 +136,7 @@ impl HmGamepadState {
 
     /// Sets (or overwrites) one axis. Values are clamped into HIDMaestro's
     /// normalized `[0,1]` domain; NaN becomes the neutral 0.5 rather than
-    /// reaching the wire, because a NaN axis byte is a stuck controller.
+    /// entering even the private frame model.
     ///
     /// Returns `false` if the frame is full — the caller's map declared more
     /// axes than [`MAX_AXES`], which is a profile bug, not a runtime condition.
@@ -222,8 +230,8 @@ fn trigger(v: u8) -> f32 {
     f32::from(v) / 255.0
 }
 
-/// Routes a ksx [`PadState`] onto the wire **by role**, through the profile's
-/// [`AxisMap`].
+/// Routes a ksx [`PadState`] into the private frame **by role**, through the
+/// profile's [`AxisMap`].
 ///
 /// Every analog value goes: role → `map.axis(role)` → `set_axis`. Nothing here
 /// can address an axis by position, which is the whole point (see the module
@@ -252,21 +260,15 @@ pub fn route(map: &AxisMap, state: &PadState, out: &mut HmGamepadState) {
         }
     }
 
-    out.buttons = buttons(state.buttons, state.lt, state.rt);
+    out.buttons = buttons(state.buttons);
     out.hat = HmHat::from_xinput(state.buttons);
 }
 
-/// XInput's `XINPUT_GAMEPAD_TRIGGER_THRESHOLD`. Same value and same reasoning as
-/// `ksx-output/src/ds4.rs`: ksx presets are written against XInput semantics, so
-/// "LT is pressed" must latch where XInput games test it, whatever persona is
-/// mounted.
-const TRIGGER_THRESHOLD: u8 = 30;
-
-fn buttons(x: XButtons, lt: u8, rt: u8) -> u32 {
+fn buttons(x: XButtons) -> u32 {
     let mut out = 0u32;
-    let mut bit = |flag: XButtons, wire: u32| {
+    let mut bit = |flag: XButtons, target: u32| {
         if x.contains(flag) {
-            out |= wire;
+            out |= target;
         }
     };
     bit(XButtons::A, button::A);
@@ -282,12 +284,8 @@ fn buttons(x: XButtons, lt: u8, rt: u8) -> u32 {
     bit(XButtons::GUIDE, button::GUIDE);
     // The D-pad is NOT in the button mask: it rides the hat. Setting both would
     // give a Sony/Nintendo consumer two conflicting sources for one direction.
-    if lt >= TRIGGER_THRESHOLD {
-        out |= button::LEFT_TRIGGER;
-    }
-    if rt >= TRIGGER_THRESHOLD {
-        out |= button::RIGHT_TRIGGER;
-    }
+    // Triggers also stay analog here. HIDMaestro derives any profile-declared
+    // digital trigger buttons from those axes in its report builder.
     out
 }
 
@@ -337,7 +335,7 @@ mod tests {
             HmAxis::RZ,
         ];
         let sony = AxisMap::sony_convention();
-        // What a positional writer would put on each wire key...
+        // What a positional writer would put on each usage key...
         let mut positional = HmGamepadState::new();
         for (role, axis) in AxisRole::ALL.into_iter().zip(POSITIONAL) {
             positional.set_axis(axis, role.neutral());
@@ -441,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn triggers_set_their_digital_bit_at_the_xinput_threshold() {
+    fn triggers_stay_analog_and_do_not_fabricate_hmbutton_bits() {
         let bits = |lt, rt| {
             routed(
                 &AxisMap::xinput_convention(),
@@ -453,9 +451,63 @@ mod tests {
             )
             .buttons
         };
-        assert_eq!(bits(29, 29), 0);
-        assert_eq!(bits(30, 0), button::LEFT_TRIGGER);
-        assert_eq!(bits(0, 255), button::RIGHT_TRIGGER);
+        assert_eq!(bits(0, 0), 0);
+        assert_eq!(bits(30, 0), 0);
+        assert_eq!(bits(0, 255), 0);
+    }
+
+    #[test]
+    fn shifted_system_buttons_route_to_their_exact_hidmaestro_bits() {
+        let cases = [
+            (XButtons::BACK, button::BACK),
+            (XButtons::START, button::START),
+            (XButtons::LEFT_THUMB, button::LEFT_THUMB),
+            (XButtons::RIGHT_THUMB, button::RIGHT_THUMB),
+            (XButtons::GUIDE, button::GUIDE),
+        ];
+
+        for (source, expected) in cases {
+            let frame = routed(
+                &AxisMap::sony_convention(),
+                &PadState {
+                    buttons: source,
+                    ..PadState::default()
+                },
+            );
+            assert_eq!(frame.buttons, expected, "wrong mapping for {source:?}");
+        }
+    }
+
+    #[test]
+    fn button_and_hat_values_match_the_pinned_hidmaestro_api() {
+        assert_eq!(button::A, 1 << 0);
+        assert_eq!(button::RIGHT_SHOULDER, 1 << 5);
+        assert_eq!(button::BACK, 1 << 6);
+        assert_eq!(button::START, 1 << 7);
+        assert_eq!(button::LEFT_THUMB, 1 << 8);
+        assert_eq!(button::RIGHT_THUMB, 1 << 9);
+        assert_eq!(button::GUIDE, 1 << 10);
+        assert_eq!(button::TOUCHPAD, 1 << 11);
+        assert_eq!(button::SHARE, 1 << 12);
+        assert_eq!(button::RIGHT_PADDLE, 1 << 13);
+        assert_eq!(button::LEFT_PADDLE, 1 << 14);
+        assert_eq!(button::MISC1, 1 << 15);
+        assert_eq!(button::RIGHT_PADDLE2, 1 << 16);
+        assert_eq!(button::LEFT_PADDLE2, 1 << 17);
+        assert_eq!(button::CROSS, button::A);
+        assert_eq!(button::CIRCLE, button::B);
+        assert_eq!(button::SQUARE, button::X);
+        assert_eq!(button::TRIANGLE, button::Y);
+
+        assert_eq!(HmHat::Centered as u8, 0);
+        assert_eq!(HmHat::North as u8, 1);
+        assert_eq!(HmHat::NorthEast as u8, 2);
+        assert_eq!(HmHat::East as u8, 3);
+        assert_eq!(HmHat::SouthEast as u8, 4);
+        assert_eq!(HmHat::South as u8, 5);
+        assert_eq!(HmHat::SouthWest as u8, 6);
+        assert_eq!(HmHat::West as u8, 7);
+        assert_eq!(HmHat::NorthWest as u8, 8);
     }
 
     #[test]

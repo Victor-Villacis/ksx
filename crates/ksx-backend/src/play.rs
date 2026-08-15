@@ -852,7 +852,7 @@ fn play_live(request: PlayRequest) -> anyhow::Result<()> {
 #[cfg(not(windows))]
 fn play_live(_request: PlayRequest) -> anyhow::Result<()> {
     anyhow::bail!(
-        "`ksx play` is Windows-only (it drives the ViGEmBus and capture drivers); \
+        "`ksx play` is Windows-only (it drives the virtual-controller and capture backends); \
          `ksx play --dry-run` works everywhere"
     )
 }

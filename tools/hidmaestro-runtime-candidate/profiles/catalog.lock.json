@@ -1,0 +1,2420 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/hifihedgehog/HIDMaestro",
+  "tag": "v1.6.1",
+  "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "purpose": "Complete hash pin for the upstream profile source tree and its source-level embedded-profile selection; no upstream code is built, loaded, or executed.",
+  "canonicalization": {
+    "content": "strict UTF-8; preserve an existing UTF-8 BOM; replace CRLF with LF; reject bare CR",
+    "hashAlgorithm": "SHA-256",
+    "path": "repository-relative forward-slash path, ordinal sort",
+    "catalogFraming": "for each sorted entry: UTF-8 path, one NUL byte, canonical content bytes, one NUL byte"
+  },
+  "sourceEvidence": [
+    {
+      "path": "sdk/HIDMaestro.Core/HIDMaestro.Core.csproj",
+      "canonicalByteLength": 10533,
+      "canonicalSha256": "86C830E5FE61CD8307C000358BEC1F23A0213AA4AC1428B8C217B4400C222416",
+      "proves": "intended profiles/**/*.json include, exact three-file exclusion, and LogicalName template"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs",
+      "canonicalByteLength": 27718,
+      "canonicalSha256": "1ABD96429B0C2AD8BD7F8C11EEE494E79A3092F8BFF8D29DA3AC1DFD77B32325",
+      "proves": "source HasDescriptor rule"
+    }
+  ],
+  "selection": {
+    "include": "profiles/**/*.json",
+    "exclude": [
+      "profiles/linux-kernel-fixed-descriptors.json",
+      "profiles/schema.json",
+      "profiles/scraped_descriptors.json"
+    ],
+    "logicalNameTemplateLiteral": "HIDMaestro.Profiles.%(RecursiveDir)%(Filename)%(Extension)",
+    "deployableRule": "included profile JSON has a non-empty descriptor string; the verifier additionally requires that its whitespace-stripped value is non-empty even-length hexadecimal"
+  },
+  "vendorDirectories": [
+    "8bitdo",
+    "amazon",
+    "asetek",
+    "cammus",
+    "ch-products",
+    "fanatec",
+    "flydigi",
+    "google",
+    "heusinkveld",
+    "honeycomb",
+    "hori",
+    "logitech",
+    "microsoft",
+    "misc",
+    "moza",
+    "nacon",
+    "nintendo",
+    "pxn",
+    "razer",
+    "sega",
+    "simagic",
+    "simucube",
+    "snk",
+    "sony",
+    "steelseries",
+    "taito",
+    "thrustmaster",
+    "turtle-beach",
+    "valve",
+    "virpil",
+    "vkbsim",
+    "winwing"
+  ],
+  "counts": {
+    "profileTreeFileCount": 231,
+    "vendorDirectoryCount": 32,
+    "embeddedProfileSourceCount": 228,
+    "excludedProfileDataCount": 3,
+    "deployableEmbeddedProfileSourceCount": 130,
+    "duplicateProfileIdCount": 0
+  },
+  "sourceCatalogs": {
+    "allProfileTree": {
+      "entryCount": 231,
+      "pathFramedCanonicalSha256": "A9C8579E0EA32E8421D219C77CB09CF10219099674AD7119837DDCDFEC61A3B6"
+    },
+    "embeddedProfileSources": {
+      "entryCount": 228,
+      "deployableCount": 130,
+      "pathFramedCanonicalSha256": "4273B2DF12CAD9AA6DE5FB87AC7E90FF20C8121035A79231700383639B7B6151"
+    }
+  },
+  "releaseDllComparison": {
+    "observedBy": "existing KSX static PE/resource probe over the hash-pinned official v1.6.1 HIDMaestro.Core.dll",
+    "resourceCount": 228,
+    "deployableCount": 130,
+    "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A",
+    "countMapping": "source selection exactly explains 231 minus the three explicit exclusions equals 228; the pinned descriptor data exactly explains 130 deployable source profiles",
+    "sourceToReleaseCatalogBinding": "unresolved",
+    "catalogSha256ReproducedFromSource": false,
+    "reason": [
+      "The release digest is framed over actual CLR manifest-resource names and the exact raw bytes embedded in the built DLL, not repository paths plus canonical source bytes.",
+      "The MSBuild source states a LogicalName template, but a read/hash-only source verifier does not evaluate MSBuild metadata or inspect the release PE resource table.",
+      "Checkout line-ending conversion can change raw resource bytes without changing this canonical source digest. Equal counts do not prove byte-for-byte resource identity."
+    ],
+    "verifierInspectsReleaseDll": false
+  },
+  "entries": [
+    {
+      "path": "profiles/8bitdo/pro-2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 475,
+      "canonicalSha256": "A701B129D990D0A88135C25AD081A865033D43922906197B8DCAA6139A8F704A",
+      "profileId": "8bitdo-pro-2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/8bitdo/sn30-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 457,
+      "canonicalSha256": "040F2B0F42E5DA9281BF9DA918AB2D2177F91BDE0C48A0680D416E0B72AD5527",
+      "profileId": "8bitdo-sn30-pro",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/8bitdo/ultimate-wired.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 449,
+      "canonicalSha256": "C4DBDC62BA0566E48BEF8855FF244F085BD292449873107E03F87C25FD8C4347",
+      "profileId": "8bitdo-ultimate-wired",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/amazon/luna-ble.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2090,
+      "canonicalSha256": "F60D289A5C7C8826E60EDAF5CEDB662455A134D8844E8C2D54A76E84DBF1298F",
+      "profileId": "amazon-luna-ble",
+      "deployable": true,
+      "descriptorByteLength": 493,
+      "descriptorSha256": "4672FACA56A8CA8187BE7CEF38C64DB7106210D831D8CAEBD605390428AD934B"
+    },
+    {
+      "path": "profiles/amazon/luna-usb.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1279,
+      "canonicalSha256": "DC4E1CBFA8CA1745B14945EF01CCC5DC9BBF678868152EEFAF4C4301EEEAB0AF",
+      "profileId": "amazon-luna-usb",
+      "deployable": true,
+      "descriptorByteLength": 93,
+      "descriptorSha256": "58F77497CC6A11302357DFC38EAA8D9426E9F681FFE05336AD5518BA6D5DF9FF"
+    },
+    {
+      "path": "profiles/asetek/asetek-forte-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 388,
+      "canonicalSha256": "C900C4B8E038BFFC3163EF070B9AFD313B1D51EB3222224F85C65396099A96CE",
+      "profileId": "asetek-forte-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/asetek/asetek-forte.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 357,
+      "canonicalSha256": "53C01552BA1065884AB86E7D8D2DB0B61BE479E9C792861DBC1B882697B97BA3",
+      "profileId": "asetek-forte",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/asetek/asetek-invicta-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 394,
+      "canonicalSha256": "FC819639A067D1C81AB530514EDEC506584C1B057CEC1AAF6CDC4876A428A4C6",
+      "profileId": "asetek-invicta-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/asetek/asetek-invicta.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 363,
+      "canonicalSha256": "9B4446B1E5642C933B3098D2671C3B4113E5CBD4328B07B407A7B19F4ED0F64A",
+      "profileId": "asetek-invicta",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/asetek/asetek-la-prima.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 366,
+      "canonicalSha256": "2914002693F2D6FC92A5AFC5B301A71ECEA9AB990A07C8D73AC378BEBB990A46",
+      "profileId": "asetek-la-prima",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/asetek/asetek-tony-kanaan.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 402,
+      "canonicalSha256": "790F79049891B33E753E6DF013B7AA605A871DC3B42C26F132990E8CE20EFE94",
+      "profileId": "asetek-tony-kanaan",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/cammus/cammus-c12.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 313,
+      "canonicalSha256": "4C69C0EAD8CECF9840E6EBC74EC42BB3BBD0874AA561CD95C9CDD52703F3129C",
+      "profileId": "cammus-c12",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/cammus/cammus-c5.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 382,
+      "canonicalSha256": "D8B7607E500432F92250C0A445E1AD62B4531CF32D8F545043D9CC35CCDF7811",
+      "profileId": "cammus-c5",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/combatstick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 431,
+      "canonicalSha256": "243018873B467D361777F5405D58CABB9188D4D34ABE9A7CDCD1C09478ABC7F6",
+      "profileId": "ch-combatstick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/f16-combat-stick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 448,
+      "canonicalSha256": "DDBA9379EA80A49550CECA5A68618F8B7F781F6F150FEC2FA4A04A2FB8543CFB",
+      "profileId": "ch-f16-combat-stick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/fighterstick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 434,
+      "canonicalSha256": "DA6420C91047150467B45A7EE4B78E9CC1801EE313102A1D2B138E32C8BA2B36",
+      "profileId": "ch-fighterstick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/flight-sim-yoke.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 440,
+      "canonicalSha256": "93C1A3DE04111DF07985A58AFF9C29ADED84A321D94A5B260C245B8FE9150FCB",
+      "profileId": "ch-flight-sim-yoke",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/pro-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 429,
+      "canonicalSha256": "31FD4CE5C02B9251AFFBE520678E0D9C9B387DDA4F4643FC9E5300A21B5DA5D6",
+      "profileId": "ch-pro-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/pro-throttle.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 431,
+      "canonicalSha256": "94734D306D7BA1EC97E77AFDD79E9DC743A200A565BE4601724D31232EF542FF",
+      "profileId": "ch-pro-throttle",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/ch-products/throttle-quadrant.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 449,
+      "canonicalSha256": "1C7A49FCD9DF64D6A746BF17B5618DA40FB070AA5944B90D19FF57D43643EB5D",
+      "profileId": "ch-throttle-quadrant",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/clubsport-handbrake.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 646,
+      "canonicalSha256": "570479896BAC094D01FDA7996DA044D1FB90EF4DC1BFCA412583A52582C89321",
+      "profileId": "fanatec-clubsport-handbrake",
+      "deployable": true,
+      "descriptorByteLength": 38,
+      "descriptorSha256": "F4F50022511228BAB81DF7E74C447C6018DEA987D6FE88ECEA056AA9071CFB50"
+    },
+    {
+      "path": "profiles/fanatec/clubsport-pedals-v3.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 361,
+      "canonicalSha256": "057658C6BD94FA5A4A53FC3FEEBC0088C8DC48C7D5EEC9D744025373EDA2F74D",
+      "profileId": "fanatec-clubsport-pedals-v3",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/clubsport-shifter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 370,
+      "canonicalSha256": "2261221302F7C25A4EAB9FED8B4982BA7E030E0B9E043268576FB940C4935E47",
+      "profileId": "fanatec-clubsport-shifter",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/clubsport-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 360,
+      "canonicalSha256": "8AA3B726A12BBD9E4B2103ECF9B44CEEE29591FB587EDB8B58A405B248845228",
+      "profileId": "fanatec-clubsport-v2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/clubsport-v25.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 365,
+      "canonicalSha256": "EB5CBB86EF086C98B5B951D4B070A9BC24FADDA57B340A0C92CE21BFA686323E",
+      "profileId": "fanatec-clubsport-v25",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-dd.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 359,
+      "canonicalSha256": "9FE2B976C1DBFDDCBF3759DB43BE808F4E8FDED257D44685C236E4F0A7C1C2E3",
+      "profileId": "fanatec-csl-dd",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-elite-pedals-lc.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 397,
+      "canonicalSha256": "6BAA6FC3C65C1E5C29DA772822592A6578EF9981F28B3374DD6DAE58F23C6239",
+      "profileId": "fanatec-csl-elite-pedals-lc",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-elite-pedals-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 394,
+      "canonicalSha256": "64046D322F1B10E5BA29AAD4B934AD8C44E9717C11B1EB7574C2FFA034D1275D",
+      "profileId": "fanatec-csl-elite-pedals-v2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-elite-ps4.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 363,
+      "canonicalSha256": "2A227C144A90CEEFDF0E068881446970513434FE67ABF7AE3B7C49A987BAC33F",
+      "profileId": "fanatec-csl-elite-ps4",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-elite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 456,
+      "canonicalSha256": "438959E194A24398A59E3C3B6B7E18D7753946B05EEDB2A30F027FAB8F134FBE",
+      "profileId": "fanatec-csl-elite",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csl-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 334,
+      "canonicalSha256": "C405B8B451987319657400BFFC57E713BAFD566C4F05C4194FCC798475179DF2",
+      "profileId": "fanatec-csl-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/csr-elite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 384,
+      "canonicalSha256": "B3390FD8D178BB80CBF8707CE8EA0E5752E532D08B6D4F742EC258C2393AF5D8",
+      "profileId": "fanatec-csr-elite",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/podium-dd1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 344,
+      "canonicalSha256": "32F0D68B8800EF0CE84031AEA2A206BE3A0D70B18BB1FA7C85DE9355DF5FA9F6",
+      "profileId": "fanatec-podium-dd1",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/fanatec/podium-dd2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 344,
+      "canonicalSha256": "4AC9D20B798B06F791CFBC24FEE88BB720F824BD075F92CE8351BB208D4F2D84",
+      "profileId": "fanatec-podium-dd2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/flydigi/vader-4-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1818,
+      "canonicalSha256": "0D21C02000600FBF618416C9CDBDC098C5EF3CC3ED4279FAEE55838A899FFE3F",
+      "profileId": "vader-4-pro",
+      "deployable": true,
+      "descriptorByteLength": 125,
+      "descriptorSha256": "93FA34F70FF8A3182BD885C79C1E3F0A5788F6CED8D7CA435BB8AD0CBB9ACFD5"
+    },
+    {
+      "path": "profiles/google/stadia-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1598,
+      "canonicalSha256": "A4BD5B404013A066CA657650F696931EE99F8D5FB0125A5D7C2BAFA87AE5505E",
+      "profileId": "stadia-controller-bt",
+      "deployable": true,
+      "descriptorByteLength": 182,
+      "descriptorSha256": "4317E34B66D9C247B0FB12327516C38C74DEEA04619DB54A05CF190444482A3F"
+    },
+    {
+      "path": "profiles/google/stadia-usb.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1485,
+      "canonicalSha256": "36252767356F36511132FA7A5A7B35D131382DB66269543EE4F2291C18BB2EA7",
+      "profileId": "stadia-controller-usb",
+      "deployable": true,
+      "descriptorByteLength": 156,
+      "descriptorSha256": "03BA5C8036F465060986F04078413E29D461C74ED1FCC57478333537BACCB3D5"
+    },
+    {
+      "path": "profiles/heusinkveld/handbrake-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 399,
+      "canonicalSha256": "4612A2AB7AB0738F50006D4980E9279ECB35F4B781739D6BE943DEA1611D9361",
+      "profileId": "heusinkveld-handbrake-v2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/heusinkveld/sequential-shifter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 417,
+      "canonicalSha256": "2ED9CD2117B5331E8052B3030B7677D1386EFD3811E284916A5560E6DBEDCB8E",
+      "profileId": "heusinkveld-sequential-shifter",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/heusinkveld/sprint-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 358,
+      "canonicalSha256": "39B18BAFEE3BB5778F36EB7077F460A2483D80B0A7DC0138DEE5AFC891EDCE64",
+      "profileId": "heusinkveld-sprint-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/heusinkveld/ultimate-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 823,
+      "canonicalSha256": "79D8249FF05B121D7BBFE1B47F037359B8E2710A776BEABC6A1B98C279F427D3",
+      "profileId": "heusinkveld-ultimate-pedals",
+      "deployable": true,
+      "descriptorByteLength": 58,
+      "descriptorSha256": "CF4027DBEEF0DF8728311293B986A0A9FD3BF83100FD5C5E31D5E586D68D7D6A"
+    },
+    {
+      "path": "profiles/honeycomb/alpha.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 457,
+      "canonicalSha256": "51C8D103E74976ED4110D2C6794AAB1A0A5A23C12DFD6E7A588D6D0AC8BB31CF",
+      "profileId": "honeycomb-alpha",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/honeycomb/bravo.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 454,
+      "canonicalSha256": "4696ADC0C8F7369FD58C9C9D0C24533C4900A6ECD2ED195627765CDCDB605026",
+      "profileId": "honeycomb-bravo",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/hori/fighting-stick-alpha.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 403,
+      "canonicalSha256": "2476E1DCC99BAFA87E92C30F07E94ED84D6ACF16FD0194085ACFFADB60E9B3FF",
+      "profileId": "hori-fighting-stick-alpha",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/hori/horipad-steam.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1687,
+      "canonicalSha256": "35931E53881352736302229BD6FD80B98193B83890C7A695E9A51F5060C3D18C",
+      "profileId": "hori-horipad-steam",
+      "deployable": true,
+      "descriptorByteLength": 140,
+      "descriptorSha256": "84712CCEF88A69BE96535E92A3CF618CE8E9ED2FF605C9ABA690D1584674A390"
+    },
+    {
+      "path": "profiles/hori/horipad-switch.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1280,
+      "canonicalSha256": "DF73EDA0A96F4BA9DD1E67D1A8254EFCF9564B3889E1D3637398197E68478E8B",
+      "profileId": "hori-horipad-switch",
+      "deployable": true,
+      "descriptorByteLength": 80,
+      "descriptorSha256": "857F5FCC1369DA5814500A07935F53453E29F253EF0F1744F3949AB95B4AEE61"
+    },
+    {
+      "path": "profiles/hori/pcengine-mini.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1050,
+      "canonicalSha256": "F6C1D3AB4D299504883F9D78105278BA659D8BCE17F7CB9CD89B574DEC2C4899",
+      "profileId": "hori-pcengine-mini",
+      "deployable": true,
+      "descriptorByteLength": 94,
+      "descriptorSha256": "44569CD69A7BC46B6C0D424AA6B8BB69C906F947E012F0434DA8C7720FC61120"
+    },
+    {
+      "path": "profiles/hori/pokken-controller.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1234,
+      "canonicalSha256": "5CE188B232476CD6233980A1F301486DFED34DD70B7C6D4584497E5C7DF71DAA",
+      "profileId": "hori-pokken-controller",
+      "deployable": true,
+      "descriptorByteLength": 90,
+      "descriptorSha256": "1A9C425DA7E1132D7C446149D00176A24DF8D9517C4A8A4F78C6BB18BFD82DF4"
+    },
+    {
+      "path": "profiles/hori/racing-wheel-apex.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 325,
+      "canonicalSha256": "B5A18311DFEF36154B8FA599278722B01AA0514342BF2E29B9BA6C720B10B6F9",
+      "profileId": "hori-racing-wheel-apex",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/hori/rap-v-kai.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 418,
+      "canonicalSha256": "FEF9EDFB2DB5545CF2A6DBDF8B7D2E3144D3DE0C6F6FEDF6B6A747D1E3828512",
+      "profileId": "hori-rap-v-kai",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/linux-kernel-fixed-descriptors.json",
+      "classification": "excluded-profile-data",
+      "canonicalByteLength": 33648,
+      "canonicalSha256": "A26106A9E612C235C6D6CEC8F485E13272D9EA7CE172CF83C517DB2DE6FD6A3A",
+      "profileId": null,
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null,
+      "exclusionReason": "linux-kernel-descriptor-reference"
+    },
+    {
+      "path": "profiles/logitech/driving-force-gt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 910,
+      "canonicalSha256": "F30678ED3FD905374D8C86763D52635F4BA59CB04F3DD5CD4FEEA578FF8F1F66",
+      "profileId": "logitech-driving-force-gt",
+      "deployable": true,
+      "descriptorByteLength": 115,
+      "descriptorSha256": "C456CF0112F610FA1484F73252E6CAD471972C865A1B561132EF3083DC22380D"
+    },
+    {
+      "path": "profiles/logitech/driving-force-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 846,
+      "canonicalSha256": "5B3B2086DA18E6CEA416AC1711F19C02E9AC03EA00EC836127D2104663202DD8",
+      "profileId": "logitech-driving-force-pro",
+      "deployable": true,
+      "descriptorByteLength": 97,
+      "descriptorSha256": "C6E0C92FB4A920D2B3A5E05F0DB50D7C011B4B3AE7AF0D9DE6A10D86AD7F2F1B"
+    },
+    {
+      "path": "profiles/logitech/driving-force.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 900,
+      "canonicalSha256": "B912AFF600070F329440A43ADD95B2E2E0D4244FDF6C5CAA3B8D7166D6E6C656",
+      "profileId": "logitech-driving-force",
+      "deployable": true,
+      "descriptorByteLength": 130,
+      "descriptorSha256": "1662CF258A5767C9C72D29ECB8C37088421D782FC6311E8F5904E0190FFC7469"
+    },
+    {
+      "path": "profiles/logitech/extreme-3d-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 400,
+      "canonicalSha256": "A7D6DD84F9EA1A973E327E9546679CB895E087CA7C959DFF86E5B8733B3C378A",
+      "profileId": "logitech-extreme-3d-pro",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/logitech/f310.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1662,
+      "canonicalSha256": "5DE8D80E2EFA8D7699BB69F6F19F13FF27EC9A0833E02D72ED3C0DD15D337DAF",
+      "profileId": "logitech-f310",
+      "deployable": true,
+      "descriptorByteLength": 119,
+      "descriptorSha256": "67EAAEE4B972EC57FB48ACB10649B399D9432CFC3004F0ACD97D79772159BFC6"
+    },
+    {
+      "path": "profiles/logitech/f710.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1406,
+      "canonicalSha256": "48C93710602CE9F2B23A535E28CFF8E11735AF991DEE50B077FE8CF4780651EC",
+      "profileId": "logitech-f710",
+      "deployable": true,
+      "descriptorByteLength": 119,
+      "descriptorSha256": "67EAAEE4B972EC57FB48ACB10649B399D9432CFC3004F0ACD97D79772159BFC6"
+    },
+    {
+      "path": "profiles/logitech/formula-vibration.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1003,
+      "canonicalSha256": "44FEC3B357D244F2D5087A69ECAAEBE7B33CA27F20A78FC62544014EE1B67D83",
+      "profileId": "logitech-formula-vibration",
+      "deployable": true,
+      "descriptorByteLength": 136,
+      "descriptorSha256": "3640B292B5F9574FA4482FF4BDE2251EBBB0FEE715D3E5611A13EAB471F14513"
+    },
+    {
+      "path": "profiles/logitech/g-pro-ps.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1049,
+      "canonicalSha256": "747B1BC4CDEE296A095E258E2FFB1888803DEBBFE340C44016915569798C10F3",
+      "profileId": "logitech-g-pro-ps",
+      "deployable": true,
+      "descriptorByteLength": 130,
+      "descriptorSha256": "847CCAF91BE0ED71214A2517866FFC8C29B6FAF7D13A16D4F165824150FE8FA6"
+    },
+    {
+      "path": "profiles/logitech/g-pro-xbox.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1147,
+      "canonicalSha256": "9961BBF47495382637786B797B4D9F90A617E7A1E19C8105D2B7A0051CFE1737",
+      "profileId": "logitech-g-pro-xbox",
+      "deployable": true,
+      "descriptorByteLength": 119,
+      "descriptorSha256": "4FAB16A95BA204ECC03B6EECBA545C875B9068E29B6D2CF61A881D76C5A9BE2C"
+    },
+    {
+      "path": "profiles/logitech/g25.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1039,
+      "canonicalSha256": "374AF8073EFF77FD2D842509A94AE69B5B3918AB4D056E38EDE6D728ADBAB1E2",
+      "profileId": "logitech-g25",
+      "deployable": true,
+      "descriptorByteLength": 111,
+      "descriptorSha256": "2F21774082BDC09799CEC2E000B70DCC761D8D31C3874574C274A2222537DC0F"
+    },
+    {
+      "path": "profiles/logitech/g27.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1212,
+      "canonicalSha256": "A8B987296AFE932EF42A9E83771E07BC78E7E6BA5752DC5186AEB4C716D9872F",
+      "profileId": "logitech-g27",
+      "deployable": true,
+      "descriptorByteLength": 133,
+      "descriptorSha256": "B0332EDFA0D0942FDCC48406BC47D56DF14377EAB45CC977F1CF9DA3B363539E"
+    },
+    {
+      "path": "profiles/logitech/g29-ps4.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1342,
+      "canonicalSha256": "D46B7340292A303E5D48A17E1FFCCADED305F9651C9CBB1401D4B6159639E8E3",
+      "profileId": "logitech-g29-ps4",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "2E5A4573523B7F2D2C2AB22864D0C90B71D814B8B80C932F6A7C11144D50128D"
+    },
+    {
+      "path": "profiles/logitech/g29.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1225,
+      "canonicalSha256": "382C8AC8CD7631C541E74443D631A5B83295D0B896A930EBAC62D24A56447710",
+      "profileId": "logitech-g29",
+      "deployable": true,
+      "descriptorByteLength": 123,
+      "descriptorSha256": "F4F6ABD480EAD7FDF22E93F2084B2D4D0E676F8F436703DAB9517C93EA1D804A"
+    },
+    {
+      "path": "profiles/logitech/g920.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1242,
+      "canonicalSha256": "1C3FD229B3697B20AA19A8FD082E7D82A80E603EB11976C559E7012616D4483F",
+      "profileId": "logitech-g920",
+      "deployable": true,
+      "descriptorByteLength": 119,
+      "descriptorSha256": "4FAB16A95BA204ECC03B6EECBA545C875B9068E29B6D2CF61A881D76C5A9BE2C"
+    },
+    {
+      "path": "profiles/logitech/g923-ps.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1171,
+      "canonicalSha256": "838C2C27C771C7EA1292F5497CCDD8E17239D5657313E5A53CD5955ABA2E99FA",
+      "profileId": "logitech-g923-ps",
+      "deployable": true,
+      "descriptorByteLength": 130,
+      "descriptorSha256": "847CCAF91BE0ED71214A2517866FFC8C29B6FAF7D13A16D4F165824150FE8FA6"
+    },
+    {
+      "path": "profiles/logitech/g923-xbox.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1187,
+      "canonicalSha256": "FDB092650004D5F744576A523B4959925E2FEB875E49E0D669506A37E5F901DC",
+      "profileId": "logitech-g923-xbox",
+      "deployable": true,
+      "descriptorByteLength": 119,
+      "descriptorSha256": "4FAB16A95BA204ECC03B6EECBA545C875B9068E29B6D2CF61A881D76C5A9BE2C"
+    },
+    {
+      "path": "profiles/logitech/gt-force.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 816,
+      "canonicalSha256": "E83E9760F33657ED643CDBC97245DAD30135FB80D30C484BA5F0D04E014E07D1",
+      "profileId": "logitech-gt-force",
+      "deployable": true,
+      "descriptorByteLength": 85,
+      "descriptorSha256": "5F51D330B5421B6E58CD495C0A7916C008A0D2AB14FE4B57E8561686838E1B3F"
+    },
+    {
+      "path": "profiles/logitech/momo-force.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 796,
+      "canonicalSha256": "096CC52C0B83D8F8545955958914F01F4C6B3D206DEB6FD7E5A7F8FA7A94DF4C",
+      "profileId": "logitech-momo-force",
+      "deployable": true,
+      "descriptorByteLength": 87,
+      "descriptorSha256": "9DDAE57E8BB24CC003010D6F1FAC278398EB4851AABA3D566121EF2F944E293D"
+    },
+    {
+      "path": "profiles/logitech/momo-racing.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 793,
+      "canonicalSha256": "542C3ED3590AFD9AC20EEAA966C61474602232FDDB9C634F0566B06CF9F3B359",
+      "profileId": "logitech-momo-racing",
+      "deployable": true,
+      "descriptorByteLength": 87,
+      "descriptorSha256": "382343A5F4D9AA38177F27DEF83FAD60DD24677034B6706FA815F309557B8857"
+    },
+    {
+      "path": "profiles/logitech/rs-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 357,
+      "canonicalSha256": "8390689B55D439E787A554D78DFB681038182765B02CECA0094056E19C2F6D51",
+      "profileId": "logitech-rs-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/logitech/speed-force-wireless.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 924,
+      "canonicalSha256": "995F8C39F26FBEC13F56DB206E3A2D9DA43FC30C8C88D8C89876ECAB84F04848",
+      "profileId": "logitech-speed-force-wireless",
+      "deployable": true,
+      "descriptorByteLength": 101,
+      "descriptorSha256": "6FBC90FFA4CFC3FC08DCCE1F799B1D24DDE8CFBC3851DEC6357FD7BE6E22B975"
+    },
+    {
+      "path": "profiles/logitech/wingman-formula-gp.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 796,
+      "canonicalSha256": "E358F4B736F91D8AA9BE8AEDCA90AE5A2CB7634706887ECC066906FAEA9B07F1",
+      "profileId": "logitech-wingman-formula-gp",
+      "deployable": true,
+      "descriptorByteLength": 82,
+      "descriptorSha256": "8EA7B777F57E349030BF80F59728C13E24D27E88F4742F97C1FBFD9143DE77B3"
+    },
+    {
+      "path": "profiles/logitech/x52-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 453,
+      "canonicalSha256": "7AA9C6AB99F652B64195FCF05D8FC236305B3DA891B40E1FE7B485D533D15C39",
+      "profileId": "saitek-x52-pro",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/logitech/x52.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1399,
+      "canonicalSha256": "65C2D227292B0A432DC1A8531CB4879C16166191E4287A6970BEDBAB4F14ACA0",
+      "profileId": "saitek-x52",
+      "deployable": true,
+      "descriptorByteLength": 118,
+      "descriptorSha256": "89475214D86828493408FCAA4611A5D26375BFD10F14E16FAF808D65F3608A2E"
+    },
+    {
+      "path": "profiles/microsoft/sidewinder-force-feedback-2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 7735,
+      "canonicalSha256": "700482522BAC6B1903D66389ED57394A6AF441E1DE565C3DA98960E61D3628E8",
+      "profileId": "sidewinder-force-feedback-2",
+      "deployable": true,
+      "descriptorByteLength": 1221,
+      "descriptorSha256": "6728EC79A327CF0256CA31699AA6A0BE4AEA13E1F81C38F094EBF67E5C62CF84"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-arcade-stick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1403,
+      "canonicalSha256": "0BCCA04FF601635BF9C28B65CD9354244FAB9CCE6BC4E50D8BCD4D5B60D433FC",
+      "profileId": "xbox-360-arcade-stick",
+      "deployable": true,
+      "descriptorByteLength": 59,
+      "descriptorSha256": "05473B9774A946A83A71E9A2604D7233F5D1249E523AA1E662323FE6D9DD87E9"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-dance-pad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1434,
+      "canonicalSha256": "A9B8F30B9FCBBFE605481B8FA4D81F2B4B7C821E417A91481493C44AD7AC85D5",
+      "profileId": "xbox-360-dance-pad",
+      "deployable": true,
+      "descriptorByteLength": 59,
+      "descriptorSha256": "05473B9774A946A83A71E9A2604D7233F5D1249E523AA1E662323FE6D9DD87E9"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-flight-stick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1663,
+      "canonicalSha256": "83427970472509D90E2118A50AD2C20A7177251F93F0F22D56A21A66556E4B1A",
+      "profileId": "xbox-360-flight-stick",
+      "deployable": true,
+      "descriptorByteLength": 93,
+      "descriptorSha256": "DFD5567C48B96FFE43E8CCE0C73F8184D990937EDD95E7038FB89334477D3B8B"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-guitar-v1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1692,
+      "canonicalSha256": "06C1A30879B168913FA1DEB67042560AC246029BCC71D8554569DFE7AF6A39E3",
+      "profileId": "xbox-360-guitar-v1",
+      "deployable": true,
+      "descriptorByteLength": 116,
+      "descriptorSha256": "B4AB1228D733AF44AC44C56FB1F8CE3EF53D23B4D26899ED05076D7273A9B0FD"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-guitar-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1530,
+      "canonicalSha256": "3503E3ACF514282E2F5225535F375E1D661D8E0544307B612DF2F46C5CB150A2",
+      "profileId": "xbox-360-guitar-v2",
+      "deployable": true,
+      "descriptorByteLength": 101,
+      "descriptorSha256": "9483AC1B2CB95AF72DB555BB90B5780BCE1D79595347B17D5EED76BA5DBE84C7"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-type2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2238,
+      "canonicalSha256": "BE0BC892A029BC7F53CAA9326FD818909E16DB0588F488815D03DBF6D13322E4",
+      "profileId": "xbox-360-type2",
+      "deployable": true,
+      "descriptorByteLength": 143,
+      "descriptorSha256": "350981CD95CDC5F66E4489FEB68E21DE5B478CCF6C89F7772C93C813086DD459"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-wheel-v1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1806,
+      "canonicalSha256": "30E8EA0CAD8B40B604B17F18A04CCB8539F2BD99CFF2DD447F76B2CE6E4AEC64",
+      "profileId": "xbox-360-wheel-v1",
+      "deployable": true,
+      "descriptorByteLength": 110,
+      "descriptorSha256": "880BD834010F5E766A9614BB080AEC3C08ACC51F20ECD2A0CACA929B15A53433"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-wheel-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1724,
+      "canonicalSha256": "398E51120E7CC9540DA646BA42308A72769973B1E4CBB68396F9E11515B799FC",
+      "profileId": "xbox-360-wheel-v2",
+      "deployable": true,
+      "descriptorByteLength": 101,
+      "descriptorSha256": "1B7B43B9D399BC69918E92C0511EC1DECF736F487098225450FEDCB607B58972"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-wired.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1670,
+      "canonicalSha256": "C3A1DB15DAB7C9D0981D82A4311631C62E5CDA04FA3C17A59686D06351AFCE13",
+      "profileId": "xbox-360-wired",
+      "deployable": true,
+      "descriptorByteLength": 143,
+      "descriptorSha256": "350981CD95CDC5F66E4489FEB68E21DE5B478CCF6C89F7772C93C813086DD459"
+    },
+    {
+      "path": "profiles/microsoft/xbox-360-wireless.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2578,
+      "canonicalSha256": "3EDA3D17C3FE96C1185EA9A1D0BECD0A5B8B4AF48244408897C9CEE95A4DC993",
+      "profileId": "xbox-360-wireless",
+      "deployable": true,
+      "descriptorByteLength": 143,
+      "descriptorSha256": "350981CD95CDC5F66E4489FEB68E21DE5B478CCF6C89F7772C93C813086DD459"
+    },
+    {
+      "path": "profiles/microsoft/xbox-adaptive.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1744,
+      "canonicalSha256": "90914F8901386D4EA02B8935307CA89D71245331F1AFB2195C2255B5495508E0",
+      "profileId": "xbox-adaptive",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-elite-v1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1762,
+      "canonicalSha256": "1ED5A928E7CEF699A40C53A7B6305452B35CEA59BA7884024C50BB4C701CD503",
+      "profileId": "xbox-elite-v1",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-elite-v2-bt-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2911,
+      "canonicalSha256": "E3E97F9418623D700D61D6760E7109F1EDC0ABA2F9D1EF63B6071574B76C42C2",
+      "profileId": "xbox-elite-v2-bt-v2",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-elite-v2-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 4113,
+      "canonicalSha256": "0736DBA5A34218298977C36D46355E280EC7D16E534EEC1D697F4C2A5A83DFF1",
+      "profileId": "xbox-elite-v2-bt",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-elite-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1856,
+      "canonicalSha256": "00372205970DA02DCE3C120599BA0D6DBADEA513DFB399114FBC9ADD13BA664C",
+      "profileId": "xbox-elite-v2",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-one-original.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1848,
+      "canonicalSha256": "43E37B4D2DE82084CDD14E2E82E9583ADE9990BF29A8A3EC8C51D7A9081AF960",
+      "profileId": "xbox-one-original",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-one-rev1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1761,
+      "canonicalSha256": "D5D476D68F89FBDDEF70CAEB6ED1F0C76DB8B3198FA44D001305D8A06B5238A4",
+      "profileId": "xbox-one-rev1",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-one-s-bt-djm00n.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 3262,
+      "canonicalSha256": "A4C5444DAA716C3EA2B2C1466D77B7A4D58840B86C9882955E03A5E6E2C77DA6",
+      "profileId": "xbox-one-s-bt-full",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-one-s-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2548,
+      "canonicalSha256": "687569A533EBC56D5B515929D6BF1CDEEFEBFF6FC10589F648E7D27BC4D1F8B8",
+      "profileId": "xbox-one-s-bt",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-one-s.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1815,
+      "canonicalSha256": "C9AD79FC5438221D59864350D7841DAACDBDDC026F8F30240A92451DF302F95F",
+      "profileId": "xbox-one-s",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "B0E2064BA9943B3926C778E2A292C6916A23A0AF593BF120D2C121C3EDBA3184"
+    },
+    {
+      "path": "profiles/microsoft/xbox-series-xs-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2644,
+      "canonicalSha256": "7F26F68B471F006B09185F6ECF1E522D6A13BD49137C905E9EE3F663E0F14E85",
+      "profileId": "xbox-series-xs-bt",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "6339F42029ABE95D5368D1F27829AF05B9D51DAE8BACA136C95865F81F608EB8"
+    },
+    {
+      "path": "profiles/microsoft/xbox-series-xs.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2625,
+      "canonicalSha256": "0CECF2716276EABCD7F7611B8883159C68EBE204B326DAC2EA3BDCAA1AEBF4AB",
+      "profileId": "xbox-series-xs",
+      "deployable": true,
+      "descriptorByteLength": 262,
+      "descriptorSha256": "6339F42029ABE95D5368D1F27829AF05B9D51DAE8BACA136C95865F81F608EB8"
+    },
+    {
+      "path": "profiles/misc/circuitpython-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 919,
+      "canonicalSha256": "0BC0F6265716374F3AEAF98E3E699960F26E882073DDA52ED31A0183C806E64E",
+      "profileId": "circuitpython-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 45,
+      "descriptorSha256": "2F8CA8FEF175D0EAFCCC00FAFF393D50E85666F904BA722ED390FECC47B24202"
+    },
+    {
+      "path": "profiles/misc/daemonbite-genesis.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 847,
+      "canonicalSha256": "B0AACB25E3841CDA46F6B376CBC5D3DF3ED78D2DD6256A47E06AAAE931FFC7D7",
+      "profileId": "daemonbite-genesis",
+      "deployable": true,
+      "descriptorByteLength": 53,
+      "descriptorSha256": "4B9C9E4CB2ADB701894335862622C07B7BD1396489A3012310DE5CEAA80F26B3"
+    },
+    {
+      "path": "profiles/misc/daemonbite-nes.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 683,
+      "canonicalSha256": "575F8653785552E741FDBFE32E42FA1D4F96B0AACA4193452E5D5098FA55178E",
+      "profileId": "daemonbite-nes",
+      "deployable": true,
+      "descriptorByteLength": 53,
+      "descriptorSha256": "3290DB220EB96E9B274D4102B5F54DFEADEB270924B48FE47D035989D731A912"
+    },
+    {
+      "path": "profiles/misc/daemonbite-snes.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 721,
+      "canonicalSha256": "FB049B392A46D6936F9C32B52240300144DCDF328846BE83BCD26319CA3FE2D4",
+      "profileId": "daemonbite-snes",
+      "deployable": true,
+      "descriptorByteLength": 47,
+      "descriptorSha256": "4E63E4EC6A5D92DE2061A5E27C388B4FE13442AB69212AE56FA8436BA88AF055"
+    },
+    {
+      "path": "profiles/misc/dragonrise-0006-twin-shock.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1102,
+      "canonicalSha256": "AA5AC58B27F775EE0C8C120E3470C4A685589C5CEBFA3458676FD5CB33489E53",
+      "profileId": "dragonrise-twin-shock-0006",
+      "deployable": true,
+      "descriptorByteLength": 84,
+      "descriptorSha256": "292C8903E083917A62C241C53D67EADE3D1E0F445FDECB5F4408D074CE267946"
+    },
+    {
+      "path": "profiles/misc/dragonrise-0006.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1140,
+      "canonicalSha256": "4691E775F8EADEE71D84F9627BCB90B31D5959126FC80ABE246655973353C990",
+      "profileId": "dragonrise-0006",
+      "deployable": true,
+      "descriptorByteLength": 84,
+      "descriptorSha256": "292C8903E083917A62C241C53D67EADE3D1E0F445FDECB5F4408D074CE267946"
+    },
+    {
+      "path": "profiles/misc/dragonrise-js19.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 710,
+      "canonicalSha256": "FE35D979FB9765CDE32EA2B5AF85FA324D94EB8BFB1970F2E26DF76524791CC3",
+      "profileId": "dragonrise-dvtech-js19",
+      "deployable": true,
+      "descriptorByteLength": 50,
+      "descriptorSha256": "F387F9F53A1B289D427811624CACCCFABDDADB0CA236C17A08292BE00AAEAF64"
+    },
+    {
+      "path": "profiles/misc/ffbeast-joystick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 385,
+      "canonicalSha256": "BF5FA265099032FB67518C023601390A059624B47ABBF949D4770875A33CBD33",
+      "profileId": "ffbeast-joystick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/ffbeast-rudder.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 377,
+      "canonicalSha256": "4FB7D55C2BB1EED6F0E47B5E04CFA4A3F9D8A0BCF3CA40054CCC008C901FC9A9",
+      "profileId": "ffbeast-rudder",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/ffbeast-wheel.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 373,
+      "canonicalSha256": "0D14B8C355B16C3CA35D8EC9C5AD07106033DFBBAD86AA026E6B3A6316D0303B",
+      "profileId": "ffbeast-wheel",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/generic-dinput-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 780,
+      "canonicalSha256": "1B8E2D2993242A82B275D91F901177ED07FA9E3065DD402B0DF489F60CCD8BA2",
+      "profileId": "generic-dinput-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 63,
+      "descriptorSha256": "EC81D0C998A8E5D06AEDD605DEB62A5AD222E94C4BE9311E02FA557252678149"
+    },
+    {
+      "path": "profiles/misc/ibuffalo-snes.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 957,
+      "canonicalSha256": "46AA4F7BF705B976236A2015BA6C9F95B1322685B051DAE42E21F5D3FE01E058",
+      "profileId": "ibuffalo-snes",
+      "deployable": true,
+      "descriptorByteLength": 50,
+      "descriptorSha256": "ED17550C39D4FB91132F4F1E7AE396A734CAF121A8B8611AA7A98249CFDE7362"
+    },
+    {
+      "path": "profiles/misc/joypad-gc-adapter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 669,
+      "canonicalSha256": "E09155599A591B72AFED0ACA0D10D5075CD4E75FC5CCE13507151CB8B5F423DB",
+      "profileId": "joypad-gc-adapter",
+      "deployable": true,
+      "descriptorByteLength": 73,
+      "descriptorSha256": "5A66FE8D89342FBD7D83184635F70E3133DE22DC82FCCC333D4ABF22AC953765"
+    },
+    {
+      "path": "profiles/misc/joypad-generic-hid.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 771,
+      "canonicalSha256": "403CC2D3EDC0737AFC37722B0F53D421A167C83FFDB92844CB30A5B87A629041",
+      "profileId": "joypad-generic-hid",
+      "deployable": true,
+      "descriptorByteLength": 141,
+      "descriptorSha256": "136FC2E69F2CCCAD461D49C7A8FEF2FED297A1C808B79C1F55DEF1393D587022"
+    },
+    {
+      "path": "profiles/misc/joypad-steam-input.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 969,
+      "canonicalSha256": "FD18C8A672DCE1D66A5FF8F558C888DD606600C42C042CF068B21BE6B93B55C2",
+      "profileId": "joypad-steam-input",
+      "deployable": true,
+      "descriptorByteLength": 176,
+      "descriptorSha256": "55F43FA92D4339A4936C2B1D4C89C451F4D97D7C3E7021FB9AE9AF7291DF208C"
+    },
+    {
+      "path": "profiles/misc/joypad-xac.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 603,
+      "canonicalSha256": "D70B5E35A1A870901CDD41FA8C101B229C964B6B79C7B1275F5EFC27282EB2E8",
+      "profileId": "joypad-xac",
+      "deployable": true,
+      "descriptorByteLength": 65,
+      "descriptorSha256": "87E041D13031700AE1BAE5F29ECB3B97AB26FAD251A964DF31A6781F7ADD09F5"
+    },
+    {
+      "path": "profiles/misc/leo-bodnar-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 383,
+      "canonicalSha256": "A1E57DCC1764DB588512AABD11369E9219C17DDBA51B5466760624004909EDA5",
+      "profileId": "leo-bodnar-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/mmos-ffb.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 360,
+      "canonicalSha256": "019E190A5B4711CED75F3F8234D683BB02F79DE7731F2817044B760DDC40067D",
+      "profileId": "mmos-ffb",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/mpg-hid-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 773,
+      "canonicalSha256": "4A7F0299F4D527E3C263B6632A995A20D7AC07860E9053C9A8D5486417863F9C",
+      "profileId": "mpg-hid-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 81,
+      "descriptorSha256": "F0D1001B57C3E01FA2127459927F259A77F5622045E1C9D8F752CBF29DBED79E"
+    },
+    {
+      "path": "profiles/misc/nicohood-arduino-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 944,
+      "canonicalSha256": "78502291666A918B16942D278E36E121576CCEB977A81107901A3DD2B7B0E1C7",
+      "profileId": "nicohood-arduino-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 78,
+      "descriptorSha256": "79B08550C363C781A88751002E7CDA6B05DA522DC4807FC990AA65E86EFD5903"
+    },
+    {
+      "path": "profiles/misc/oddor-handbrake.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 364,
+      "canonicalSha256": "E7AF7D181A2ECF4FF844E484666F78B682E23CD2A4D30C514D9716AACED8D324",
+      "profileId": "oddor-handbrake",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/openffboard.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 410,
+      "canonicalSha256": "55067C64E01206B1B372AB63016D430D88F8AE99A9BE0A53728BFF05BD15451E",
+      "profileId": "openffboard",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/misc/p5general-activtor.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 884,
+      "canonicalSha256": "B26177C48F0085D60EF9B51515EED3EF3C938ACABA120CD0221F2DC27C4983DA",
+      "profileId": "p5general-activtor",
+      "deployable": true,
+      "descriptorByteLength": 165,
+      "descriptorSha256": "F4B108F4560AC6F2E9EEE56AE2081BAF2F42BFDD2C1CAF5793119C00BB1AC7D1"
+    },
+    {
+      "path": "profiles/misc/phoenixrc.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 681,
+      "canonicalSha256": "1D6972B585D17B46EFB50AD216E20BF34C2172FD703ED0021F310E42A7959389",
+      "profileId": "phoenixrc-pxrc",
+      "deployable": true,
+      "descriptorByteLength": 44,
+      "descriptorSha256": "D35B870F59BE5F39CC51564D240779856EB86D6C2DCD7F0F7CFDB300A9EE34F0"
+    },
+    {
+      "path": "profiles/misc/ps3-alt-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 917,
+      "canonicalSha256": "26C5F027D5F042A280F9311AACE4D4A3E1FFC0BCF928F5FA9D4F4338C2C71E81",
+      "profileId": "ps3-alt-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 157,
+      "descriptorSha256": "80D094FD88FB45CD0E450B4773126CB2BE2C0215D3C4AED2C4D06DB70EA1E149"
+    },
+    {
+      "path": "profiles/misc/retrolink-snes-0011.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 932,
+      "canonicalSha256": "9331528BE53DC112BD1FC13A08FB6EFA0DFF921A0A96BFE8EC548A3CA7D54479",
+      "profileId": "retrolink-snes-0011",
+      "deployable": true,
+      "descriptorByteLength": 50,
+      "descriptorSha256": "F387F9F53A1B289D427811624CACCCFABDDADB0CA236C17A08292BE00AAEAF64"
+    },
+    {
+      "path": "profiles/misc/shanwan-gioteck.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 784,
+      "canonicalSha256": "80917AB62CAD6C76AC46CD2D7BEC020C67BDDE333EFA6ADCEFA5E82D36EE5914",
+      "profileId": "shanwan-gioteck-ps3",
+      "deployable": true,
+      "descriptorByteLength": 99,
+      "descriptorSha256": "43BAC740E7820B713355020CC4B71B25CDEC300A3A71FD8FB9320006BAA73A56"
+    },
+    {
+      "path": "profiles/misc/tinyusb-gamepad-noid.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 866,
+      "canonicalSha256": "BB681A7EEBB208C1F908DDC0A9D79B25668351EF90868AD4C23B93632CA257C9",
+      "profileId": "tinyusb-gamepad-no-reportid",
+      "deployable": true,
+      "descriptorByteLength": 66,
+      "descriptorSha256": "B4A74382668CCAB60059E52F614CC3425370AC242BB76A7001ED2CF5472AEBE7"
+    },
+    {
+      "path": "profiles/misc/tinyusb-gamepad.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1254,
+      "canonicalSha256": "B9A7006622F0751E84095CBD442631A9FF108388F380816A4BA0B6807C727A68",
+      "profileId": "tinyusb-generic-gamepad",
+      "deployable": true,
+      "descriptorByteLength": 153,
+      "descriptorSha256": "7EDA74B249126E1ABAD54DC6441BAFD2AC321EBE8C8B1B496842B51AA67AB2A3"
+    },
+    {
+      "path": "profiles/misc/vrc2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 563,
+      "canonicalSha256": "94398FFF2E67A749024CBC9938E21B5BFFF1066526299E9D12A90713ABF0A37A",
+      "profileId": "vrc2",
+      "deployable": true,
+      "descriptorByteLength": 38,
+      "descriptorSha256": "86DB10B715B4EE42A1CEEF9ADBB482C1834619A1506F88899083223A60047368"
+    },
+    {
+      "path": "profiles/misc/vrs-dfp-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 882,
+      "canonicalSha256": "F896D7CC6CB232994EED5CB4D408CC987761B1F460E8D929AACC880433B610E4",
+      "profileId": "vrs-dfp-pedals",
+      "deployable": true,
+      "descriptorByteLength": 94,
+      "descriptorSha256": "AFC469567E517A6D1C156CB6B4DC934A05E6D12D25BEE00EA3F6701053EEB2DD"
+    },
+    {
+      "path": "profiles/misc/vrs-dfp-wheel.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 386,
+      "canonicalSha256": "5058997934757C46D54C10780006F716F939A6D4815F4EC24A9F6707E754A9FE",
+      "profileId": "vrs-dfp-wheel",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/moza/moza-r12.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 370,
+      "canonicalSha256": "403D7FA80D7ED32C23BCA5CE4EA780BD0BF2FE80CD0EF2301556F36B06FB49C7",
+      "profileId": "moza-r12",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/moza/moza-r16.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 374,
+      "canonicalSha256": "87D1679C64C142A51FFD713F5AD9DE2EA54701B33059EDE7BAA4E90415EF4867",
+      "profileId": "moza-r16",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/moza/moza-r3.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 364,
+      "canonicalSha256": "29F6B0E72F7D759B82B169102D20C65FF3D252420738BE4CDAF355F6AFD8D3EB",
+      "profileId": "moza-r3",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/moza/moza-r5.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 465,
+      "canonicalSha256": "C3BA9FF0FD015C6EB0ECCB0048B1C8F7345C867B040AB588862F2784B5868EC8",
+      "profileId": "moza-r5",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/moza/moza-r9.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 367,
+      "canonicalSha256": "6DC6CD1DD6A390FB180A4B6392211E553B668CFE0F06AC8B0D2D4A293B9FD247",
+      "profileId": "moza-r9",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/nacon/bigben-ps4.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1552,
+      "canonicalSha256": "B8614D38B75BE559876C26C9DCA8B5FF6B6C1F402429B294EF5A45256D349385",
+      "profileId": "nacon-bigben-ps4",
+      "deployable": true,
+      "descriptorByteLength": 141,
+      "descriptorSha256": "13B986B0C36716235A1B9A3F396795E6D6D52C0ACBD0188894EE55786CFB0953"
+    },
+    {
+      "path": "profiles/nintendo/gamecube-adapter-hid.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1235,
+      "canonicalSha256": "BD470C05E841F2CC443E71589E3C190D0F43068C96B1DD22229DBEA2BECD4ADD",
+      "profileId": "gamecube-adapter-hid",
+      "deployable": true,
+      "descriptorByteLength": 214,
+      "descriptorSha256": "38FA21E877058487D07F073DEB148CC3F8199A394465C150FAC674E895A7D6FA"
+    },
+    {
+      "path": "profiles/nintendo/gamecube-adapter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 513,
+      "canonicalSha256": "9D41C28FB03E7E0694F1C25941C43AB8140724CB4E4CABACEE4E8216349EAF7E",
+      "profileId": "gamecube-adapter",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/nintendo/genesis-nso.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1503,
+      "canonicalSha256": "F03E0B96DDB21AB31C6351C80C179898351CF5C6CD34202A4A56DBC139E4C78F",
+      "profileId": "genesis-nso",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/joycon-charging-grip.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1405,
+      "canonicalSha256": "D245D50971BE75CE03EC3FCC420117BE43BB7167737F7DE93B925F91CE125D8F",
+      "profileId": "joycon-charging-grip",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/joycon-l.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1208,
+      "canonicalSha256": "6BA6BF48841DF97B3439754351CCFA4857046FC8663721111786D3AF098CF20A",
+      "profileId": "joycon-l",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/joycon-r.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1586,
+      "canonicalSha256": "13AAF9E8FC42F2A4BAA4C75AFAF10388424D06C26873F091AFBB98B08B8CC905",
+      "profileId": "joycon-r",
+      "deployable": true,
+      "descriptorByteLength": 84,
+      "descriptorSha256": "F340AB2EBC87F5326CCD5CD04D3A18D432521365B400348334E1C3F0802BBD92"
+    },
+    {
+      "path": "profiles/nintendo/n64-nso.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1383,
+      "canonicalSha256": "56CA937F76E1882F1C93EEE1718033D9BC0116DBE76284B24C4AB02A2EEBE887",
+      "profileId": "n64-nso",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/snes-nso.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1401,
+      "canonicalSha256": "C994CF3F3E1F04A97B2C89576EF0FB8361DB8FE8AE895A798EC7EB42DB127F8C",
+      "profileId": "snes-nso",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/switch-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2899,
+      "canonicalSha256": "2094F27EAF94CD6BC8202D0CE3B0240CB08C0E56E5343708C5D4F80A27E8E688",
+      "profileId": "switch-pro",
+      "deployable": true,
+      "descriptorByteLength": 170,
+      "descriptorSha256": "421DBC392EA406CD864C602ACB17E9E5FB24E2D764B61AE80A4F0C60B6252AC8"
+    },
+    {
+      "path": "profiles/nintendo/switch2-joycon-l.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 389,
+      "canonicalSha256": "2B973A5DC2CC58670FE3788F2ECC7F4870552EDA44C96645F6EF0CF9FF8E774B",
+      "profileId": "switch2-joycon-l",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/nintendo/switch2-joycon-r.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 389,
+      "canonicalSha256": "FABA5A98859F9E6E4C54567CB0EC065A0BBEA222E31FE2D473AB62AE13B477F2",
+      "profileId": "switch2-joycon-r",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/nintendo/switch2-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 6216,
+      "canonicalSha256": "011EE8707E3C712226A8458E1CBFAC0E81058B569046634BD51EEAF5AFA335DD",
+      "profileId": "switch2-pro-controller",
+      "deployable": true,
+      "descriptorByteLength": 97,
+      "descriptorSha256": "FD41803DCAFB0781EEC1F6CC8E9374C51BAB7DA6ED11BE031C0D1EC323CF3D1C"
+    },
+    {
+      "path": "profiles/pxn/litestar-gt987.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 374,
+      "canonicalSha256": "83839BE999F0401163A73CBCC28BE34520B3DBB56D0ECADBD2FB64C4E530BE0B",
+      "profileId": "litestar-gt987",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/pxn/pxn-v10.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 311,
+      "canonicalSha256": "D2C6252B6081AADCA54E03C73EC53D7B7C6B393A19AEEB5B294BBB8238A7B952",
+      "profileId": "pxn-v10",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/pxn/pxn-v12-lite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 360,
+      "canonicalSha256": "6275495D7DD7BC747FE204796A995DCBE7D8300C7A04EE83D8C4264CE49947EA",
+      "profileId": "pxn-v12-lite",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/pxn/pxn-v12.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 346,
+      "canonicalSha256": "8B65727C167693A15FFC7877150C20C6730E1E7351C1AF834C44C03970D2CFA6",
+      "profileId": "pxn-v12",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/pxn/pxn-vd6.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1167,
+      "canonicalSha256": "9DE3D097E497679185083454C047E30C9B164C76248FF0C2D0D625E286327FBA",
+      "profileId": "pxn-vd6",
+      "deployable": true,
+      "descriptorByteLength": 36,
+      "descriptorSha256": "095A3FA87E2085ABCF1774EDAC606E220B41040D889C5A84ABB1F10919F13B53"
+    },
+    {
+      "path": "profiles/razer/panthera-ps4.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 2045,
+      "canonicalSha256": "B86D580C559D466C24BD40007BAD62EC4A642B8B37E11E16884D346CFC5437B6",
+      "profileId": "razer-panthera-ps4",
+      "deployable": true,
+      "descriptorByteLength": 481,
+      "descriptorSha256": "64D4B28259702A1D2E06EAEFF647824FFF4BB0BCC9C6FD34D5999AC18CB3D4DE"
+    },
+    {
+      "path": "profiles/razer/wolverine-v3-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1028,
+      "canonicalSha256": "A629C06E7DC194AEBD9F5FE5CEAD0DF81CE9B90EDD66E30A4949B737072F99A5",
+      "profileId": "razer-wolverine-v3-pro",
+      "deployable": true,
+      "descriptorByteLength": 103,
+      "descriptorSha256": "F8629DE4CA3BF7B6820AD49527FDC92FDF3C9454BD97D2F68BFABBC0BD2CFC2B"
+    },
+    {
+      "path": "profiles/schema.json",
+      "classification": "excluded-profile-data",
+      "canonicalByteLength": 8619,
+      "canonicalSha256": "354F4862CD238049DDAAF02DCAA71BE60D37875466AE92366D353FA1D5F23753",
+      "profileId": null,
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null,
+      "exclusionReason": "json-schema"
+    },
+    {
+      "path": "profiles/scraped_descriptors.json",
+      "classification": "excluded-profile-data",
+      "canonicalByteLength": 10978,
+      "canonicalSha256": "1FF6B95C667C01893F0995ADED70B7D32E6BB187ED7FAF2D2E27BA4A2C4E2E8C",
+      "profileId": null,
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null,
+      "exclusionReason": "scraped-descriptor-reference"
+    },
+    {
+      "path": "profiles/sega/astro-city-mini.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 985,
+      "canonicalSha256": "880C77F8F67136C7DC078ABD938A0473F46DAE738295B8F0EDB6EBAE6FE61442",
+      "profileId": "sega-astro-city-mini",
+      "deployable": true,
+      "descriptorByteLength": 101,
+      "descriptorSha256": "05A151C932362FEE13503905962880CE75212BBF8C43C95701527B8290833162"
+    },
+    {
+      "path": "profiles/sega/mega-drive-mini.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1005,
+      "canonicalSha256": "7B131C04175F46CAE2B460AAE2EA315C29236DC496F34BB14AC9B4F12CA5D2A8",
+      "profileId": "sega-mega-drive-mini",
+      "deployable": true,
+      "descriptorByteLength": 101,
+      "descriptorSha256": "05A151C932362FEE13503905962880CE75212BBF8C43C95701527B8290833162"
+    },
+    {
+      "path": "profiles/simagic/simagic-alpha.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 398,
+      "canonicalSha256": "C5E06B87D2D1AC080581FDC9AE8809394B4B9F5FD49355D069A7DE148833D535",
+      "profileId": "simagic-alpha",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/simagic/simagic-gt-neo.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 359,
+      "canonicalSha256": "87AC98CA7D4F6B001EEB3492F153516B1154705B1272FB49175EB1B025F43096",
+      "profileId": "simagic-gt-neo",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/simucube/simucube-1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 363,
+      "canonicalSha256": "6510DE6B76757E5DE56C308B8DD229A51959C18450818EB185240962E84B78DF",
+      "profileId": "simucube-1",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/simucube/simucube-2-pro.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 389,
+      "canonicalSha256": "0CCDC9C5854BF428EB94584D520B67A4A0B6DEEA0ABAF65BDCECB69544211555",
+      "profileId": "simucube-2-pro",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/simucube/simucube-2-sport.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 359,
+      "canonicalSha256": "771362B15D5024470C82CB92F28B5E025D9DB0799DC0A73EEE88486F901903FC",
+      "profileId": "simucube-2-sport",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/simucube/simucube-2-ultimate.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 368,
+      "canonicalSha256": "E4EDC81B1202E85C1302E811AE869A2CEDBF6F825230EEC6DBF7E19ACF7028AB",
+      "profileId": "simucube-2-ultimate",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/snk/neogeo-mini.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1095,
+      "canonicalSha256": "D3B01681DE1D98AD5E28F0D5BEE67F2E2560D9D12BECB033F1AC07E4C068325A",
+      "profileId": "snk-neogeo-mini",
+      "deployable": true,
+      "descriptorByteLength": 150,
+      "descriptorSha256": "F7E10917F498565C5EC1EC6FFBE361D65CFB87FBDDA86D25AF1C10765D53358D"
+    },
+    {
+      "path": "profiles/sony/dualsense-bt-full.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 7193,
+      "canonicalSha256": "DA19686A0AC08AF0F4F3228D1A8BEB524FA54A20B74BBEEAF95329C740C7EE8B",
+      "profileId": "dualsense-bt-full",
+      "deployable": true,
+      "descriptorByteLength": 496,
+      "descriptorSha256": "AB4BC3A0B52D39CFDA58BADEFAF00227A2CDC8597726A9BA4714186A6930F0B7"
+    },
+    {
+      "path": "profiles/sony/dualsense-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 6401,
+      "canonicalSha256": "0CA31B84CA117FB9045205A5E9FB252A400FBA252B2EE14A1C7486F99840AFDA",
+      "profileId": "dualsense-bt",
+      "deployable": true,
+      "descriptorByteLength": 279,
+      "descriptorSha256": "F82D9BA0B84EFA3B35DAD5B96E46EBAB553F5B9F3BA37272F45C0665784FEBF1"
+    },
+    {
+      "path": "profiles/sony/dualsense-composite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 9049,
+      "canonicalSha256": "E9C5A86F052723DA3C7B0EAEF555F576469A2D012C05E275BB308699524B289B",
+      "profileId": "dualsense-composite",
+      "deployable": true,
+      "descriptorByteLength": 273,
+      "descriptorSha256": "7587A72EE49550F24DA50CBBAD203742A0EB9AEFBB753C2AAA5BEDF8466C0D33"
+    },
+    {
+      "path": "profiles/sony/dualsense-edge-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 7240,
+      "canonicalSha256": "B75B5041C6FAC8D30DC01E6D849163B8A6348F8FC32BCC3CD3DF7104783A809A",
+      "profileId": "dualsense-edge-bt",
+      "deployable": true,
+      "descriptorByteLength": 428,
+      "descriptorSha256": "C4DACAC0D3A286243930D5F8F358F43E489603D12E06E62DBCCBC4D27DBA8BDC"
+    },
+    {
+      "path": "profiles/sony/dualsense-edge-composite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 8987,
+      "canonicalSha256": "E97920B59DF558F41E5C656895CBD2DA85D5191C77580EFA043738D1F32D8984",
+      "profileId": "dualsense-edge-composite",
+      "deployable": true,
+      "descriptorByteLength": 389,
+      "descriptorSha256": "962368681AEEECAF4C384C37458FA98A7E58DE2905AAFAD8EE0B81986EE50891"
+    },
+    {
+      "path": "profiles/sony/dualsense-edge.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 5488,
+      "canonicalSha256": "AEBE41F4BC11DFE64862D9AD564D768E1A20A07E7374FFDEB4992DEB1A588C0A",
+      "profileId": "dualsense-edge",
+      "deployable": true,
+      "descriptorByteLength": 389,
+      "descriptorSha256": "962368681AEEECAF4C384C37458FA98A7E58DE2905AAFAD8EE0B81986EE50891"
+    },
+    {
+      "path": "profiles/sony/dualsense.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 5325,
+      "canonicalSha256": "DBD33E713FAFA6670610E75CC247AECE5BBAEB51591521A41AF6275D7808A4C5",
+      "profileId": "dualsense",
+      "deployable": true,
+      "descriptorByteLength": 273,
+      "descriptorSha256": "7587A72EE49550F24DA50CBBAD203742A0EB9AEFBB753C2AAA5BEDF8466C0D33"
+    },
+    {
+      "path": "profiles/sony/dualshock-3.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1529,
+      "canonicalSha256": "DB677355592A5A17E90ADF3744394241466C058B2678C4C1C33DE0B39D1A1752",
+      "profileId": "dualshock-3",
+      "deployable": true,
+      "descriptorByteLength": 148,
+      "descriptorSha256": "718163F543FFBC77DD5FB89CAB00F6346A4610DA659A07B2DF848834F7DBA7BC"
+    },
+    {
+      "path": "profiles/sony/dualshock-4-v1-full.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 5396,
+      "canonicalSha256": "52BEA4E6E6EBE7F0797455FDF183DEF35729713CE773331691F803A044D50C60",
+      "profileId": "dualshock-4-v1-full",
+      "deployable": true,
+      "descriptorByteLength": 483,
+      "descriptorSha256": "6E947A7AE4FA8E4B3129BD32B16D5932B950604DA4458F6DEA8FD3BA07FC3EDF"
+    },
+    {
+      "path": "profiles/sony/dualshock-4-v1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 5317,
+      "canonicalSha256": "5F46E35CC46951669B18B3E79C475096DECD29688482B2B16A86E5E30150BFC0",
+      "profileId": "dualshock-4-v1",
+      "deployable": true,
+      "descriptorByteLength": 467,
+      "descriptorSha256": "2FBF32C9BB0B4A1A8170F487D64ED3FFA19BDDD579BE40B29287DE35F1D00600"
+    },
+    {
+      "path": "profiles/sony/dualshock-4-v2-bt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 6446,
+      "canonicalSha256": "0015BE6C9ABC9DC465884CECFE793A77E14BACA33D57F543219B86AECFDC23D9",
+      "profileId": "dualshock-4-v2-bt",
+      "deployable": true,
+      "descriptorByteLength": 442,
+      "descriptorSha256": "31E289D29C28511680ADF3A5D0E1811681DE860A2200AA7DADA9FAF6B469D882"
+    },
+    {
+      "path": "profiles/sony/dualshock-4-v2-composite.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 8122,
+      "canonicalSha256": "71087CBA903E875DFA3C2EDC66D56FAD4339F289DAA46A9095E1FD8BA611B11D",
+      "profileId": "dualshock-4-v2-composite",
+      "deployable": true,
+      "descriptorByteLength": 507,
+      "descriptorSha256": "68B83F0CA188487E879670A0CEB22A73675BA4B51AC2887277F4F534A515FCDF"
+    },
+    {
+      "path": "profiles/sony/dualshock-4-v2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 4869,
+      "canonicalSha256": "95E76EFAF5886D6D580138490078952324A5FED54A431B6797EF9681E04EC716",
+      "profileId": "dualshock-4-v2",
+      "deployable": true,
+      "descriptorByteLength": 507,
+      "descriptorSha256": "68B83F0CA188487E879670A0CEB22A73675BA4B51AC2887277F4F534A515FCDF"
+    },
+    {
+      "path": "profiles/sony/ps-classic.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1006,
+      "canonicalSha256": "A94B3BD91180CDDFC5D715CAC395A2B5A4411A26D2251AAD134126F397F990B5",
+      "profileId": "ps-classic",
+      "deployable": true,
+      "descriptorByteLength": 49,
+      "descriptorSha256": "2229E1F9FAA00FF06B4BCE1DAD86D7A5BA1DD182D7883B0B78FC2FA75FE0F527"
+    },
+    {
+      "path": "profiles/sony/ps-move.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1198,
+      "canonicalSha256": "2DD9EC32B0A7A740189809B1FC434568C34D4F77578390ECF6193F1102234C42",
+      "profileId": "ps-move",
+      "deployable": true,
+      "descriptorByteLength": 194,
+      "descriptorSha256": "741A8B299811ED6B75AD9D7482E97BAF081E6837AA18BFA1F78441D7E8EA88EC"
+    },
+    {
+      "path": "profiles/sony/ps3-remote.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 634,
+      "canonicalSha256": "AD0B42AB541B83811674C2181A70D5468CDBC34A8ACAFB13FBBBBECCC5180280",
+      "profileId": "ps3-remote",
+      "deployable": true,
+      "descriptorByteLength": 90,
+      "descriptorSha256": "FD4A116E2BE9F6EF943906EFC50BF44986F0549087ED231B43D72F0C4D852C53"
+    },
+    {
+      "path": "profiles/steelseries/srws1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1087,
+      "canonicalSha256": "DA0EA4F538503211F2F2F7AC8D36011FD8CC09727923FF79BEF04E263F2358CC",
+      "profileId": "steelseries-srws1",
+      "deployable": true,
+      "descriptorByteLength": 139,
+      "descriptorSha256": "5DC4D88C19B05D90C31153E059234BB4B6CF870268DFDD8CB5BB912813761F67"
+    },
+    {
+      "path": "profiles/taito/egret-ii-mini.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 869,
+      "canonicalSha256": "10B8CEF2B2782892D034C3B7B8443A6A1FE4EBA760A812494C0C890189F92F7D",
+      "profileId": "taito-egret-ii-mini",
+      "deployable": true,
+      "descriptorByteLength": 49,
+      "descriptorSha256": "20D7398BDF1AECEF47C4CDB8EB79060EFC66299690D6F1AC57DF49768011AA81"
+    },
+    {
+      "path": "profiles/thrustmaster/t-flight-hotas-4.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1479,
+      "canonicalSha256": "34DC9EE306C85C8C926277DE36917FBD6BB705E927F321B0672BBBC8CF65C908",
+      "profileId": "thrustmaster-t-flight-hotas-4",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "9C099EA4B1D5400969A3363D781F1B354EFD25E2D382B81B56CF31C81B01CDEE"
+    },
+    {
+      "path": "profiles/thrustmaster/t-flight-hotas-one.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1474,
+      "canonicalSha256": "CAC76C95D45B72C020F3970673053EAF464AAC68CC19853F52102E6D0D206F3E",
+      "profileId": "thrustmaster-t-flight-hotas-one",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "9C099EA4B1D5400969A3363D781F1B354EFD25E2D382B81B56CF31C81B01CDEE"
+    },
+    {
+      "path": "profiles/thrustmaster/t-flight-hotas-x.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 353,
+      "canonicalSha256": "650D577287304A86ED53CF194F14CC13A42C02AA8E39C542F5D1A6C4CAAD94B4",
+      "profileId": "thrustmaster-t-flight-hotas-x",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/thrustmaster/t-flight-rudder-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 359,
+      "canonicalSha256": "A7051DBDB8F1B582510E79BD89507D9DB2FBCF8091F08DB2A6A571E50607104E",
+      "profileId": "thrustmaster-t-flight-rudder-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/thrustmaster/t-gt.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 422,
+      "canonicalSha256": "C76176E9FB4F253A7D0F5905A00A1F7DB1CB7E7C5CDB07300BA70A3E97F99563",
+      "profileId": "thrustmaster-t-gt",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/thrustmaster/t-lcm-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 347,
+      "canonicalSha256": "201F1C3BFBDAAFBD4C3B571A78B156CD377B0D666510F05979C0F2CB9652CE1E",
+      "profileId": "thrustmaster-t-lcm-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/thrustmaster/t-rudder-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 621,
+      "canonicalSha256": "4CD0C700C6242167FFECA4C4E43465A3E84078593582015B5E3BC9BD0236B312",
+      "profileId": "thrustmaster-t-rudder-pedals",
+      "deployable": true,
+      "descriptorByteLength": 62,
+      "descriptorSha256": "3FB59D4A6831EC99D408DDE1204ADA68BFEE1FA6FDBFF0F9901B4524A6741131"
+    },
+    {
+      "path": "profiles/thrustmaster/t150.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1195,
+      "canonicalSha256": "F3E10D527A6C33606215BE2614B6F1B01E0397E622C83F50B6A1483F1839BA8F",
+      "profileId": "thrustmaster-t150",
+      "deployable": true,
+      "descriptorByteLength": 130,
+      "descriptorSha256": "2FAAA21AB6DCBB610D5431979C010352F0F011DD6751E0F88EF9F848C436D579"
+    },
+    {
+      "path": "profiles/thrustmaster/t16000m.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1119,
+      "canonicalSha256": "126EEC8696FCA7E70631D4284A9F2346694981ACB7173C1B688D993770722144",
+      "profileId": "thrustmaster-t16000m",
+      "deployable": true,
+      "descriptorByteLength": 124,
+      "descriptorSha256": "0D45517D130D7CCEDF8C541D1519EC1E2806D19B58D04BC620A5DDD981BBD0B9"
+    },
+    {
+      "path": "profiles/thrustmaster/t248.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1364,
+      "canonicalSha256": "2C72858944997ABB1544D939AE5D68AF2070477271B506CC65BB1BFF5D9EBE59",
+      "profileId": "thrustmaster-t248",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "42A3107308D8BD1F69544CCBB9E75C4BE9B634482042C0E41961FB4AEE171C7E"
+    },
+    {
+      "path": "profiles/thrustmaster/t300rs-ps3-adv.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1141,
+      "canonicalSha256": "6C080E9075BD1DD41BB2E14F597DE321ED76842A698F8E283340A533A9D0CD7C",
+      "profileId": "thrustmaster-t300rs-ps3-adv",
+      "deployable": true,
+      "descriptorByteLength": 128,
+      "descriptorSha256": "817C8BE3E27372FD2F5BA9A8912F7C1197D63CA2A065E5F469DB713BF3BF3641"
+    },
+    {
+      "path": "profiles/thrustmaster/t300rs-ps3.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1175,
+      "canonicalSha256": "BABFC4AAB4D2D8D8C619AE7F98247CF498B06EE7AD5FC057287B00796D86514E",
+      "profileId": "thrustmaster-t300rs-ps3",
+      "deployable": true,
+      "descriptorByteLength": 135,
+      "descriptorSha256": "77AEEDA5A37F36094906F3F238CC335A45B845F612A48AB93CB6E25DCC7CD198"
+    },
+    {
+      "path": "profiles/thrustmaster/t300rs.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1283,
+      "canonicalSha256": "C5027F564ED372864FFBC9348199BD0546769C1679D1012000502197B1CDDB48",
+      "profileId": "thrustmaster-t300rs",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "9C099EA4B1D5400969A3363D781F1B354EFD25E2D382B81B56CF31C81B01CDEE"
+    },
+    {
+      "path": "profiles/thrustmaster/t500rs.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1235,
+      "canonicalSha256": "203974F9177468DCA3B9DB0101D35E6F0B660C182C590D4FC96A58102B78F810",
+      "profileId": "thrustmaster-t500rs",
+      "deployable": true,
+      "descriptorByteLength": 135,
+      "descriptorSha256": "77AEEDA5A37F36094906F3F238CC335A45B845F612A48AB93CB6E25DCC7CD198"
+    },
+    {
+      "path": "profiles/thrustmaster/t80.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1193,
+      "canonicalSha256": "739C6C6201DEE9865E384D8FED101DCEE1053284783544490508826615097F5E",
+      "profileId": "thrustmaster-t80",
+      "deployable": true,
+      "descriptorByteLength": 160,
+      "descriptorSha256": "9736AB5A619E334F9EB2B63A0D8D001347B9403172B45829D9F8EE143DE3D5FB"
+    },
+    {
+      "path": "profiles/thrustmaster/th8a-shifter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1010,
+      "canonicalSha256": "893C6B8B6168261736353EC92357FAADC272E86C683468D6D4C9285EF6941E11",
+      "profileId": "thrustmaster-th8a-shifter",
+      "deployable": true,
+      "descriptorByteLength": 83,
+      "descriptorSha256": "9B08B1092EDD34C4E263A98453BD68D5E5B04531253FC9DB97F86F87BEB52310"
+    },
+    {
+      "path": "profiles/thrustmaster/tpr-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 357,
+      "canonicalSha256": "67B42F7A53B529D760BDB1DC0C136F6C78441F93244C8B59B51121ADA7B07CB6",
+      "profileId": "thrustmaster-tpr-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/thrustmaster/ts-pc-racer.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1124,
+      "canonicalSha256": "CB719A0B5E66B8D45F9464291E9108915DBA58077122DEF1D83C11F5FECA6811",
+      "profileId": "thrustmaster-ts-pc-racer",
+      "deployable": true,
+      "descriptorByteLength": 135,
+      "descriptorSha256": "77AEEDA5A37F36094906F3F238CC335A45B845F612A48AB93CB6E25DCC7CD198"
+    },
+    {
+      "path": "profiles/thrustmaster/ts-xw.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1118,
+      "canonicalSha256": "5D2F050D7679B892069DD925ECA32E32A72D06FF177145AF6EC8D5A6C4EBB575",
+      "profileId": "thrustmaster-ts-xw",
+      "deployable": true,
+      "descriptorByteLength": 135,
+      "descriptorSha256": "77AEEDA5A37F36094906F3F238CC335A45B845F612A48AB93CB6E25DCC7CD198"
+    },
+    {
+      "path": "profiles/thrustmaster/tx-xbox.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1135,
+      "canonicalSha256": "8C380693414070CD797B8958C4C3EB4FB1B221A5E1AF2E3C3394118EDC8D759C",
+      "profileId": "thrustmaster-tx-xbox",
+      "deployable": true,
+      "descriptorByteLength": 135,
+      "descriptorSha256": "77AEEDA5A37F36094906F3F238CC335A45B845F612A48AB93CB6E25DCC7CD198"
+    },
+    {
+      "path": "profiles/turtle-beach/flightstick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 478,
+      "canonicalSha256": "8866147D09511BC779E5B8FD310D17B78C88AA1EA78B1B34D1550DCDEB1EF21E",
+      "profileId": "velocityone-flightstick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/turtle-beach/race.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 468,
+      "canonicalSha256": "C3A1B36155C66A706AFFB2F3FC0B0A2F6062683E2090D0718B690AE7E80016BA",
+      "profileId": "velocityone-race",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/turtle-beach/throttle.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 463,
+      "canonicalSha256": "E11CDC892696DA0F6FB93175D680602BD5F4AB44E6A30118371174B75FE7B16E",
+      "profileId": "velocityone-throttle",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/valve/steam-controller.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 924,
+      "canonicalSha256": "BD59698A092BD27561BE4EDA81DA7EEA66358B19513D8C651367D6655ACECDF5",
+      "profileId": "steam-controller",
+      "deployable": true,
+      "descriptorByteLength": 33,
+      "descriptorSha256": "E77B0E5CF5E7F0BAEDBE3350B57477C649CCC626A212B8B8B4EC9D17BDF83B6E"
+    },
+    {
+      "path": "profiles/valve/steam-deck.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 1965,
+      "canonicalSha256": "3437C052D50768132CEBB6ECC0427AA848DEE46C07EF99B15F1D7CFA1788F107",
+      "profileId": "steam-deck",
+      "deployable": true,
+      "descriptorByteLength": 129,
+      "descriptorSha256": "83B626F13A26A4DFB16917994FC9F6964DF4A649B68D38C8D90DAA2DD661E9A8"
+    },
+    {
+      "path": "profiles/virpil/constellation-alpha-cm2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 467,
+      "canonicalSha256": "7ACB9D9B64BB5E6E071605E5E3CCBA4947E8FB6F891CC8177FB3D9F87B9794FC",
+      "profileId": "virpil-constellation-alpha-cm2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/constellation-alpha-cm3.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 465,
+      "canonicalSha256": "F3E8FDFEA56273F39604701E6F3558149BB8B1F2E96103BECA06ECC906C34A60",
+      "profileId": "virpil-constellation-alpha-cm3",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/constellation-alpha-warbrd.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 475,
+      "canonicalSha256": "75116FC6767462E905914E57A5DDEFBAD88EC70B9DE9057FB3893C1052F55703",
+      "profileId": "virpil-constellation-alpha-warbrd",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/control-panel-1.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 442,
+      "canonicalSha256": "EC15ACE09B88A2C73C78F64817346C201336F75E58C74988EBCD8928E0878408",
+      "profileId": "virpil-control-panel-1",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/control-panel-2.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 442,
+      "canonicalSha256": "BE6DE0394E3F7E709B54F903A69D444F305057138EADFF09B056BBC4ED04E216",
+      "profileId": "virpil-control-panel-2",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/mongoost-50cm2-throttle.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 464,
+      "canonicalSha256": "056D76CA3000CB0165F03D7FC4963C692D734C351B44878E2D0FCFA8465600D9",
+      "profileId": "virpil-mongoost-50cm2-throttle",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/virpil/mongoost-50cm3-throttle.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 466,
+      "canonicalSha256": "1248140D40466EAD96736B1814B7D90F70FCCDE0ABA58FA4D76AEE5A9F8AD17C",
+      "profileId": "virpil-mongoost-50cm3-throttle",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gladiator-evo-l.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 444,
+      "canonicalSha256": "71D5F0D1B04E931E18F16A40F2960418E0AC973E7F0F782ADAE4B6E7C50565EC",
+      "profileId": "vkbsim-gladiator-evo-l",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gladiator-evo-r.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 444,
+      "canonicalSha256": "71FB9321FCAF4EF06AC1E9413EB33A4343BEA196B0250CD999B495347A299794",
+      "profileId": "vkbsim-gladiator-evo-r",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gladiator-k-l.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 432,
+      "canonicalSha256": "C805EDD113B425715CA41EC9F420037C457CF58237258279E2987303D4FA2C65",
+      "profileId": "vkbsim-gladiator-k-l",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gladiator-k-r.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 432,
+      "canonicalSha256": "D722C69C1839C72037D6D9F69F9DF8DECAF166ADB5ED9BC03F8D871B4310C5D5",
+      "profileId": "vkbsim-gladiator-k-r",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gladiator-mcp.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 456,
+      "canonicalSha256": "5757BD07385F13ACE7C6842CD1A422DBF332E28A2602FDB16FE7614D337601A3",
+      "profileId": "vkbsim-gladiator-mcp",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gunfighter-sce-l.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 467,
+      "canonicalSha256": "9DBE01D8F9029001ECA7C78B10C79B2272243C77945DFFBE232775D499A8EFA6",
+      "profileId": "vkbsim-gunfighter-sce-l",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gunfighter-sce-r.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 467,
+      "canonicalSha256": "D263DC7DF57C5D6E5A45FA3C6073B98AB253207DDC2B512DE141DD2A7C842EC8",
+      "profileId": "vkbsim-gunfighter-sce-r",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/gunfighter.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 427,
+      "canonicalSha256": "1A8BF5516EE3652D637A6ADE0D3A559733FAEE0787F1B6377684FCF1BAEB5B91",
+      "profileId": "vkbsim-gunfighter",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/sem-thq.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 422,
+      "canonicalSha256": "D9C5BA0ACBABDA2B4CD20CE189F0B0FECEC5297B690F857EF3D5E10B703D3219",
+      "profileId": "vkbsim-sem-thq",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/vkbsim/stecs.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 410,
+      "canonicalSha256": "2E6725E30A3CB7EE32D1D351AF7A0F662E4C0A5340458EFBD5768837CD920B6A",
+      "profileId": "vkbsim-stecs",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/winwing/orion2-f16ex.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 461,
+      "canonicalSha256": "97C6B6B5FA1C34D25FF3DBEE331E8D0D250B37E63CE87A69825822B1B62A6C18",
+      "profileId": "winwing-orion2-f16ex",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/winwing/orion2-f18.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 462,
+      "canonicalSha256": "E67016E73A02394BC743056E1028981F2160D79E29A8E6969E8C552AD9339DB7",
+      "profileId": "winwing-orion2-f18",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/winwing/orion2-joystick.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 442,
+      "canonicalSha256": "C014CECEAA8C5FB16CC8657C5B66220CB1E46D5C54BDDE4F7E595597D60EBF36",
+      "profileId": "winwing-orion2-joystick",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/winwing/skywalker-pedals.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 457,
+      "canonicalSha256": "ABE0A355AB52E385AAA18871E84D55693F9A2EDB1F70C72688FAED06145892E7",
+      "profileId": "winwing-skywalker-pedals",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    },
+    {
+      "path": "profiles/winwing/ursa-minor.json",
+      "classification": "embedded-profile-source",
+      "canonicalByteLength": 449,
+      "canonicalSha256": "30E8502F4158497DCF10FA6D10CBC21BA67BFAFD7A7BAF7952C43733C208AD1D",
+      "profileId": "winwing-ursa-minor",
+      "deployable": false,
+      "descriptorByteLength": null,
+      "descriptorSha256": null
+    }
+  ]
+}

@@ -491,6 +491,60 @@ Assert-Check 'program.no-absolute-artifact-path-in-report' `
     'The receipt uses an artifact role rather than the absolute input path.'
 
 $runner = Get-Content -LiteralPath (Join-Path $leafRoot 'run-actions-proof.ps1') -Raw
+$absoluteDrivePattern = '(?i)(?<![a-z])[a-z]:[\\/]'
+$fileUriPattern = '(?i)(?<![a-z0-9+.-])file:[\\/]{2,}'
+$forwardUncPattern = '(?i)(?<![-a-z0-9+./:\\])[\\/]{2,}(?=[^\\/\s])'
+Assert-Check 'runner.absolute-windows-path-boundary' `
+    ((Has-Literal $runner 'function Test-ContainsAbsoluteWindowsPath') -and
+     (Has-Literal $runner "'(?i)(?<![a-z])[a-z]:[\\/]'" ) -and
+     (Has-Literal $runner "'(?i)(?<![a-z0-9+.-])file:[\\/]{2,}'" ) -and
+     (Has-Literal $runner "'(?i)(?<![-a-z0-9+./:\\])[\\/]{2,}(?=[^\\/\s])'" ) -and
+     (Has-Literal $runner 'if (Test-ContainsAbsoluteWindowsPath -Text $text)') -and
+     -not (Has-Literal $runner "'(?i)[a-z]:[\\/]'" ) -and
+     -not [regex]::IsMatch(
+        'http://schemas.microsoft.com/developer/msbuild/2003',
+        $absoluteDrivePattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     -not [regex]::IsMatch(
+        'http://schemas.microsoft.com/developer/msbuild/2003',
+        $forwardUncPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     -not [regex]::IsMatch(
+        'https://example.invalid/a//b',
+        $forwardUncPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     -not [regex]::IsMatch(
+        'profile://example.invalid/value',
+        $fileUriPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'D:\proof\input.xml', $absoluteDrivePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'D:/proof/input.xml', $absoluteDrivePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'file:///D:/proof/input.xml', $absoluteDrivePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        '//server/share/input.props', $forwardUncPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        '///server/share/input.props', $forwardUncPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        '/\server/share/input.props', $forwardUncPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        '\/server/share/input.props', $forwardUncPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'file://server/share/input.props', $fileUriPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'file:/\server/share/input.props', $fileUriPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     [regex]::IsMatch(
+        'file:\/server/share/input.props', $fileUriPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     '\\server\share'.IndexOf('\\', [StringComparison]::Ordinal) -ge 0) `
+    'Canonical MSBuild namespace URLs pass while drive-root and UNC paths fail closed.'
 $runnerAnchorIndex = 0
 foreach ($literal in @(
     '$env:GITHUB_ACTIONS', '$env:RUNNER_OS', '$env:RUNNER_TEMP', '$env:GITHUB_WORKSPACE',

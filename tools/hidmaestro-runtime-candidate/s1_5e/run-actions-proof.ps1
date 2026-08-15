@@ -1337,6 +1337,17 @@ function Get-XmlExpectedItems {
     return [pscustomobject]@{ Compile = $compile; Resources = $resources }
 }
 
+function Test-ContainsAbsoluteWindowsPath {
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Text)
+    $options = [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    return [regex]::IsMatch($Text, '(?i)(?<![a-z])[a-z]:[\\/]', $options) -or
+        [regex]::IsMatch(
+            $Text, '(?i)(?<![a-z0-9+.-])file:[\\/]{2,}', $options) -or
+        [regex]::IsMatch(
+            $Text, '(?i)(?<![-a-z0-9+./:\\])[\\/]{2,}(?=[^\\/\s])', $options) -or
+        $Text.IndexOf('\\', [StringComparison]::Ordinal) -ge 0
+}
+
 function Get-RoleNormalizedTextSha256 {
     param(
         [Parameter(Mandatory)][string] $Path,
@@ -1351,7 +1362,7 @@ function Get-RoleNormalizedTextSha256 {
         $text = $text.Replace($root.Replace('\', '/'), '<' + [string]$entry.Key + '>',
             [StringComparison]::OrdinalIgnoreCase)
     }
-    if ($text -match '(?i)[a-z]:[\\/]' -or $text.Contains('\\')) {
+    if (Test-ContainsAbsoluteWindowsPath -Text $text) {
         throw 'A role-normalized generated import retains an absolute filesystem path.'
     }
     $normalized = $script:Utf8NoBom.GetBytes($text)

@@ -21,10 +21,9 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Touches a real HIDMaestro install (opens its named section, installs the
-# driver, creates devices). Never in CI — same contract as ksx-output's
-# `cab-tests`. Every test in this crate that is NOT behind this feature runs
-# against in-process fakes and needs no driver.
+# Reserved for future tests against an isolated real HIDMaestro installation.
+# This build currently has no such tests or reachable install/device lifecycle;
+# never add them to ordinary CI or run them on a developer workstation.
 cab-tests = []
 # Exercises only the fixed, non-elevating inherited-token cross-language fake
 # host. This does not expose or select production elevated-host admission.

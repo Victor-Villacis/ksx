@@ -9,7 +9,8 @@ validates several of our roadmap bets.
 
 Physical-controller → virtual-controller remapping over SDL3 input, with
 HIDMaestro as its virtual-pad engine (Xbox One/Series, DualSense, Switch Pro,
-225+ profiles — our planned M8 backend, live in production today). It does NOT
+228 profile resources (130 descriptor-backed in v1.6.1) — our planned M8
+backend, live in production today). It does NOT
 do per-keyboard capture: SDL3 sees gamepads/wheels, not individual keyboards,
 so it cannot split an I-PAC into players — ksx's core job remains unserved by
 it. Same neighborhood, different street; complementary more than competing.

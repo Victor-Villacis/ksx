@@ -1,0 +1,18 @@
+# Sparse payload patches are zero-based HMOutputPacket.Data coordinates, not full HID-report coordinates.
+name	source	report_id	data_len	patches	initial_large	initial_small	expected_disposition	expected_large	expected_small
+legacy_update_uses_raw_offsets	0	0x02	47	0:03,2:40,3:80	0x11	0x22	apply-legacy	0x80	0x40
+v2_update_uses_valid_flag2	0	0x02	47	0:02,2:24,3:42,38:04	0x11	0x22	apply-v2	0x42	0x24
+legacy_valid_zero_is_stop	0	0x02	47	0:03	0x80	0x40	stop-legacy	0x00	0x00
+v2_valid_zero_is_stop	0	0x02	47	0:02,38:04	0x80	0x40	stop-v2	0x00	0x00
+sdl_all_zero_restore_is_stop	0	0x02	47	-	0x80	0x40	stop-all-zero	0x00	0x00
+lightbar_only_preserves_motors	0	0x02	47	1:04,2:FE,3:DC,44:10,45:20,46:30	0x80	0x40	preserve-no-motor-validity	0x80	0x40
+selector_only_start_preserves_motors	0	0x02	47	0:02	0x80	0x40	preserve-selector-only	0x80	0x40
+legacy_validity_without_selector_preserves	0	0x02	47	0:01,2:33,3:44	0x80	0x40	preserve-missing-selector	0x80	0x40
+v2_validity_without_selector_preserves	0	0x02	47	2:33,3:44,38:04	0x80	0x40	preserve-missing-selector	0x80	0x40
+both_motor_variants_preserve	0	0x02	47	0:03,2:33,3:44,38:04	0x80	0x40	preserve-conflicting-variants	0x80	0x40
+both_motor_variants_without_selector_preserve	0	0x02	47	0:01,2:33,3:44,38:04	0x80	0x40	preserve-conflicting-variants	0x80	0x40
+hid_feature_is_rejected	1	0x02	47	0:03,2:40,3:80	0x11	0x22	reject-source	0x11	0x22
+bluetooth_report_id_is_rejected	0	0x31	47	0:03,2:40,3:80	0x11	0x22	reject-report-id	0x11	0x22
+short_payload_is_rejected	0	0x02	46	0:03,2:40,3:80	0x11	0x22	reject-length	0x11	0x22
+long_payload_is_rejected	0	0x02	48	0:03,2:40,3:80	0x11	0x22	reject-length	0x11	0x22
+report_id_prefixed_into_data_is_not_reinterpreted	0	0x02	47	0:02,1:03,2:40,3:80	0x11	0x22	preserve-selector-only	0x11	0x22

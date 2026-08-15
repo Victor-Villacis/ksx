@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "contract": "s1.5c-dualsense-usb-raw-feedback",
+  "status": "inert-source-and-golden-vector-contract",
+  "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "scope": {
+    "profileId": "dualsense",
+    "connection": "usb",
+    "vendorId": 1356,
+    "productId": 3302,
+    "surface": "HMController.OutputReceived",
+    "decodedState": "complete effective classic-rumble motor snapshot only"
+  },
+  "implementation": {
+    "canonicalRustSource": "../../crates/ksx-hidmaestro/src/dualsense_feedback.rs",
+    "goldenVectorCount": 16,
+    "workspaceAndHarnessCompileTheSameSource": true
+  },
+  "sourceFacts": {
+    "source": {
+      "name": "HidOutput",
+      "value": 0
+    },
+    "reportId": 2,
+    "reportIdIsSeparateFromData": true,
+    "fullHidWriteLength": 48,
+    "dataLength": 47,
+    "dataOffsets": {
+      "validFlag0": 0,
+      "validFlag1": 1,
+      "rightSmallMotor": 2,
+      "leftLargeMotor": 3,
+      "validFlag2": 38
+    },
+    "validityMasks": {
+      "validFlag0CompatibleVibration": 1,
+      "validFlag0HapticsSelect": 2,
+      "validFlag2CompatibleVibrationV2": 4
+    },
+    "outputDecodedReconstructsReportIdBeforeGenericProfileDecode": true,
+    "outputDecodedDoesNotApplyMotorValidityPolicy": true,
+    "outputReceivedDataBorrowsAReusedReaderBufferForTheCallback": true,
+    "ringCanLoseOldPacketsAfterSixtyFourUnreadWrites": true
+  },
+  "decoderPolicy": {
+    "envelope": "Accept only HidOutput(0), ReportId 0x02, and exactly 47 Data bytes.",
+    "legacyUpdate": "Apply both motor bytes atomically only when haptics-select and the legacy compatible-vibration bit are set, and the v2 bit is clear.",
+    "v2Update": "Apply both motor bytes atomically only when haptics-select and the v2 compatible-vibration bit are set, and the legacy bit is clear.",
+    "validZeroUpdate": "A source-proven update combination with two zero motor bytes is an explicit stop.",
+    "allZeroUpdate": "An exactly all-zero 47-byte payload is the SDL restore-audio-haptics/stop idiom and clears both effective motors.",
+    "partialValidity": "Selector-only, motor-validity-without-selector, and conflicting legacy-plus-v2 combinations preserve the prior motor state and are surfaced distinctly.",
+    "unrelatedFields": "A structurally valid packet with no motor validity and nonzero unrelated fields preserves the prior motor state.",
+    "snapshot": "Every structurally accepted packet returns an owned, complete effective two-motor snapshot; preserve never becomes implicit zero, and zero never gets filtered.",
+    "bufferLifetime": "Decode synchronously in the OutputReceived callback or copy Data first; never retain HMOutputPacket.Data across callbacks."
+  },
+  "unsupportedAssumptions": [
+    "No claim is made about malformed or partial flag combinations on physical DualSense firmware; the contract deliberately preserves state for those combinations.",
+    "No claim is made that the unsigned source tree matches a particular installed signed HIDMaestro driver package.",
+    "No SDK, driver, controller, process, shared section, event, or device was loaded or exercised by this contract.",
+    "Adaptive triggers, lightbar, audio controls, audio haptics, feature reports, Bluetooth framing, and CRC are outside this one-profile adapter.",
+    "The contract cannot repair packets already overwritten in HIDMaestro's 64-slot output ring; the host must monitor HMOutputPacket.SeqNo for gaps.",
+    "Hardware conformance and captured Windows game traffic remain required before product enablement."
+  ],
+  "authorized": [
+    "static source validation",
+    "pure unit tests",
+    "golden-vector comparison"
+  ],
+  "notAuthorized": [
+    "SDK loading",
+    "driver installation",
+    "controller creation",
+    "elevation",
+    "hardware access",
+    "product enablement",
+    "distribution claims"
+  ]
+}

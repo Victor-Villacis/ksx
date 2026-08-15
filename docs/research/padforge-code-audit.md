@@ -439,7 +439,8 @@ not an assumed shortcut.
 
 - **In-process SDK over a shared-memory section + event signaling**, not a
   pipe/COM/IOCTL client. C# surface: `HMContext` (driver install, profile
-  load, controller factory) → `HMProfile` (one of 225+ embedded JSONs:
+  load, controller factory) → `HMProfile` (one of 228 embedded JSON resources
+  in v1.6.1, 130 of them descriptor-backed:
   VID/PID, strings, `DescriptorHex`, `AxisMap`, Sticks/Triggers layout,
   `ExtendedOutputReport`) → `HMController` (one virtual device;
   `SubmitState(HMGamepadState)` / `SubmitRawReport(bytes)`; events
@@ -549,7 +550,8 @@ Two events:
 
 ### 3.5 Profile selection & the catalog
 
-225+ embedded profile JSONs, enumerated via `LoadDefaultProfiles`.
+228 embedded profile JSON resources in v1.6.1, 130 descriptor-backed,
+enumerated via `LoadDefaultProfiles`.
 PadForge buckets them by vendor-prefix + name-token filters (Microsoft +
 "Xbox"; Sony + "DualShock/DualSense"; exact "switch-pro"; everything else →
 Extended), filters out profiles without a captured HID descriptor

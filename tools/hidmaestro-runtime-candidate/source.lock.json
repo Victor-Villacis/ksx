@@ -8,7 +8,7 @@
     "coreAutocrlf": true,
     "hashesDescribe": "checked-out file bytes after Git's explicit Windows CRLF conversion"
   },
-  "purpose": "Static source baseline for the S1.5b runtime-only fork; this is not an executable or distributable candidate.",
+  "purpose": "Static source baseline for the S1.5c runtime-only fork; this is not an executable or distributable candidate.",
   "files": [
     {
       "path": "LICENSE",

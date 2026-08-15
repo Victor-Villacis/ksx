@@ -1,0 +1,466 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-s1.5c-dualsense-host-public-api",
+  "status": "exact-candidate-allowlist-source-derived-replacements-absent",
+  "upstream": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro",
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "checkoutBytes": "windows-crlf-core.autocrlf-true"
+  },
+  "artifact": {
+    "assemblyName": "HIDMaestro.Core",
+    "assemblyVersion": "1.6.1.0",
+    "fileVersion": "1.6.1.0",
+    "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "targetFramework": "net10.0-windows10.0.26100.0",
+    "runtimeIdentifier": "win-x64",
+    "buildAuthorized": false,
+    "executionAuthorized": false
+  },
+  "surfaceRules": {
+    "declaredPublicTypesOnly": true,
+    "declaredMembersOnly": true,
+    "compilerGeneratedBackingMembersIgnored": true,
+    "enumValueFieldIgnored": true,
+    "nullableAnnotationsAreContractual": true,
+    "anyUnlistedPublicTypeOrMemberFails": true,
+    "logicalMemberCount": 100,
+    "declaredTypeCount": 9,
+    "externalTypeDependencyCount": 16
+  },
+  "types": [
+    {
+      "id": "HIDMaestro.HMContext",
+      "visibility": "public",
+      "kind": "class",
+      "sealed": true,
+      "baseType": "System.Object",
+      "interfaces": ["System.IDisposable"],
+      "sourceTypeAnchor": "public sealed class HMContext : IDisposable",
+      "sourcePath": "sdk/HIDMaestro.Core/HMContext.cs",
+      "sourceSha256": "9C2DFA766961DE1608E2F12E51B89439E15B1F6C62CD4F40F6ADF83A6A3915C5",
+      "sourceDisposition": "replacement-required",
+      "members": [
+        {
+          "id": ".ctor()",
+          "kind": "constructor",
+          "signature": "public HIDMaestro.HMContext()",
+          "sourceAnchor": "public HMContext()",
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "LoadDefaultProfiles()",
+          "kind": "method",
+          "signature": "public System.Int32 LoadDefaultProfiles()",
+          "sourceAnchor": "public int LoadDefaultProfiles()",
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "GetProfile(System.String)",
+          "kind": "method",
+          "signature": "public HIDMaestro.HMProfile? GetProfile(System.String id)",
+          "sourceAnchor": "public HMProfile? GetProfile(string id)",
+          "returnNullable": true,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMProfile"]
+        },
+        {
+          "id": "CreateController(HIDMaestro.HMProfile)",
+          "kind": "method",
+          "signature": "public HIDMaestro.HMController CreateController(HIDMaestro.HMProfile profile)",
+          "sourceAnchor": "public HMController CreateController(HMProfile profile)",
+          "hidmaestroTypeRefs": ["HIDMaestro.HMController", "HIDMaestro.HMProfile"]
+        },
+        {
+          "id": "Dispose()",
+          "kind": "method",
+          "signature": "public System.Void Dispose()",
+          "sourceAnchor": "public void Dispose()",
+          "hidmaestroTypeRefs": []
+        }
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMController",
+      "visibility": "public",
+      "kind": "class",
+      "sealed": true,
+      "baseType": "System.Object",
+      "interfaces": ["System.IDisposable"],
+      "sourceTypeAnchor": "public sealed class HMController : IDisposable",
+      "sourcePath": "sdk/HIDMaestro.Core/HMController.cs",
+      "sourceSha256": "0750DE36C54F89B2B64734D10D3DFD417F3A8BF3A06D50D2E10DF953630CC7FD",
+      "sourceDisposition": "replacement-required",
+      "members": [
+        {
+          "id": "Profile",
+          "kind": "property",
+          "signature": "public HIDMaestro.HMProfile Profile { get; }",
+          "metadataAccessors": ["get_Profile() -> HIDMaestro.HMProfile"],
+          "sourceAnchor": "public HMProfile Profile { get; }",
+          "hidmaestroTypeRefs": ["HIDMaestro.HMProfile"]
+        },
+        {
+          "id": "OutputReceived",
+          "kind": "event",
+          "signature": "public event System.Action<HIDMaestro.HMController,HIDMaestro.HMOutputPacket>? OutputReceived",
+          "metadataAccessors": [
+            "add_OutputReceived(System.Action<HIDMaestro.HMController,HIDMaestro.HMOutputPacket>) -> System.Void",
+            "remove_OutputReceived(System.Action<HIDMaestro.HMController,HIDMaestro.HMOutputPacket>) -> System.Void"
+          ],
+          "sourceAnchor": "public event Action<HMController, HMOutputPacket>? OutputReceived;",
+          "nullable": true,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMController", "HIDMaestro.HMOutputPacket"]
+        },
+        {
+          "id": "SubmitState(in HIDMaestro.HMGamepadState)",
+          "kind": "method",
+          "signature": "public System.Void SubmitState(in HIDMaestro.HMGamepadState state)",
+          "parameterMetadata": [
+            {
+              "name": "state",
+              "type": "HIDMaestro.HMGamepadState&",
+              "modifier": "in-readonly-byref"
+            }
+          ],
+          "sourceAnchor": "public void SubmitState(in HMGamepadState state)",
+          "hidmaestroTypeRefs": ["HIDMaestro.HMGamepadState"]
+        },
+        {
+          "id": "Dispose()",
+          "kind": "method",
+          "signature": "public System.Void Dispose()",
+          "sourceAnchor": "public void Dispose()",
+          "hidmaestroTypeRefs": []
+        }
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMProfile",
+      "visibility": "public",
+      "kind": "class",
+      "sealed": true,
+      "baseType": "System.Object",
+      "interfaces": [],
+      "sourceTypeAnchor": "public sealed class HMProfile",
+      "sourcePath": "sdk/HIDMaestro.Core/HMProfile.cs",
+      "sourceSha256": "08C7373401BD986DFE34DD160CBA38B21A10FC2C040E230326DF03E6A568D94F",
+      "sourceDisposition": "replacement-required",
+      "members": [
+        {
+          "id": "Id",
+          "kind": "property",
+          "signature": "public System.String Id { get; }",
+          "metadataAccessors": ["get_Id() -> System.String"],
+          "sourceAnchor": "public string Id => Inner.Id;",
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "Name",
+          "kind": "property",
+          "signature": "public System.String Name { get; }",
+          "metadataAccessors": ["get_Name() -> System.String"],
+          "sourceAnchor": "public string Name => Inner.Name;",
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "VendorId",
+          "kind": "property",
+          "signature": "public System.UInt16 VendorId { get; }",
+          "metadataAccessors": ["get_VendorId() -> System.UInt16"],
+          "sourceAnchor": "public ushort VendorId => Inner.VendorId;",
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "ProductId",
+          "kind": "property",
+          "signature": "public System.UInt16 ProductId { get; }",
+          "metadataAccessors": ["get_ProductId() -> System.UInt16"],
+          "sourceAnchor": "public ushort ProductId => Inner.ProductId;",
+          "hidmaestroTypeRefs": []
+        }
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMGamepadState",
+      "visibility": "public",
+      "kind": "struct",
+      "readonly": false,
+      "baseType": "System.ValueType",
+      "interfaces": [],
+      "sourceTypeAnchor": "public struct HMGamepadState",
+      "sourcePath": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "sourceSha256": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79",
+      "sourceDisposition": "replacement-required",
+      "members": [
+        {
+          "id": "Axes",
+          "kind": "field",
+          "signature": "public System.Collections.Generic.Dictionary<HIDMaestro.HMAxis,System.Single>? Axes",
+          "sourceAnchor": "public Dictionary<HMAxis, float>? Axes;",
+          "nullable": true,
+          "readonly": false,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMAxis"]
+        },
+        {
+          "id": "Buttons",
+          "kind": "field",
+          "signature": "public HIDMaestro.HMButton Buttons",
+          "sourceAnchor": "public HMButton Buttons;",
+          "readonly": false,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMButton"]
+        },
+        {
+          "id": "Hat",
+          "kind": "field",
+          "signature": "public HIDMaestro.HMHat Hat",
+          "sourceAnchor": "public HMHat Hat;",
+          "readonly": false,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMHat"]
+        }
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMAxis",
+      "visibility": "public",
+      "kind": "enum",
+      "baseType": "System.Enum",
+      "underlyingType": "System.UInt16",
+      "attributes": [],
+      "sourceTypeAnchor": "public enum HMAxis : ushort",
+      "sourcePath": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "sourceSha256": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79",
+      "sourceDisposition": "replacement-required",
+      "values": [
+        {"name":"None","value":0,"sourceAnchor":"None = 0"},
+        {"name":"X","value":304,"sourceAnchor":"X       = 0x0130"},
+        {"name":"Y","value":305,"sourceAnchor":"Y       = 0x0131"},
+        {"name":"Z","value":306,"sourceAnchor":"Z       = 0x0132"},
+        {"name":"Rx","value":307,"sourceAnchor":"Rx      = 0x0133"},
+        {"name":"Ry","value":308,"sourceAnchor":"Ry      = 0x0134"},
+        {"name":"Rz","value":309,"sourceAnchor":"Rz      = 0x0135"},
+        {"name":"Slider","value":310,"sourceAnchor":"Slider  = 0x0136"},
+        {"name":"Dial","value":311,"sourceAnchor":"Dial    = 0x0137"},
+        {"name":"Wheel","value":312,"sourceAnchor":"Wheel   = 0x0138"},
+        {"name":"Hat","value":313,"sourceAnchor":"Hat     = 0x0139"},
+        {"name":"Vx","value":320,"sourceAnchor":"Vx      = 0x0140"},
+        {"name":"Vy","value":321,"sourceAnchor":"Vy      = 0x0141"},
+        {"name":"Vz","value":322,"sourceAnchor":"Vz      = 0x0142"},
+        {"name":"Vbrx","value":323,"sourceAnchor":"Vbrx    = 0x0143"},
+        {"name":"Vbry","value":324,"sourceAnchor":"Vbry    = 0x0144"},
+        {"name":"Vbrz","value":325,"sourceAnchor":"Vbrz    = 0x0145"},
+        {"name":"Vno","value":326,"sourceAnchor":"Vno     = 0x0146"},
+        {"name":"Aileron","value":688,"sourceAnchor":"Aileron          = 0x02B0"},
+        {"name":"AileronTrim","value":689,"sourceAnchor":"AileronTrim      = 0x02B1"},
+        {"name":"AntiTorque","value":690,"sourceAnchor":"AntiTorque       = 0x02B2"},
+        {"name":"CollectiveControl","value":693,"sourceAnchor":"CollectiveControl= 0x02B5"},
+        {"name":"DiveBrake","value":694,"sourceAnchor":"DiveBrake        = 0x02B6"},
+        {"name":"Elevator","value":696,"sourceAnchor":"Elevator         = 0x02B8"},
+        {"name":"ElevatorTrim","value":697,"sourceAnchor":"ElevatorTrim     = 0x02B9"},
+        {"name":"Rudder","value":698,"sourceAnchor":"Rudder           = 0x02BA"},
+        {"name":"Throttle","value":699,"sourceAnchor":"Throttle         = 0x02BB"},
+        {"name":"LandingGear","value":702,"sourceAnchor":"LandingGear      = 0x02BE"},
+        {"name":"ToeBrake","value":703,"sourceAnchor":"ToeBrake         = 0x02BF"},
+        {"name":"WingFlaps","value":707,"sourceAnchor":"WingFlaps        = 0x02C3"},
+        {"name":"Accelerator","value":708,"sourceAnchor":"Accelerator      = 0x02C4"},
+        {"name":"Brake","value":709,"sourceAnchor":"Brake            = 0x02C5"},
+        {"name":"Clutch","value":710,"sourceAnchor":"Clutch           = 0x02C6"},
+        {"name":"Shifter","value":711,"sourceAnchor":"Shifter          = 0x02C7"},
+        {"name":"Steering","value":712,"sourceAnchor":"Steering         = 0x02C8"},
+        {"name":"TurretDirection","value":713,"sourceAnchor":"TurretDirection  = 0x02C9"},
+        {"name":"BarrelElevation","value":714,"sourceAnchor":"BarrelElevation  = 0x02CA"},
+        {"name":"DivePlane","value":715,"sourceAnchor":"DivePlane        = 0x02CB"},
+        {"name":"Ballast","value":716,"sourceAnchor":"Ballast          = 0x02CC"},
+        {"name":"BicycleCrank","value":717,"sourceAnchor":"BicycleCrank     = 0x02CD"},
+        {"name":"HandleBars","value":718,"sourceAnchor":"HandleBars       = 0x02CE"},
+        {"name":"FrontBrake","value":719,"sourceAnchor":"FrontBrake       = 0x02CF"},
+        {"name":"RearBrake","value":720,"sourceAnchor":"RearBrake        = 0x02D0"}
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMButton",
+      "visibility": "public",
+      "kind": "enum",
+      "baseType": "System.Enum",
+      "underlyingType": "System.UInt32",
+      "attributes": ["System.FlagsAttribute"],
+      "sourceTypeAnchor": "public enum HMButton : uint",
+      "sourcePath": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "sourceSha256": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79",
+      "sourceDisposition": "replacement-required",
+      "values": [
+        {"name":"None","value":0,"sourceAnchor":"None         = 0"},
+        {"name":"A","value":1,"sourceAnchor":"A            = 1u << 0"},
+        {"name":"B","value":2,"sourceAnchor":"B            = 1u << 1"},
+        {"name":"X","value":4,"sourceAnchor":"X            = 1u << 2"},
+        {"name":"Y","value":8,"sourceAnchor":"Y            = 1u << 3"},
+        {"name":"LeftBumper","value":16,"sourceAnchor":"LeftBumper   = 1u << 4"},
+        {"name":"RightBumper","value":32,"sourceAnchor":"RightBumper  = 1u << 5"},
+        {"name":"Back","value":64,"sourceAnchor":"Back         = 1u << 6"},
+        {"name":"Start","value":128,"sourceAnchor":"Start        = 1u << 7"},
+        {"name":"LeftStick","value":256,"sourceAnchor":"LeftStick    = 1u << 8"},
+        {"name":"RightStick","value":512,"sourceAnchor":"RightStick   = 1u << 9"},
+        {"name":"Guide","value":1024,"sourceAnchor":"Guide        = 1u << 10"},
+        {"name":"Touchpad","value":2048,"sourceAnchor":"Touchpad     = 1u << 11"},
+        {"name":"Share","value":4096,"sourceAnchor":"Share        = 1u << 12"},
+        {"name":"RightPaddle","value":8192,"sourceAnchor":"RightPaddle  = 1u << 13"},
+        {"name":"LeftPaddle","value":16384,"sourceAnchor":"LeftPaddle   = 1u << 14"},
+        {"name":"Misc1","value":32768,"sourceAnchor":"Misc1        = 1u << 15"},
+        {"name":"RightPaddle2","value":65536,"sourceAnchor":"RightPaddle2 = 1u << 16"},
+        {"name":"LeftPaddle2","value":131072,"sourceAnchor":"LeftPaddle2  = 1u << 17"},
+        {"name":"Cross","value":1,"aliasOf":"A","sourceAnchor":"Cross    = A"},
+        {"name":"Circle","value":2,"aliasOf":"B","sourceAnchor":"Circle   = B"},
+        {"name":"Square","value":4,"aliasOf":"X","sourceAnchor":"Square   = X"},
+        {"name":"Triangle","value":8,"aliasOf":"Y","sourceAnchor":"Triangle = Y"}
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMHat",
+      "visibility": "public",
+      "kind": "enum",
+      "baseType": "System.Enum",
+      "underlyingType": "System.Byte",
+      "attributes": [],
+      "sourceTypeAnchor": "public enum HMHat : byte",
+      "sourcePath": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "sourceSha256": "477097B7993E1360D80FF756FB67629D62CBD60559DE064A6035D574E825AE79",
+      "sourceDisposition": "replacement-required",
+      "values": [
+        {"name":"None","value":0,"sourceAnchor":"None      = 0"},
+        {"name":"North","value":1,"sourceAnchor":"North     = 1"},
+        {"name":"NorthEast","value":2,"sourceAnchor":"NorthEast = 2"},
+        {"name":"East","value":3,"sourceAnchor":"East      = 3"},
+        {"name":"SouthEast","value":4,"sourceAnchor":"SouthEast = 4"},
+        {"name":"South","value":5,"sourceAnchor":"South     = 5"},
+        {"name":"SouthWest","value":6,"sourceAnchor":"SouthWest = 6"},
+        {"name":"West","value":7,"sourceAnchor":"West      = 7"},
+        {"name":"NorthWest","value":8,"sourceAnchor":"NorthWest = 8"}
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMOutputPacket",
+      "visibility": "public",
+      "kind": "struct",
+      "readonly": true,
+      "baseType": "System.ValueType",
+      "interfaces": [],
+      "sourceTypeAnchor": "public readonly struct HMOutputPacket",
+      "sourcePath": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+      "sourceSha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+      "sourceDisposition": "retain-unchanged",
+      "members": [
+        {
+          "id": "Source",
+          "kind": "field",
+          "signature": "public readonly HIDMaestro.HMOutputSource Source",
+          "sourceAnchor": "public readonly HMOutputSource Source;",
+          "readonly": true,
+          "hidmaestroTypeRefs": ["HIDMaestro.HMOutputSource"]
+        },
+        {
+          "id": "ReportId",
+          "kind": "field",
+          "signature": "public readonly System.Byte ReportId",
+          "sourceAnchor": "public readonly byte ReportId;",
+          "readonly": true,
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "Data",
+          "kind": "field",
+          "signature": "public readonly System.ReadOnlyMemory<System.Byte> Data",
+          "sourceAnchor": "public readonly ReadOnlyMemory<byte> Data;",
+          "readonly": true,
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": "SeqNo",
+          "kind": "field",
+          "signature": "public readonly System.UInt32 SeqNo",
+          "sourceAnchor": "public readonly uint SeqNo;",
+          "readonly": true,
+          "hidmaestroTypeRefs": []
+        },
+        {
+          "id": ".ctor(HIDMaestro.HMOutputSource,System.Byte,System.ReadOnlyMemory<System.Byte>,System.UInt32)",
+          "kind": "constructor",
+          "signature": "public HIDMaestro.HMOutputPacket(HIDMaestro.HMOutputSource source, System.Byte reportId, System.ReadOnlyMemory<System.Byte> data, System.UInt32 seqNo)",
+          "sourceAnchor": "public HMOutputPacket(HMOutputSource source, byte reportId, ReadOnlyMemory<byte> data, uint seqNo)",
+          "hidmaestroTypeRefs": ["HIDMaestro.HMOutputSource"]
+        }
+      ]
+    },
+    {
+      "id": "HIDMaestro.HMOutputSource",
+      "visibility": "public",
+      "kind": "enum",
+      "baseType": "System.Enum",
+      "underlyingType": "System.Byte",
+      "attributes": [],
+      "sourceTypeAnchor": "public enum HMOutputSource : byte",
+      "sourcePath": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+      "sourceSha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+      "sourceDisposition": "retain-unchanged",
+      "values": [
+        {"name":"HidOutput","value":0,"sourceAnchor":"HidOutput  = 0"},
+        {"name":"HidFeature","value":1,"sourceAnchor":"HidFeature = 1"},
+        {"name":"XInput","value":2,"sourceAnchor":"XInput     = 2"},
+        {"name":"HidFeatureRead","value":3,"sourceAnchor":"HidFeatureRead = 3"}
+      ]
+    }
+  ],
+  "hidmaestroTypeClosure": [
+    "HIDMaestro.HMAxis",
+    "HIDMaestro.HMButton",
+    "HIDMaestro.HMContext",
+    "HIDMaestro.HMController",
+    "HIDMaestro.HMGamepadState",
+    "HIDMaestro.HMHat",
+    "HIDMaestro.HMOutputPacket",
+    "HIDMaestro.HMOutputSource",
+    "HIDMaestro.HMProfile"
+  ],
+  "externalTypeDependencies": [
+    "System.Action<HIDMaestro.HMController,HIDMaestro.HMOutputPacket>",
+    "System.Byte",
+    "System.Collections.Generic.Dictionary<HIDMaestro.HMAxis,System.Single>",
+    "System.Enum",
+    "System.FlagsAttribute",
+    "System.IDisposable",
+    "System.Int32",
+    "System.Object",
+    "System.ReadOnlyMemory<System.Byte>",
+    "System.Runtime.CompilerServices.IsReadOnlyAttribute",
+    "System.Single",
+    "System.String",
+    "System.UInt16",
+    "System.UInt32",
+    "System.ValueType",
+    "System.Void"
+  ],
+  "explicitlyAbsentPublicTypes": [
+    "HIDMaestro.HMGamepadStateHelpers",
+    "HIDMaestro.HMLayout",
+    "HIDMaestro.HMOutputDecodedEventArgs",
+    "HIDMaestro.HMOutputEncoder",
+    "HIDMaestro.HMPidBlockLoad",
+    "HIDMaestro.HMProfileBuilder",
+    "HIDMaestro.HMUsbAudio",
+    "HIDMaestro.HMVR",
+    "HIDMaestro.HMVRController",
+    "HIDMaestro.HidDescriptorBuilder",
+    "HIDMaestro.Internal.ControllerProfile",
+    "HIDMaestro.Internal.DeviceManager",
+    "HIDMaestro.Internal.DriverBuilder",
+    "HIDMaestro.Internal.HidReportBuilder",
+    "HIDMaestro.Internal.HMLayoutJsonOptions",
+    "HIDMaestro.Internal.HMLayoutValidator",
+    "HIDMaestro.Internal.PidReportIdExtractor"
+  ],
+  "limitations": [
+    "This contract is an exact target allowlist, not a claim that replacement sources or a conforming assembly exist.",
+    "It covers only the one-DualSense raw-feedback host boundary and deliberately omits touch, IMU, battery, decoded-output, PID, USB/IP, VR, builder and provisioning surfaces.",
+    "A future metadata gate must reject every public type or member not listed here, including public types under HIDMaestro.Internal.",
+    "Passing the source-only verifier proves provenance and closure of this contract, not compilation, behavior, binary identity, driver ABI, signing, installation or hardware operation."
+  ]
+}

@@ -1,39 +1,36 @@
 //! Availability probe, and the only [`crate::HmDriverApi`] this build ships:
 //! one that cannot create a device.
 //!
-//! **The refusal is about ksx, not about the machine.** ksx has never had code
-//! that maps HIDMaestro's shared section, so [`UnavailableDriver`] refuses on
-//! every machine — including one where HIDMaestro is installed and every probe
-//! below says so. That is why the refusal is [`HmError::NotImplemented`] and
-//! not [`HmError::NotInstalled`]: the second reads as an instruction to install
-//! a driver, and following it changes nothing.
+//! **The refusal is about ksx, not about the machine.** This build has no safe
+//! production SDK-host adapter or approved runtime artifact, so
+//! [`UnavailableDriver`] refuses on every machine — including one where
+//! HIDMaestro is installed and every probe below says so. That is why the
+//! refusal is [`HmError::NotImplemented`] and not [`HmError::NotInstalled`]:
+//! the second reads as an instruction to install a driver, and following it
+//! changes nothing.
 //!
 //! The availability probe reports service/driver presence to `ksx doctor`, but
-//! it gates nothing: this build refuses because the shared-section adapter is
-//! not implemented, not because of any particular machine's install state.
+//! it gates nothing: this build refuses because the safe host/runtime boundary
+//! is not implemented, not because of any particular machine's install state.
 //!
-//! So this module contains no fake. It answers the sweep honestly (nothing to
-//! sweep, because ksx created nothing) and refuses everything else. Everything
-//! upstream of it — the seqlock, the lifecycle order, the axis routing, the
-//! keepalive, the decode table — is real code that will run unchanged the day a
-//! real driver implementation is dropped in behind the same trait.
+//! So this module contains no fake driver. It answers the sweep honestly
+//! (nothing to sweep, because ksx created nothing) and refuses everything else.
+//! The surrounding seqlock, lifecycle, routing, and cadence code remains a
+//! private conformance model; production integration must bind or replace it
+//! against the supported runtime rather than assume it can run unchanged.
 //!
-//! ## What a real implementation still needs
+//! ## What production integration still needs
 //!
 //! HIDMaestro's author has supplied the exact object names and the authoritative
 //! MIT sources: `driver/driver.h` for packed structures/bounds and
 //! `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs` for creator/writer behavior.
 //! They prove that the real protocol is not this crate's small open-existing
-//! latch. Two implementation routes remain:
-//!
-//! 1. Host the supported MIT `HIDMaestro.Core.dll` behind a narrow installed
-//!    process and call `HMContext` / `HMController`.
-//! 2. Transcribe the complete creator/input/output/PID protocol natively after
-//!    the SDK spike supplies live conformance fixtures.
-//!
-//! Route 1 is the next measurement, not a commitment to keep a CLR in the 1 kHz
-//! daemon. The production privilege boundary is a separate narrow host; the main
-//! daemon and games stay unelevated.
+//! latch. The adopted first production route is a narrowed, source-built
+//! `HIDMaestro.Core` runtime behind a fixed native bootstrap and managed host,
+//! calling `HMContext` / `HMController` without provisioning or global cleanup
+//! authority. A complete native protocol client remains a later option only if
+//! measured product value justifies carrying that ABI. The main daemon and
+//! games stay unelevated either way.
 
 use crate::error::{HmError, ProbeSummary};
 
@@ -303,8 +300,7 @@ mod tests {
     /// picker's promise cashes out to, and it never even reached `require()`.
     #[test]
     fn create_controller_refuses_as_unimplemented_not_as_uninstalled() {
-        let profile = crate::profile::expected_profile(ksx_core::Persona::DualSense)
-            .expect("dualsense has a profile — the persona is known, just not buildable");
+        let profile = crate::profile::dualsense_conformance_stub_profile();
         let mut driver = UnavailableDriver::new();
         let err = driver.create_controller(0, &profile).unwrap_err();
         assert!(err.is_not_implemented(), "{err}");

@@ -169,7 +169,7 @@ jobs:
           # Match the SDK used to establish the current probe baseline; do not
           # let `LangVersion=latest` silently move under this contract.
           dotnet-version: '10.0.400'
-      - name: Verify the hash-pinned runtime source contract
+      - name: Verify the hash-pinned runtime source contracts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -188,14 +188,56 @@ jobs:
 
           $lockPath = 'tools/hidmaestro-runtime-candidate/source.lock.json'
           $contractPath = 'tools/hidmaestro-runtime-candidate/candidate-contract.json'
-          $expectedLockHash = '140A562055D7659FD3A8B8D100C2EA15589C0E76CB6A647638DD5F4B136FCF71'
-          $expectedContractHash = '70617FB5622A608F91361CF5199725FF3D124AE383EC78C534D253F0E1F317C1'
+          $runtimeVerifierPath = 'tools/hidmaestro-runtime-candidate/test-source-contract.ps1'
+          $apiLockPath = 'tools/hidmaestro-runtime-candidate/api/contract.lock.json'
+          $apiVerifierPath = 'tools/hidmaestro-runtime-candidate/api/test-api-contract.ps1'
+          $profileLockPath = 'tools/hidmaestro-runtime-candidate/profiles/catalog.lock.json'
+          $profileVerifierPath = 'tools/hidmaestro-runtime-candidate/profiles/verify-profile-catalog.ps1'
+          $feedbackContractPath = 'tools/hidmaestro-feedback-contract/contract.json'
+          $feedbackSourceLockPath = 'tools/hidmaestro-feedback-contract/source.lock.json'
+          $feedbackVectorsPath = 'tools/hidmaestro-feedback-contract/golden-vectors.tsv'
+          $feedbackManifestPath = 'tools/hidmaestro-feedback-contract/Cargo.toml'
+          $feedbackCargoLockPath = 'tools/hidmaestro-feedback-contract/Cargo.lock'
+          $feedbackHarnessPath = 'tools/hidmaestro-feedback-contract/src/lib.rs'
+          $feedbackReducerPath = 'crates/ksx-hidmaestro/src/dualsense_feedback.rs'
+          $feedbackVerifierPath = 'tools/hidmaestro-feedback-contract/test-source-contract.ps1'
+          $expectedLockHash = 'F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC'
+          $expectedContractHash = '8E02F1A9B64A566845A708B5547547FABBFAB53BCE1073E02D239DE3AF2443A4'
           if ((Get-NormalizedTextSha256 $lockPath) -cne $expectedLockHash -or
-              (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash) {
+              (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash -or
+              (Get-NormalizedTextSha256 $runtimeVerifierPath) -cne
+                '7B4FFF3D8D38D71D9B6AE8E4060495CF8A1B4BC54CCF0AE9E1030FD30C4D77D4') {
             throw 'The complete runtime source lock or inert candidate contract drifted.'
+          }
+          if ((Get-NormalizedTextSha256 $apiLockPath) -cne
+                '83076D8BE3A59261F91D1B2887F48DC88C8C3148E8E72808248F92DAADA67161' -or
+              (Get-NormalizedTextSha256 $apiVerifierPath) -cne
+                '6142A4CE33849C4B00017B63054075B17F0E490D2BBEC53C1FC5E2435546323E' -or
+              (Get-NormalizedTextSha256 $profileLockPath) -cne
+                'CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80' -or
+              (Get-NormalizedTextSha256 $profileVerifierPath) -cne
+                '2F30B356F759121CB3586B27233214BB2298239FCD77EFFAE86C86C839B32773' -or
+              (Get-NormalizedTextSha256 $feedbackContractPath) -cne
+                '854B0006809AC69CA5BA9CE94DFF097146AAE9E5D9A3C66DA6C56A662DF4D803' -or
+              (Get-NormalizedTextSha256 $feedbackSourceLockPath) -cne
+                'C3A1D9357CA86FF0BEA7FAFAFDF1F6AA001EC1D3334D0D7C0C0D54690E668917' -or
+              (Get-NormalizedTextSha256 $feedbackVectorsPath) -cne
+                '8047FA9C913FE8BE416796DFE8A2C81CBAB4643EA959613331FEC01D8326701D' -or
+              (Get-NormalizedTextSha256 $feedbackManifestPath) -cne
+                '67F111C4F980C8106B26CF5640595E873AF736A5B09EF905F8EB59A57E20DD74' -or
+              (Get-NormalizedTextSha256 $feedbackCargoLockPath) -cne
+                'EA1D397555EF3105C2FEAB1C2BC86259486C5C5C38771B857F9C86CEFDEF01D8' -or
+              (Get-NormalizedTextSha256 $feedbackHarnessPath) -cne
+                '38F68F02DAC628D79215ABEC11B051BDA14D113281E7EB9FECD0655585D9FE4C' -or
+              (Get-NormalizedTextSha256 $feedbackReducerPath) -cne
+                '32C4B46DD36B8E9421FCEF34823C7199C9ADC2155D1609F2D3A58DBE97E0949D' -or
+              (Get-NormalizedTextSha256 $feedbackVerifierPath) -cne
+                '1DA6D342ACB99981E68F45999A47FCD58C9F5D234EAF35DEACC5E0D1694EE4C0') {
+            throw 'A frozen S1.5c API, profile, or feedback source contract drifted.'
           }
           $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
           $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+          $feedbackContract = Get-Content -LiteralPath $feedbackContractPath -Raw | ConvertFrom-Json
           $expectedRepository = 'https://github.com/hifihedgehog/HIDMaestro'
           $expectedCommit = '2a0dac0857901a63d365a36dcf99cf50114ca954'
           if ($lock.repository -cne $expectedRepository -or
@@ -208,6 +250,8 @@ jobs:
           $sourceRoot = Join-Path $env:RUNNER_TEMP 'hidmaestro-runtime-source'
           $emptyHooks = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-hooks'
           $emptyGitConfig = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-gitconfig'
+          $linuxSource = Join-Path $env:RUNNER_TEMP 'hid-playstation-dac3e89a.c'
+          $sdlSource = Join-Path $env:RUNNER_TEMP 'SDL_hidapi_ps5-b669ac24.c'
           $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
 
           try {
@@ -268,20 +312,164 @@ jobs:
                   $contract.conformanceScope.profile.id -cne 'dualsense' -or
                   $contract.conformanceScope.profile.vendorId -ne 1356 -or
                   $contract.conformanceScope.profile.productId -ne 3302 -or
+                  $contract.gateState.sourcePublicApiContractFrozen -ne $true -or
+                  $contract.gateState.sourceCompilationDispositionFrozen -ne $true -or
+                  $contract.gateState.profileSourceManifestFrozen -ne $true -or
+                  $contract.gateState.rawFeedbackContractFrozen -ne $true -or
                   $contract.gateState.artifactPublicApiAllowlistFrozen -ne $false -or
                   $contract.gateState.artifactCompileAllowlistFrozen -ne $false -or
                   $contract.gateState.profileSourceCatalogBound -ne $false -or
                   $contract.gateState.rawFeedbackDecoderFrozen -ne $false -or
                   $contract.gateState.driverRuntimeAbiBound -ne $false -or
-                  $contract.gateState.distributionReady -ne $false) {
+                  $contract.gateState.distributionReady -ne $false -or
+                  $contract.sourceContracts.publicApi.publicTypeCount -ne 9 -or
+                  $contract.sourceContracts.publicApi.logicalMemberCount -ne 100 -or
+                  $contract.sourceContracts.publicApi.artifactMetadataVerified -ne $false -or
+                  $contract.sourceContracts.compilationDisposition.upstreamUnitCount -ne 51 -or
+                  $contract.sourceContracts.compilationDisposition.retainedUnchangedCount -ne 1 -or
+                  $contract.sourceContracts.compilationDisposition.replacementRequiredCount -ne 13 -or
+                  $contract.sourceContracts.compilationDisposition.excludedCount -ne 37 -or
+                  $contract.sourceContracts.compilationDisposition.replacementSourcesPresent -ne $false -or
+                  $contract.sourceContracts.profileCatalog.profileTreeFileCount -ne 231 -or
+                  $contract.sourceContracts.profileCatalog.embeddedProfileSourceCount -ne 228 -or
+                  $contract.sourceContracts.profileCatalog.deployableProfileSourceCount -ne 130 -or
+                  $contract.sourceContracts.profileCatalog.duplicateProfileIdCount -ne 0 -or
+                  $contract.sourceContracts.profileCatalog.releaseDllCatalogBinding -cne 'unresolved' -or
+                  $contract.sourceContracts.rawDualSenseFeedback.goldenVectorCount -ne 16 -or
+                  $contract.sourceContracts.rawDualSenseFeedback.pureRustDecoderFrozen -ne $true -or
+                  $contract.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -ne $false -or
+                  $contract.sourceContracts.rawDualSenseFeedback.hardwareVerified -ne $false -or
+                  $feedbackContract.schemaVersion -ne 1 -or
+                  $feedbackContract.contract -cne 's1.5c-dualsense-usb-raw-feedback' -or
+                  $feedbackContract.scope.profileId -cne 'dualsense' -or
+                  $feedbackContract.scope.connection -cne 'usb' -or
+                  $feedbackContract.implementation.goldenVectorCount -ne 16 -or
+                  $feedbackContract.implementation.canonicalRustSource -cne
+                    '../../crates/ksx-hidmaestro/src/dualsense_feedback.rs' -or
+                  $feedbackContract.implementation.workspaceAndHarnessCompileTheSameSource -ne $true -or
+                  $contract.sourceContracts.rawDualSenseFeedback.goldenVectorCount -ne
+                    $feedbackContract.implementation.goldenVectorCount) {
                 throw 'the inert one-DualSense candidate contract drifted'
               }
               $document.Dispose()
             } catch {
               throw "HIDMaestro source audit did not emit the exact inert contract: $_"
             }
+
+            $apiStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/api/test-api-contract.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro API/source contract failed.' }
+            $apiJson = $apiStdout -join "`n"
+            try {
+              $apiDocument = [System.Text.Json.JsonDocument]::Parse($apiJson)
+              if ($apiDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $apiReport = $apiJson | ConvertFrom-Json -Depth 20
+              $apiChecks = @($apiReport.checks)
+              if ($apiReport.schemaVersion -ne 1 -or
+                  $apiReport.command -cne 'hidmaestro-runtime-api-source-contract' -or
+                  $apiReport.assurance -cne
+                    'hash-pinned-static-source-and-source-text-consumer-anchors-only' -or
+                  $apiReport.ok -ne $true -or
+                  $apiReport.upstreamCommit -cne $expectedCommit -or
+                  $apiReport.publicTypeCount -ne 9 -or
+                  $apiReport.logicalMemberCount -ne 100 -or
+                  $apiReport.upstreamUnitCount -ne 51 -or
+                  $apiChecks.Count -ne 352 -or
+                  @($apiChecks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 352-check API/source contract did not pass'
+              }
+              $apiDocument.Dispose()
+            } catch {
+              throw "HIDMaestro API/source audit did not emit the exact contract: $_"
+            }
+
+            $profileStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/profiles/verify-profile-catalog.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro profile-source contract failed.' }
+            $profileJson = $profileStdout -join "`n"
+            try {
+              $profileDocument = [System.Text.Json.JsonDocument]::Parse($profileJson)
+              if ($profileDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $profileReport = $profileJson | ConvertFrom-Json -Depth 20
+              if ($profileReport.schemaVersion -ne 1 -or
+                  $profileReport.command -cne 'verify-profile-source-catalog' -or
+                  $profileReport.ok -ne $true -or
+                  $profileReport.upstreamCommit -cne $expectedCommit -or
+                  $profileReport.manifestCanonicalByteLength -ne 99509 -or
+                  $profileReport.manifestCanonicalSha256 -cne
+                    'CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80' -or
+                  $profileReport.counts.profileTreeFiles -ne 231 -or
+                  $profileReport.counts.vendorDirectories -ne 32 -or
+                  $profileReport.counts.embeddedProfileSources -ne 228 -or
+                  $profileReport.counts.excludedProfileData -ne 3 -or
+                  $profileReport.counts.deployableEmbeddedProfileSources -ne 130 -or
+                  $profileReport.counts.duplicateProfileIds -ne 0 -or
+                  $profileReport.sourceCatalogs.allProfileTreeSha256 -cne
+                    'A9C8579E0EA32E8421D219C77CB09CF10219099674AD7119837DDCDFEC61A3B6' -or
+                  $profileReport.sourceCatalogs.embeddedProfileSourcesSha256 -cne
+                    '4273B2DF12CAD9AA6DE5FB87AC7E90FF20C8121035A79231700383639B7B6151' -or
+                  $profileReport.releaseDllComparison.countMappingMatches -ne $true -or
+                  $profileReport.releaseDllComparison.sourceToReleaseCatalogBinding -cne 'unresolved' -or
+                  $profileReport.releaseDllComparison.catalogSha256ReproducedFromSource -ne $false -or
+                  $profileReport.releaseDllComparison.verifierInspectedReleaseDll -ne $false -or
+                  $profileReport.safety.readAndHashOnly -ne $true -or
+                  $profileReport.safety.invokesExternalCommands -ne $false -or
+                  $profileReport.safety.buildsOrLoadsUpstreamCode -ne $false -or
+                  $profileReport.safety.writesSourceTree -ne $false) {
+                throw 'the exact 231/228/130 profile-source contract did not pass'
+              }
+              $profileDocument.Dispose()
+            } catch {
+              throw "HIDMaestro profile-source audit did not emit the exact contract: $_"
+            }
+
+            Invoke-WebRequest `
+              -Uri 'https://raw.githubusercontent.com/torvalds/linux/dac3e89a2c90c2feeb471e1f22a2512ad424b792/drivers/hid/hid-playstation.c' `
+              -OutFile $linuxSource
+            Invoke-WebRequest `
+              -Uri 'https://raw.githubusercontent.com/libsdl-org/SDL/b669ac244e10fbab4734c7389151f7a4e8ac725f/src/joystick/hidapi/SDL_hidapi_ps5.c' `
+              -OutFile $sdlSource
+            $feedbackStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-feedback-contract/test-source-contract.ps1 `
+              -HidMaestroRoot $sourceRoot `
+              -LinuxSource $linuxSource `
+              -SdlSource $sdlSource
+            if ($LASTEXITCODE -ne 0) { throw 'The DualSense feedback source contract failed.' }
+            $feedbackJson = $feedbackStdout -join "`n"
+            try {
+              $feedbackDocument = [System.Text.Json.JsonDocument]::Parse($feedbackJson)
+              if ($feedbackDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $feedbackReport = $feedbackJson | ConvertFrom-Json -Depth 20
+              $feedbackChecks = @($feedbackReport.checks)
+              if ($feedbackReport.schemaVersion -ne 1 -or
+                  $feedbackReport.contract -cne 's1.5c-dualsense-usb-raw-feedback-source' -or
+                  $feedbackReport.total -ne 29 -or
+                  $feedbackReport.passed -ne 29 -or
+                  $feedbackReport.failed -ne 0 -or
+                  $feedbackChecks.Count -ne 29 -or
+                  @($feedbackChecks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 29-check DualSense feedback source contract did not pass'
+              }
+              $feedbackDocument.Dispose()
+            } catch {
+              throw "DualSense feedback source audit did not emit the exact contract: $_"
+            }
           } finally {
-            foreach ($target in @($sourceRoot, $emptyHooks, $emptyGitConfig)) {
+            foreach ($target in @(
+              $sourceRoot,
+              $emptyHooks,
+              $emptyGitConfig,
+              $linuxSource,
+              $sdlSource
+            )) {
               $resolvedTarget = [IO.Path]::GetFullPath($target)
               if (!$resolvedTarget.StartsWith(
                   $runnerTemp,
@@ -501,6 +689,32 @@ jobs:
             --locked
           if ($LASTEXITCODE -ne 0) {
             throw 'The inert HIDMaestro native-bootstrap policy failed.'
+          }
+
+          $env:CARGO_TARGET_DIR = Join-Path `
+            $env:RUNNER_TEMP `
+            'ksx-hidmaestro-feedback-contract-target'
+          cargo fmt `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            -- `
+            --check
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract is not formatted.'
+          }
+          cargo clippy `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            --all-targets `
+            --locked `
+            -- `
+            -D warnings
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract failed strict clippy.'
+          }
+          cargo test `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract failed its golden vectors.'
           }
 
           # Everything below is deliberately SDK-free. Build the inherited-token

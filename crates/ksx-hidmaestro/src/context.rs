@@ -1,5 +1,8 @@
 //! Lifecycle — and the order is the whole content of this module.
 //!
+//! This is a legacy conformance model over test doubles, not the supported
+//! upstream `HMContext` / `HMController` runtime boundary.
+//!
 //! Every step below is ordered against a failure PadForge hit first
 //! (`padforge-code-audit.md` §3.2). Doing them in a "sensible" order instead
 //! fails in ways that look like unrelated bugs:
@@ -34,19 +37,15 @@ pub type SlotId = u32;
 /// The feedback index parked before teardown so late callbacks no-op.
 pub const PARKED_FEEDBACK_INDEX: i32 = -1;
 
-/// The driver operations the lifecycle needs, in the vocabulary HIDMaestro's
-/// SDK uses.
+/// Legacy operations retained only to test the historical ordering model.
 ///
-/// A trait rather than direct calls for one reason that matters more than
-/// testing: it is the seam where "we have no driver" lives. The production
-/// implementation ([`crate::driver::UnavailableDriver`] today) refuses at
-/// [`HmDriverApi::install_driver`] with the probe evidence attached.
+/// No production adapter should implement this trait: its global sweep/install
+/// vocabulary and private latch return type cannot represent the adopted
+/// ownership-scoped SDK-host boundary. [`crate::driver::UnavailableDriver`]
+/// exists only to keep this model fail-closed.
 pub trait HmDriverApi {
-    /// The latch storage this driver hands out. The *driver* owns the shared
-    /// section, so the transport type belongs to the driver and not to the
-    /// context: a real implementation yields `shm::MappedStorage`, a test
-    /// double yields `HeapStorage`, and the seqlock discipline above them is
-    /// the same code either way.
+    /// Private latch storage used by the model's test doubles. This is not the
+    /// real SDK/shared-memory transport contract.
     type Storage: LatchStorage;
 
     /// Sweep stale device nodes. Returns how many were removed.
@@ -82,12 +81,11 @@ enum Phase {
     ShutDown,
 }
 
-/// A HIDMaestro session: sweep, install, then N controllers.
+/// A legacy lifecycle-ordering model: sweep, install, then N test controllers.
 ///
-/// PadForge runs two contexts — a metadata-only one for the UI catalog and a
-/// live one in the engine. ksx has no catalog browser yet, so there is one
-/// context and it is the live one. If a Studio profile picker ever lands, it
-/// gets its own context that never installs and never creates.
+/// This type records the order learned from PadForge. It does not host the
+/// upstream SDK, load a real catalog, install a driver, or create a device in
+/// this build.
 pub struct HmContext<D: HmDriverApi> {
     driver: D,
     phase: Phase,
@@ -107,7 +105,7 @@ impl<D: HmDriverApi> HmContext<D> {
         }
     }
 
-    /// Steps 1–3: sweep, load catalog, install driver — in that order.
+    /// Replays legacy steps 1–3 against a test double in their recorded order.
     ///
     /// The sweep runs **before** anything else, including before we know
     /// whether the driver is installed at all: a stale node from a crashed
@@ -219,10 +217,8 @@ impl<D: HmDriverApi> Drop for HmContext<D> {
 
 #[cfg(test)]
 mod tests {
-    use ksx_core::Persona;
-
     use super::*;
-    use crate::profile::{expected_profile, stub_descriptor};
+    use crate::profile::{conformance_stub_descriptor, dualsense_conformance_stub_profile};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum Call {
@@ -296,7 +292,7 @@ mod tests {
     }
 
     fn ds5() -> HmProfile {
-        expected_profile(Persona::DualSense).unwrap()
+        dualsense_conformance_stub_profile()
     }
 
     /// The headline ordering test: sweep FIRST, then catalog, then install.
@@ -337,7 +333,7 @@ mod tests {
     #[test]
     fn a_profile_without_a_pid_block_skips_the_pool_step() {
         let mut profile = ds5();
-        profile.descriptor = stub_descriptor(false);
+        profile.descriptor = conformance_stub_descriptor(false);
         assert!(!profile.has_pid_block());
         let mut ctx = HmContext::new(Recorder::default());
         ctx.start().unwrap();

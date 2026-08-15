@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "hashAlgorithm": "SHA-256",
+  "canonicalization": "UTF-8 without BOM; CRLF and CR normalized to LF; final-newline state preserved",
+  "expectedVerifierCheckCount": 352,
+  "files": [
+    {
+      "path": "../candidate-contract.json",
+      "sha256": "8E02F1A9B64A566845A708B5547547FABBFAB53BCE1073E02D239DE3AF2443A4"
+    },
+    {
+      "path": "../profiles/catalog.lock.json",
+      "sha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80"
+    },
+    {
+      "path": "public-api.contract.json",
+      "sha256": "D8B2C1C8A0EF6BCDE2D075065B4B3DE6F5199C6745097C1AFECC34389CC23595"
+    },
+    {
+      "path": "source-compilation.contract.json",
+      "sha256": "A6DC1E83DAA1521386CDEEE5A5828482FC30D450CEB6DC4A818DBE82E2558FD1"
+    }
+  ]
+}

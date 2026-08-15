@@ -43,6 +43,8 @@ windows-sys = { workspace = true, features = [
     "Win32_System_SystemServices",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     # `inject`: SendInput/KEYBDINPUT.
@@ -55,6 +57,13 @@ windows-sys = { workspace = true, features = [
     # ViGEmBus children answers a different question (see xinput.rs).
     "Win32_UI_Input_XboxController",
 ] }
+
+[features]
+# Builds only the fixed SDK-free child used by HIDMaestro's Windows transport
+# integration test. It must inherit the test runner's exact session/elevation
+# state. Production admission has no ordinary-child constructor or privilege
+# downgrade switch.
+hidmaestro-fake-host-tests = []
 
 [dev-dependencies]
 serde_json.workspace = true

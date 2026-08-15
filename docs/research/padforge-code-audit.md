@@ -399,20 +399,56 @@ Where: `PadForge.App/Common/Input/HMaestro*.cs` (client),
 `PadForge.App/Resources/HIDMaestro/HIDMaestro.Core.dll` (bundled SDK).
 HIDMaestro upstream is MIT (github.com/hifihedgehog/HIDMaestro), so
 everything here is open protocol; PadForge's comments *confirm* driver
-internals (they cite `driver.c` / `companion.c` line behavior directly).
+internals. Direct upstream source now overrides every inference in this section.
+
+### 3.0 Direct upstream clarification — 2026-08-14
+
+HIDMaestro's author supplied the object names KSX had deliberately refused to
+guess. `{N}` is the zero-based controller index:
+
+```text
+Global\HIDMaestroInput{N}         input section
+Global\HIDMaestroOutput{N}        output section
+Global\HIDMaestroPidState{N}      PID/FFB state section
+Global\HIDMaestroInputEvent{N}    input signal
+Global\HIDMaestroOutputEvent{N}   output signal
+Global\HIDMaestroStopEvent{N}     teardown signal
+SOFTWARE\HIDMaestro\Controller{N} per-controller configuration key
+```
+
+Current upstream also contains a companion-input event; that is why M8 must pin
+and vendor/test against a specific upstream revision rather than treating this
+message as a frozen ABI. The authoritative files are
+[`driver/driver.h`](https://github.com/hifihedgehog/HIDMaestro/blob/master/driver/driver.h)
+for `DEVICE_CONTEXT`, seqlock fields and maximum descriptor/report sizes, and
+[`SharedMemoryIO.cs`](https://github.com/hifihedgehog/HIDMaestro/blob/master/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs)
+for object creation, security and the `BeginWrite`/`EndWrite` writer pattern.
+
+Crucial correction: `HMGamepadState` is the convenient managed API input, **not
+the shared-memory byte layout**. The SDK turns it into native HID report bytes
+and publishes those alongside GIP and optional extended report data. Output is
+a ring, not the small latch modeled by the current KSX crate. Therefore the
+existing pure routing/seqlock tests remain useful, but `HmGamepadState::encode`
+and `MappedStorage::open` are not a production transport with constants missing.
+
+`HMContext` and `HMController` are the supported client surface. The next M8
+step is an SDK-backed conformance host; a native Rust client is a later choice,
+not an assumed shortcut.
 
 ### 3.1 Transport & SDK surface
 
 - **In-process SDK over a shared-memory section + event signaling**, not a
   pipe/COM/IOCTL client. C# surface: `HMContext` (driver install, profile
-  load, controller factory) → `HMProfile` (one of 225+ embedded JSONs:
+  load, controller factory) → `HMProfile` (one of 228 embedded JSON resources
+  in v1.6.1, 130 of them descriptor-backed:
   VID/PID, strings, `DescriptorHex`, `AxisMap`, Sticks/Triggers layout,
   `ExtendedOutputReport`) → `HMController` (one virtual device;
   `SubmitState(HMGamepadState)` / `SubmitRawReport(bytes)`; events
   `OutputReceived`, `OutputDecoded`).
 - Driver is UMDF2. **The consumer drives the cadence** — "no internal
   pumping thread"; the driver reads a seqlocked latch from the shared
-  section. `HMGamepadState`: `Axes` = `Dictionary<HMAxis, float>` keyed by
+  section. At the supported SDK surface, `HMGamepadState`: `Axes` =
+  `Dictionary<HMAxis, float>` keyed by
   HID usage (`HMAxis` = ushort `page<<8|usage`, e.g. Z=0x0132), all values
   normalized **[0,1]** (sticks 0.5 center, HID convention Y+ = down —
   XInput Y must be flipped; triggers 0 = released); `Buttons` = `[Flags]`
@@ -514,7 +550,8 @@ Two events:
 
 ### 3.5 Profile selection & the catalog
 
-225+ embedded profile JSONs, enumerated via `LoadDefaultProfiles`.
+228 embedded profile JSON resources in v1.6.1, 130 descriptor-backed,
+enumerated via `LoadDefaultProfiles`.
 PadForge buckets them by vendor-prefix + name-token filters (Microsoft +
 "Xbox"; Sony + "DualShock/DualSense"; exact "switch-pro"; everything else →
 Extended), filters out profiles without a captured HID descriptor
@@ -531,6 +568,10 @@ block) under the faux VID 0xBEEF (their in-app squat convention: PIDs
 
 ### 3.6 WGI double-input
 
+**2026-08-14 update:** the HIDMaestro author reports this virtual-device issue
+was fixed upstream in v1.1.16. The section below records what PadForge did at the
+time of the audit; it is no longer evidence for rejecting the current release.
+
 Their answer is **HidHide, expanded correctly**: when hiding a mapped
 physical pad, they expand the HID instance ID to the **base container plus
 all sibling HID children** (`ExpandToBaseContainerAndChildren`), because
@@ -538,10 +579,10 @@ blacklisting only the SDL-visible interface leaves XInput/WGI seeing the
 controller through the XUSB parent or other HID descendants (Xbox 360
 wired = XUSB parent with multiple HID children). BT transport forms differ
 (`VID_` underscore vs `VID&` ampersand for BT Classic) and the naive
-substring check missed BT DualSense entirely. No WGI-side workaround exists
-for the *virtual* pad — the ui-lessons doc's "re-test WGI double-input"
-note stands, but the physical-side hiding recipe above is the load-bearing
-half for splitter scenarios.
+substring check missed BT DualSense entirely. At the time, no WGI-side
+workaround existed for the *virtual* pad. The physical-side hiding recipe above
+remains the load-bearing half for splitter scenarios; current HIDMaestro behavior
+must now be measured directly.
 
 *ksx M8 consequences*: the Rust client is an FFI (or reimplementation)
 against an MIT SDK whose contract is now well mapped: context →

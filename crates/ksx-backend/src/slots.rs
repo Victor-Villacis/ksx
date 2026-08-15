@@ -199,17 +199,16 @@ pub enum SlotError {
     },
     /// The persona is a real persona, and this build cannot create it.
     ///
-    /// The gap is [`ksx_core::PadBackend::gap`]'s own sentence, not a
+    /// The gap is [`ksx_core::Persona::gap`]'s own sentence, not a
     /// paraphrase, so the CLI, the pipe, Studio and `ksx doctor` all say the
-    /// identical thing — and so that the day HIDMaestro's shared section gets
-    /// a mapper, one `is_implemented` flips and every one of them stops
-    /// refusing at once.
+    /// identical thing — and so each HIDMaestro persona stops refusing only
+    /// after its own implementation gate is proven.
     #[error(
         "persona '{persona}' is a persona ksx knows and this build cannot create — {reason}. \
          What decides it is the BINARY, not the machine: `Persona::backend()` sends {persona} to \
-         {backend}, and `PadBackend::is_implemented` is false for {backend} in this build, so \
+         {backend}, and `Persona::can_plug` is false for {persona} in this build, so \
          this refusal is identical on every PC and on this one tomorrow. It changes when a ksx \
-         release ships code that can map {backend}'s shared section — nothing you can install \
+         release ships and proves host support for that exact persona — nothing you can install \
          moves it. Use persona '{instead}' for now"
     )]
     PersonaNotImplemented {
@@ -217,6 +216,16 @@ pub enum SlotError {
         backend: &'static str,
         reason: &'static str,
         instead: Persona,
+    },
+    #[error(
+        "slot {slot} would make {after} slots in {destination} use persona '{persona}', but this release can create at most {limit}; use another supported persona for the extra slot"
+    )]
+    PersonaCapacity {
+        slot: u8,
+        persona: Persona,
+        after: usize,
+        limit: usize,
+        destination: String,
     },
     /// The write would leave the destination with a fifth slot on an XInput
     /// persona. Refused the way `ksx pads` refuses a fifth pad, and for the
@@ -270,6 +279,7 @@ impl SlotError {
             // build refusing the same persona. A second spelling would make a
             // surface that routes on the code handle one and not the other.
             Self::PersonaNotImplemented { .. } => "persona-not-implemented",
+            Self::PersonaCapacity { .. } => "persona-capacity",
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
             Self::NoPresetToKeep { .. } => "no-preset-to-keep",
             Self::Config(_) => "config-error",
@@ -326,7 +336,7 @@ pub fn assign(store: &Store, spec: &SlotSpec) -> Result<AppliedSlot, SlotError> 
     }
 }
 
-/// Refuse a persona this BUILD cannot create, in [`ksx_core::PadBackend`]'s own
+/// Refuse a persona this BUILD cannot create, in [`ksx_core::Persona`]'s own
 /// words.
 ///
 /// Reads [`Persona::can_plug`] and nothing else — never a driver probe, for the
@@ -343,7 +353,7 @@ fn check_pluggable(persona: Persona) -> Result<(), SlotError> {
     Err(SlotError::PersonaNotImplemented {
         persona,
         backend: backend.label(),
-        reason: backend
+        reason: persona
             .gap()
             .unwrap_or("this build ships no code that can create it"),
         instead: persona.nearest_pluggable(),
@@ -371,6 +381,28 @@ fn check_xinput_ceiling(
         return Err(SlotError::TooManyXinputSlots {
             slot,
             after,
+            destination,
+        });
+    }
+    Ok(())
+}
+
+fn check_persona_capacity(
+    slot: u8,
+    persona: Persona,
+    before: usize,
+    after: usize,
+    destination: String,
+) -> Result<(), SlotError> {
+    let Some(limit) = persona.instance_limit() else {
+        return Ok(());
+    };
+    if after > limit && after > before {
+        return Err(SlotError::PersonaCapacity {
+            slot,
+            persona,
+            after,
+            limit,
             destination,
         });
     }
@@ -408,6 +440,8 @@ fn assign_in_config(
 ) -> Result<AppliedSlot, SlotError> {
     let mut config = store.load_config()?.value;
     let before_xinput = xinput_count(config.slots.iter().map(|s| s.persona));
+    let before_personas: std::collections::BTreeMap<Persona, usize> =
+        persona_counts(config.slots.iter().map(|s| s.persona));
     let existing = config.slots.iter_mut().find(|s| s.number == slot);
     let (previous, previous_persona, preset, now, created) = match existing {
         Some(entry) => {
@@ -487,6 +521,17 @@ fn assign_in_config(
         xinput_count(config.slots.iter().map(|s| s.persona)),
         "config.toml".to_owned(),
     )?;
+    check_persona_capacity(
+        slot,
+        now,
+        before_personas.get(&now).copied().unwrap_or(0),
+        config
+            .slots
+            .iter()
+            .filter(|entry| entry.persona == now)
+            .count(),
+        "config.toml".to_owned(),
+    )?;
 
     let path = store.root().config_path();
     let backup = store.backup(&path)?;
@@ -513,6 +558,16 @@ fn assign_in_config(
 /// would be a fourth persona's chance to be forgotten.
 fn xinput_count(personas: impl Iterator<Item = Persona>) -> usize {
     personas.filter(|p| p.is_xinput()).count()
+}
+
+fn persona_counts(
+    personas: impl Iterator<Item = Persona>,
+) -> std::collections::BTreeMap<Persona, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for persona in personas {
+        *counts.entry(persona).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn assign_in_profile(
@@ -542,6 +597,8 @@ fn assign_in_profile(
     // the file whole would refuse a perfectly ordinary second profile. Same
     // scope `ksx-config::validate_games` uses, per `[[game]]`.
     let before_xinput = xinput_count(game.slots.iter().map(|s| s.persona));
+    let before_personas: std::collections::BTreeMap<Persona, usize> =
+        persona_counts(game.slots.iter().map(|s| s.persona));
 
     let existing = game.slots.iter_mut().find(|s| s.number == slot);
     let (previous, previous_persona, preset, now, created) = match existing {
@@ -606,6 +663,16 @@ fn assign_in_profile(
         slot,
         before_xinput,
         after_xinput,
+        format!("profile \"{title}\" (games.toml)"),
+    )?;
+    check_persona_capacity(
+        slot,
+        now,
+        before_personas.get(&now).copied().unwrap_or(0),
+        game.slots
+            .iter()
+            .filter(|entry| entry.persona == now)
+            .count(),
         format!("profile \"{title}\" (games.toml)"),
     )?;
 
@@ -1117,8 +1184,8 @@ mod tests {
         );
     }
 
-    /// The three HIDMaestro personas are refused BEFORE the disk is touched,
-    /// in `PadBackend::gap()`'s own words — including the sentence that closes
+    /// The two unfinished HIDMaestro personas are refused BEFORE the disk is touched,
+    /// in `Persona::gap()`'s own words — including the sentence that closes
     /// off the wrong fix, because "not installed" is the reading that costs a
     /// pointless driver install.
     ///
@@ -1132,7 +1199,6 @@ mod tests {
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
         for (persona, instead) in [
-            (Persona::DualSense, "playstation"),
             (Persona::SwitchPro, "xbox360"),
             (Persona::XboxSeries, "xbox360"),
         ] {
@@ -1141,7 +1207,7 @@ mod tests {
             let message = err.to_string();
             // The gap, verbatim — the half that stops a wasted driver install.
             assert!(
-                message.contains("installing HIDMaestro does not change it"),
+                message.contains("has not yet completed its independent production runtime"),
                 "{message}"
             );
             // What DECIDES it: the binary, not this machine.
@@ -1149,11 +1215,46 @@ mod tests {
             // ...and a way out that itself works.
             assert!(message.contains(instead), "{message}");
         }
+        assign(&store, &persona_spec(1, Persona::DualSense))
+            .expect("the production DualSense path is writable");
         // Nothing was written by any of them.
         assert_eq!(
             store.load_config().unwrap().value.slots[0].persona,
-            Persona::Xbox360
+            Persona::DualSense
         );
+    }
+
+    #[test]
+    fn a_second_dualsense_is_refused_before_the_config_is_written() {
+        let root = TempRoot::new("dualsense-capacity");
+        let store = root.store();
+        assign(
+            &store,
+            &SlotSpec {
+                slot: 1,
+                preset: Some("Panel P1".into()),
+                profile: None,
+                persona: Some(Persona::DualSense),
+                socd: None,
+            },
+        )
+        .unwrap();
+        let err = assign(
+            &store,
+            &SlotSpec {
+                slot: 2,
+                preset: Some("Panel P2".into()),
+                profile: None,
+                persona: Some(Persona::DualSense),
+                socd: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "persona-capacity");
+        assert!(err.to_string().contains("at most 1"), "{err}");
+        let config = store.load_config().unwrap().value;
+        assert_eq!(config.slots.len(), 1, "a refusal writes nothing");
+        assert_eq!(config.slots[0].persona, Persona::DualSense);
     }
 
     /// A fifth XInput slot is refused the way `ksx pads` refuses a fifth pad.

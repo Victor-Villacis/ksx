@@ -19,11 +19,30 @@ Deep dives: [`research/virtual-gamepad-2026.md`](research/virtual-gamepad-2026.m
 - **Installed by the ksx installer, from a checkbox** — see "Who runs it, and
   when" below. `ksx install-drivers` is still the verb; the setup wizard is now
   one of the two places it is run from.
-- Plan B: HIDMaestro (MIT, user-mode UMDF2; would mean a hand-written Rust client for
-  its documented shared-memory protocol — verify its WGI double-input bug first).
-  Plan C: libvirtualhid (LizardByte; revisit when Sunshine's PR merges and XInput slot
-  behavior is verified). Not options: Nefarius VirtualPad (closed/commercial), vJoy
-  (DirectInput-only).
+- **ViGEmBus remains the compatibility foundation/fallback**, not the only future
+  backend. Its shipped X360 and DS4 paths stay supported while they work.
+- **HIDMaestro is the live rich-profile Windows backend.** The current release
+  packages a fixed NativeAOT privileged host and an explicit v1.6.1
+  installer-only bootstrap. The checked setup task discloses its network use,
+  downloads the exact official archive, verifies pinned lengths and SHA-256
+  identities, invokes only `HMContext.InstallDriver()`, and deletes the
+  temporary SDK. Neither KSX nor its installer redistributes the upstream
+  embedded WDK tools. It supports exactly one plain-USB DualSense per session;
+  Switch Pro and Xbox Series remain independently gated.
+- **VIIPER is the complementary virtual-USB/network/Linux lane.** It is for
+  software-defined controllers, keyboards and mice, including remote endpoints—not a
+  replacement profile catalog. Its GPL core stays across a deliberate process boundary
+  unless a future licensing review approves a different distribution design.
+- **Watchlist, not roadmap dependencies:** libvirtualhid has a useful cross-platform
+  API but its Windows driver/broker is commercially licensed; Nefarius VirtualPad is
+  commercial partner-only; WinUHid would make KSX responsible for building, signing
+  and maintaining a Windows driver; vJoy is a generic DirectInput path.
+
+No future backend in this list is bundled or enabled merely because it appears here.
+The current release ships ViGEmBus plus the bounded HIDMaestro DualSense lane.
+VirtualHere is a proprietary external
+raw-USB forwarding product and could be an optional user-installed/OEM integration;
+it is not an output dependency and cannot be vendored under its standard license.
 
 ### Expired signing certificate — accepted, because a verified timestamp covers it
 
@@ -344,6 +363,7 @@ software. Costs per-key remapping and caps at 2 pads/board — escape hatch, not
 | `ksx-winusb-helper.exe` | installed beside `ksx.exe`; omitted from portable builds | MIT OR Apache-2.0; GUI subsystem, fixed elevated transaction boundary |
 | KSX prepare-only `libwdi.dll` + corresponding source | installed beside the helper + `THIRD-PARTY-SOURCE\libwdi`; omitted from portable builds | LGPL-3.0-or-later; dynamically replaceable narrow provider |
 | ksx-generated WinUSB package, receipt and public certificate | protected `%ProgramData%\KSX\WinUSB`; generated only after explicit Studio consent/UAC | machine-local transaction material; removed by verified Release/uninstall cleanup |
+| HIDMaestro v1.6.1 integration | HIDMaestro-authored material is MIT; the exact official release is downloaded only by the checked setup task, verified before execution, and deleted afterward | KSX does not redistribute the release or its Microsoft SDK/WDK dependencies; the task requires internet and existing setup elevation |
 
 This table calls out the driver-facing and Forma components. The complete
 locked Rust runtime graph — including every transitive crate, version,

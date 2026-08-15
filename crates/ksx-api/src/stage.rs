@@ -20,7 +20,7 @@
 //! and the whole persona roster with a `can_plug` flag on each. `docs/CLAUDE.md`
 //! and `SURFACES.md` §1 make that a rule rather than a courtesy: a `16` typed
 //! into TypeScript is the specific bug the rule exists for, and the day
-//! HIDMaestro's shared section gets a mapper the roster changes underneath
+//! the production HIDMaestro host lands and the roster changes underneath
 //! every surface at once, with nothing to edit.
 //!
 //! # Looking is never a commitment
@@ -135,7 +135,7 @@ pub struct PersonaOption {
     pub is_xinput: bool,
     /// Can THIS BUILD create it? A fact about the binary, never a driver probe.
     pub can_plug: bool,
-    /// What is missing, when it cannot — `PadBackend::gap()`'s own sentence, so
+    /// What is missing, when it cannot — `Persona::gap()`'s own sentence, so
     /// no surface paraphrases it into "install HIDMaestro".
     pub gap: Option<String>,
     /// The nearest persona this build CAN plug, so an option that is greyed out
@@ -153,7 +153,7 @@ impl PersonaOption {
                 label: persona.label().to_owned(),
                 is_xinput: persona.is_xinput(),
                 can_plug: persona.can_plug(),
-                gap: persona.backend().gap().map(str::to_owned),
+                gap: persona.gap().map(str::to_owned),
                 instead: persona.nearest_pluggable().as_str().to_owned(),
             })
             .collect()
@@ -1827,18 +1827,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 option.instead
             );
         }
-        // The gap is `PadBackend::gap()`'s own sentence, not a paraphrase.
+        // The gap is `Persona::gap()`'s own sentence, not a paraphrase.
         let dualsense = view
             .personas
             .iter()
             .find(|p| p.name == "dualsense")
-            .expect("the roster lists it even though it cannot plug");
-        assert!(!dualsense.can_plug);
-        assert!(dualsense
-            .gap
-            .as_deref()
-            .unwrap()
-            .contains("installing HIDMaestro does not change it"));
+            .expect("the roster lists the production DualSense persona");
+        assert!(dualsense.can_plug);
+        assert_eq!(dualsense.gap, None);
     }
 
     /// An unreachable daemon renders as an unreachable daemon, with the reason
@@ -1987,7 +1983,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
 
         let refused = StageEdit::AddSlot {
             number: None,
-            persona: "dualsense".into(),
+            persona: "switchpro".into(),
             preset: "P1".into(),
             layout: None,
         }
@@ -1997,7 +1993,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert!(
             refused
                 .message
-                .contains("installing HIDMaestro does not change it"),
+                .contains("has not yet completed its independent production runtime"),
             "{refused}"
         );
 

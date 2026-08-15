@@ -149,6 +149,1179 @@ jobs:
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
 
+  # Keep the HIDMaestro contract work off the unreliable development CPU too.
+  # GitHub's Windows runner is an administrator with UAC disabled, so it must
+  # never load or initialize the external SDK assembly. The probe hashes one
+  # retained file handle, parses that same image with PEReader/MetadataReader,
+  # then deletes every copied SDK byte before running the pure host contracts.
+  hidmaestro-contracts:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: hidmaestro-contracts
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Match the SDK used to establish the current probe baseline; do not
+          # let `LangVersion=latest` silently move under this contract.
+          dotnet-version: '10.0.400'
+      - name: Verify the hash-pinned runtime source contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-NormalizedTextSha256([string] $path) {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
+            $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+              $dashed = [BitConverter]::ToString(
+                $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)))
+              return $dashed.Replace('-', '')
+            } finally {
+              $sha.Dispose()
+            }
+          }
+
+          $lockPath = 'tools/hidmaestro-runtime-candidate/source.lock.json'
+          $contractPath = 'tools/hidmaestro-runtime-candidate/candidate-contract.json'
+          $runtimeVerifierPath = 'tools/hidmaestro-runtime-candidate/test-source-contract.ps1'
+          $apiLockPath = 'tools/hidmaestro-runtime-candidate/api/contract.lock.json'
+          $apiVerifierPath = 'tools/hidmaestro-runtime-candidate/api/test-api-contract.ps1'
+          $profileLockPath = 'tools/hidmaestro-runtime-candidate/profiles/catalog.lock.json'
+          $profileVerifierPath = 'tools/hidmaestro-runtime-candidate/profiles/verify-profile-catalog.ps1'
+          $feedbackContractPath = 'tools/hidmaestro-feedback-contract/contract.json'
+          $feedbackSourceLockPath = 'tools/hidmaestro-feedback-contract/source.lock.json'
+          $feedbackVectorsPath = 'tools/hidmaestro-feedback-contract/golden-vectors.tsv'
+          $feedbackManifestPath = 'tools/hidmaestro-feedback-contract/Cargo.toml'
+          $feedbackCargoLockPath = 'tools/hidmaestro-feedback-contract/Cargo.lock'
+          $feedbackHarnessPath = 'tools/hidmaestro-feedback-contract/src/lib.rs'
+          $feedbackReducerPath = 'crates/ksx-hidmaestro/src/dualsense_feedback.rs'
+          $feedbackVerifierPath = 'tools/hidmaestro-feedback-contract/test-source-contract.ps1'
+          $inputContractPath = 'tools/hidmaestro-input-contract/contract.json'
+          $inputVectorsPath = 'tools/hidmaestro-input-contract/golden-vectors.json'
+          $inputSourceLockPath = 'tools/hidmaestro-input-contract/source-lock.json'
+          $inputVerifierPath = 'tools/hidmaestro-input-contract/verify-source-contract.ps1'
+          $s1dLockPath = 'tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json'
+          $s1dVerifierPath = 'tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1'
+          $expectedLockHash = 'F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC'
+          $expectedContractHash = '755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1'
+          if ((Get-NormalizedTextSha256 $lockPath) -cne $expectedLockHash -or
+              (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash -or
+              (Get-NormalizedTextSha256 $runtimeVerifierPath) -cne
+                '7B4FFF3D8D38D71D9B6AE8E4060495CF8A1B4BC54CCF0AE9E1030FD30C4D77D4') {
+            throw 'The complete runtime source lock or inert candidate contract drifted.'
+          }
+          if ((Get-NormalizedTextSha256 $apiLockPath) -cne
+                '1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5' -or
+              (Get-NormalizedTextSha256 $apiVerifierPath) -cne
+                '6735CD5847FCA178D24027BFFD7D2D6D17233B01F22AA0521DC943735385748D' -or
+              (Get-NormalizedTextSha256 $profileLockPath) -cne
+                'CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80' -or
+              (Get-NormalizedTextSha256 $profileVerifierPath) -cne
+                '2F30B356F759121CB3586B27233214BB2298239FCD77EFFAE86C86C839B32773' -or
+              (Get-NormalizedTextSha256 $feedbackContractPath) -cne
+                '854B0006809AC69CA5BA9CE94DFF097146AAE9E5D9A3C66DA6C56A662DF4D803' -or
+              (Get-NormalizedTextSha256 $feedbackSourceLockPath) -cne
+                'C3A1D9357CA86FF0BEA7FAFAFDF1F6AA001EC1D3334D0D7C0C0D54690E668917' -or
+              (Get-NormalizedTextSha256 $feedbackVectorsPath) -cne
+                '8047FA9C913FE8BE416796DFE8A2C81CBAB4643EA959613331FEC01D8326701D' -or
+              (Get-NormalizedTextSha256 $feedbackManifestPath) -cne
+                '67F111C4F980C8106B26CF5640595E873AF736A5B09EF905F8EB59A57E20DD74' -or
+              (Get-NormalizedTextSha256 $feedbackCargoLockPath) -cne
+                'EA1D397555EF3105C2FEAB1C2BC86259486C5C5C38771B857F9C86CEFDEF01D8' -or
+              (Get-NormalizedTextSha256 $feedbackHarnessPath) -cne
+                '38F68F02DAC628D79215ABEC11B051BDA14D113281E7EB9FECD0655585D9FE4C' -or
+              (Get-NormalizedTextSha256 $feedbackReducerPath) -cne
+                '32C4B46DD36B8E9421FCEF34823C7199C9ADC2155D1609F2D3A58DBE97E0949D' -or
+              (Get-NormalizedTextSha256 $feedbackVerifierPath) -cne
+                '1DA6D342ACB99981E68F45999A47FCD58C9F5D234EAF35DEACC5E0D1694EE4C0' -or
+              (Get-NormalizedTextSha256 $inputContractPath) -cne
+                'D0E59B710B23A464221675D50CFD1160423480487148A59DD3BD4769E229D001' -or
+              (Get-NormalizedTextSha256 $inputVectorsPath) -cne
+                'D7A312A21353CE4F32DF5E1EA60B0E6F8DF6155D69259D10BC6D7C753834342E' -or
+              (Get-NormalizedTextSha256 $inputSourceLockPath) -cne
+                '1068AB3A80CD290FFD1C2FF789C5CB6006828F9DB53807AEB31374D156199BA8' -or
+              (Get-NormalizedTextSha256 $inputVerifierPath) -cne
+                'FE657CB353CA5C7E88B9D82C19A7FFD3EC9CF93D300EE93AA1D86ACE1F2D7321') {
+            throw 'A frozen S1.5c/S1.5d API, profile, feedback, or input source contract drifted.'
+          }
+          if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
+                '01DD327F4C280FC996484141A8E664B1E415A12BE748587A9670287FBD0401EA' -or
+              (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
+                '9B7FBEF83B420F1143EEEF9EF31FEF923EE8F36CC15F9DE0B94198EB7BBF3861') {
+            throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
+          }
+          $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+          $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+          $feedbackContract = Get-Content -LiteralPath $feedbackContractPath -Raw | ConvertFrom-Json
+          $expectedRepository = 'https://github.com/hifihedgehog/HIDMaestro'
+          $expectedCommit = '2a0dac0857901a63d365a36dcf99cf50114ca954'
+          if ($lock.repository -cne $expectedRepository -or
+              $lock.tag -cne 'v1.6.1' -or
+              $lock.commit -cne $expectedCommit -or
+              $lock.checkout.platform -cne 'windows' -or
+              $lock.checkout.coreAutocrlf -ne $true) {
+            throw 'The source-fetch authority or checkout-byte contract drifted.'
+          }
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'hidmaestro-runtime-source'
+          $emptyHooks = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-hooks'
+          $emptyGitConfig = Join-Path $env:RUNNER_TEMP 'hidmaestro-empty-gitconfig'
+          $linuxSource = Join-Path $env:RUNNER_TEMP 'hid-playstation-dac3e89a.c'
+          $sdlSource = Join-Path $env:RUNNER_TEMP 'SDL_hidapi_ps5-b669ac24.c'
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+
+          try {
+            New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+            New-Item -ItemType Directory -Path $emptyHooks -Force | Out-Null
+            New-Item -ItemType File -Path $emptyGitConfig -Force | Out-Null
+            $env:GIT_CONFIG_NOSYSTEM = '1'
+            $env:GIT_CONFIG_GLOBAL = $emptyGitConfig
+            git -C $sourceRoot init --quiet --template=$emptyHooks
+            if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the inert source checkout.' }
+            git -C $sourceRoot `
+              -c core.hooksPath=$emptyHooks `
+              -c protocol.allow=never `
+              -c protocol.https.allow=always `
+              fetch `
+              --quiet `
+              --depth=1 `
+              --no-tags `
+              $expectedRepository `
+              $expectedCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the pinned HIDMaestro source commit.' }
+            git -C $sourceRoot `
+              -c core.autocrlf=true `
+              -c core.eol=crlf `
+              -c core.hooksPath=$emptyHooks `
+              checkout `
+              --quiet `
+              --detach `
+              FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Could not check out the pinned HIDMaestro source commit.' }
+
+            $stdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/test-source-contract.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro runtime source contract failed.' }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 20
+              $checks = @($report.checks)
+              if ($report.schemaVersion -ne 1 -or
+                  $report.command -cne 'runtime-source-baseline' -or
+                  $report.assurance -cne 'hash-pinned-static-source-facts-only' -or
+                  $report.ok -ne $true -or
+                  $report.upstreamCommit -cne $lock.commit -or
+                  $checks.Count -ne 82 -or
+                  @($checks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 82-check source contract did not pass'
+              }
+              if ($contract.schemaVersion -ne 1 -or
+                  $contract.status -cne 's1.5e-source-frozen-observation-not-established-not-built-or-loaded' -or
+                  $contract.upstreamCommit -cne $lock.commit -or
+                  $contract.artifact.observation.phase -cne 's1.5e' -or
+                  $contract.artifact.observation.contractPath -cne 's1_5e/contract.lock.json' -or
+                  $contract.artifact.observation.contractId -cne
+                    'hidmaestro-s1.5e-actions-static-artifact-observation' -or
+                  $contract.artifact.observation.contractReferenceState -cne
+                    'source-frozen-observation-not-established' -or
+                  $contract.artifact.observation.actionsObservationBuildAuthorized -ne $true -or
+                  $contract.artifact.observation.sourceVerifierBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.localBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.productBuildAuthorized -ne $false -or
+                  $contract.artifact.observation.loadAuthorized -ne $false -or
+                  $contract.artifact.observation.executionAuthorized -ne $false -or
+                  $contract.artifact.observation.observationEstablished -ne $false -or
+                  $contract.artifact.observation.actionsObservationArtifactBuilt -ne $false -or
+                  $contract.artifact.observation.metadataMatched -ne $false -or
+                  $contract.artifact.observation.compileClosureMatched -ne $false -or
+                  $contract.artifact.observation.resourceCatalogMatched -ne $false -or
+                  $contract.conformanceScope.maximumLiveControllers -ne 1 -or
+                  $contract.conformanceScope.controllerIndex -ne 0 -or
+                  $contract.conformanceScope.profile.id -cne 'dualsense' -or
+                  $contract.conformanceScope.profile.vendorId -ne 1356 -or
+                  $contract.conformanceScope.profile.productId -ne 3302 -or
+                  $contract.gateState.sourcePublicApiContractFrozen -ne $true -or
+                  $contract.gateState.sourceCompilationDispositionFrozen -ne $true -or
+                  $contract.gateState.profileSourceManifestFrozen -ne $true -or
+                  $contract.gateState.rawFeedbackContractFrozen -ne $true -or
+                  $contract.gateState.rawInputContractFrozen -ne $true -or
+                  $contract.gateState.artifactPublicApiAllowlistFrozen -ne $false -or
+                  $contract.gateState.artifactCompileAllowlistFrozen -ne $false -or
+                  $contract.gateState.profileSourceCatalogBound -ne $false -or
+                  $contract.gateState.rawFeedbackDecoderFrozen -ne $false -or
+                  $contract.gateState.driverRuntimeAbiBound -ne $false -or
+                  $contract.gateState.distributionReady -ne $false -or
+                  $contract.sourceContracts.publicApi.publicTypeCount -ne 9 -or
+                  $contract.sourceContracts.publicApi.logicalMemberCount -ne 100 -or
+                  $contract.sourceContracts.publicApi.actionsObservationMetadataMatched -ne $false -or
+                  $contract.sourceContracts.publicApi.artifactMetadataAllowlistAdopted -ne $false -or
+                  $contract.sourceContracts.compilationDisposition.upstreamUnitCount -ne 51 -or
+                  $contract.sourceContracts.compilationDisposition.retainedUnchangedCount -ne 1 -or
+                  $contract.sourceContracts.compilationDisposition.replacementRequiredCount -ne 13 -or
+                  $contract.sourceContracts.compilationDisposition.excludedCount -ne 37 -or
+                  $contract.sourceContracts.compilationDisposition.replacementSourcesPresent -ne $true -or
+                  $contract.sourceContracts.managedSourceCandidate.candidateFileCount -ne 12 -or
+                  $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 11 -or
+                  $contract.sourceContracts.managedSourceCandidate.embeddedResourceCount -ne 228 -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceAndProjectXmlFrozen -ne $true -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuildAuthorized -ne $false -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuiltArtifact -ne $false -or
+                  $contract.sourceContracts.managedSourceCandidate.sourceVerifierLoadedArtifact -ne $false -or
+                  $contract.sourceContracts.profileCatalog.profileTreeFileCount -ne 231 -or
+                  $contract.sourceContracts.profileCatalog.embeddedProfileSourceCount -ne 228 -or
+                  $contract.sourceContracts.profileCatalog.deployableProfileSourceCount -ne 130 -or
+                  $contract.sourceContracts.profileCatalog.duplicateProfileIdCount -ne 0 -or
+                  $contract.sourceContracts.profileCatalog.releaseDllCatalogBinding -cne 'unresolved' -or
+                  $contract.sourceContracts.rawDualSenseFeedback.goldenVectorCount -ne 16 -or
+                  $contract.sourceContracts.rawDualSenseFeedback.pureRustDecoderFrozen -ne $true -or
+                  $contract.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -ne $true -or
+                  $contract.sourceContracts.rawDualSenseFeedback.hardwareVerified -ne $false -or
+                  $contract.sourceContracts.rawDualSenseInput.sourceFileCount -ne 12 -or
+                  $contract.sourceContracts.rawDualSenseInput.descriptorGroupCount -ne 6 -or
+                  $contract.sourceContracts.rawDualSenseInput.goldenScenarioCount -ne 9 -or
+                  $contract.sourceContracts.rawDualSenseInput.goldenFrameCount -ne 37 -or
+                  $contract.sourceContracts.rawDualSenseInput.managedRuntimeEncoderPresent -ne $true -or
+                  $contract.sourceContracts.rawDualSenseInput.fullWireReportByteCount -ne 64 -or
+                  $contract.sourceContracts.rawDualSenseInput.legacySharedDataByteCount -ne 63 -or
+                  $contract.sourceContracts.rawDualSenseInput.artifactBehaviorVerified -ne $false -or
+                  $contract.sourceContracts.rawDualSenseInput.hardwareVerified -ne $false -or
+                  $feedbackContract.schemaVersion -ne 1 -or
+                  $feedbackContract.contract -cne 's1.5c-dualsense-usb-raw-feedback' -or
+                  $feedbackContract.scope.profileId -cne 'dualsense' -or
+                  $feedbackContract.scope.connection -cne 'usb' -or
+                  $feedbackContract.implementation.goldenVectorCount -ne 16 -or
+                  $feedbackContract.implementation.canonicalRustSource -cne
+                    '../../crates/ksx-hidmaestro/src/dualsense_feedback.rs' -or
+                  $feedbackContract.implementation.workspaceAndHarnessCompileTheSameSource -ne $true -or
+                  $contract.sourceContracts.rawDualSenseFeedback.goldenVectorCount -ne
+                    $feedbackContract.implementation.goldenVectorCount) {
+                throw 'the inert one-DualSense candidate contract drifted'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro source audit did not emit the exact inert contract: $_"
+            }
+
+            $apiStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/api/test-api-contract.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro API/source contract failed.' }
+            $apiJson = $apiStdout -join "`n"
+            try {
+              $apiDocument = [System.Text.Json.JsonDocument]::Parse($apiJson)
+              if ($apiDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $apiReport = $apiJson | ConvertFrom-Json -Depth 20
+              $apiChecks = @($apiReport.checks)
+              if ($apiReport.schemaVersion -ne 1 -or
+                  $apiReport.command -cne 'hidmaestro-runtime-api-source-contract' -or
+                  $apiReport.assurance -cne
+                    'hash-pinned-static-source-and-source-text-consumer-anchors-only' -or
+                  $apiReport.ok -ne $true -or
+                  $apiReport.upstreamCommit -cne $expectedCommit -or
+                  $apiReport.publicTypeCount -ne 9 -or
+                  $apiReport.logicalMemberCount -ne 100 -or
+                  $apiReport.upstreamUnitCount -ne 51 -or
+                  $apiChecks.Count -ne 352 -or
+                  @($apiChecks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 352-check API/source contract did not pass'
+              }
+              $apiDocument.Dispose()
+            } catch {
+              throw "HIDMaestro API/source audit did not emit the exact contract: $_"
+            }
+
+            $profileStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/profiles/verify-profile-catalog.ps1 `
+              -SourceRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro profile-source contract failed.' }
+            $profileJson = $profileStdout -join "`n"
+            try {
+              $profileDocument = [System.Text.Json.JsonDocument]::Parse($profileJson)
+              if ($profileDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $profileReport = $profileJson | ConvertFrom-Json -Depth 20
+              if ($profileReport.schemaVersion -ne 1 -or
+                  $profileReport.command -cne 'verify-profile-source-catalog' -or
+                  $profileReport.ok -ne $true -or
+                  $profileReport.upstreamCommit -cne $expectedCommit -or
+                  $profileReport.manifestCanonicalByteLength -ne 99509 -or
+                  $profileReport.manifestCanonicalSha256 -cne
+                    'CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80' -or
+                  $profileReport.counts.profileTreeFiles -ne 231 -or
+                  $profileReport.counts.vendorDirectories -ne 32 -or
+                  $profileReport.counts.embeddedProfileSources -ne 228 -or
+                  $profileReport.counts.excludedProfileData -ne 3 -or
+                  $profileReport.counts.deployableEmbeddedProfileSources -ne 130 -or
+                  $profileReport.counts.duplicateProfileIds -ne 0 -or
+                  $profileReport.sourceCatalogs.allProfileTreeSha256 -cne
+                    'A9C8579E0EA32E8421D219C77CB09CF10219099674AD7119837DDCDFEC61A3B6' -or
+                  $profileReport.sourceCatalogs.embeddedProfileSourcesSha256 -cne
+                    '4273B2DF12CAD9AA6DE5FB87AC7E90FF20C8121035A79231700383639B7B6151' -or
+                  $profileReport.releaseDllComparison.countMappingMatches -ne $true -or
+                  $profileReport.releaseDllComparison.sourceToReleaseCatalogBinding -cne 'unresolved' -or
+                  $profileReport.releaseDllComparison.catalogSha256ReproducedFromSource -ne $false -or
+                  $profileReport.releaseDllComparison.verifierInspectedReleaseDll -ne $false -or
+                  $profileReport.safety.readAndHashOnly -ne $true -or
+                  $profileReport.safety.invokesExternalCommands -ne $false -or
+                  $profileReport.safety.buildsOrLoadsUpstreamCode -ne $false -or
+                  $profileReport.safety.writesSourceTree -ne $false) {
+                throw 'the exact 231/228/130 profile-source contract did not pass'
+              }
+              $profileDocument.Dispose()
+            } catch {
+              throw "HIDMaestro profile-source audit did not emit the exact contract: $_"
+            }
+
+            $inputStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-input-contract/verify-source-contract.ps1 `
+              -HidMaestroRoot $sourceRoot
+            if ($LASTEXITCODE -ne 0) { throw 'The DualSense input source contract failed.' }
+            $inputJson = $inputStdout -join "`n"
+            try {
+              $inputDocument = [System.Text.Json.JsonDocument]::Parse($inputJson)
+              if ($inputDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $inputReport = $inputJson | ConvertFrom-Json -Depth 20
+              $inputAllowlist = @($inputReport.safety.externalProcessAllowlist)
+              if ($inputReport.schemaVersion -ne 1 -or
+                  $inputReport.command -cne 'verify-dualsense-input-source-contract' -or
+                  $inputReport.ok -ne $true -or
+                  $inputReport.commit -cne $expectedCommit -or
+                  $inputReport.sourceFileCount -ne 12 -or
+                  $inputReport.descriptorGroupCount -ne 6 -or
+                  $inputReport.goldenScenarioCount -ne 9 -or
+                  $inputReport.goldenFrameCount -ne 37 -or
+                  $inputReport.gitCommandCount -ne 14 -or
+                  $inputReport.checkCount -ne 538 -or
+                  $inputReport.sourceVerdict -cne 'GO' -or
+                  $inputReport.runtimeVerdict -cne 'NO-GO' -or
+                  $inputReport.safety.sourceOnly -ne $true -or
+                  $inputReport.safety.gitCommandsExecuted -ne $true -or
+                  $inputReport.safety.externalProcessStarted -ne $true -or
+                  $inputAllowlist.Count -ne 1 -or
+                  $inputAllowlist[0] -cne 'git' -or
+                  $inputReport.safety.gitNoReplaceObjects -ne $true -or
+                  $inputReport.safety.gitConfiguration -cne 'inherited-not-mutated' -or
+                  $inputReport.safety.buildExecuted -ne $false -or
+                  $inputReport.safety.upstreamCodeExecuted -ne $false -or
+                  $inputReport.safety.nonGitHelperProcessStarted -ne $false -or
+                  $inputReport.safety.networkAccessed -ne $false -or
+                  $inputReport.safety.elevationRequested -ne $false -or
+                  $inputReport.safety.driverLoaded -ne $false -or
+                  $inputReport.safety.deviceProvisioned -ne $false -or
+                  $inputReport.safety.deviceAccessed -ne $false -or
+                  $inputReport.safety.temporaryFileCreated -ne $false -or
+                  $null -ne $inputReport.error) {
+                throw 'the exact 538-check DualSense input source contract did not pass'
+              }
+              $inputDocument.Dispose()
+            } catch {
+              throw "DualSense input source audit did not emit the exact contract: $_"
+            }
+
+            Invoke-WebRequest `
+              -Uri 'https://raw.githubusercontent.com/torvalds/linux/dac3e89a2c90c2feeb471e1f22a2512ad424b792/drivers/hid/hid-playstation.c' `
+              -OutFile $linuxSource
+            Invoke-WebRequest `
+              -Uri 'https://raw.githubusercontent.com/libsdl-org/SDL/b669ac244e10fbab4734c7389151f7a4e8ac725f/src/joystick/hidapi/SDL_hidapi_ps5.c' `
+              -OutFile $sdlSource
+            $feedbackStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-feedback-contract/test-source-contract.ps1 `
+              -HidMaestroRoot $sourceRoot `
+              -LinuxSource $linuxSource `
+              -SdlSource $sdlSource
+            if ($LASTEXITCODE -ne 0) { throw 'The DualSense feedback source contract failed.' }
+            $feedbackJson = $feedbackStdout -join "`n"
+            try {
+              $feedbackDocument = [System.Text.Json.JsonDocument]::Parse($feedbackJson)
+              if ($feedbackDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $feedbackReport = $feedbackJson | ConvertFrom-Json -Depth 20
+              $feedbackChecks = @($feedbackReport.checks)
+              if ($feedbackReport.schemaVersion -ne 1 -or
+                  $feedbackReport.contract -cne 's1.5c-dualsense-usb-raw-feedback-source' -or
+                  $feedbackReport.total -ne 29 -or
+                  $feedbackReport.passed -ne 29 -or
+                  $feedbackReport.failed -ne 0 -or
+                  $feedbackChecks.Count -ne 29 -or
+                  @($feedbackChecks | Where-Object passed -ne $true).Count -ne 0) {
+                throw 'the exact 29-check DualSense feedback source contract did not pass'
+              }
+              $feedbackDocument.Dispose()
+            } catch {
+              throw "DualSense feedback source audit did not emit the exact contract: $_"
+            }
+
+            $s1dStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
+              -File tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1 `
+              -WorkspaceRoot (Get-Location).Path
+            if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro S1.5d inert source-candidate contract failed.' }
+            $s1dJson = $s1dStdout -join "`n"
+            try {
+              $s1dDocument = [System.Text.Json.JsonDocument]::Parse($s1dJson)
+              if ($s1dDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $s1dReport = $s1dJson | ConvertFrom-Json -Depth 30
+              $s1dChecks = @($s1dReport.checks)
+              $s1dGateNames = @($s1dReport.gateState.PSObject.Properties.Name)
+              if ($s1dReport.schemaVersion -ne 1 -or
+                  $s1dReport.command -cne 'hidmaestro-s1.5d-source-candidate' -or
+                  $s1dReport.assurance -cne
+                    'hash-pinned-static-candidate-source-and-project-xml-closure-only' -or
+                  $s1dReport.ok -ne $true -or
+                  $s1dReport.candidateTreeSha256 -cne
+                    '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393' -or
+                  $s1dReport.counts.candidateFiles -ne 12 -or
+                  $s1dReport.counts.compileItems -ne 11 -or
+                  $s1dReport.counts.embeddedResources -ne 228 -or
+                  $s1dReport.counts.deployableProfileSources -ne 130 -or
+                  $s1dReport.counts.candidateApiTypes -ne 7 -or
+                  $s1dReport.counts.candidateApiEntries -ne 91 -or
+                  $s1dReport.counts.goldenVectors -ne 16 -or
+                  $s1dReport.counts.inputSourceBlobs -ne 12 -or
+                  $s1dReport.counts.inputDescriptorGroups -ne 6 -or
+                  $s1dReport.counts.inputScenarios -ne 9 -or
+                  $s1dReport.counts.inputFrames -ne 37 -or
+                  $s1dReport.counts.lockedInputSourceVerifierChecks -ne 538 -or
+                  $s1dReport.counts.checks -ne 453 -or
+                  $s1dChecks.Count -ne 453 -or
+                  @($s1dChecks | Where-Object passed -ne $true).Count -ne 0 -or
+                  $s1dReport.sourceOnly.verifierBuiltCandidate -ne $false -or
+                  $s1dReport.sourceOnly.verifierLoadedCandidate -ne $false -or
+                  $s1dReport.sourceOnly.verifierInspectedStagingBytes -ne $false -or
+                  $s1dReport.sourceOnly.verifierLoadedSdk -ne $false -or
+                  $s1dReport.sourceOnly.verifierExecutedInputSourceVerifier -ne $false -or
+                  $s1dReport.sourceOnly.verifierTouchedDriver -ne $false -or
+                  $s1dReport.sourceOnly.verifierTouchedHardware -ne $false -or
+                  ($s1dGateNames -join ',') -cne
+                    'artifactPublicApiAllowlistFrozen,artifactCompileAllowlistFrozen,profileSourceCatalogBound,rawFeedbackDecoderFrozen,driverRuntimeAbiBound,distributionReady' -or
+                  @($s1dReport.gateState.PSObject.Properties |
+                    Where-Object Value -ne $false).Count -ne 0) {
+                throw 'the exact 453-check S1.5d inert source-candidate contract did not pass'
+              }
+              $s1dDocument.Dispose()
+            } catch {
+              throw "HIDMaestro S1.5d source-candidate audit did not emit the exact contract: $_"
+            }
+          } finally {
+            foreach ($target in @(
+              $sourceRoot,
+              $emptyHooks,
+              $emptyGitConfig,
+              $linuxSource,
+              $sdlSource
+            )) {
+              $resolvedTarget = [IO.Path]::GetFullPath($target)
+              if (!$resolvedTarget.StartsWith(
+                  $runnerTemp,
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to clean source input outside RUNNER_TEMP: $resolvedTarget"
+              }
+              if (Test-Path -LiteralPath $resolvedTarget) {
+                Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+              }
+            }
+          }
+      - name: Fetch the hash-pinned HIDMaestro SDK input
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content -LiteralPath tools/hidmaestro-probe/sdk.lock.json -Raw |
+            ConvertFrom-Json
+          $archive = Join-Path $env:RUNNER_TEMP $lock.releaseAsset.fileName
+          $expanded = Join-Path $env:RUNNER_TEMP 'hidmaestro-v1.6.1'
+
+          Invoke-WebRequest -Uri $lock.releaseAsset.url -OutFile $archive
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($archiveHash -cne $lock.releaseAsset.sha256) {
+            throw "HIDMaestro release archive hash mismatch: $archiveHash"
+          }
+
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $candidates = @(
+            Get-ChildItem -LiteralPath $expanded -Recurse -File |
+              Where-Object Name -CEQ $lock.coreDll.fileName
+          )
+          $matches = @(
+            $candidates | Where-Object {
+              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -ceq
+                $lock.coreDll.sha256
+            }
+          )
+          if ($matches.Count -ne 1) {
+            throw "Expected exactly one hash-pinned HIDMaestro.Core.dll; found $($matches.Count)."
+          }
+          "HIDMAESTRO_CORE_PATH=$($matches[0].FullName)" >> $env:GITHUB_ENV
+          "HIDMAESTRO_ARCHIVE_PATH=$archive" >> $env:GITHUB_ENV
+          "HIDMAESTRO_EXPANDED_PATH=$expanded" >> $env:GITHUB_ENV
+      - name: Build, statically inventory the pin, then execute SDK-free contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content -LiteralPath tools/hidmaestro-probe/sdk.lock.json -Raw |
+            ConvertFrom-Json
+          $probe = $null
+
+          try {
+            & tools/hidmaestro-probe/build.ps1 `
+              -DotNet dotnet `
+              -SdkDll $env:HIDMAESTRO_CORE_PATH `
+              -Configuration Release
+            if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro probe build failed.' }
+
+            $outputRoot = 'tools/hidmaestro-probe/bin/Release/net10.0-windows10.0.26100.0/win-x64'
+            $probe = Resolve-Path (Join-Path $outputRoot 'ksx-hidmaestro-probe.dll')
+            $deps = Get-Content -LiteralPath `
+              (Join-Path $outputRoot 'ksx-hidmaestro-probe.deps.json') -Raw
+            if ($deps.Contains('HIDMaestro.Core', [StringComparison]::Ordinal)) {
+              throw 'The probe runtime graph contains the upstream SDK assembly.'
+            }
+
+            Write-Host '::group::HIDMaestro static inventory'
+            $stdout = & dotnet $probe inventory
+            $inventoryExit = $LASTEXITCODE
+            if ($inventoryExit -ne 0) {
+              throw "HIDMaestro static inventory failed with exit $inventoryExit."
+            }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 100
+              if ($report.schemaVersion -ne 1 -or $report.command -cne 'inventory' -or
+                  $report.ok -ne $true) {
+                throw 'unexpected inventory envelope'
+              }
+              if ($report.sdkPin.ok -ne $true -or
+                  $report.sdkPin.expectedSha256 -cne $lock.coreDll.sha256 -or
+                  $report.sdkPin.actualSha256 -cne $lock.coreDll.sha256 -or
+                  $report.sdkPin.expectedFileVersion -cne $lock.coreDll.fileVersion -or
+                  $report.sdkPin.actualFileVersion -cne $lock.coreDll.fileVersion -or
+                  $report.sdkPin.expectedInformationalVersion -cne
+                    $lock.coreDll.informationalVersion -or
+                  $report.sdkPin.actualInformationalVersion -cne
+                    $lock.coreDll.informationalVersion -or
+                  @($report.sdkPin.mismatches).Count -ne 0) {
+                throw 'the SDK pin report did not match the exact lock'
+              }
+              $apiChecks = @($report.api.checks)
+              if ($report.api.ok -ne $true -or $apiChecks.Count -ne 22 -or
+                  @($apiChecks | Where-Object present -ne $true).Count -ne 0) {
+                throw 'the exact 22-member CLR API contract did not pass'
+              }
+              if ($report.catalog.resourceCount -ne 228 -or
+                  $report.catalog.deployableCount -ne 130 -or
+                  @($report.catalog.profiles).Count -ne 228 -or
+                  $report.catalog.catalogSha256 -cne
+                    '8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A') {
+                throw 'the profile catalog did not match the pinned contract'
+              }
+              $personas = @($report.ksxPersonaContract.personas)
+              if ($report.ksxPersonaContract.ok -ne $true -or
+                  $personas.Count -ne 3 -or
+                  @($personas | Where-Object { $_.present -ne $true -or $_.passed -ne $true }).Count -ne 0) {
+                throw 'the three KSX persona contracts did not pass'
+              }
+              if ($report.safety.requestsReadOnlySdkOperations -ne $false -or
+                  $report.safety.constructsSdkContext -ne $false -or
+                  $report.safety.callsDriverLifecycleApis -ne $false -or
+                  $report.safety.liveExerciseStatus -cne 'static-only') {
+                throw 'the static-only safety contract drifted'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro inventory did not emit the exact static contract: $_"
+            }
+            Write-Host '::endgroup::'
+          } finally {
+            if (Test-Path -LiteralPath tools/hidmaestro-probe/bin) {
+              Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
+                Where-Object Name -CEQ 'HIDMaestro.Core.dll' |
+                Remove-Item -Force
+            }
+
+            $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+            foreach ($target in @($env:HIDMAESTRO_ARCHIVE_PATH, $env:HIDMAESTRO_EXPANDED_PATH)) {
+              if ([String]::IsNullOrWhiteSpace($target)) { continue }
+              $resolvedTarget = [IO.Path]::GetFullPath($target)
+              if (!$resolvedTarget.StartsWith(
+                  $runnerTemp,
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to clean HIDMaestro input outside RUNNER_TEMP: $resolvedTarget"
+              }
+              if (Test-Path -LiteralPath $resolvedTarget) {
+                Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+              }
+            }
+            Remove-Item Env:HIDMAESTRO_CORE_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:HIDMAESTRO_ARCHIVE_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:HIDMAESTRO_EXPANDED_PATH -ErrorAction SilentlyContinue
+          }
+
+          $remainingSdk = @(
+            Get-ChildItem -LiteralPath tools/hidmaestro-probe/bin -Recurse -File |
+              Where-Object Name -CEQ 'HIDMaestro.Core.dll'
+          )
+          if ($remainingSdk.Count -ne 0) {
+            throw 'The upstream SDK remained in the executable probe tree.'
+          }
+          foreach ($name in @(
+            'HIDMAESTRO_CORE_PATH',
+            'HIDMAESTRO_ARCHIVE_PATH',
+            'HIDMAESTRO_EXPANDED_PATH'
+          )) {
+            if (Test-Path "Env:$name") {
+              throw "The upstream SDK environment path remained set: $name"
+            }
+          }
+
+          foreach ($command in @('protocol', 'simulate-protocol', 'self-test')) {
+            $arguments = @($command)
+            $label = $command
+            Write-Host "::group::HIDMaestro $label"
+            $stdout = & dotnet $probe @arguments
+            if ($LASTEXITCODE -ne 0) { throw "HIDMaestro $label failed." }
+            $json = $stdout -join "`n"
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($json)
+              if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                throw 'the root JSON value is not an object'
+              }
+              $report = $json | ConvertFrom-Json -Depth 100
+              if ($report.schemaVersion -ne 1) {
+                throw "unexpected schemaVersion '$($report.schemaVersion)'"
+              }
+              if ($report.command -cne $label) {
+                throw "unexpected command '$($report.command)'"
+              }
+              if ($report.ok -ne $true) {
+                throw 'the command reported ok=false'
+              }
+              $document.Dispose()
+            } catch {
+              throw "HIDMaestro $label did not emit exactly one JSON document: $_"
+            }
+            Write-Host '::endgroup::'
+          }
+
+          $env:CARGO_TARGET_DIR = Join-Path `
+            $env:RUNNER_TEMP `
+            'ksx-hidmaestro-bootstrap-policy-target'
+          cargo fmt `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            -- `
+            --check
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy is not formatted.'
+          }
+          cargo clippy `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            --all-targets `
+            --locked `
+            -- `
+            -D warnings
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy failed strict clippy.'
+          }
+          cargo test `
+            --manifest-path tools/hidmaestro-bootstrap-policy/Cargo.toml `
+            --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert HIDMaestro native-bootstrap policy failed.'
+          }
+
+          $env:CARGO_TARGET_DIR = Join-Path `
+            $env:RUNNER_TEMP `
+            'ksx-hidmaestro-feedback-contract-target'
+          cargo fmt `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            -- `
+            --check
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract is not formatted.'
+          }
+          cargo clippy `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            --all-targets `
+            --locked `
+            -- `
+            -D warnings
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract failed strict clippy.'
+          }
+          cargo test `
+            --manifest-path tools/hidmaestro-feedback-contract/Cargo.toml `
+            --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The inert DualSense feedback contract failed its golden vectors.'
+          }
+
+          # Everything below is deliberately SDK-free. Build the inherited-token
+          # apphost only after the upstream archive, extraction, copied DLL and
+          # related environment paths have been removed.
+          foreach ($name in @(
+            'DOTNET_STARTUP_HOOKS',
+            'DOTNET_ADDITIONAL_DEPS',
+            'DOTNET_SHARED_STORE',
+            'CORECLR_ENABLE_PROFILING',
+            'CORECLR_PROFILER',
+            'CORECLR_PROFILER_PATH',
+            'DOTNET_ENABLE_PROFILING',
+            'DOTNET_PROFILER',
+            'DOTNET_PROFILER_PATH'
+          )) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+
+          & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File tools/hidmaestro-fake-host/test-safety.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host safety guard failed.' }
+
+          dotnet build tools/hidmaestro-fake-host/HidMaestroFakeHost.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host build failed.' }
+          dotnet build tools/hidmaestro-fake-host/tests/HidMaestroFakeHost.PureTests.csproj `
+            --configuration Release `
+            --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host pure-test build failed.' }
+
+          $fakeRoot = Resolve-Path `
+            'tools/hidmaestro-fake-host/bin/Release/net10.0-windows10.0.26100.0/win-x64'
+          $fakeExe = Join-Path $fakeRoot 'ksx-hidmaestro-fake-host.exe'
+          if (!(Test-Path -LiteralPath $fakeExe -PathType Leaf)) {
+            throw 'The fixed HIDMaestro fake-host apphost was not emitted.'
+          }
+          $fakeDependencyFiles = @(
+            (Join-Path $fakeRoot 'ksx-hidmaestro-fake-host.deps.json')
+            'tools/hidmaestro-fake-host/tests/bin/Release/net10.0-windows10.0.26100.0/ksx-hidmaestro-fake-host-pure-tests.deps.json'
+            'tools/hidmaestro-fake-host/obj/project.assets.json'
+            'tools/hidmaestro-fake-host/tests/obj/project.assets.json'
+          )
+          foreach ($dependencyFile in $fakeDependencyFiles) {
+            if (!(Test-Path -LiteralPath $dependencyFile -PathType Leaf)) {
+              throw "Missing fake-host dependency evidence: $dependencyFile"
+            }
+            $dependencyText = Get-Content -LiteralPath $dependencyFile -Raw
+            if ($dependencyText.Contains('HIDMaestro.Core', [StringComparison]::Ordinal)) {
+              throw "The SDK-free fake host references HIDMaestro.Core: $dependencyFile"
+            }
+          }
+
+          $pureTests = Resolve-Path `
+            'tools/hidmaestro-fake-host/tests/bin/Release/net10.0-windows10.0.26100.0/ksx-hidmaestro-fake-host-pure-tests.dll'
+          $pureStdout = & dotnet $pureTests
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro fake-host pure tests failed.' }
+          $pureJson = $pureStdout -join "`n"
+          try {
+            $pureDocument = [System.Text.Json.JsonDocument]::Parse($pureJson)
+            if ($pureDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+              throw 'the root JSON value is not an object'
+            }
+            $pureReport = $pureJson | ConvertFrom-Json
+            if ($pureReport.schemaVersion -ne 1 -or
+                $pureReport.command -cne 'fake-host-pure-tests' -or
+                $pureReport.passed -ne 10) {
+              throw 'unexpected pure-test result'
+            }
+            $pureDocument.Dispose()
+          } catch {
+            throw "HIDMaestro fake-host pure tests did not emit the exact result: $_"
+          }
+
+          # The fixed Rust launcher resolves only this basename beside its own
+          # test executable. Build first, then copy the exact framework-
+          # dependent apphost quartet into that test directory.
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'ksx-hidmaestro-s1-6b-target'
+          cargo test -p ksx-hidmaestro `
+            --features hidmaestro-fake-host-tests `
+            --lib `
+            --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro transport test build failed.' }
+          $rustTestDirectory = Join-Path $env:CARGO_TARGET_DIR 'debug/deps'
+          if (!(Test-Path -LiteralPath $rustTestDirectory -PathType Container)) {
+            throw 'The Rust test executable directory was not emitted.'
+          }
+          foreach ($suffix in @('.exe', '.dll', '.deps.json', '.runtimeconfig.json')) {
+            $name = "ksx-hidmaestro-fake-host$suffix"
+            $source = Join-Path $fakeRoot $name
+            if (!(Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "The fake-host apphost quartet is missing $name."
+            }
+            Copy-Item -LiteralPath $source -Destination $rustTestDirectory -Force
+          }
+          cargo test -p ksx-hidmaestro `
+            --features hidmaestro-fake-host-tests `
+            --lib `
+            windows_transport::windows::integration_tests::fixed_cross_language_fake_exercises_authenticated_framing_and_feedback `
+            -- `
+            --exact `
+            --nocapture
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The authenticated HIDMaestro fake-host transport test failed.'
+          }
+
+  # S1.5e is deliberately separate from the source-contract job. It is the
+  # only scope authorized to compile the inert candidate, and it never loads,
+  # executes, uploads, packages, or grants product authority to that output.
+  hidmaestro-artifact-observation:
+    needs: hidmaestro-contracts
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.400'
+      - name: Verify the frozen S1.5e observation infrastructure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-NormalizedTextSha256([string] $path) {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
+            $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+              $dashed = [BitConverter]::ToString(
+                $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)))
+              return $dashed.Replace('-', '')
+            } finally {
+              $sha.Dispose()
+            }
+          }
+          function ConvertFrom-SingleJsonObject([object[]] $lines, [string] $label) {
+            $json = (@($lines | ForEach-Object { [string]$_ }) -join "`n")
+            $document = [Text.Json.JsonDocument]::Parse($json)
+            try {
+              if ($document.RootElement.ValueKind -ne [Text.Json.JsonValueKind]::Object) {
+                throw "$label root must be a JSON object."
+              }
+              return $json | ConvertFrom-Json -Depth 100
+            } finally {
+              $document.Dispose()
+            }
+          }
+          function Assert-SixClosedGates([object] $gateState, [string] $label) {
+            $expected = @(
+              'artifactPublicApiAllowlistFrozen',
+              'artifactCompileAllowlistFrozen',
+              'profileSourceCatalogBound',
+              'rawFeedbackDecoderFrozen',
+              'driverRuntimeAbiBound',
+              'distributionReady'
+            )
+            $actual = @($gateState.PSObject.Properties.Name)
+            if ($actual.Count -ne $expected.Count -or
+                @(Compare-Object $expected $actual -CaseSensitive).Count -ne 0) {
+              throw "$label gate set is not exact."
+            }
+            foreach ($name in $expected) {
+              if ($gateState.$name -ne $false) {
+                throw "$label advanced gate '$name'."
+              }
+            }
+          }
+
+          $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
+          $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
+          if ((Get-NormalizedTextSha256 $lockPath) -cne
+                '2F693C2B240963DE8FDB1118138B2D92414F6B4A8ECA9A0A9604C67EFFAAE872' -or
+              (Get-NormalizedTextSha256 $verifierPath) -cne
+                'E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D') {
+            throw 'The frozen S1.5e observation contract or verifier drifted.'
+          }
+
+          $stdout = @(& $verifierPath -WorkspaceRoot $env:GITHUB_WORKSPACE)
+          $report = ConvertFrom-SingleJsonObject $stdout 'S1.5e source verifier'
+          if ($report.schemaVersion -ne 1 -or
+              $report.assurance -cne 'static-source-only-s1.5e-observation-infrastructure' -or
+              $report.ok -ne $true -or
+              $report.checkCount -ne 291 -or
+              $report.passedCount -ne 291 -or
+              $report.failedCount -ne 0 -or
+              @($report.checks).Count -ne 291 -or
+              @($report.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
+              $report.observationEstablished -ne $false -or
+              $report.candidateBuilt -ne $false -or
+              $report.candidateLoaded -ne $false -or
+              $report.candidateExecuted -ne $false) {
+            throw 'The S1.5e source-only verifier receipt is not exact.'
+          }
+          Assert-SixClosedGates $report.gateState 'S1.5e source verifier'
+
+      - name: Build twice and inspect inert candidate bytes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function ConvertFrom-SingleJsonObject([object[]] $lines, [string] $label) {
+            $json = (@($lines | ForEach-Object { [string]$_ }) -join "`n")
+            $document = [Text.Json.JsonDocument]::Parse($json)
+            try {
+              if ($document.RootElement.ValueKind -ne [Text.Json.JsonValueKind]::Object) {
+                throw "$label root must be a JSON object."
+              }
+              return [pscustomobject]@{
+                Json = $json
+                Value = ($json | ConvertFrom-Json -Depth 100)
+              }
+            } finally {
+              $document.Dispose()
+            }
+          }
+          function Assert-SixClosedGates([object] $gateState, [string] $label) {
+            $expected = @(
+              'artifactPublicApiAllowlistFrozen',
+              'artifactCompileAllowlistFrozen',
+              'profileSourceCatalogBound',
+              'rawFeedbackDecoderFrozen',
+              'driverRuntimeAbiBound',
+              'distributionReady'
+            )
+            $actual = @($gateState.PSObject.Properties.Name)
+            if ($actual.Count -ne $expected.Count -or
+                @(Compare-Object $expected $actual -CaseSensitive).Count -ne 0) {
+              throw "$label gate set is not exact."
+            }
+            foreach ($name in $expected) {
+              if ($gateState.$name -ne $false) {
+                throw "$label advanced gate '$name'."
+              }
+            }
+          }
+          function Assert-ExactRemovedAnalyzers(
+              [object[]] $actual,
+              [string[]] $expected,
+              [string] $label) {
+            $observed = @($actual | ForEach-Object {
+              if ([string]::IsNullOrWhiteSpace([string]$_.relativePath) -or
+                  [long]$_.byteLength -le 0 -or
+                  [string]$_.sha256 -cnotmatch '^[A-F0-9]{64}$') {
+                throw "$label contains an invalid analyzer identity."
+              }
+              "{0}|{1}" -f [string]$_.relativePath, [string]$_.sha256
+            })
+            if ($observed.Count -ne $expected.Count -or
+                [string]::Join("`n", $observed) -cne [string]::Join("`n", $expected)) {
+              throw "$label does not match the exact removed-analyzer sequence."
+            }
+          }
+
+          $runner = 'tools/hidmaestro-runtime-candidate/s1_5e/run-actions-proof.ps1'
+          $captured = ConvertFrom-SingleJsonObject `
+            @(& $runner -WorkspaceRoot $env:GITHUB_WORKSPACE) `
+            'S1.5e Actions observation'
+          $receipt = $captured.Value
+          # Preserve the path-redacted receipt for both success and failure.
+          Write-Host $captured.Json
+          if ($receipt.schemaVersion -ne 1 -or
+              $receipt.ok -ne $true -or
+              $receipt.phase -cne 's1.5e-actions-static-artifact-observation' -or
+              $receipt.observationEstablished -ne $true -or
+              $receipt.actionsRunner.os -cne 'Windows' -or
+              $receipt.actionsRunner.dotnetSdk -cne '10.0.400' -or
+              $receipt.actionsRunner.upstreamCommit -cne
+                '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
+              $receipt.actionsRunner.infrastructureNetworkUsedForPinnedFetch -ne $true -or
+              $receipt.stage.fileCountPerBuild -ne 241 -or
+              $receipt.stage.upstreamSelectedFileCount -ne 229 -or
+              $receipt.stage.preRawTreeSha256 -cne $receipt.stage.postRawTreeSha256 -or
+              $receipt.stage.preNormalizedTreeSha256 -cne
+                $receipt.stage.postNormalizedTreeSha256 -or
+              $receipt.stage.upstreamPreRawTreeSha256 -cne
+                $receipt.stage.upstreamPostRawTreeSha256 -or
+              $receipt.stage.upstreamPreNormalizedTreeSha256 -cne
+                $receipt.stage.upstreamPostNormalizedTreeSha256 -or
+              $receipt.stage.rootsWereQuiescentAndHashBound -ne $true -or
+              $receipt.stage.rootsClaimedImmutable -ne $false -or
+              $receipt.determinism.buildCount -ne 2 -or
+              $receipt.determinism.exactArtifactByteEquality -ne $true -or
+              $receipt.inspectorHost.runtimeTarget -cne
+                '.NETCoreApp,Version=v10.0/win-x64' -or
+              $receipt.inspectorHost.frameworkName -cne 'Microsoft.NETCore.App' -or
+              $receipt.inspectorHost.frameworkVersion -cne '10.0.11' -or
+              $receipt.candidateBuilt -ne $true -or
+              $receipt.candidateLoaded -ne $false -or
+              $receipt.candidateExecuted -ne $false -or
+              $receipt.driverTouched -ne $false -or
+              $receipt.deviceTouched -ne $false -or
+              $receipt.artifactsRetained -ne $false -or
+              $receipt.cleanupCompleted -ne $true) {
+            throw 'The top-level S1.5e Actions observation receipt is not exact.'
+          }
+          $packs = $receipt.targetingPacks
+          if ($packs.sdkVersionFileSha256 -cne
+                '89D0157FDF8D6ACD8A76EA6FC0E3A110BE7BCA5FF2001D0436ADE70DD0A7ADC7' -or
+              $packs.sdkToolsetVersionFileSha256 -cne
+                '45D078105738431B70271E857D5CE409B8E6F0F891FF9F864CB5FC92546CDDCC' -or
+              $packs.sdkBundledVersionsSha256 -cne
+                '2D6C1879967A87460C1C712B54B9FE378281DE4D4F7301ECBB8AF923B47C40DD' -or
+              $packs.netCoreAppRefVersion -cne '10.0.11' -or
+              $packs.netCoreAppRefOriginalFileCount -ne 348 -or
+              $packs.netCoreAppRefOriginalRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePreRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefSourcePostRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePostRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefOriginalFrameworkListByteLength -ne 36320 -or
+              $packs.netCoreAppRefOriginalFrameworkListSha256 -cne
+                '0527031269FF47FCEB1518ECCD9992E75F924881A362754957676C18988263B4' -or
+              $packs.netCoreAppRefSanitizedFileCount -ne 342 -or
+              $packs.netCoreAppRefSanitizedRawByteLength -ne 41745862 -or
+              $packs.netCoreAppRefSanitizedFrameworkListByteLength -ne 34752 -or
+              $packs.netCoreAppRefSanitizedFrameworkListSha256 -cne
+                'C23E017A615E74F8CD94DAA2FCA3B9F5EDDBDC4C6636A47D6CB4FC5A61EF9006' -or
+              $packs.netCoreAppRefSanitizedRawTreeSha256 -cne
+                'EF000B960364CC8C39255D3619BA7BF95DA97C0E07B4C029FC9B578E9C1C8276' -or
+              $packs.windowsSdkNetRefVersion -cne '10.0.26100.57' -or
+              $packs.windowsPackageSha256 -cne
+                'EAA0E3B938319F75BEAC5C046C84EF57212C2743E9263E0DB33B2019AB70B524' -or
+              $packs.windowsEvidenceFileCount -ne 97 -or
+              $packs.windowsEvidenceRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePreRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsEvidencePostRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePostRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsOriginalFrameworkListByteLength -ne 942 -or
+              $packs.windowsOriginalFrameworkListSha256 -cne
+                '5F5DC88A217A01FAD154279EF8760C49C4FF9819E33AD0671D0F110D0B641D04' -or
+              $packs.windowsSanitizedFileCount -ne 96 -or
+              $packs.windowsSanitizedRawByteLength -ne 66953308 -or
+              $packs.windowsSanitizedFrameworkListByteLength -ne 702 -or
+              $packs.windowsSanitizedFrameworkListSha256 -cne
+                '78770AD71BD625A18FB1128CF0FF1030C4B1594060931246AB68F94A28921388' -or
+              $packs.windowsSanitizedRawTreeSha256 -cne
+                'E9F9791056DEABD9763FCA005F8604668FF23ACFA875BAB61285CA978BB1D6BA' -or
+              $packs.overlayFileCount -ne 438 -or
+              $packs.overlayRawByteLength -ne 108699170 -or
+              $packs.overlayPreRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.overlayPostFileCount -ne 438 -or
+              $packs.overlayPostRawByteLength -ne 108699170 -or
+              $packs.overlayPostRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.effectiveCompilerAnalyzerItemCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerConfigArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAdditionalFileArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscResponseFileArgumentCount -ne 0 -or
+              $packs.effectiveCompilerAuxiliaryItemCount -ne 0 -or
+              $packs.sourceGeneratorExecutionAuthorized -ne $false -or
+              $packs.analyzerClosureCheckedPreAndPostForCandidateAndInspector -ne $true -or
+              $packs.candidatePackageDownloadFallbacksDisabled -ne $true -or
+              $packs.candidatePackageSourcesConfigured -ne 0 -or
+              $packs.workloadResolverEnabled -ne $false -or
+              $packs.candidateNetworkAuthorized -ne $false) {
+            throw 'The exact released-SDK targeting-pack observation is not exact.'
+          }
+          Assert-ExactRemovedAnalyzers `
+            @($packs.netCoreAppRefRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/Microsoft.Interop.ComInterfaceGenerator.dll|6AD171126DF1AE4DB0420EDFA9791C2CE2599AF758C506BEAB1F29CC9219FE2B',
+              'analyzers/dotnet/cs/Microsoft.Interop.JavaScript.JSImportGenerator.dll|6C06555039E10929673A5EA53CB5CFF7324D292C989D77F0D10DDD56198D6DE1',
+              'analyzers/dotnet/cs/Microsoft.Interop.LibraryImportGenerator.dll|AE1A7C7BEE96FCD69C66FF4FC1CD4D5E2C2474E1644EA9547A11048CF648871C',
+              'analyzers/dotnet/cs/Microsoft.Interop.SourceGeneration.dll|5EFC03100F5C544F64ACE8D240BB73661D1BDA8B01BD69BC4D1FB24D605F8BB5',
+              'analyzers/dotnet/cs/System.Text.Json.SourceGeneration.dll|82CA672F31AD099C9E823B646C27F3A1DA249E3C5574B1DBC4DC76DEE234BD12',
+              'analyzers/dotnet/cs/System.Text.RegularExpressions.Generator.dll|D5B18010ED85ABA3C8807BD3CFA01097BF99E1B6460E99B9A26EB74BFCE12B10'
+            ) `
+            'Core targeting-pack removal evidence'
+          Assert-ExactRemovedAnalyzers `
+            @($packs.windowsRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/WinRT.SourceGenerator.dll|A23601B11FBB36A2DE48960AAD942FBAB26D2F0835F98086CC764F97EA81CBC8'
+            ) `
+            'Windows targeting-pack removal evidence'
+          if ($receipt.inspectorRuntime.version -cne '10.0.11' -or
+              $receipt.inspectorRuntime.fileCount -le 0 -or
+              $receipt.inspectorRuntime.rawByteLength -le 0 -or
+              $receipt.inspectorRuntime.versionFileSha256 -cne
+                '13B770DFE2DFC0294F8C5A9CD60198F365745A219878910A572FD85784D3B733' -or
+              $receipt.inspectorRuntime.preRawTreeSha256 -cnotmatch '^[A-F0-9]{64}$' -or
+              $receipt.inspectorRuntime.preLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.postLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.pathRedacted -ne $true) {
+            throw 'The exact byte-inspector runtime observation is not exact.'
+          }
+          $outputs = @($receipt.determinism.outputs.PSObject.Properties)
+          $expectedOutputs = @(
+            'HIDMaestro.Core.deps.json',
+            'HIDMaestro.Core.dll',
+            'HIDMaestro.Core.pdb'
+          )
+          if ($outputs.Count -ne 3 -or
+              @(Compare-Object $expectedOutputs @($outputs.Name) -CaseSensitive).Count -ne 0 -or
+              @($outputs | Where-Object {
+                $_.Value.byteLength -le 0 -or
+                $_.Value.sha256 -cnotmatch '^[0-9A-F]{64}$'
+              }).Count -ne 0) {
+            throw 'The deterministic output inventory is not exact.'
+          }
+          if ($receipt.observation.ok -ne $true -or
+              $receipt.observation.phase -cne 's1.5e-actions-static-artifact-observation' -or
+              $receipt.observation.candidateBuilt -ne $true -or
+              $receipt.observation.candidateLoaded -ne $false -or
+              $receipt.observation.candidateExecuted -ne $false -or
+              $receipt.observation.driverTouched -ne $false -or
+              $receipt.observation.deviceTouched -ne $false -or
+              $receipt.observation.networkUsedByCandidate -ne $false -or
+              $receipt.observation.publicApi.declaredTypeCount -ne 9 -or
+              $receipt.observation.publicApi.logicalEntryCount -ne 100 -or
+              @($receipt.observation.publicApi.missingTypes).Count -ne 0 -or
+              @($receipt.observation.publicApi.unexpectedTypes).Count -ne 0 -or
+              @($receipt.observation.publicApi.missingEntries).Count -ne 0 -or
+              @($receipt.observation.publicApi.unexpectedEntries).Count -ne 0 -or
+              $receipt.observation.publicApi.structuralContractMatched -ne $false -or
+              $receipt.observation.resources.count -ne 228 -or
+              $receipt.observation.resources.deployableCount -ne 130 -or
+              @($receipt.observation.checks | Where-Object { $_.ok -ne $true }).Count -ne 0) {
+            throw 'The nested byte-only artifact observation is not exact.'
+          }
+          Assert-SixClosedGates $receipt.gateState 'S1.5e Actions observation'
+          Assert-SixClosedGates $receipt.observation.gateState 'S1.5e byte inspector'
+
   # The shippable binary and the installer. The steps live in
   # `build-installer.yml` because `release.yml` needs the SAME build — the file
   # a customer downloads must be the file this gate proved, not a second build
@@ -160,7 +1333,7 @@ jobs:
   # walk through the Actions tab. `release.yml` is what turns the same two files
   # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
-    needs: test
+    needs: [test, hidmaestro-contracts, hidmaestro-artifact-observation]
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

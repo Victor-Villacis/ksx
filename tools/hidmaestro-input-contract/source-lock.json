@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-v1.6.1-dualsense-usb-submit-state-input",
+  "upstream": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro.git",
+    "tag": "v1.6.1",
+    "tagKind": "lightweight",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "tagTarget": "2a0dac0857901a63d365a36dcf99cf50114ca954"
+  },
+  "files": [
+    {
+      "path": "profiles/sony/dualsense.json",
+      "gitBlobSha1": "ffdf2c2b99c4a8315c65fde9e7096c5780580760",
+      "role": "USB DualSense identity, descriptor, report size, axis map, button map, and trigger-button map"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMGamepadState.cs",
+      "gitBlobSha1": "1a0365d579b9f2c27afc544e048ebd4e95012b29",
+      "role": "public state fields and exact HMAxis, HMButton, and HMHat values"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMController.cs",
+      "gitBlobSha1": "65d1378680b7d19d89202abaa0bbb28e66005d5a",
+      "role": "active USB SubmitState path selection and 64-byte wire to 63-byte shared-data coordinate conversion"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs",
+      "gitBlobSha1": "20f70dc330b15bff44df871be3fcfda958b454c1",
+      "role": "profile JSON binding and parsed builder configuration with AxisMap, ButtonMap, and TriggerButtons"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs",
+      "gitBlobSha1": "f5f552dc5f5a29fe369222ba6f6c9118d9d74883",
+      "role": "authoritative active descriptor parser and legacy input encoder"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/VendorBlobCodec.cs",
+      "gitBlobSha1": "ef1c53e2f161a210a85b73e8c1af4b7abd8327a6",
+      "role": "alternative extended-report encoder that the pinned USB profile does not arm"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/VendorBlobProgram.cs",
+      "gitBlobSha1": "ecee7761ccc32e307136725935ca0709a787dd26",
+      "role": "compiled extended-report metadata semantics, retained only to close the rejected alternative path"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs",
+      "gitBlobSha1": "c29f75012ca7a6be489a65b0d763558fc442a5ee",
+      "role": "legacy shared-input DataSize and dataOffset publication semantics"
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs",
+      "gitBlobSha1": "55b266c898cd4d61a959902996594d0f9124409e",
+      "role": "profile inputReportSize to driver InputReportByteLength binding"
+    },
+    {
+      "path": "driver/driver.c",
+      "gitBlobSha1": "6d48b888dd95534098af6b8c78cc84ca0547c9fe",
+      "role": "legacy driver zero-fill, report-ID prepend, data overlay, and exact 64-byte delivery"
+    },
+    {
+      "path": "driver/driver.h",
+      "gitBlobSha1": "5c7abc3bb4962d16ca06469bafaadc85be2fee45",
+      "role": "shared-input and report-buffer bounds used by the driver path"
+    },
+    {
+      "path": "test/probes/sony_extra_buttons_check/Program.cs",
+      "gitBlobSha1": "fb91a8e4a38c639337f0f8816d9985245598ce2e",
+      "role": "upstream corroboration for byte 8 through byte 10 DualSense USB button placement"
+    }
+  ],
+  "sourceAnchors": [
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs",
+      "lines": "328-344",
+      "claim": "GetOrBuildReportBuilder parses the descriptor with AxisMap and applies ButtonMap plus TriggerButtons."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMController.cs",
+      "lines": "349-410",
+      "claim": "USB profiles without armOn or alwaysArmed do not allocate or arm the extended encoder."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/HMController.cs",
+      "lines": "489-728",
+      "claim": "SubmitState selects the legacy builder, then publishes report[1..64] as 63 data bytes."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs",
+      "lines": "324-497",
+      "claim": "The descriptor parser selects report ID 1 and computes 504 data bits."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/HidReportBuilder.cs",
+      "lines": "716-1009",
+      "claim": "The active encoder clears the report, truncates and clamps axes, maps the hat, derives digital trigger buttons, and applies ButtonMap."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs",
+      "lines": "552-625",
+      "claim": "WriteInputFrame copies exactly dataLen bytes starting at dataOffset."
+    },
+    {
+      "path": "sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs",
+      "lines": "822-858",
+      "claim": "The profile's inputReportSize 64 is written as InputReportByteLength."
+    },
+    {
+      "path": "driver/driver.c",
+      "lines": "1282-1320",
+      "claim": "The driver zero-fills, prepends report ID 1, overlays at most 63 data bytes, and delivers expectedSize 64."
+    }
+  ],
+  "verifierAuthority": {
+    "shell": "Windows PowerShell 5.1 or newer",
+    "externalExecutable": "git resolved from the caller's PATH",
+    "gitConfiguration": "inherited from the caller; the verifier does not mutate system, global, or repository Git configuration",
+    "globalGitOptions": ["--no-replace-objects", "-C", "<caller-supplied-HidMaestroRoot>"],
+    "commandAllowlist": [
+      "cat-file -e <exact-commit>^{commit}",
+      "rev-parse <exact-commit>:<locked-path>",
+      "show <exact-commit>:profiles/sony/dualsense.json"
+    ],
+    "hooksInvoked": false,
+    "networkAuthorized": false,
+    "upstreamCodeExecutionAuthorized": false,
+    "buildAuthorized": false,
+    "driverOrDeviceAuthorized": false
+  },
+  "assurance": {
+    "kind": "static-source-only",
+    "sourceContractFrozen": true,
+    "runtimeImplementationBound": false,
+    "artifactBuilt": false,
+    "driverLoaded": false,
+    "deviceExercised": false,
+    "distributionReady": false
+  }
+}

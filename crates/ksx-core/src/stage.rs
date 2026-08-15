@@ -31,10 +31,10 @@
 //!
 //! Every rule here already existed somewhere and is *read*, not re-derived:
 //!
-//! - [`Persona::can_plug`] gates the three HIDMaestro personas, and the refusal
-//!   quotes [`crate::PadBackend::gap`] verbatim — the same sentence
-//!   `ksx slot assign` prints, so the day HIDMaestro's shared section gets a
-//!   mapper, one `is_implemented` flips and both stop refusing at once;
+//! - [`Persona::can_plug`] gates each HIDMaestro persona independently, and the refusal
+//!   quotes [`crate::Persona::gap`] verbatim — the same sentence
+//!   `ksx slot assign` prints, so each exact persona stops refusing only when
+//!   its production host path is proven;
 //! - [`MAX_XINPUT_SLOTS`] caps the personas that occupy one of Windows' four
 //!   XInput slots, counted through [`Persona::is_xinput`] — which is why
 //!   `playstation` is plain HID, takes none, and is how players 5+ exist;
@@ -177,12 +177,12 @@ pub enum StageRefusal {
     )]
     NoFreeSlot,
     /// The persona is a real persona, and this build cannot create it. Worded
-    /// from [`crate::PadBackend::gap`] so this refusal and `ksx slot assign`'s
+    /// from [`crate::Persona::gap`] so this refusal and `ksx slot assign`'s
     /// say the identical thing.
     #[error(
         "persona '{persona}' is a persona ksx knows and this build cannot create — {reason}. \
          What decides it is the BINARY, not the machine: `Persona::backend()` sends {persona} to \
-         {backend}, and `PadBackend::is_implemented` is false for {backend} in this build. \
+         {backend}, and `Persona::can_plug` is false for {persona} in this build. \
          Stage persona '{instead}' instead"
     )]
     PersonaNotImplemented {
@@ -190,6 +190,17 @@ pub enum StageRefusal {
         backend: &'static str,
         reason: &'static str,
         instead: Persona,
+    },
+    /// This build can create the persona, but its production runtime owns a
+    /// deliberately bounded number of devices.
+    #[error(
+        "slot {number} would make {after} staged '{persona}' controllers, but this release can create at most {limit}. The first HIDMaestro runtime owns one fixed DualSense endpoint; use another supported persona for the extra slot"
+    )]
+    PersonaCapacity {
+        number: u8,
+        persona: Persona,
+        after: usize,
+        limit: usize,
     },
     /// Staging this would leave a fifth slot on an XInput persona.
     #[error(
@@ -296,6 +307,7 @@ impl StageRefusal {
             Self::NoSuchSlot { .. } => "no-such-slot",
             Self::NoFreeSlot => "no-free-slot",
             Self::PersonaNotImplemented { .. } => "persona-not-implemented",
+            Self::PersonaCapacity { .. } => "persona-capacity",
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
             Self::BadAlias { .. } => "bad-alias",
             Self::PresetNameClash { .. } => "preset-name-clash",
@@ -380,6 +392,14 @@ impl StagedSetup {
         self.slots.iter().filter(|s| s.persona.is_xinput()).count()
     }
 
+    /// How many staged slots ask for one exact persona.
+    pub fn persona_slots(&self, persona: Persona) -> usize {
+        self.slots
+            .iter()
+            .filter(|slot| slot.persona == persona)
+            .count()
+    }
+
     /// Choose the input device. Replaces any earlier choice — that is the whole
     /// point of moment 4, and it costs nothing because nothing was written.
     pub fn choose_device(&self, device: StagedDevice) -> Result<Self, StageRefusal> {
@@ -455,6 +475,7 @@ impl StagedSetup {
             preset,
         });
         next.slots.sort_by_key(|s| s.number);
+        next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
         Ok(next)
     }
@@ -478,6 +499,7 @@ impl StagedSetup {
             .find(|s| s.number == number)
             .ok_or(StageRefusal::NoSuchSlot { number })?;
         slot.persona = persona;
+        next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
         Ok(next)
     }
@@ -592,6 +614,17 @@ impl StagedSetup {
                 after: xinput,
             });
         }
+        for persona in Persona::ALL.iter().copied() {
+            self.check_persona_capacity(
+                self.slots
+                    .iter()
+                    .filter(|slot| slot.persona == persona)
+                    .map(|slot| slot.number)
+                    .next_back()
+                    .unwrap_or(0),
+                persona,
+            )?;
+        }
         // LAST, because it is moment 6 and the others are moments 4 and 5: a
         // user who has not yet added a controller should be told that, not
         // asked about blocking. An unanswered question resolved to
@@ -615,6 +648,22 @@ impl StagedSetup {
         let after = self.xinput_slots();
         if after > usize::from(MAX_XINPUT_SLOTS) {
             return Err(StageRefusal::TooManyXinputSlots { number, after });
+        }
+        Ok(())
+    }
+
+    fn check_persona_capacity(&self, number: u8, persona: Persona) -> Result<(), StageRefusal> {
+        let Some(limit) = persona.instance_limit() else {
+            return Ok(());
+        };
+        let after = self.persona_slots(persona);
+        if after > limit {
+            return Err(StageRefusal::PersonaCapacity {
+                number,
+                persona,
+                after,
+                limit,
+            });
         }
         Ok(())
     }
@@ -651,7 +700,7 @@ fn check_slot_number(number: u8) -> Result<(), StageRefusal> {
     Ok(())
 }
 
-/// Refuse a persona this BUILD cannot create, in [`crate::PadBackend`]'s own
+/// Refuse a persona this BUILD cannot create, in [`crate::Persona`]'s own
 /// words.
 ///
 /// Reads [`Persona::can_plug`] and nothing else — never a driver probe, for the
@@ -666,7 +715,7 @@ fn check_pluggable(persona: Persona) -> Result<(), StageRefusal> {
     Err(StageRefusal::PersonaNotImplemented {
         persona,
         backend: backend.label(),
-        reason: backend
+        reason: persona
             .gap()
             .unwrap_or("this build ships no code that can create it"),
         instead: persona.nearest_pluggable(),
@@ -807,7 +856,7 @@ mod tests {
         );
     }
 
-    /// The three HIDMaestro personas are refused in `PadBackend::gap()`'s own
+    /// The two unfinished HIDMaestro personas are refused in `Persona::gap()`'s own
     /// words — including the half that closes off the wrong fix.
     ///
     /// Breaks against a stage that accepted them: the user picks DualSense, the
@@ -816,7 +865,6 @@ mod tests {
     #[test]
     fn a_persona_this_build_cannot_plug_is_refused_with_a_way_out() {
         for (persona, instead) in [
-            (Persona::DualSense, Persona::PlayStation),
             (Persona::SwitchPro, Persona::Xbox360),
             (Persona::XboxSeries, Persona::Xbox360),
         ] {
@@ -824,7 +872,7 @@ mod tests {
             assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
             let message = refused.to_string();
             assert!(
-                message.contains("installing HIDMaestro does not change it"),
+                message.contains("has not yet completed its independent production runtime"),
                 "the gap verbatim: {message}"
             );
             assert!(message.contains("BINARY"), "{message}");
@@ -835,6 +883,31 @@ mod tests {
                 "persona-not-implemented"
             );
         }
+        staged()
+            .add_slot(2, Persona::DualSense, preset("P2"))
+            .expect("the production DualSense path is accepted");
+    }
+
+    #[test]
+    fn a_second_dualsense_is_refused_before_it_can_reach_the_single_host() {
+        let one = staged()
+            .add_slot(2, Persona::DualSense, preset("P2"))
+            .unwrap();
+        let err = one
+            .add_slot(3, Persona::DualSense, preset("P3"))
+            .unwrap_err();
+        assert_eq!(err.code(), "persona-capacity");
+        assert!(err.to_string().contains("at most 1"), "{err}");
+        assert_eq!(one.persona_slots(Persona::DualSense), 1);
+
+        let with_other = one.add_slot(3, Persona::PlayStation, preset("P3")).unwrap();
+        assert_eq!(
+            with_other
+                .set_persona(3, Persona::DualSense)
+                .unwrap_err()
+                .code(),
+            "persona-capacity"
+        );
     }
 
     /// MAX_SLOTS is the total ceiling, and it is ksx's own — the refusal says
@@ -1195,6 +1268,12 @@ mod tests {
                 backend: "HIDMaestro",
                 reason: "x",
                 instead: Persona::PlayStation,
+            },
+            StageRefusal::PersonaCapacity {
+                number: 2,
+                persona: Persona::DualSense,
+                after: 2,
+                limit: 1,
             },
             StageRefusal::TooManyXinputSlots {
                 number: 5,

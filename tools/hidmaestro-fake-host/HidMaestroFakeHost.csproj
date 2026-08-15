@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <AssemblyName>ksx-hidmaestro-fake-host</AssemblyName>
+    <RootNamespace>Ksx.HidMaestroFakeHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Compile the already-frozen, BCL-only KSXH codec into this executable.
+         No SDK assembly, content file, package, or runtime lookup is allowed. -->
+    <Compile Include="../hidmaestro-probe/HostProtocolCodec.cs"
+             Link="Protocol/HostProtocolCodec.cs" />
+    <Compile Remove="tests/**/*.cs" />
+  </ItemGroup>
+
+  <Target Name="EnforceSdkFreeFakeHost" BeforeTargets="CoreCompile">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\test-safety.ps1&quot;" />
+  </Target>
+</Project>

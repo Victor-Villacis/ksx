@@ -226,26 +226,15 @@ pub(crate) fn live_session(
     live_latency: bool,
     json: bool,
 ) -> anyhow::Result<()> {
-    use anyhow::Context as _;
     use ksx_output::{RoutedBackend, VigemBackend};
 
-    // Pads first, even for the availability check: a missing bus must be found
-    // before anything touches the keyboard stack.
-    //
-    // Wrapped in a `RoutedBackend` so a slot's *persona* picks its driver stack
-    // (see `ksx_output::router`). ViGEmBus is still connected eagerly — it backs
-    // xbox360/playstation, which is every configuration ksx ships — while
-    // HIDMaestro is built only if some slot asks for a persona that needs it.
-    // A cabinet with no such slot never probes for it and cannot be broken by
-    // its absence.
-    let vigem = match VigemBackend::connect() {
-        Ok(backend) => backend,
-        Err(err) if err.is_bus_missing() => {
-            refuse(json, "vigembus-missing", &err.to_string());
-        }
-        Err(err) => return Err(err).context("connecting to ViGEmBus"),
-    };
-    let pads = RoutedBackend::standard(Box::new(vigem));
+    // Each output stack is opened only if a selected persona needs it. This is
+    // load-bearing for a DualSense-only session: ViGEmBus is a compatibility
+    // lane, not a hidden prerequisite for the HIDMaestro product path.
+    let pads = RoutedBackend::standard_lazy(Box::new(|| {
+        VigemBackend::connect()
+            .map(|backend| Box::new(backend) as Box<dyn ksx_output::VirtualPadBackend>)
+    }));
     // Every failure here is a refusal: no pad is plugged and no filter is armed.
     let capture = match capture(plan) {
         Ok(backend) => backend,
@@ -335,7 +324,7 @@ fn run_live(
     _json: bool,
 ) -> anyhow::Result<()> {
     anyhow::bail!(
-        "`ksx run` is Windows-only (it drives the Interception and ViGEmBus kernel drivers); \
+        "`ksx run` is Windows-only (it drives the configured capture and virtual-controller backends); \
          `ksx run --dry-run` works everywhere"
     )
 }

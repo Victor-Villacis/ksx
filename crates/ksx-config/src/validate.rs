@@ -43,6 +43,12 @@ pub enum Issue {
     /// game, which is a failure that looks like success — so it is reported
     /// here, where the fix (a HID persona) can be named.
     TooManyXinputSlots { count: usize },
+    /// More slots request a persona than this release's runtime can own.
+    PersonaCapacity {
+        persona: String,
+        count: usize,
+        limit: usize,
+    },
     /// A `[[slot]]` names a persona this BUILD of ksx cannot create.
     ///
     /// Not a typo and not an unknown name — the persona is real, it parses, and
@@ -59,7 +65,7 @@ pub enum Issue {
         slot: u8,
         /// Canonical name, as written in the file.
         persona: String,
-        /// What is missing, verbatim from [`ksx_core::PadBackend::gap`] —
+        /// What is missing, verbatim from [`ksx_core::Persona::gap`] —
         /// carried rather than re-derived so `--json` consumers read the same
         /// sentence the text output prints.
         reason: String,
@@ -73,6 +79,13 @@ pub enum Issue {
         persona: String,
         reason: String,
         instead: String,
+    },
+    /// See [`Issue::PersonaCapacity`], scoped to one game profile.
+    GamePersonaCapacity {
+        game: String,
+        persona: String,
+        count: usize,
+        limit: usize,
     },
     /// Slot references a preset that is neither a preset file nor a built-in.
     UnknownPresetRef { slot: u8, preset: String },
@@ -387,6 +400,14 @@ impl fmt::Display for Issue {
                     Persona::PlayStation
                 )
             }
+            Issue::PersonaCapacity {
+                persona,
+                count,
+                limit,
+            } => write!(
+                f,
+                "{count} slots request persona '{persona}', but this release can create at most {limit}; use another supported persona for the extra slot"
+            ),
             Issue::PersonaNotImplemented {
                 slot,
                 persona,
@@ -708,6 +729,15 @@ impl fmt::Display for Issue {
                     Persona::PlayStation
                 )
             }
+            Issue::GamePersonaCapacity {
+                game,
+                persona,
+                count,
+                limit,
+            } => write!(
+                f,
+                "game '{game}': {count} slots request persona '{persona}', but this release can create at most {limit}; use another supported persona for the extra slot"
+            ),
             Issue::GameDuplicateSlotNumber { game, number } => {
                 write!(f, "game '{game}': more than one slot uses number {number}")
             }
@@ -809,6 +839,23 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
             count: xinput_slots,
         });
     }
+    for persona in Persona::ALL.iter().copied() {
+        let Some(limit) = persona.instance_limit() else {
+            continue;
+        };
+        let count = config
+            .slots
+            .iter()
+            .filter(|slot| slot.persona == persona)
+            .count();
+        if count > limit {
+            issues.push(Issue::PersonaCapacity {
+                persona: persona.to_string(),
+                count,
+                limit,
+            });
+        }
+    }
 
     for preset in presets {
         validate_preset(preset, &mut issues);
@@ -882,6 +929,24 @@ pub fn validate_games(games: &GamesFile, presets: &[PresetFile]) -> Vec<Issue> {
                 count: xinput_slots,
             });
         }
+        for persona in Persona::ALL.iter().copied() {
+            let Some(limit) = persona.instance_limit() else {
+                continue;
+            };
+            let count = game
+                .slots
+                .iter()
+                .filter(|slot| slot.persona == persona)
+                .count();
+            if count > limit {
+                issues.push(Issue::GamePersonaCapacity {
+                    game: game.title.clone(),
+                    persona: persona.to_string(),
+                    count,
+                    limit,
+                });
+            }
+        }
     }
     issues
 }
@@ -898,11 +963,7 @@ fn persona_gap(persona: Persona) -> Option<(String, String)> {
         return None;
     }
     Some((
-        persona
-            .backend()
-            .gap()
-            .unwrap_or("no reason recorded")
-            .to_owned(),
+        persona.gap().unwrap_or("no reason recorded").to_owned(),
         persona.nearest_pluggable().to_string(),
     ))
 }
@@ -1685,7 +1746,7 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        for persona in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
@@ -1726,11 +1787,61 @@ preset = "default"
             slots: vec![
                 slot(1, Persona::Xbox360),
                 slot(2, Persona::PlayStation),
-                slot(3, Persona::Xbox360),
+                slot(3, Persona::DualSense),
             ],
             ..ConfigFile::default()
         };
         assert_eq!(validate(&cfg, &[]), vec![]);
+    }
+
+    #[test]
+    fn a_second_dualsense_is_rejected_by_config_and_game_validation() {
+        let slot = |number: u8| SlotEntry {
+            number,
+            keyboard: None,
+            mouse: None,
+            preset: "default".into(),
+            persona: Persona::DualSense,
+            socd: Socd::default(),
+            macros: Default::default(),
+        };
+        let cfg = ConfigFile {
+            slots: vec![slot(1), slot(2)],
+            ..ConfigFile::default()
+        };
+        assert_eq!(
+            validate(&cfg, &[]),
+            vec![Issue::PersonaCapacity {
+                persona: "dualsense".into(),
+                count: 2,
+                limit: 1,
+            }]
+        );
+
+        use crate::games::GameSlotEntry;
+        let mut games: GamesFile =
+            toml::from_str("[[game]]\ntitle = \"PS5\"\npath = \"C:\\\\ps5.exe\"\n").unwrap();
+        games.games[0].slots = (1..=2)
+            .map(|number| GameSlotEntry {
+                number,
+                user_index: None,
+                keyboard: None,
+                mouse: None,
+                preset: "default".into(),
+                persona: Persona::DualSense,
+                socd: Socd::default(),
+                macros: Default::default(),
+            })
+            .collect();
+        assert_eq!(
+            validate_games(&games, &[]),
+            vec![Issue::GamePersonaCapacity {
+                game: "PS5".into(),
+                persona: "dualsense".into(),
+                count: 2,
+                limit: 1,
+            }]
+        );
     }
 
     #[test]
@@ -1744,7 +1855,7 @@ preset = "default"
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: Persona::DualSense,
+            persona: Persona::SwitchPro,
             socd: Socd::default(),
             macros: Default::default(),
         }];
@@ -1754,14 +1865,14 @@ preset = "default"
             vec![Issue::GamePersonaNotImplemented {
                 game: "Bloodborne".into(),
                 slot: 1,
-                persona: "dualsense".into(),
-                reason: ksx_core::PadBackend::HidMaestro.gap().unwrap().to_owned(),
-                instead: "playstation".into(),
+                persona: "switchpro".into(),
+                reason: Persona::SwitchPro.gap().unwrap().to_owned(),
+                instead: "xbox360".into(),
             }]
         );
         let msg = issues[0].to_string();
         assert!(msg.contains("Bloodborne"), "{msg}");
-        assert!(msg.contains("playstation"), "{msg}");
+        assert!(msg.contains("xbox360"), "{msg}");
     }
 
     /// The trap, stated as a test: this check may never consult the machine.
@@ -1777,14 +1888,15 @@ preset = "default"
             persona_gap(Persona::SwitchPro).expect("switchpro cannot be plugged by this build");
         assert_eq!(
             reason,
-            ksx_core::PadBackend::HidMaestro.gap().unwrap(),
+            Persona::SwitchPro.gap().unwrap(),
             "the sentence must come from the capability, not a second copy"
         );
-        assert!(reason.contains("installing HIDMaestro does not change it"));
+        assert!(reason.contains("has not yet completed its independent production runtime"));
         assert_eq!(instead, "xbox360");
         // And no gap at all for what the cabinet actually runs.
         assert_eq!(persona_gap(Persona::Xbox360), None);
         assert_eq!(persona_gap(Persona::PlayStation), None);
+        assert_eq!(persona_gap(Persona::DualSense), None);
     }
 
     #[test]

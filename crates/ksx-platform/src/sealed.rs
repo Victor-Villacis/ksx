@@ -90,6 +90,36 @@ impl SealedFile {
         })
     }
 
+    /// Open and seal `path`, refusing unless Windows can name the object back
+    /// from the retained handle.
+    ///
+    /// [`Self::open`] keeps its historical fallback because its non-Windows
+    /// callers use the requested path for offline verification.  An elevation
+    /// boundary cannot accept that ambiguity: ShellExecute receives a path, so
+    /// the path must have been derived from the exact file object whose seal is
+    /// still held.  This strict constructor is therefore Windows-only in
+    /// effect and fails closed everywhere else.
+    pub fn open_strict(path: &Path) -> std::io::Result<Self> {
+        let file = open_shared_read(path)?;
+        let len = file.metadata()?.len();
+        let resolved = final_path(&file).ok_or_else(|| {
+            std::io::Error::new(
+                if cfg!(windows) {
+                    std::io::ErrorKind::Other
+                } else {
+                    std::io::ErrorKind::Unsupported
+                },
+                "could not derive the sealed file's final path from its handle",
+            )
+        })?;
+        Ok(Self {
+            file,
+            requested: path.to_path_buf(),
+            resolved,
+            len,
+        })
+    }
+
     /// The path as the caller named it.
     pub fn path(&self) -> &Path {
         &self.requested
@@ -287,6 +317,34 @@ mod tests {
             resolved.display()
         );
         drop(sealed);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strict_open_returns_only_a_handle_derived_path_and_keeps_the_seal() {
+        let path = temp_file("strict.exe", b"not a real image");
+        let sealed = SealedFile::open_strict(&path).expect("strict handle-derived path");
+        assert!(sealed.exec_path().is_absolute());
+        assert_eq!(
+            sealed.exec_path().file_name(),
+            Some(std::ffi::OsStr::new("strict.exe"))
+        );
+        assert!(
+            std::fs::write(&path, b"replacement").is_err(),
+            "the strict path must retain the same no-write seal"
+        );
+        drop(sealed);
+        std::fs::write(&path, b"replacement").unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn strict_open_fails_closed_without_handle_path_identity() {
+        let path = temp_file("strict.exe", b"not a real image");
+        let err = SealedFile::open_strict(&path).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
         let _ = std::fs::remove_file(&path);
     }
 

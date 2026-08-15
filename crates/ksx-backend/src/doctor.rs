@@ -158,7 +158,7 @@ pub fn render_human(report: &DriverReport, advice: &[Advice]) -> String {
     render_interception(&mut doc, report);
     doc.blank();
 
-    doc.line("HIDMaestro (M8 backend — not implemented in this build; see below)");
+    doc.line("HIDMaestro (production DualSense backend)");
     render_hidmaestro(&mut doc, &report.hidmaestro);
     doc.blank();
 
@@ -323,15 +323,13 @@ fn render_interception(doc: &mut Doc, report: &DriverReport) {
 /// ([`ksx_core::Persona::can_plug`]), so that is what the gate line reports,
 /// and it says the same thing whatever the probe found.
 ///
-/// The install state is still printed, with what was looked for, because a
-/// half-finished install is worth knowing about. It is `[INFO]`, never `[FAIL]`:
-/// no supported KSX path depends on HIDMaestro today.
+/// The install state is printed because the production DualSense path depends
+/// on it. The compatibility personas remain available through ViGEmBus.
 fn render_hidmaestro(doc: &mut Doc, hm: &ksx_platform::HidMaestroReport) {
     let gated = ksx_platform::HidMaestroReport::gated_personas();
     if !gated.is_empty() {
         doc.line(format!(
-            "  [INFO] {} cannot be plugged by this build of ksx — no HIDMaestro \
-             transport is implemented, so installing the driver does not enable them",
+            "  [INFO] {} remain unavailable — those profile runtimes are not implemented",
             gated.join("/")
         ));
         doc.line(format!(
@@ -341,19 +339,19 @@ fn render_hidmaestro(doc: &mut Doc, hm: &ksx_platform::HidMaestroReport) {
         ));
     }
     if !hm.installed {
-        if hm.service_key {
+        if hm.service_key || hm.driver_file.is_some() {
             doc.line(
-                "  [WARN] service key present but the UMDF driver is missing — broken install",
+                "  [WARN] HIDMaestro package is missing, duplicated, or does not match pinned v1.6.1 — repair required",
             );
         } else {
-            doc.line("  [INFO] not installed (nothing depends on it today)");
+            doc.line("  [INFO] not installed — DualSense needs the HIDMaestro installer task");
         }
         for target in &hm.looked_for {
             doc.line(format!("  [INFO]   looked for {target}"));
         }
         return;
     }
-    doc.line("  [INFO] installed");
+    doc.line("  [OK]   installed — production DualSense runtime is available");
     match &hm.driver_file {
         Some(file) => render_driver_file(doc, file),
         None => doc.line("  [WARN] driver file present but unreadable"),
@@ -584,7 +582,8 @@ mod tests {
             // Synthetic absent-state fixture: no service key or UMDF driver.
             hidmaestro: ksx_platform::HidMaestroReport::absent(vec![
                 "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro".into(),
-                "C:\\Windows\\System32\\drivers\\UMDF\\HIDMaestro.dll".into(),
+                "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\hidmaestro.inf (SHA256 187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704)".into(),
+                "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\HIDMaestro.dll (SHA256 D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C)".into(),
             ]),
         }
     }
@@ -617,7 +616,7 @@ mod tests {
     /// which was false on every build ksx has ever shipped, and false in the
     /// one state where a user would act on it.
     #[test]
-    fn installing_hidmaestro_never_makes_doctor_offer_a_persona() {
+    fn installing_hidmaestro_reports_dualsense_ready_without_offering_unfinished_profiles() {
         let mut report = cabinet_report();
         report.hidmaestro.installed = true;
         report.hidmaestro.service_key = true;
@@ -631,12 +630,15 @@ mod tests {
             assert!(text.contains(persona), "{persona} unmentioned:\n{text}");
         }
         assert!(
-            text.contains("installing the driver does not enable them"),
+            text.contains("profile runtimes are not implemented"),
             "{text}"
         );
         // The install is still reported — it is worth knowing, it just decides
         // nothing — and it must not be dressed up as a fault.
-        assert!(text.contains("[INFO] installed"), "{text}");
+        assert!(
+            text.contains("[OK]   installed — production DualSense"),
+            "{text}"
+        );
         assert_ne!(exit_code(&summarize(&report)), EXIT_CRITICAL);
     }
 

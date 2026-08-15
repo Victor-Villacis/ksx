@@ -1,76 +1,50 @@
-//! ksx-hidmaestro — a Rust client for HIDMaestro's protocol.
+//! HIDMaestro support for KSX's production plain-USB DualSense persona.
 //!
-//! HIDMaestro (<https://github.com/hifihedgehog/HIDMaestro>, **MIT**) is a
-//! user-mode (UMDF2) HID descriptor emulator. It is the only route to the
-//! DualSense / Switch Pro / Xbox Series personas: ViGEmBus emulates X360 and
-//! DS4 and nothing else, and the project is frozen
-//! (`docs/ENHANCEMENTS.md` E1).
+//! HIDMaestro (<https://github.com/hifihedgehog/HIDMaestro>, MIT) is a UMDF2
+//! virtual-HID engine. The ordinary KSX daemon never opens its device mappings
+//! or mutates PnP state. [`windows_transport`] starts one fixed installed
+//! elevated sibling, authenticates that retained process over a one-use pipe,
+//! and [`host`] carries bounded create/submit/feedback/destroy messages. The
+//! sibling owns the exact driver ABI and one session-owned DualSense root.
 //!
-//! # Status: written to spec, NOT verified against a live driver
-//!
-//! This build has no production implementation that maps HIDMaestro's shared
-//! section, regardless of whether the driver is installed. Everything in this
-//! crate is implemented against the protocol map in
-//! `docs/research/padforge-code-audit.md` §3, which was extracted from
-//! PadForge's working C# client. That map is a good spec — it records the
-//! *bugs* as well as the shapes, which is the expensive half — but a spec is not
-//! a measurement.
-//!
-//! What that means concretely:
-//!
-//! | Layer | Verified | How |
-//! |---|---|---|
-//! | Seqlock discipline ([`seqlock`]) | **Yes** — real concurrency test | writer thread vs reader loop over shared atomics |
-//! | Keepalive cadence ([`keepalive`]) | **Yes** — pure logic, derived constants | arithmetic against the three watchdogs |
-//! | Axis routing by name ([`axis`], [`state`]) | **Yes** — pure logic | including a counterfactual that reproduces the phantom-trigger bug |
-//! | Lifecycle order ([`context`]) | **Yes** — recorded call order | test double behind [`context::HmDriverApi`] |
-//! | Feedback decode table ([`feedback`]) | **Table pinned, bytes unverified** | fixtures from the audit, incl. the BT length trap |
-//! | Shared-section layout ([`shm`], [`state::HmGamepadState::encode`]) | **No** | the audit documents the field set and the discipline, not the byte layout |
-//! | Anything touching a real device | **No** | there is no device to touch |
-//!
-//! Nothing here fakes a controller. On a machine without HIDMaestro,
-//! [`driver::UnavailableDriver`] refuses with the probe evidence attached, and
-//! `ksx doctor` reports the absence.
-//!
-//! # Shape
-//!
-//! - [`seqlock`] — the shared-memory latch and its read/write discipline. The
-//!   consumer drives the cadence; **this crate spawns no threads**.
-//! - [`keepalive`] — 16 ms idle-dedup, derived from three driver watchdogs.
-//! - [`axis`] / [`state`] — HID-usage axes, routed **by role through the
-//!   profile's map**, never positionally.
-//! - [`profile`] — descriptor + axis map, PID-block detection.
-//! - [`context`] — lifecycle, in the one order that works.
-//! - [`feedback`] — the decode table, including the Bluetooth length trap.
-//! - [`driver`] — availability probe and the honest not-installed driver.
-//! - [`shm`] (Windows) — file-mapping storage for the latch.
+//! Switch Pro and Xbox Series remain independently build-gated. The older
+//! seqlock, profile and lifecycle modules are retained as research/test models;
+//! they are not the live driver path and cannot be selected by product routing.
 
 pub mod axis;
 pub mod context;
 pub mod driver;
+mod dualsense_feedback;
 pub mod error;
 pub mod feedback;
+pub mod host;
 pub mod keepalive;
 pub mod profile;
+pub mod rendezvous;
 pub mod seqlock;
 #[cfg(windows)]
 pub mod shm;
 pub mod state;
+pub mod windows_transport;
 
 pub use axis::{AxisMap, AxisRole, HmAxis};
 pub use context::{HmContext, HmDriverApi, SlotId};
 pub use driver::{Availability, UnavailableDriver};
 pub use error::{HmError, ProbeSummary};
-pub use feedback::{decode_sony, decode_xbox_hid, decode_xinput, Decoded, Motors, OutputSource};
+pub use feedback::{
+    decode_xbox_hid, decode_xinput, Decoded, DualSenseDecodeResult, DualSenseDisposition,
+    DualSenseFeedbackDecoder, DualSenseRejectReason, EffectiveMotorSnapshot, Motors, OutputSource,
+    RawDualSensePacket,
+};
 pub use keepalive::{Cadence, Publish, KEEPALIVE};
 pub use profile::{slug_for, HmProfile, Transport};
 pub use seqlock::{HeapStorage, Latch, LatchStorage};
 pub use state::{route, HmGamepadState, HmHat, FRAME_BYTES};
 
-/// One virtual pad: a profile, a latch to publish into, and its cadence.
+/// One private, non-wire-compatible pad model: a profile, a test latch, and its
+/// cadence.
 ///
-/// This is the whole submit path, and it is deliberately small — everything
-/// interesting is in the modules above.
+/// This is the whole private model submit path, and it is deliberately small.
 pub struct HmController<S: LatchStorage> {
     slot: SlotId,
     profile: HmProfile,
@@ -102,8 +76,8 @@ impl<S: LatchStorage> HmController<S> {
         &self.profile
     }
 
-    /// Routes a ksx pad state onto the wire and publishes it if the cadence says
-    /// to.
+    /// Routes a ksx pad state into the private latch format and publishes it if
+    /// the cadence says to. This does not encode or submit HIDMaestro wire data.
     ///
     /// Allocation-free and lock-free: routing writes into an inline frame, the
     /// encode goes into an owned scratch buffer, and the publish is three
@@ -119,7 +93,8 @@ impl<S: LatchStorage> HmController<S> {
         decision
     }
 
-    /// Current `SeqNo` — the number every driver watchdog is really counting.
+    /// Current private-latch `SeqNo`, used only by the cadence/model tests. No
+    /// HIDMaestro driver observes this counter.
     pub fn seq(&self) -> u32 {
         self.latch.seq()
     }
@@ -128,13 +103,13 @@ impl<S: LatchStorage> HmController<S> {
 #[cfg(test)]
 mod tests {
     use ksx_core::pad::XButtons;
-    use ksx_core::{PadState, Persona};
+    use ksx_core::PadState;
 
     use super::*;
     use std::time::{Duration, Instant};
 
     fn controller() -> HmController<HeapStorage> {
-        let profile = profile::expected_profile(Persona::DualSense).unwrap();
+        let profile = profile::dualsense_conformance_stub_profile();
         let latch = Latch::new(HeapStorage::new(FRAME_BYTES), FRAME_BYTES).unwrap();
         HmController::new(0, profile, latch).unwrap()
     }
@@ -200,7 +175,7 @@ mod tests {
 
     #[test]
     fn a_controller_cannot_be_built_from_an_undeployable_profile() {
-        let mut profile = profile::expected_profile(Persona::SwitchPro).unwrap();
+        let mut profile = profile::dualsense_conformance_stub_profile();
         profile.descriptor.clear();
         let latch = Latch::new(HeapStorage::new(FRAME_BYTES), FRAME_BYTES).unwrap();
         assert!(matches!(

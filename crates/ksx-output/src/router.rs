@@ -10,19 +10,19 @@
 //! not get working, and would then debug — so it must not be expressible.
 //!
 //! Concretely (`docs/ENHANCEMENTS.md` E1/E4):
-//! - `xbox360`, `playstation` → **ViGEmBus, always**. Slots 1–4 never migrate:
-//!   HIDMaestro's XInput is a synthesis layer and the direct cause of its WGI
-//!   double-input bug, while ViGEm's X360 target is Microsoft's own
-//!   `xusb22.sys`. There is nothing to gain and a known bug to inherit.
+//! - `xbox360`, `playstation` → **ViGEmBus in the current capability matrix**.
+//!   It is the shipped compatibility/fallback lane, and its X360 target reaches
+//!   Microsoft's own `xusb22.sys`. The historical HIDMaestro WGI issue was fixed
+//!   upstream; it is not the reason for preserving this explicit routing.
 //! - `dualsense`, `switchpro`, `xboxseries` → **HIDMaestro**, because ViGEmBus
 //!   cannot express them at all and never will (the project is frozen).
 //!
 //! # Laziness is part of the rule
 //!
 //! [`RoutedBackend`] only builds the HIDMaestro backend when a slot actually
-//! asks for it. A cabinet running four X360 pads and four DS4 pads — every
-//! configuration ksx ships today — never constructs it, never probes for the
-//! driver, and cannot be broken by its absence.
+//! asks for it. A cabinet running only X360/DS4 pads never constructs it,
+//! never probes for the driver, and cannot be broken by its absence. A
+//! DualSense-only session likewise does not open ViGEmBus.
 
 use ksx_core::{PadBackend, PadState, Persona};
 
@@ -34,8 +34,11 @@ use crate::error::OutputError;
 ///
 /// A boxed factory rather than an eagerly-built backend so that the ordinary
 /// cabinet never pays for a driver it does not use.
-pub type HidMaestroFactory =
+pub type BackendFactory =
     Box<dyn FnMut() -> Result<Box<dyn VirtualPadBackend>, OutputError> + Send>;
+
+/// Backwards-compatible name for the second-stack factory.
+pub type HidMaestroFactory = BackendFactory;
 
 struct Entry {
     which: PadBackend,
@@ -54,17 +57,17 @@ struct Entry {
 /// stale handle always resolves to [`OutputError::UnknownHandle`] rather than
 /// aliasing a live pad on the *other* stack — the worst possible failure here.
 pub struct RoutedBackend {
-    vigem: Box<dyn VirtualPadBackend>,
+    vigem: Option<Box<dyn VirtualPadBackend>>,
     hidmaestro: Option<Box<dyn VirtualPadBackend>>,
-    factory: Option<HidMaestroFactory>,
+    vigem_factory: Option<BackendFactory>,
+    hidmaestro_factory: Option<HidMaestroFactory>,
     /// Whether [`Persona::can_plug`] is enforced before anything is dispatched.
     ///
     /// True for the routers ksx builds for itself, where the answer is a fact
-    /// about this binary and there is nothing to gain by handing a persona to a
-    /// stack that cannot create it. False for [`RoutedBackend::with_hidmaestro`]:
-    /// a caller who supplies a backend has supplied the very thing the build
-    /// fact says is missing, and that is how the two-stack dispatch below stays
-    /// under test while the second stack has no production driver.
+    /// about this binary and there is nothing to gain by handing an unfinished
+    /// persona to a stack that cannot create it. False for
+    /// [`RoutedBackend::with_hidmaestro`], which lets contract tests exercise
+    /// the complete dispatch table with a caller-supplied backend.
     enforce_build_capability: bool,
     pads: std::collections::BTreeMap<u32, Entry>,
     next_id: u32,
@@ -74,9 +77,10 @@ impl RoutedBackend {
     /// A router with only ViGEmBus.
     pub fn vigem_only(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: None,
+            vigem_factory: None,
+            hidmaestro_factory: None,
             enforce_build_capability: true,
             pads: Default::default(),
             next_id: 0,
@@ -92,15 +96,35 @@ impl RoutedBackend {
     /// is never called, so the driver is never probed for and its absence
     /// cannot fail a run.
     ///
-    /// The factory is wired even though today's build gate refuses every
-    /// persona that would reach it. That is deliberate and it is the point:
-    /// flipping [`ksx_core::PadBackend::is_implemented`] in the commit that
-    /// lands a real driver lights this path up with nothing else to change.
+    /// The factory is wired for the one live DualSense path; the per-persona
+    /// build gate still refuses Switch Pro and Xbox Series before this factory
+    /// can touch the machine.
     pub fn standard(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: Some(Box::new(|| {
+            vigem_factory: None,
+            hidmaestro_factory: Some(Box::new(|| {
+                crate::HidMaestroBackend::connect()
+                    .map(|b| Box::new(b) as Box<dyn VirtualPadBackend>)
+            })),
+            enforce_build_capability: true,
+            pads: Default::default(),
+            next_id: 0,
+        }
+    }
+
+    /// Production factories without opening either driver stack yet.
+    ///
+    /// A session that needs no ViGEm persona never opens ViGEmBus. Production
+    /// entry points use this so a DualSense-only session does not acquire the
+    /// compatibility backend as a hidden prerequisite.
+    pub fn standard_lazy(vigem: BackendFactory) -> Self {
+        Self {
+            vigem: None,
+            hidmaestro: None,
+            vigem_factory: Some(vigem),
+            hidmaestro_factory: Some(Box::new(|| {
                 crate::HidMaestroBackend::connect()
                     .map(|b| Box::new(b) as Box<dyn VirtualPadBackend>)
             })),
@@ -118,9 +142,24 @@ impl RoutedBackend {
     /// [`RoutedBackend::standard`] for anything a user's config reaches.
     pub fn with_hidmaestro(vigem: Box<dyn VirtualPadBackend>, factory: HidMaestroFactory) -> Self {
         Self {
-            vigem,
+            vigem: Some(vigem),
             hidmaestro: None,
-            factory: Some(factory),
+            vigem_factory: None,
+            hidmaestro_factory: Some(factory),
+            enforce_build_capability: false,
+            pads: Default::default(),
+            next_id: 0,
+        }
+    }
+
+    /// Fully lazy two-stack router for driverless contract tests and future
+    /// production preflight wiring.
+    pub fn with_factories(vigem: BackendFactory, hidmaestro: HidMaestroFactory) -> Self {
+        Self {
+            vigem: None,
+            hidmaestro: None,
+            vigem_factory: Some(vigem),
+            hidmaestro_factory: Some(hidmaestro),
             enforce_build_capability: false,
             pads: Default::default(),
             next_id: 0,
@@ -134,6 +173,11 @@ impl RoutedBackend {
         self.hidmaestro.is_some()
     }
 
+    /// Whether ViGEmBus has actually been constructed.
+    pub fn vigem_started(&self) -> bool {
+        self.vigem.is_some()
+    }
+
     /// Which backend a persona routes to. Restates nothing — it is
     /// [`Persona::backend`].
     pub fn backend_for(persona: Persona) -> PadBackend {
@@ -142,11 +186,20 @@ impl RoutedBackend {
 
     fn stack(&mut self, which: PadBackend) -> Result<&mut Box<dyn VirtualPadBackend>, OutputError> {
         match which {
-            PadBackend::Vigem => Ok(&mut self.vigem),
+            PadBackend::Vigem => {
+                if self.vigem.is_none() {
+                    let factory = self
+                        .vigem_factory
+                        .as_mut()
+                        .ok_or(OutputError::BackendUnavailable(PadBackend::Vigem))?;
+                    self.vigem = Some(factory()?);
+                }
+                Ok(self.vigem.as_mut().expect("just built"))
+            }
             PadBackend::HidMaestro => {
                 if self.hidmaestro.is_none() {
                     let factory = self
-                        .factory
+                        .hidmaestro_factory
                         .as_mut()
                         .ok_or(OutputError::BackendUnavailable(PadBackend::HidMaestro))?;
                     self.hidmaestro = Some(factory()?);
@@ -174,7 +227,10 @@ impl RoutedBackend {
             .ok_or(OutputError::UnknownHandle(handle))?;
         let (which, inner) = entry;
         let stack = match which {
-            PadBackend::Vigem => &mut self.vigem,
+            PadBackend::Vigem => self
+                .vigem
+                .as_mut()
+                .ok_or(OutputError::UnknownHandle(handle))?,
             // Already built: a handle cannot exist for a backend that was never
             // constructed.
             PadBackend::HidMaestro => self
@@ -187,6 +243,16 @@ impl RoutedBackend {
 }
 
 impl VirtualPadBackend for RoutedBackend {
+    fn service(&mut self) -> Result<(), OutputError> {
+        if let Some(backend) = self.vigem.as_mut() {
+            backend.service()?;
+        }
+        if let Some(backend) = self.hidmaestro.as_mut() {
+            backend.service()?;
+        }
+        Ok(())
+    }
+
     fn plug(&mut self) -> Result<PadHandle, OutputError> {
         self.plug_persona(Persona::default())
     }
@@ -211,7 +277,7 @@ impl VirtualPadBackend for RoutedBackend {
     fn persona(&self, handle: PadHandle) -> Option<Persona> {
         let entry = self.pads.get(&handle.0)?;
         match entry.which {
-            PadBackend::Vigem => self.vigem.persona(entry.inner),
+            PadBackend::Vigem => self.vigem.as_ref()?.persona(entry.inner),
             PadBackend::HidMaestro => self.hidmaestro.as_ref()?.persona(entry.inner),
         }
     }
@@ -219,7 +285,7 @@ impl VirtualPadBackend for RoutedBackend {
     fn user_index(&self, handle: PadHandle) -> Option<u8> {
         let entry = self.pads.get(&handle.0)?;
         match entry.which {
-            PadBackend::Vigem => self.vigem.user_index(entry.inner),
+            PadBackend::Vigem => self.vigem.as_ref()?.user_index(entry.inner),
             PadBackend::HidMaestro => self.hidmaestro.as_ref()?.user_index(entry.inner),
         }
     }
@@ -241,7 +307,9 @@ impl VirtualPadBackend for RoutedBackend {
         let _ = self.entry(handle)?;
         let (stack, inner) = self.resolve(handle)?;
         let result = stack.unplug(inner);
-        self.pads.remove(&handle.0);
+        if result.is_ok() {
+            self.pads.remove(&handle.0);
+        }
         result
     }
 }
@@ -267,6 +335,24 @@ mod tests {
             }),
         );
         (router, builds)
+    }
+
+    fn lazy_router() -> (RoutedBackend, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let vigem_builds = Arc::new(AtomicUsize::new(0));
+        let hidmaestro_builds = Arc::new(AtomicUsize::new(0));
+        let vigem_counter = vigem_builds.clone();
+        let hidmaestro_counter = hidmaestro_builds.clone();
+        let router = RoutedBackend::with_factories(
+            Box::new(move || {
+                vigem_counter.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+            }),
+            Box::new(move || {
+                hidmaestro_counter.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+            }),
+        );
+        (router, vigem_builds, hidmaestro_builds)
     }
 
     #[test]
@@ -311,6 +397,42 @@ mod tests {
         assert!(r.hidmaestro_started());
     }
 
+    #[test]
+    fn either_stack_can_start_first_without_constructing_the_other() {
+        let (mut r, vigem_builds, hidmaestro_builds) = lazy_router();
+        assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
+
+        r.plug_persona(Persona::DualSense).unwrap();
+        assert_eq!(hidmaestro_builds.load(Ordering::Relaxed), 1);
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
+        assert!(!r.vigem_started());
+
+        r.plug_persona(Persona::Xbox360).unwrap();
+        assert_eq!(hidmaestro_builds.load(Ordering::Relaxed), 1);
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 1);
+        assert!(r.vigem_started());
+    }
+
+    #[test]
+    fn a_lazy_production_router_refuses_before_opening_either_driver() {
+        let vigem_builds = Arc::new(AtomicUsize::new(0));
+        let counter = vigem_builds.clone();
+        let mut r = RoutedBackend::standard_lazy(Box::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
+        }));
+
+        let err = r.plug_persona(Persona::SwitchPro).unwrap_err();
+        assert!(matches!(
+            err,
+            OutputError::PersonaNotImplemented(Persona::SwitchPro)
+        ));
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
+        assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
+    }
+
     /// Handles from the two stacks must never collide. Both mocks hand out
     /// `PadHandle(0)` first, so without re-issuing, an update meant for the
     /// DualSense would land on the X360 pad.
@@ -353,11 +475,8 @@ mod tests {
     fn without_a_factory_a_hidmaestro_persona_is_refused_not_downgraded() {
         let mut r = RoutedBackend::vigem_only(Box::new(MockBackend::new()));
         let err = r.plug_persona(Persona::DualSense).unwrap_err();
-        // The build gate answers first, and it is the more fundamental fact:
-        // "no factory is wired up" invites someone to wire one, and there is
-        // nothing to wire.
         assert!(
-            matches!(err, OutputError::PersonaNotImplemented(Persona::DualSense)),
+            matches!(err, OutputError::BackendUnavailable(PadBackend::HidMaestro)),
             "{err}"
         );
         // A ViGEm persona still works on the same router.
@@ -366,7 +485,7 @@ mod tests {
 
     /// The regression this whole change exists for.
     ///
-    /// A production router must refuse the three HIDMaestro personas **without
+    /// A production router must refuse the unfinished HIDMaestro personas **without
     /// consulting the machine**, because the machine's answer is the wrong one:
     /// on a box where HIDMaestro is installed the probe says yes, and the pad
     /// still cannot be created. A gate that flips with an install would offer a
@@ -374,7 +493,7 @@ mod tests {
     #[test]
     fn the_production_router_refuses_unbuildable_personas_without_probing() {
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        for persona in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
             let err = r.plug_persona(persona).unwrap_err();
             assert!(
                 matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),

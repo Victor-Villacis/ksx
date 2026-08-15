@@ -34,8 +34,8 @@ pub enum OutputError {
     #[error("this backend cannot emulate a '{0}' controller")]
     PersonaUnsupported(ksx_core::Persona),
 
-    /// The persona is valid and its backend is wired up — and **no build of
-    /// ksx can create it yet**.
+    /// The persona is valid and routed, but this KSX build has not completed
+    /// that exact profile runtime yet.
     ///
     /// The third and last member of a family that must never merge:
     /// [`OutputError::PersonaUnsupported`] means "wrong backend, try the other
@@ -51,7 +51,7 @@ pub enum OutputError {
         "persona '{persona}' cannot be plugged by this build of ksx: {gap}. \
          Use persona '{instead}'",
         persona = .0,
-        gap = .0.backend().gap().unwrap_or("no reason recorded"),
+        gap = .0.gap().unwrap_or("no reason recorded"),
         instead = .0.nearest_pluggable()
     )]
     PersonaNotImplemented(ksx_core::Persona),
@@ -67,27 +67,32 @@ pub enum OutputError {
     )]
     BackendUnavailable(ksx_core::PadBackend),
 
-    /// HIDMaestro is not installed. The M8 analogue of
+    /// The exact pinned HIDMaestro package is unavailable. The M8 analogue of
     /// [`OutputError::BusNotFound`], and the only outcome available on a
     /// machine without it.
     ///
     /// Carries the probe summary verbatim so "not installed" is evidence the
     /// user can check, rather than an assertion they have to trust.
     #[error(
-        "HIDMaestro is not installed ({probe}) — the DualSense, Switch Pro and \
-         Xbox Series personas require it. Xbox 360 and PlayStation do not: \
+        "the exact pinned HIDMaestro v1.6.1 package is unavailable ({probe}) — the DualSense persona requires it. \
+         Xbox 360 and PlayStation do not: \
          they run on ViGEmBus."
     )]
     HidMaestroMissing { probe: String },
 
-    /// Any other HIDMaestro client failure.
+    /// The fixed production host is not available on this platform/package.
     ///
-    /// The source is inlined into the message, not left to `{:#}`: the most
-    /// common occupant is [`ksx_hidmaestro::HmError::NotImplemented`], whose
-    /// whole value is the sentence it carries, and a caller that prints only
-    /// the top-level error would show "operation failed" and nothing else.
-    #[error("HIDMaestro operation failed: {0}")]
-    HidMaestro(#[source] ksx_hidmaestro::HmError),
+    /// Kept separate from [`HidMaestroMissing`](Self::HidMaestroMissing):
+    /// installing a driver cannot add code which this binary does not contain.
+    #[error(
+        "the fixed production HIDMaestro host is unavailable in this package or on this platform"
+    )]
+    HidMaestroHostUnavailable,
+
+    /// The fixed installed elevated host was present but could not establish
+    /// or maintain its authenticated, exact-owned controller conversation.
+    #[error("the HIDMaestro runtime host failed: {0}")]
+    HidMaestroRuntime(String),
 
     /// The underlying driver client reported an error.
     #[cfg(windows)]
@@ -107,13 +112,9 @@ impl OutputError {
         matches!(self, OutputError::BusNotFound)
     }
 
-    /// True when the root cause is "HIDMaestro is not installed".
+    /// True when the exact pinned HIDMaestro package is unavailable.
     pub fn is_hidmaestro_missing(&self) -> bool {
-        match self {
-            OutputError::HidMaestroMissing { .. } => true,
-            OutputError::HidMaestro(err) => err.is_not_installed(),
-            _ => false,
-        }
+        matches!(self, OutputError::HidMaestroMissing { .. })
     }
 
     /// True when the root cause is "this build of ksx cannot do that".
@@ -123,11 +124,10 @@ impl OutputError {
     /// the bug: a "not implemented" reported as "not installed" is an
     /// instruction to go and install a driver that will not help.
     pub fn is_not_implemented(&self) -> bool {
-        match self {
-            OutputError::PersonaNotImplemented(_) => true,
-            OutputError::HidMaestro(err) => err.is_not_implemented(),
-            _ => false,
-        }
+        matches!(
+            self,
+            OutputError::PersonaNotImplemented(_) | OutputError::HidMaestroHostUnavailable
+        )
     }
 }
 
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn the_two_missing_driver_errors_are_never_confused() {
         // They have different fixes and different blast radii: a missing
-        // HIDMaestro costs three personas, a missing ViGEmBus costs the whole
+        // HIDMaestro costs DualSense, a missing ViGEmBus costs the compatibility
         // cabinet. Nothing may collapse them into one flag.
         let hm = OutputError::HidMaestroMissing {
             probe: "looked for a, b and found none".into(),
@@ -169,7 +169,10 @@ mod tests {
         assert!(!OutputError::BusNotFound.is_hidmaestro_missing());
 
         let msg = hm.to_string();
-        assert!(msg.contains("HIDMaestro is not installed"), "{msg}");
+        assert!(
+            msg.contains("exact pinned HIDMaestro v1.6.1 package is unavailable"),
+            "{msg}"
+        );
         assert!(msg.contains("looked for a, b"), "{msg} must carry evidence");
         // And it must say what still works, so nobody panics about the cabinet.
         assert!(msg.contains("ViGEmBus"), "{msg}");
@@ -185,18 +188,18 @@ mod tests {
 
     #[test]
     fn a_persona_this_build_cannot_make_is_refused_with_a_way_out() {
-        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::DualSense);
+        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::SwitchPro);
         let msg = err.to_string();
-        assert!(msg.contains("dualsense"), "{msg}");
+        assert!(msg.contains("switchpro"), "{msg}");
         // It must not read as an install problem...
         assert!(!err.is_hidmaestro_missing(), "{msg}");
         assert!(err.is_not_implemented());
         assert!(
-            msg.contains("installing HIDMaestro does not change it"),
+            msg.contains("has not yet completed its independent production runtime"),
             "{msg} must close off the wrong fix"
         );
         // ...and it must end in something the user can actually type.
-        assert!(msg.contains("playstation"), "{msg}");
+        assert!(msg.contains("xbox360"), "{msg}");
     }
 
     #[test]
@@ -215,16 +218,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wrapped_driver_error_carries_its_own_sentence_to_the_surface() {
-        // `HidMaestro(_)` used to print "HIDMaestro operation failed" and put
-        // the only informative text in a source nothing was obliged to render.
-        let err = OutputError::HidMaestro(ksx_hidmaestro::HmError::NotImplemented {
-            detail: "no section mapper",
-        });
+    fn a_missing_host_adapter_names_the_fixed_product_component() {
+        let err = OutputError::HidMaestroHostUnavailable;
         let msg = err.to_string();
-        assert!(msg.contains("no section mapper"), "{msg}");
+        assert!(msg.contains("production HIDMaestro host"), "{msg}");
         assert!(err.is_not_implemented());
-        assert!(!err.is_hidmaestro_missing(), "{msg}");
+        assert!(!err.is_hidmaestro_missing());
     }
 
     #[test]

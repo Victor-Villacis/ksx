@@ -1971,27 +1971,38 @@ fn output_thread(
 
         if last_service.elapsed() >= POLL {
             last_service = Instant::now();
-            for &(slot, handle) in &handles {
-                while let Some(feedback) = pads.poll_feedback(handle) {
-                    tracing::debug!(
-                        slot,
-                        large_motor = feedback.large_motor,
-                        small_motor = feedback.small_motor,
-                        led = feedback.led_number,
-                        "pad feedback"
-                    );
-                    // E8's stream, on E7's bus. This queue used to be drained
-                    // and discarded — "today that data is discarded: nothing
-                    // consumes the queue" (docs/ENHANCEMENTS.md E8). It now has
-                    // exactly one consumer shape, the same lossy fan-out the
-                    // button check reads, so a lamp driver is a subscriber
-                    // rather than a second tap into the output thread.
-                    feed.feedback(ksx_api::PadFeedback {
-                        slot,
-                        large_motor: feedback.large_motor,
-                        small_motor: feedback.small_motor,
-                        led_number: feedback.led_number,
-                    });
+            if !failed {
+                if let Err(err) = pads.service() {
+                    tracing::error!(%err, "virtual pad backend service failed");
+                    failed = true;
+                    if msg.send(Msg::OutputError(err.to_string())).is_err() {
+                        break 'outer;
+                    }
+                }
+            }
+            if !failed {
+                for &(slot, handle) in &handles {
+                    while let Some(feedback) = pads.poll_feedback(handle) {
+                        tracing::debug!(
+                            slot,
+                            large_motor = feedback.large_motor,
+                            small_motor = feedback.small_motor,
+                            led = feedback.led_number,
+                            "pad feedback"
+                        );
+                        // E8's stream, on E7's bus. This queue used to be drained
+                        // and discarded — "today that data is discarded: nothing
+                        // consumes the queue" (docs/ENHANCEMENTS.md E8). It now has
+                        // exactly one consumer shape, the same lossy fan-out the
+                        // button check reads, so a lamp driver is a subscriber
+                        // rather than a second tap into the output thread.
+                        feed.feedback(ksx_api::PadFeedback {
+                            slot,
+                            large_motor: feedback.large_motor,
+                            small_motor: feedback.small_motor,
+                            led_number: feedback.led_number,
+                        });
+                    }
                 }
             }
         }

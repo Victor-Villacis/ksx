@@ -111,9 +111,9 @@ Two things must be said on that screen, not buried:
 
 ## §4 What the installer must do (moment 2)
 
-- **Install the bundled controller driver, having asked.** Without ViGEmBus
+- **Install the controller drivers, having asked.** Without ViGEmBus
   there is no bus for a virtual pad to appear on, so every one of the moments
-  below can be performed perfectly and moment 7 still plugs nothing. Setup is
+  below can be performed perfectly and moment 7 still plugs nothing. Setup
   already owns an administrator token and the user has consented to that driver
   (`ksx install-drivers` itself never self-elevates), so it is the right place
   this particular controller driver can be installed without a terminal — and
@@ -127,6 +127,14 @@ Two things must be said on that screen, not buried:
   A failure here **never** fails the install: a machine with no ViGEmBus still
   wants the ksx that configures and maps, so the wizard says what happened,
   names the way back, and carries on.
+  HIDMaestro is a second checked task for the one live DualSense persona. It
+  runs an installer-only, version- and hash-pinned bootstrap from the protected
+  installed directory. Its label discloses that internet is required; it
+  downloads the exact official release only during setup, verifies every
+  assembly it executes, and deletes the temporary SDK. The ordinary daemon and
+  its elevated runtime host have no network or package install/update authority;
+  clearing this task leaves only DualSense unavailable and the wizard explains
+  how to retry.
 - **Desktop icon by default.** Not `Flags: unchecked`. The audit's finding: a
   user who declines the launch prompt has to go hunting through a Start menu.
 - **Offer to launch ksx**, not to run a diagnostic. `ksx doctor` is a developer

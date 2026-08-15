@@ -22,8 +22,8 @@ pub struct DriverReport {
     /// Pads ViGEmBus is exposing right now — children of the bus devnode, never
     /// a system-wide VID/PID match (see [`crate::virtual_pads`]).
     pub virtual_pads: VirtualPadReport,
-    /// HIDMaestro — the M8 backend, and the only route to the DualSense /
-    /// Switch Pro / Xbox Series personas.
+    /// HIDMaestro — the production DualSense backend. Switch Pro and Xbox
+    /// Series remain capability-gated until their own runtimes exist.
     pub hidmaestro: HidMaestroReport,
 }
 
@@ -34,29 +34,30 @@ pub struct DriverReport {
 /// HIDMaestro anywhere, which is why the verdict for this is
 /// [`crate::Severity::Info`] and never a warning.
 ///
-/// **This report does not decide which personas are available.** It cannot:
-/// which personas ksx can build is a fact about the ksx binary
-/// ([`ksx_core::Persona::can_plug`]), and today no build can create a
-/// HIDMaestro pad whatever this says. Reporting it as the gate is how a doctor
-/// row ends up promising a persona the moment a driver appears.
+/// **This report does not decide which personas are implemented.** That is a
+/// fact about the ksx binary ([`ksx_core::Persona::can_plug`]). It does report
+/// whether the installed machine prerequisite for the production DualSense
+/// route exists.
 ///
 /// `looked_for` is part of the report on purpose: "not installed" should be
 /// evidence a user can check, not a claim they have to take on faith.
 #[derive(Debug, Clone, Serialize)]
 pub struct HidMaestroReport {
-    /// The UMDF driver binary is present — the load-bearing artifact. A service
-    /// key alone is a leftover, not an install.
+    /// Exactly one non-reparse Driver Store package matches the pinned v1.6.1
+    /// INF and UMDF DLL hashes. A service key or similarly named DLL alone is
+    /// not a usable install.
     pub installed: bool,
     /// Service key exists under `HKLM\SYSTEM\CurrentControlSet\Services`.
     pub service_key: bool,
-    /// The UMDF driver DLL, when present.
+    /// The exact UMDF driver DLL when ready, otherwise the first incompatible
+    /// candidate found so the report can describe the broken installation.
     pub driver_file: Option<DriverFileReport>,
     /// Everything the probe checked, in order.
     pub looked_for: Vec<String>,
 }
 
 impl HidMaestroReport {
-    /// The personas ksx cannot create, canonical names in
+    /// The personas this build cannot create, canonical names in
     /// [`ksx_core::Persona::ALL`] order.
     ///
     /// **Derived, never listed.** This used to be a hand-written

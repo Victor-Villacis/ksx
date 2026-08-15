@@ -1,6 +1,6 @@
 [package]
 name = "ksx-hidmaestro"
-description = "HIDMaestro protocol client: seqlocked shared-memory latch, lifecycle, axis routing, feedback decode."
+description = "Authenticated HIDMaestro host protocol and production DualSense transport."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+ksx-platform.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Memory",
@@ -20,8 +21,10 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Touches a real HIDMaestro install (opens its named section, installs the
-# driver, creates devices). Never in CI — same contract as ksx-output's
-# `cab-tests`. Every test in this crate that is NOT behind this feature runs
-# against in-process fakes and needs no driver.
+# Reserved for supervised hardware tests against an isolated real HIDMaestro
+# installation. The live product path exists, but destructive/device tests must
+# never enter ordinary CI or run on an unsupervised developer workstation.
 cab-tests = []
+# Exercises only the fixed, non-elevating inherited-token cross-language fake
+# host. This does not expose or select production elevated-host admission.
+hidmaestro-fake-host-tests = ["ksx-platform/hidmaestro-fake-host-tests"]

@@ -1,27 +1,28 @@
 //! The feedback decode table — rumble/FFB coming back from the OS.
 //!
-//! Transcribed from `padforge-code-audit.md` §3.4, whose Sony half was itself
-//! cross-checked against Linux's `hid-playstation.c`. Every rule here is
-//! **written to spec and unverified on hardware**; the tests below pin the table
-//! so a live capture can contradict it precisely rather than vaguely.
+//! The plain-USB DualSense path is transcribed from pinned HIDMaestro v1.6.1,
+//! Linux and SDL sources. Other tables remain the older PadForge-derived model.
+//! Every rule is still **unverified on physical hardware**; tests pin the source
+//! contract so a live capture can contradict it precisely rather than vaguely.
 //!
-//! One decision governs the whole module: **a packet that fails its gate
-//! preserves the previous motor state; it never zeroes it.** A lightbar-only
-//! Sony report means "I have nothing to say about rumble", not "stop rumbling",
-//! and a decoder that reads it as the latter turns every LED change into a
-//! stutter. [`Decoded::Preserve`] is that answer, and it is deliberately not
-//! representable as "motors = 0".
+//! One safety rule governs the whole module: a non-motor command never invents
+//! a zero-motor update. The stateful DualSense reducer carries the complete
+//! prior motor pair forward; structurally invalid input produces no snapshot.
+//! Only source-proven zero forms are interpreted as an explicit stop.
 
 /// Which lane a packet arrived on. HIDMaestro reports this alongside the bytes,
 /// and it disambiguates layouts that would otherwise collide on length.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OutputSource {
-    /// An `XUSB`-style vibration IOCTL, forwarded by the GIP companion.
-    XInput,
     /// A HID output report written to the device.
-    HidOutput,
+    HidOutput = 0,
     /// A HID `SetFeature`.
-    HidFeature,
+    HidFeature = 1,
+    /// An `XUSB`-style vibration IOCTL, forwarded by the GIP companion.
+    XInput = 2,
+    /// A HID `GetFeature` response.
+    HidFeatureRead = 3,
 }
 
 /// Motor magnitudes, in the 16-bit domain XInput and SDL both use.
@@ -53,10 +54,6 @@ impl Motors {
 pub enum Decoded {
     /// New motor state, to be applied.
     Motors(Motors),
-    /// The packet was a valid feedback packet whose gate failed (wrong size,
-    /// bad CRC, or `validFlag0` not asserting the motor bits). **Keep the
-    /// previous motors.**
-    Preserve,
     /// Not a feedback packet at all (wrong header, too short to be anything).
     Ignored,
 }
@@ -126,114 +123,14 @@ pub fn decode_xbox_hid(bytes: &[u8]) -> Decoded {
     }
 }
 
-/// Which Sony pad a report came from — it selects the offsets and the
-/// `validFlag0` mask.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum SonyFamily {
-    /// DualShock 4. USB output report 0x05: `validFlag0` at 1, motors at 4
-    /// (right/small) and 5 (left/large).
-    Ds4,
-    /// DualSense. USB output report 0x02: `validFlag0` at 1, motors at 2
-    /// (right/small) and 3 (left/large).
-    Ds5,
-}
-
-impl SonyFamily {
-    /// `validFlag0` bits that must be asserted for the motor fields to mean
-    /// anything. DS4: 0x01. DS5: 0x03 (compatible-vibration | haptics-select).
-    pub const fn motor_mask(self) -> u8 {
-        match self {
-            SonyFamily::Ds4 => 0x01,
-            SonyFamily::Ds5 => 0x03,
-        }
-    }
-
-    const fn valid_flag0_offset(self) -> usize {
-        1
-    }
-
-    /// (small/right, large/left) motor byte offsets in the USB report form.
-    const fn motor_offsets(self) -> (usize, usize) {
-        match self {
-            SonyFamily::Ds4 => (4, 5),
-            SonyFamily::Ds5 => (2, 3),
-        }
-    }
-
-    /// Minimum bytes a report must actually contain for the motor fields to be
-    /// present.
-    pub const fn required_len(self) -> usize {
-        let (small, large) = self.motor_offsets();
-        if small > large {
-            small + 1
-        } else {
-            large + 1
-        }
-    }
-}
-
-/// A Sony output report as HIDMaestro hands it over.
-///
-/// `bytes` is the **USB form**: the driver pre-strips Bluetooth framing and CRC
-/// before raising `OutputDecoded`, which is why the offsets above are
-/// transport-independent. `declared_len` and `crc_ok` are the transport facts
-/// the gate still needs.
-#[derive(Clone, Copy, Debug)]
-pub struct SonyReport<'a> {
-    pub family: SonyFamily,
-    pub bytes: &'a [u8],
-    /// The largest output report size the descriptor declares. On Bluetooth
-    /// this is **547** for a DualSense — see [`sony_motors_present`].
-    pub declared_len: usize,
-    /// Whether the transport CRC verified. USB reports carry none; pass `true`.
-    pub crc_ok: bool,
-}
-
-/// The length half of the Sony gate — **`>=`, never `==`**.
-///
-/// **The Bluetooth length trap.** Windows sizes a Bluetooth HID host write to
-/// the *largest declared output report*, which for a DualSense is 547 bytes.
-/// That write is then clamped to the driver's 256-byte report slot, so what
-/// actually arrives is ~257 bytes (report id + slot), and an
-/// `actual == declared` check is false for **every single Bluetooth report**.
-/// PadForge shipped that equality and Sony rumble silently never worked over
-/// BT. The correct question is "are the motor bytes present?", which is
-/// `actual >= required`, where `required` comes from the report layout
-/// ([`SonyFamily::required_len`]) and not from the descriptor's declaration.
-pub fn sony_motors_present(actual_len: usize, required_len: usize) -> bool {
-    actual_len >= required_len
-}
-
-/// Decodes a Sony output report through the full trust gate.
-///
-/// Gate order (cheapest first, and each failure is [`Decoded::Preserve`], not a
-/// zeroing): length → CRC → `validFlag0`.
-pub fn decode_sony(report: &SonyReport<'_>) -> Decoded {
-    let family = report.family;
-    let required = family.required_len();
-    if report.bytes.len() <= family.valid_flag0_offset() {
-        // Too short to even hold the flag byte: this is not a report we can
-        // reason about.
-        return Decoded::Ignored;
-    }
-    if !sony_motors_present(report.bytes.len(), required) {
-        return Decoded::Preserve;
-    }
-    if !report.crc_ok {
-        return Decoded::Preserve;
-    }
-    let flags = report.bytes[family.valid_flag0_offset()];
-    if flags & family.motor_mask() == 0 {
-        // A lightbar-only or haptics-only report. "Ignore", not "stop".
-        return Decoded::Preserve;
-    }
-    let (small_at, large_at) = family.motor_offsets();
-    Decoded::Motors(Motors {
-        large: u16::from(report.bytes[large_at]) << 8,
-        small: u16::from(report.bytes[small_at]) << 8,
-        ..Motors::default()
-    })
-}
+pub use crate::dualsense_feedback::{
+    DualSenseDecodeResult, DualSenseDisposition, DualSenseFeedbackDecoder, DualSenseRejectReason,
+    EffectiveMotorSnapshot, RawDualSensePacket, DUALSENSE_COMPATIBLE_VIBRATION_MASK,
+    DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK, DUALSENSE_HAPTICS_SELECT_MASK,
+    DUALSENSE_LEFT_LARGE_MOTOR_OFFSET, DUALSENSE_RIGHT_SMALL_MOTOR_OFFSET,
+    DUALSENSE_USB_OUTPUT_DATA_LEN, DUALSENSE_USB_OUTPUT_REPORT_ID, DUALSENSE_VALID_FLAG0_OFFSET,
+    DUALSENSE_VALID_FLAG2_OFFSET, HID_OUTPUT_SOURCE,
+};
 
 /// A HID-PID effect, reduced to what a rumble consumer needs: a magnitude and
 /// **when it expires**.
@@ -375,7 +272,6 @@ mod tests {
         let d = decode_xinput(&[0x00, 0x08, 0x00, 0x00, 0x00]);
         assert_eq!(d, Decoded::Motors(Motors::default()));
         assert_ne!(d, Decoded::Ignored);
-        assert_ne!(d, Decoded::Preserve);
     }
 
     #[test]
@@ -435,130 +331,252 @@ mod tests {
         assert_eq!(decode_xbox_hid(&[1, 2, 3]), Decoded::Ignored);
     }
 
-    fn ds5(bytes: &[u8], declared: usize) -> SonyReport<'_> {
-        SonyReport {
-            family: SonyFamily::Ds5,
-            bytes,
-            declared_len: declared,
-            crc_ok: true,
+    fn dualsense_packet(data: &[u8], seq_no: u32) -> RawDualSensePacket<'_> {
+        RawDualSensePacket {
+            source: HID_OUTPUT_SOURCE,
+            report_id: DUALSENSE_USB_OUTPUT_REPORT_ID,
+            data,
+            seq_no,
         }
     }
 
-    /// **The BT length trap**, as a test: a DualSense declares 547 bytes, the
-    /// clamped host write delivers 257, and the motors are right there. An
-    /// `actual == declared` gate rejects every Bluetooth report forever.
     #[test]
-    fn the_bluetooth_547_to_257_length_trap() {
-        const DECLARED_BT: usize = 547;
-        const DELIVERED: usize = 257; // driver's 256-byte slot + report id
-        let mut bytes = vec![0u8; DELIVERED];
-        bytes[0] = 0x02;
-        bytes[1] = SonyFamily::Ds5.motor_mask();
-        bytes[2] = 0x40; // small/right
-        bytes[3] = 0x80; // large/left
+    fn hidmaestro_output_source_values_are_source_pinned() {
+        assert_eq!(OutputSource::HidOutput as u8, 0);
+        assert_eq!(OutputSource::HidFeature as u8, 1);
+        assert_eq!(OutputSource::XInput as u8, 2);
+        assert_eq!(OutputSource::HidFeatureRead as u8, 3);
+    }
 
-        // The correct gate accepts it.
-        assert!(sony_motors_present(
-            DELIVERED,
-            SonyFamily::Ds5.required_len()
+    #[test]
+    fn dualsense_raw_output_uses_separate_report_id_and_47_data_bytes() {
+        let mut full_report = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN + 1];
+        full_report[0] = DUALSENSE_USB_OUTPUT_REPORT_ID;
+        full_report[1] = DUALSENSE_COMPATIBLE_VIBRATION_MASK | DUALSENSE_HAPTICS_SELECT_MASK;
+        full_report[3] = 0x34;
+        full_report[4] = 0x78;
+
+        let mut decoder = DualSenseFeedbackDecoder::default();
+        assert_eq!(
+            decoder.apply(dualsense_packet(&full_report[1..], 7)),
+            DualSenseDecodeResult::Snapshot {
+                disposition: DualSenseDisposition::ApplyLegacy,
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0x78,
+                    small_motor: 0x34,
+                    source_seq_no: 7,
+                },
+            }
+        );
+
+        // Counterexample for the old bug: retaining the report ID in Data
+        // shifts validFlag0 and both motors, so this must not apply an update.
+        let mut shifted = DualSenseFeedbackDecoder::new(0xAA, 0xBB);
+        assert!(matches!(
+            shifted.apply(dualsense_packet(&full_report[..47], 8)),
+            DualSenseDecodeResult::Snapshot {
+                disposition: DualSenseDisposition::PreserveSelectorOnly,
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0xAA,
+                    small_motor: 0xBB,
+                    ..
+                },
+            }
         ));
-        assert_eq!(
-            decode_sony(&ds5(&bytes, DECLARED_BT)),
-            Decoded::Motors(Motors {
-                large: 0x8000,
-                small: 0x4000,
-                ..Motors::default()
-            })
-        );
-
-        // The gate PadForge shipped first would have rejected it — stated
-        // explicitly so nobody "simplifies" the >= back into an ==.
-        assert_ne!(DELIVERED, DECLARED_BT);
-        assert!(
-            DELIVERED != DECLARED_BT
-                && sony_motors_present(DELIVERED, SonyFamily::Ds5.required_len()),
-            "equality would fail where >= succeeds — that is the whole trap"
-        );
-        // And 256 (no report id) must pass too.
-        assert!(sony_motors_present(256, SonyFamily::Ds5.required_len()));
     }
 
     #[test]
-    fn a_truly_short_report_preserves_rather_than_zeroes() {
-        // Shorter than the motor offsets: we do not know the motors, so we keep
-        // whatever was already running.
-        let bytes = [0x02u8, SonyFamily::Ds5.motor_mask(), 0x11];
-        assert_eq!(decode_sony(&ds5(&bytes, 78)), Decoded::Preserve);
-        assert_eq!(SonyFamily::Ds5.required_len(), 4);
-        assert_eq!(SonyFamily::Ds4.required_len(), 6);
+    fn legacy_and_v2_updates_replace_both_motors_atomically() {
+        let mut decoder = DualSenseFeedbackDecoder::default();
+        let mut legacy = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+        legacy[0] = DUALSENSE_COMPATIBLE_VIBRATION_MASK | DUALSENSE_HAPTICS_SELECT_MASK;
+        legacy[2] = 0x12;
+        legacy[3] = 0xAB;
+        assert!(matches!(
+            decoder.apply(dualsense_packet(&legacy, 1)),
+            DualSenseDecodeResult::Snapshot {
+                disposition: DualSenseDisposition::ApplyLegacy,
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0xAB,
+                    small_motor: 0x12,
+                    ..
+                },
+            }
+        ));
+
+        let mut v2 = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+        v2[0] = DUALSENSE_HAPTICS_SELECT_MASK;
+        v2[2] = 0x56;
+        v2[3] = 0xCD;
+        v2[38] = DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK;
+        assert!(matches!(
+            decoder.apply(dualsense_packet(&v2, 2)),
+            DualSenseDecodeResult::Snapshot {
+                disposition: DualSenseDisposition::ApplyV2,
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0xCD,
+                    small_motor: 0x56,
+                    ..
+                },
+            }
+        ));
     }
 
     #[test]
-    fn validflag0_gates_the_motors_and_a_lightbar_report_preserves() {
-        let mut bytes = vec![0u8; 16];
-        bytes[0] = 0x02;
-        bytes[2] = 0x40;
-        bytes[3] = 0x80;
-        // validFlag0 = 0x04 (some non-motor bit, e.g. a lighting flag).
-        bytes[1] = 0x04;
-        assert_eq!(
-            decode_sony(&ds5(&bytes, 78)),
-            Decoded::Preserve,
-            "a lightbar-only report means 'ignore', not 'stop'"
-        );
-        // Assert the motor bit and it decodes.
-        bytes[1] = 0x04 | 0x01;
-        assert!(matches!(decode_sony(&ds5(&bytes, 78)), Decoded::Motors(_)));
+    fn valid_zero_pairs_and_sdl_all_zero_are_explicit_stops() {
+        let cases = [
+            (
+                DUALSENSE_COMPATIBLE_VIBRATION_MASK | DUALSENSE_HAPTICS_SELECT_MASK,
+                0,
+                DualSenseDisposition::StopLegacy,
+            ),
+            (
+                DUALSENSE_HAPTICS_SELECT_MASK,
+                DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK,
+                DualSenseDisposition::StopV2,
+            ),
+        ];
+        for (valid0, valid2, expected) in cases {
+            let mut decoder = DualSenseFeedbackDecoder::new(0xAA, 0x55);
+            let mut data = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+            data[0] = valid0;
+            data[38] = valid2;
+            assert!(matches!(
+                decoder.apply(dualsense_packet(&data, 4)),
+                DualSenseDecodeResult::Snapshot {
+                    disposition,
+                    snapshot: EffectiveMotorSnapshot {
+                        large_motor: 0,
+                        small_motor: 0,
+                        ..
+                    },
+                } if disposition == expected
+            ));
+        }
+
+        let mut decoder = DualSenseFeedbackDecoder::new(0xAA, 0x55);
+        let data = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+        assert!(matches!(
+            decoder.apply(dualsense_packet(&data, 5)),
+            DualSenseDecodeResult::Snapshot {
+                disposition: DualSenseDisposition::StopAllZero,
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0,
+                    small_motor: 0,
+                    ..
+                },
+            }
+        ));
     }
 
     #[test]
-    fn a_bad_crc_preserves() {
-        let mut bytes = vec![0u8; 16];
-        bytes[1] = SonyFamily::Ds5.motor_mask();
-        bytes[3] = 0xFF;
-        let mut report = ds5(&bytes, 547);
-        report.crc_ok = false;
-        assert_eq!(decode_sony(&report), Decoded::Preserve);
+    fn partial_unrelated_and_conflicting_flags_preserve_complete_state() {
+        let cases = [
+            (0, 0, DualSenseDisposition::PreserveNoMotorValidity),
+            (
+                DUALSENSE_HAPTICS_SELECT_MASK,
+                0,
+                DualSenseDisposition::PreserveSelectorOnly,
+            ),
+            (
+                DUALSENSE_COMPATIBLE_VIBRATION_MASK,
+                0,
+                DualSenseDisposition::PreserveMissingSelector,
+            ),
+            (
+                0,
+                DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK,
+                DualSenseDisposition::PreserveMissingSelector,
+            ),
+            (
+                DUALSENSE_COMPATIBLE_VIBRATION_MASK | DUALSENSE_HAPTICS_SELECT_MASK,
+                DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK,
+                DualSenseDisposition::PreserveConflictingVariants,
+            ),
+            (
+                DUALSENSE_COMPATIBLE_VIBRATION_MASK,
+                DUALSENSE_COMPATIBLE_VIBRATION_V2_MASK,
+                DualSenseDisposition::PreserveConflictingVariants,
+            ),
+        ];
+        for (valid0, valid2, expected) in cases {
+            let mut decoder = DualSenseFeedbackDecoder::new(0x91, 0x27);
+            let mut data = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+            data[0] = valid0;
+            data[1] = 0x80;
+            data[2] = 0xFF;
+            data[3] = 0xFF;
+            data[38] = valid2;
+            assert!(matches!(
+                decoder.apply(dualsense_packet(&data, 9)),
+                DualSenseDecodeResult::Snapshot {
+                    disposition,
+                    snapshot: EffectiveMotorSnapshot {
+                        large_motor: 0x91,
+                        small_motor: 0x27,
+                        source_seq_no: 9,
+                    },
+                } if disposition == expected
+            ));
+        }
     }
 
     #[test]
-    fn ds4_and_ds5_read_different_offsets_and_different_masks() {
-        assert_eq!(SonyFamily::Ds4.motor_mask(), 0x01);
-        assert_eq!(SonyFamily::Ds5.motor_mask(), 0x03);
-        let mut bytes = vec![0u8; 16];
-        bytes[1] = 0x01;
-        bytes[2] = 0x11;
-        bytes[3] = 0x22;
-        bytes[4] = 0x33;
-        bytes[5] = 0x44;
-        let as_ds5 = decode_sony(&SonyReport {
-            family: SonyFamily::Ds5,
-            bytes: &bytes,
-            declared_len: 78,
-            crc_ok: true,
-        });
-        let as_ds4 = decode_sony(&SonyReport {
-            family: SonyFamily::Ds4,
-            bytes: &bytes,
-            declared_len: 78,
-            crc_ok: true,
-        });
+    fn wrong_envelopes_reject_before_indexing_and_do_not_change_state() {
+        let data = [0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+        let mut decoder = DualSenseFeedbackDecoder::new(0x81, 0x18);
         assert_eq!(
-            as_ds5,
-            Decoded::Motors(Motors {
-                small: 0x1100,
-                large: 0x2200,
-                ..Motors::default()
-            })
+            decoder.apply(RawDualSensePacket {
+                source: OutputSource::XInput as u8,
+                report_id: DUALSENSE_USB_OUTPUT_REPORT_ID,
+                data: &data,
+                seq_no: 1,
+            }),
+            DualSenseDecodeResult::Rejected(DualSenseRejectReason::Source)
         );
         assert_eq!(
-            as_ds4,
-            Decoded::Motors(Motors {
-                small: 0x3300,
-                large: 0x4400,
-                ..Motors::default()
-            })
+            decoder.apply(RawDualSensePacket {
+                source: HID_OUTPUT_SOURCE,
+                report_id: 0x05,
+                data: &data,
+                seq_no: 2,
+            }),
+            DualSenseDecodeResult::Rejected(DualSenseRejectReason::ReportId)
         );
+        assert_eq!(
+            decoder.apply(RawDualSensePacket {
+                source: HID_OUTPUT_SOURCE,
+                report_id: DUALSENSE_USB_OUTPUT_REPORT_ID,
+                data: &data[..46],
+                seq_no: 3,
+            }),
+            DualSenseDecodeResult::Rejected(DualSenseRejectReason::Length)
+        );
+        assert_eq!(decoder.effective_motors(), (0x81, 0x18));
+    }
+
+    #[test]
+    fn callback_memory_is_copied_into_the_effective_snapshot() {
+        let mut callback_buffer = vec![0u8; DUALSENSE_USB_OUTPUT_DATA_LEN];
+        callback_buffer[0] = DUALSENSE_COMPATIBLE_VIBRATION_MASK | DUALSENSE_HAPTICS_SELECT_MASK;
+        callback_buffer[2] = 0x12;
+        callback_buffer[3] = 0xAB;
+        let mut decoder = DualSenseFeedbackDecoder::default();
+        let result = decoder.apply(dualsense_packet(&callback_buffer, 7));
+        callback_buffer.fill(0xFF);
+
+        assert_eq!(decoder.effective_motors(), (0xAB, 0x12));
+        assert!(matches!(
+            result,
+            DualSenseDecodeResult::Snapshot {
+                snapshot: EffectiveMotorSnapshot {
+                    large_motor: 0xAB,
+                    small_motor: 0x12,
+                    source_seq_no: 7,
+                },
+                ..
+            }
+        ));
     }
 
     #[test]

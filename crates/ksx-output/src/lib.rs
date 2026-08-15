@@ -1,6 +1,6 @@
 //! ksx-output — virtual game pads.
 //!
-//! Primary (only, for now) backend: ViGEmBus 1.22.0 through the vendored
+//! Compatibility backend: ViGEmBus 1.22.0 through the vendored
 //! `vigem-client` (pure-Rust IOCTL, no C DLL). Slot identity comes from **active
 //! correlation** — pulse LT below the game-visible threshold and watch which
 //! XInput slot echoes it. Measured on real hardware, both `get_user_index()` and
@@ -23,16 +23,13 @@
 //! - `ds4` (Windows) — `PadState` → DualShock 4 report for the PlayStation
 //!   persona. Not a field copy like the Xbox path: Y axes invert, the D-pad
 //!   collapses to a 4-bit hat, and triggers are analog *and* digital.
-//! - [`HidMaestroBackend`] (M8) — HIDMaestro implementation, for the personas
-//!   ViGEmBus cannot express (DualSense, Switch Pro, Xbox Series). The protocol
-//!   itself lives in `ksx-hidmaestro`; this crate holds only the adapter.
-//!   The production shared-section adapter is not implemented, so these
-//!   personas remain unavailable regardless of the local install state — see
-//!   that crate's docs for what is verified vs written-to-spec.
-//! - [`RoutedBackend`] — persona → backend selection. X360/DS4 stay on ViGEm
-//!   (slots 1–4 never migrate to HIDMaestro's XInput synthesis layer); the new
-//!   personas select HIDMaestro, lazily, so a cabinet that uses none of them
-//!   never even probes for the driver.
+//! - [`HidMaestroBackend`] (M8) — production one-DualSense adapter over the
+//!   fixed authenticated elevated host. Switch Pro and Xbox Series remain
+//!   refused by independent capability gates.
+//! - [`RoutedBackend`] — persona → backend routing rule. X360/DS4 stay on
+//!   ViGEm (slots 1–4 never migrate to HIDMaestro's XInput synthesis layer).
+//!   DualSense builds its host lazily; unfinished rich personas refuse before
+//!   either factory runs.
 //! - `tests/loopback.rs` — cabinet-only XInput round-trip behind the `cab-tests`
 //!   feature; never runs in CI or on machines without ViGEmBus.
 
@@ -50,6 +47,6 @@ pub use backend::{Feedback, PadHandle, VirtualPadBackend};
 pub use error::OutputError;
 pub use hidmaestro::HidMaestroBackend;
 pub use mock::MockBackend;
-pub use router::{HidMaestroFactory, RoutedBackend};
+pub use router::{BackendFactory, HidMaestroFactory, RoutedBackend};
 #[cfg(windows)]
 pub use vigem::VigemBackend;

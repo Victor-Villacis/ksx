@@ -36,16 +36,8 @@ pub fn summarize(report: &DriverReport) -> Vec<Advice> {
     out
 }
 
-/// The personas ksx cannot build, and — separately — whether HIDMaestro is
-/// installed.
-///
-/// **Two facts, deliberately not one.** The old version reported only the
-/// second and let it stand for the first: it said "HIDMaestro is not installed,
-/// so the dualsense/switchpro/xboxseries personas are unavailable", and it went
-/// completely silent once the driver appeared. Both halves were wrong. ksx has
-/// no code that can create a HIDMaestro pad on any machine, so the install was
-/// never the reason and its arrival never a fix — a user who followed that
-/// advice installed a second driver and got exactly nothing.
+/// The independently unfinished personas and the machine prerequisite for the
+/// production DualSense path are reported as separate facts.
 ///
 /// Everything here stays **Info, never Warning** (except a half-finished
 /// install, which is a real defect on the machine): a cabinet running Xbox 360
@@ -59,11 +51,8 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             severity: Severity::Info,
             code: "personas-not-implemented",
             message: format!(
-                "The {} personas cannot be plugged by this build of ksx: it has no code \
-                 that creates a device over HIDMaestro's shared section, only the protocol \
-                 layers above it. Installing HIDMaestro does not enable them. Use \
-                 playstation (HID/DirectInput — ✕○△□ prompts, read by MAME/RetroArch/Steam \
-                 Input) or xbox360 instead.",
+                "The {} personas have not completed their independent production runtimes. \
+                 DualSense is live; use xbox360 for the unfinished profiles.",
                 gated.join("/"),
             ),
         });
@@ -71,15 +60,16 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
     if hm.installed {
         return;
     }
-    if hm.service_key {
+    if hm.service_key || hm.driver_file.is_some() {
         // A half-install is a real defect on the machine and worth a warning on
         // its own terms — even though no persona depends on fixing it today.
         out.push(Advice {
             severity: Severity::Warning,
             code: "hidmaestro-partial",
             message: format!(
-                "HIDMaestro's service key exists but its UMDF driver is missing \
-                 (checked {}): a broken or half-removed install. Reinstall or remove it.",
+                "The HIDMaestro package is missing, duplicated, or does not match the pinned \
+                 v1.6.1 INF and UMDF driver hashes (checked {}): reinstall it with the KSX \
+                 installer task, or remove the broken package.",
                 hm.looked_for.join(", "),
             ),
         });
@@ -88,8 +78,9 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
     out.push(Advice {
         severity: Severity::Info,
         code: "hidmaestro-missing",
-        message: "HIDMaestro is not installed. Nothing depends on it today — ksx cannot \
-                  drive it either way — and xbox360/playstation slots run on ViGEmBus."
+        message: "HIDMaestro is not installed, so the production DualSense persona cannot \
+                  start. Re-run the KSX installer with the HIDMaestro driver task selected. \
+                  xbox360/playstation slots continue to run on ViGEmBus."
             .into(),
     });
 }
@@ -396,7 +387,7 @@ mod tests {
             // Synthetic absent-state fixture.
             hidmaestro: crate::report::HidMaestroReport::absent(vec![
                 "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro".into(),
-                "C:\\Windows\\System32\\drivers\\UMDF\\HIDMaestro.dll".into(),
+                "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\HIDMaestro.dll".into(),
             ]),
         }
     }
@@ -597,7 +588,7 @@ mod tests {
     /// personas must not mention the install as its cause — nor go quiet when
     /// the driver turns up.
     #[test]
-    fn installing_hidmaestro_does_not_change_which_personas_are_offered() {
+    fn installing_hidmaestro_changes_machine_readiness_not_build_capability() {
         let mut absent = cabinet_report();
         absent.hidmaestro = crate::report::HidMaestroReport::absent(vec!["<probe>".into()]);
         let mut present = absent.clone();
@@ -617,7 +608,7 @@ mod tests {
             }
             assert!(
                 gate.message
-                    .contains("Installing HIDMaestro does not enable them"),
+                    .contains("have not completed their independent production runtimes"),
                 "{label}: {}",
                 gate.message
             );

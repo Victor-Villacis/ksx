@@ -79,6 +79,9 @@ pub enum PadBackend {
     HidMaestro,
 }
 
+const HIDMAESTRO_BUILD_GAP: &str =
+    "this HIDMaestro controller persona has not yet completed its independent production runtime";
+
 impl PadBackend {
     pub const ALL: &'static [PadBackend] = &[PadBackend::Vigem, PadBackend::HidMaestro];
 
@@ -96,8 +99,8 @@ impl PadBackend {
         }
     }
 
-    /// Whether THIS BUILD of ksx contains code that can actually create a
-    /// device on this stack.
+    /// Whether THIS BUILD of ksx contains code that can create at least one
+    /// persona on this stack.
     ///
     /// A fact about the binary, and deliberately **not** a probe of the
     /// machine. The two disagree in the one case that matters: install
@@ -106,15 +109,34 @@ impl PadBackend {
     /// would start offering personas that plug no better than before, and send
     /// the user back to the driver they had just installed.
     ///
-    /// `false` for [`PadBackend::HidMaestro`] because `ksx-hidmaestro` holds
-    /// everything *above* HIDMaestro's shared section — the seqlock, the
-    /// lifecycle order, the axis routing, the keepalive, the feedback decode —
-    /// and nothing that can map the section itself. Flip this in the same
-    /// commit that lands a driver which can, not before.
+    /// This is a backend-level diagnostic. Product gates must call
+    /// [`PadBackend::supports`] (normally through [`Persona::can_plug`]) so a
+    /// measured DualSense rollout cannot accidentally enable Switch Pro and
+    /// Xbox Series at the same time.
     pub const fn is_implemented(self) -> bool {
         match self {
             PadBackend::Vigem => true,
-            PadBackend::HidMaestro => false,
+            PadBackend::HidMaestro => {
+                self.supports(Persona::DualSense)
+                    || self.supports(Persona::SwitchPro)
+                    || self.supports(Persona::XboxSeries)
+            }
+        }
+    }
+
+    /// Whether this exact persona is implemented by this backend in this
+    /// build.
+    ///
+    /// The three HIDMaestro arms are intentionally separate. The first live
+    /// milestone is one plain DualSense, and proving it must not turn two
+    /// unrelated catalog entries into product promises.
+    pub const fn supports(self, persona: Persona) -> bool {
+        match (self, persona) {
+            (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
+            (PadBackend::HidMaestro, Persona::DualSense) => true,
+            (PadBackend::HidMaestro, Persona::SwitchPro) => false,
+            (PadBackend::HidMaestro, Persona::XboxSeries) => false,
+            _ => false,
         }
     }
 
@@ -125,13 +147,24 @@ impl PadBackend {
     /// act on, and acting on it here costs a driver install that changes
     /// nothing.
     pub const fn gap(self) -> Option<&'static str> {
+        if self.is_implemented() {
+            None
+        } else {
+            Some(HIDMAESTRO_BUILD_GAP)
+        }
+    }
+
+    /// What is missing for one exact persona.
+    ///
+    /// Unlike [`PadBackend::gap`], this remains truthful after a partial
+    /// backend rollout.
+    pub const fn gap_for(self, persona: Persona) -> Option<&'static str> {
+        if self.supports(persona) {
+            return None;
+        }
         match self {
-            PadBackend::Vigem => None,
-            PadBackend::HidMaestro => Some(
-                "ksx has no code that can create a device over HIDMaestro's shared section \
-                 — only the protocol layers above it — so this fails on every machine, and \
-                 installing HIDMaestro does not change it",
-            ),
+            PadBackend::Vigem => Some("ViGEmBus cannot emulate this controller persona"),
+            PadBackend::HidMaestro => Some(HIDMAESTRO_BUILD_GAP),
         }
     }
 }
@@ -176,14 +209,13 @@ impl Persona {
 
     /// Which driver stack has to materialize this persona.
     ///
-    /// **The migration rule, stated as code** (`docs/ENHANCEMENTS.md` E1/E4):
-    /// Xbox 360 and PlayStation stay on ViGEmBus *forever*, even once
-    /// HIDMaestro is installed and could emulate them. HIDMaestro's XInput is a
-    /// synthesis layer — its GIP companion maps a HID device onto an XInput
-    /// slot — and that layer is the direct cause of its WGI double-input bug
-    /// (`docs/research/padforge-code-audit.md` §3.6). ViGEmBus's X360 target is
-    /// the genuine `xusb22.sys` article. Slots 1–4 are the cabinet's whole
-    /// reason to exist; they do not move to a synthesis layer to gain nothing.
+    /// **The current capability rule, stated as code**
+    /// (`docs/ENHANCEMENTS.md` E1/E4): Xbox 360 and PlayStation use the shipped
+    /// ViGEmBus compatibility lane; richer identities use the gated HIDMaestro
+    /// lane. ViGEmBus's X360 target reaches Microsoft's genuine `xusb22.sys`
+    /// stack and is kept as a supported fallback even after HIDMaestro ships.
+    /// The historical HIDMaestro WGI double-input issue was fixed upstream and
+    /// is no longer an architectural reason for this routing rule.
     pub const fn backend(self) -> PadBackend {
         match self {
             Persona::Xbox360 | Persona::PlayStation => PadBackend::Vigem,
@@ -250,7 +282,7 @@ impl Persona {
     ///
     /// The gate that decides whether a persona is *offered* — by the config
     /// validator, by the router, by `ksx doctor`. It resolves to
-    /// [`PadBackend::is_implemented`], which is a fact about the binary and not
+    /// [`PadBackend::supports`], which is a fact about the binary and not
     /// about the machine, and that distinction is the whole point: a gate built
     /// on a driver probe is wrong in exactly the case it is there for. Install
     /// HIDMaestro, the probe says yes, the picker offers `dualsense`, and the
@@ -263,7 +295,30 @@ impl Persona {
     /// — and it would break every file that already says `persona =
     /// "dualsense"`.
     pub const fn can_plug(self) -> bool {
-        self.backend().is_implemented()
+        self.backend().supports(self)
+    }
+
+    /// Maximum number of this exact persona one ksx session may create.
+    ///
+    /// `None` means the backend has no persona-specific ceiling beyond ksx's
+    /// normal slot limits. The first production HIDMaestro runtime deliberately
+    /// owns one fixed device and one fixed shared-memory endpoint, so exposing
+    /// a second DualSense would make configuration appear valid and then fail
+    /// halfway through startup. Keep the bound here so setup, config, the slot
+    /// writer, and `ksx pads` all make the same decision.
+    pub const fn instance_limit(self) -> Option<usize> {
+        match self {
+            Persona::DualSense => Some(1),
+            _ => None,
+        }
+    }
+
+    /// Why this exact persona cannot be plugged by this build.
+    ///
+    /// Product surfaces use this instead of a backend-wide gap so enabling one
+    /// HIDMaestro profile never silences the refusal for the others.
+    pub const fn gap(self) -> Option<&'static str> {
+        self.backend().gap_for(self)
     }
 
     /// The nearest persona this build *can* plug, so a refusal ends in a fix
@@ -272,12 +327,13 @@ impl Persona {
     /// **Never a substitution.** Nothing calls this to downgrade a slot behind
     /// the user's back — silently handing a PS5 name a DS4 is precisely what
     /// [`FromStr`] refuses to do. It exists so the message that turns down
-    /// `dualsense` can name `playstation` in the same breath.
+    /// an unfinished profile can name a working compatibility persona in the
+    /// same breath.
     pub const fn nearest_pluggable(self) -> Persona {
         match self {
-            // ✕○△□ prompts with no second driver: the DS4 clone ViGEmBus does
-            // emulate. Costs the DualSense VID/PID sniff and adaptive triggers.
-            Persona::DualSense => Persona::PlayStation,
+            // The production HIDMaestro host now materializes one exact USB
+            // DualSense, so a DualSense request needs no fallback.
+            Persona::DualSense => Persona::DualSense,
             // Nintendo has no ViGEmBus equivalent at all, and Xbox Series is an
             // XInput pad, so both land on the most compatible pad there is —
             // Nintendo prompts then need a remap in the emulator.
@@ -413,7 +469,7 @@ mod tests {
 
     /// The M8 personas, each flag justified in the doc comment it mirrors.
     /// Written to spec (`docs/research/padforge-code-audit.md` §3), NOT yet
-    /// validated through a production shared-section adapter. Complete that
+    /// validated through a production SDK-host adapter. Complete that
     /// physical gate before trusting the device-specific claims.
     #[test]
     fn hidmaestro_persona_flags_are_stated_per_device_not_copied() {
@@ -467,11 +523,9 @@ mod tests {
     }
 
     #[test]
-    fn the_three_hidmaestro_personas_cannot_be_plugged_by_this_build() {
-        // The fact this whole gate exists for: `UnavailableDriver` is the only
-        // `HmDriverApi` implementation that ships, and it refuses to create a
-        // controller. Offering these three anywhere is offering a plug failure.
-        for p in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+    fn only_the_independently_finished_hidmaestro_persona_can_plug() {
+        assert!(Persona::DualSense.can_plug());
+        for p in [Persona::SwitchPro, Persona::XboxSeries] {
             assert!(!p.can_plug(), "{p} must not be offered");
         }
         // ...and the two the cabinet actually runs on are unaffected.
@@ -480,15 +534,28 @@ mod tests {
     }
 
     #[test]
+    fn the_first_hidmaestro_runtime_has_one_explicit_device_slot() {
+        assert_eq!(Persona::DualSense.instance_limit(), Some(1));
+        for persona in [
+            Persona::Xbox360,
+            Persona::PlayStation,
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+        ] {
+            assert_eq!(persona.instance_limit(), None, "{persona}");
+        }
+    }
+
+    #[test]
     fn a_refused_persona_still_parses_and_still_has_a_name() {
         // Deleting the variant, or making it stop parsing, would turn every
         // existing `persona = "dualsense"` into "unknown persona" — which is
         // false, and points the reader at a typo they did not make.
-        let p: Persona = "dualsense".parse().unwrap();
-        assert_eq!(p, Persona::DualSense);
+        let p: Persona = "switchpro".parse().unwrap();
+        assert_eq!(p, Persona::SwitchPro);
         assert!(!p.can_plug());
         assert!(Persona::ALL.contains(&p));
-        assert_eq!(p.as_str(), "dualsense");
+        assert_eq!(p.as_str(), "switchpro");
     }
 
     #[test]
@@ -506,7 +573,7 @@ mod tests {
         }
         // The two suggestions that carry meaning: Sony stays Sony (✕○△□ is
         // what the user wanted), Nintendo/Series fall back to XInput.
-        assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::PlayStation);
+        assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::Xbox360);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::Xbox360);
     }
@@ -518,23 +585,23 @@ mod tests {
         for &b in PadBackend::ALL {
             assert_eq!(b.gap().is_none(), b.is_implemented(), "{b}");
         }
+        assert_eq!(PadBackend::HidMaestro.gap(), None);
         let gap = PadBackend::HidMaestro
-            .gap()
-            .expect("HIDMaestro is unimplemented");
-        // The sentence has to close off the wrong fix explicitly: "not
-        // installed" is the reading that costs a pointless driver install.
+            .gap_for(Persona::SwitchPro)
+            .expect("Switch Pro remains unimplemented");
         assert!(
-            gap.contains("installing HIDMaestro does not change it"),
+            gap.contains("has not yet completed its independent production runtime"),
             "{gap}"
         );
     }
 
     #[test]
-    fn plugability_is_derived_from_the_backend_and_never_restated() {
-        // Two lists that must be one: `can_plug` has to follow `backend()`, or
-        // a persona could be added to one and forgotten in the other.
+    fn plugability_is_derived_from_the_exact_backend_capability() {
+        // The persona-specific gate is what allows one rich profile to ship
+        // without silently enabling every profile on the same backend.
         for &p in Persona::ALL {
-            assert_eq!(p.can_plug(), p.backend().is_implemented(), "{p}");
+            assert_eq!(p.can_plug(), p.backend().supports(p), "{p}");
+            assert_eq!(p.gap().is_none(), p.can_plug(), "{p}");
         }
         // And the sanity floor: something must be pluggable, or ksx is a no-op.
         assert!(Persona::ALL.iter().any(|p| p.can_plug()));

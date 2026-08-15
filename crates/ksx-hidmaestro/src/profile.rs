@@ -1,14 +1,14 @@
 //! Profiles: the descriptor + axis map a virtual device is created from.
 //!
-//! HIDMaestro embeds 225+ profile JSONs (`LoadDefaultProfiles` returns the
-//! count). ksx does not need a catalog browser — it needs exactly three slugs,
-//! one per M8 persona, and the rules for handling them.
+//! HIDMaestro v1.6.1's source project selects 228 profile JSON resources, 130
+//! of which carry a descriptor-shaped hexadecimal payload. S1.5c freezes only
+//! the plain-USB DualSense conformance slice; the other persona slugs below are
+//! roadmap selectors, not claims that their catalog profiles are implemented.
 
 use ksx_core::Persona;
 
-use crate::axis::{AxisMap, AxisRole, HmAxis};
+use crate::axis::AxisMap;
 use crate::error::HmError;
-use crate::feedback::SonyFamily;
 
 /// The byte pattern that says a descriptor carries a HID-PID force-feedback
 /// block: `Usage(Set Effect Report), Collection(Logical)`.
@@ -25,31 +25,30 @@ pub fn has_pid_block(descriptor: &[u8]) -> bool {
         .any(|w| w == PID_BLOCK_SIGNATURE)
 }
 
-/// Transport the profile emulates. Not cosmetic: it selects the feedback
-/// layout (Xbox Series BT short form vs legacy HID) and it is why the Xbox slug
-/// below is the BT one.
+/// Transport metadata retained by the profile model.
+///
+/// The current S1.5c conformance stub constructs only [`Transport::Usb`]; a
+/// variant's existence is not evidence that its runtime path is implemented.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Transport {
     Usb,
     Bluetooth,
 }
 
-/// One HIDMaestro profile, reduced to what a submit path needs.
+/// One profile-shaped value used by the private conformance model.
 #[derive(Clone, Debug)]
 pub struct HmProfile {
-    /// Catalog slug, e.g. `xbox-series-xs-bt`.
+    /// Catalog selector, e.g. `dualsense`.
     pub slug: String,
     pub vid: u16,
     pub pid: u16,
     pub transport: Transport,
-    /// The captured HID report descriptor. **Empty means not deployable** —
-    /// HIDMaestro's own catalog flags these, and `CreateController` throws on
-    /// them, so ksx refuses them one step earlier with a name attached.
+    /// Descriptor bytes attached to the model. **Empty means not deployable**.
+    /// Production must supply hash-bound catalog bytes; the conformance helper
+    /// below deliberately supplies a synthetic test-only descriptor.
     pub descriptor: Vec<u8>,
     /// Role → HID usage. The only routing table; see [`crate::axis`].
     pub axis_map: AxisMap,
-    /// Sony report family, when this is a Sony pad — selects the feedback gate.
-    pub sony_family: Option<SonyFamily>,
 }
 
 impl HmProfile {
@@ -82,13 +81,11 @@ impl HmProfile {
     }
 }
 
-/// The catalog slug ksx asks for, per persona.
+/// The planned catalog selector for each HIDMaestro-routed persona.
 ///
-/// **`xbox-series-xs-bt`, not a wired Xbox profile**, and that is a deliberate
-/// choice inherited from PadForge (`padforge-code-audit.md` §3.5): WGI /
-/// GameInput consumers do not route force feedback to the X360 XUSB companion,
-/// so a wired profile vibrates in nothing that browsers or GameInput-era titles
-/// drive. The Series BT profile takes the HID output path, which they do drive.
+/// A returned slug proves only which upstream catalog entry the roadmap names.
+/// It does not prove descriptor, input, feedback, transport, or hardware
+/// conformance. S1.5c's only frozen runtime-candidate scope is `dualsense`.
 ///
 /// Returns `None` for the personas that never reach this backend
 /// ([`Persona::backend`] routes them to ViGEmBus) — a HIDMaestro Xbox 360 pad
@@ -102,11 +99,12 @@ pub const fn slug_for(persona: Persona) -> Option<&'static str> {
     }
 }
 
-/// A minimal descriptor stub used when the real catalog is unavailable, so the
-/// *shape* of a profile is testable. Carries a PID block so PID-ordering logic
-/// has something to trigger on.
-#[doc(hidden)]
-pub fn stub_descriptor(with_pid: bool) -> Vec<u8> {
+/// A deliberately synthetic descriptor for private conformance-model tests.
+///
+/// This is not a HIDMaestro catalog descriptor and must never be submitted to a
+/// driver. `with_pid` exists solely to exercise both lifecycle-ordering paths.
+#[cfg(test)]
+pub(crate) fn conformance_stub_descriptor(with_pid: bool) -> Vec<u8> {
     let mut d = vec![0x05, 0x01, 0x09, 0x05, 0xA1, 0x01];
     if with_pid {
         d.extend_from_slice(&PID_BLOCK_SIGNATURE);
@@ -115,58 +113,23 @@ pub fn stub_descriptor(with_pid: bool) -> Vec<u8> {
     d
 }
 
-/// The three profiles ksx asks HIDMaestro for, described from the documented
-/// facts. **The `descriptor` here is a stub**: real descriptors come from the
-/// installed catalog via `LoadDefaultProfiles`. VID/PIDs are the real vendor
-/// ids; the axis maps are the documented conventions.
-pub fn expected_profile(persona: Persona) -> Option<HmProfile> {
-    let slug = slug_for(persona)?;
-    let (vid, pid, transport, axis_map, sony_family) = match persona {
-        Persona::DualSense => (
-            0x054C,
-            0x0CE6,
-            Transport::Usb,
-            AxisMap::sony_convention(),
-            Some(SonyFamily::Ds5),
-        ),
-        Persona::SwitchPro => (
-            0x057E,
-            0x2009,
-            Transport::Usb,
-            // Switch Pro reports sticks on X/Y and Rx/Ry and has no analog
-            // triggers; ZL/ZR are digital. They are still routed as roles so a
-            // preset's LT/RT reach the digital bits through the threshold in
-            // `state::buttons` rather than through a positional guess.
-            {
-                let mut m = AxisMap::new();
-                m.set(AxisRole::LeftStickX, HmAxis::X)
-                    .set(AxisRole::LeftStickY, HmAxis::Y)
-                    .set(AxisRole::RightStickX, HmAxis::RX)
-                    .set(AxisRole::RightStickY, HmAxis::RY)
-                    .set(AxisRole::LeftTrigger, HmAxis::Z)
-                    .set(AxisRole::RightTrigger, HmAxis::RZ);
-                m
-            },
-            None,
-        ),
-        Persona::XboxSeries => (
-            0x045E,
-            0x0B13,
-            Transport::Bluetooth,
-            AxisMap::xinput_convention(),
-            None,
-        ),
-        Persona::Xbox360 | Persona::PlayStation => return None,
-    };
-    Some(HmProfile {
-        slug: slug.to_string(),
-        vid,
-        pid,
-        transport,
-        descriptor: stub_descriptor(true),
-        axis_map,
-        sony_family,
-    })
+/// Synthetic one-DualSense profile for the private latch/lifecycle conformance
+/// model.
+///
+/// Only the identity, USB transport, and by-role axis map reflect the pinned
+/// DualSense source. The descriptor is intentionally fake and contains a PID
+/// marker solely so tests can exercise pre-enumeration ordering. This function
+/// is not a catalog loader and does not authorize controller creation.
+#[cfg(test)]
+pub(crate) fn dualsense_conformance_stub_profile() -> HmProfile {
+    HmProfile {
+        slug: "dualsense".to_owned(),
+        vid: 0x054C,
+        pid: 0x0CE6,
+        transport: Transport::Usb,
+        descriptor: conformance_stub_descriptor(true),
+        axis_map: AxisMap::sony_convention(),
+    }
 }
 
 #[cfg(test)]
@@ -176,8 +139,8 @@ mod tests {
     #[test]
     fn pid_block_detection_matches_the_documented_signature() {
         assert_eq!(PID_BLOCK_SIGNATURE, [0x09, 0x21, 0xA1, 0x02]);
-        assert!(has_pid_block(&stub_descriptor(true)));
-        assert!(!has_pid_block(&stub_descriptor(false)));
+        assert!(has_pid_block(&conformance_stub_descriptor(true)));
+        assert!(!has_pid_block(&conformance_stub_descriptor(false)));
         // It must be a subsequence search, not a prefix check.
         let mut buried = vec![0u8; 300];
         buried[200..204].copy_from_slice(&PID_BLOCK_SIGNATURE);
@@ -188,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_hidmaestro_personas_have_slugs() {
+    fn roadmap_selectors_name_only_the_hidmaestro_personas() {
         assert_eq!(slug_for(Persona::XboxSeries), Some("xbox-series-xs-bt"));
         assert_eq!(slug_for(Persona::DualSense), Some("dualsense"));
         assert_eq!(slug_for(Persona::SwitchPro), Some("switch-pro"));
@@ -196,41 +159,26 @@ mod tests {
         // pad is the synthesis layer we deliberately refuse.
         assert_eq!(slug_for(Persona::Xbox360), None);
         assert_eq!(slug_for(Persona::PlayStation), None);
-        assert!(expected_profile(Persona::Xbox360).is_none());
     }
 
     #[test]
-    fn the_xbox_slug_is_the_bluetooth_profile_on_purpose() {
-        let p = expected_profile(Persona::XboxSeries).unwrap();
-        assert_eq!(p.transport, Transport::Bluetooth);
+    fn the_dualsense_conformance_profile_is_explicitly_a_valid_stub() {
+        let p = dualsense_conformance_stub_profile();
+        p.validate().unwrap();
+        assert_eq!(p.slug, "dualsense");
+        assert_eq!((p.vid, p.pid), (0x054C, 0x0CE6));
+        assert_eq!(p.transport, Transport::Usb);
+        assert!(p.axis_map.is_complete());
+        assert_eq!(p.descriptor, conformance_stub_descriptor(true));
         assert!(
-            p.slug.ends_with("-bt"),
-            "a wired Xbox profile gets no FFB from WGI/GameInput consumers"
+            p.has_pid_block(),
+            "the synthetic fixture requests PID ordering"
         );
-    }
-
-    #[test]
-    fn every_shipped_profile_validates() {
-        for persona in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
-            let p = expected_profile(persona).expect("slug exists");
-            p.validate().unwrap_or_else(|e| panic!("{persona}: {e}"));
-            assert!(p.axis_map.is_complete());
-            assert!(p.has_pid_block());
-        }
-        // Sony family is set exactly where the Sony feedback gate applies.
-        assert_eq!(
-            expected_profile(Persona::DualSense).unwrap().sony_family,
-            Some(SonyFamily::Ds5)
-        );
-        assert!(expected_profile(Persona::XboxSeries)
-            .unwrap()
-            .sony_family
-            .is_none());
     }
 
     #[test]
     fn an_undeployable_profile_is_refused_by_name() {
-        let mut p = expected_profile(Persona::DualSense).unwrap();
+        let mut p = dualsense_conformance_stub_profile();
         p.descriptor.clear();
         let err = p.validate().unwrap_err();
         assert!(matches!(err, HmError::ProfileNotDeployable(s) if s == "dualsense"));
@@ -238,7 +186,7 @@ mod tests {
 
     #[test]
     fn an_incomplete_axis_map_is_refused_at_create_time_not_at_submit_time() {
-        let mut p = expected_profile(Persona::DualSense).unwrap();
+        let mut p = dualsense_conformance_stub_profile();
         p.axis_map = AxisMap::new();
         let err = p.validate().unwrap_err();
         let msg = err.to_string();

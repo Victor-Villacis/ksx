@@ -6,66 +6,111 @@ the shipped contract before expanding it — each item below is deliberately
 designed-for now (trait boundaries, config schema) so none requires a rewrite
 later.
 
-## E1 — More controller types than Xbox 360 (Xbox One/Series, DualSense, Switch Pro)
+## E1 — A capability-routed output stack
 
-**Verdict: yes, via the backend trait — not via ViGEmBus.**
+**Decision 2026-08-14: HIDMaestro, ViGEmBus and VIIPER are complementary.**
+
+This is not a winner-take-all driver migration. KSX chooses an output path from
+the requested device identity and transport:
+
+| Role | Backend | Product use | Status |
+|---|---|---|---|
+| Compatibility foundation and fallback | **ViGEmBus** | Proven Xbox 360 and DS4 output, including genuine `xusb22.sys` XInput slots | shipped |
+| Rich local Windows controller identities | **HIDMaestro** | Production plain-USB DualSense now; independently gated catalog expansion later | DualSense implemented, hardware acceptance pending |
+| Software-defined virtual USB and network transport | **VIIPER** | Virtual controllers, keyboards and mice; remote input; Windows/Linux bridge | roadmap prototype, not shipped |
+
+“Fallback” never means silently turning a requested DualSense into an Xbox 360
+pad. Persona substitution changes what the game sees and therefore requires an
+explicit compatibility choice. Routing is capability-based: local rich profile
+→ HIDMaestro; requested X360/DS4 compatibility → ViGEmBus; virtual USB or a
+network/cross-platform endpoint → VIIPER.
 
 - ViGEmBus only emulates X360 and DS4 (DS4 exists in our vendored client behind
   `unstable_ds4`). It will never gain Xbox One/Series — the project is frozen.
-- **HIDMaestro** (MIT, active, user-mode) ships 228 byte-exact profiles incl.
+- **HIDMaestro** (MIT, active, user-mode) ships a large byte-exact catalog incl.
   Xbox Series, DualSense (adaptive triggers), DS4v2, Switch Pro. Our
   `VirtualPadBackend` trait exists precisely so a `hidmaestro.rs` backend can add
-  these personas without touching the engine. Prereq: write a small Rust client for
-  its MIT-documented shared-memory protocol; verify its WGI double-input bug doesn't
-  hit our games.
-- Reality check for the cabinet: X360 remains the *most* compatible persona ever made
-  (every XInput game, 2006→today). Fancier personas matter only for games that check
-  for newer pads. **Priority: low until a concrete game needs it.**
+  these personas without touching the engine.
+- **VIIPER** is a different lane, not a competing profile catalog. It creates
+  software-defined USB devices through USB/IP, runs on Windows and Linux, and can
+  be driven locally or over its network API. It is the planned route when KSX needs
+  a real virtual keyboard/mouse, remote controllers, or a cross-platform virtual-USB
+  endpoint.
+- X360 remains the broadest compatibility persona. That is why ViGEmBus remains a
+  supported fallback even after HIDMaestro works; retirement of its upstream project
+  is a maintenance risk, not a reason to remove a working signed driver.
 
-### E1 status 2026-08-06 — M8 started, blocked on the production adapter
+### E1 status 2026-08-15 — first production adapter implemented
 
-**Feasibility check first.** Installation state is not the blocker: this build has no
-production implementation that maps HIDMaestro's shared section. Installing the driver
-would therefore not make these personas usable. The managed SDK is a specification
-source, not a production transport for KSX.
+M8 now ships a bounded first controller path:
 
-So M8 shipped the **client, honestly gated**, and nothing that pretends:
-
-- `crates/ksx-hidmaestro` — the protocol client written against
-  `research/padforge-code-audit.md` §3: seqlocked shared-memory latch, lifecycle in the
-  documented order (sweep → catalog → install; PID pool before enumeration), 16 ms
-  idle-dedup keepalive derived from the three driver watchdogs, axis routing **by role
-  through the profile's map** (never positional), trigger writes mirrored to two keys,
-  and the feedback decode table including the Bluetooth 547→257 length trap.
-- `ksx-output`: `HidMaestroBackend` (adapter) + `RoutedBackend` (persona → stack).
+- `crates/ksx-hidmaestro` carries the authenticated, bounded `KSXH` transport.
+  It resolves one fixed protected sibling, binds the UAC process identity, and
+  keeps raw driver/shared-memory authority out of the ordinary daemon.
+- `ksx-output::HidMaestroBackend` creates one exact DualSense, submits full
+  state, renews its lease, drains bounded feedback and tears the host down.
 - `ksx-core`: `Persona::{DualSense, SwitchPro, XboxSeries}` + `PadBackend`, with
   `Persona::backend()` as the single statement of the routing rule.
-- **The three personas are not offered until the section lands.**
-  `PadBackend::is_implemented()` says this build cannot create a HIDMaestro device, and
+- **Each persona is offered only when its exact implementation lands.**
+  `PadBackend::supports(persona)` records that per-persona build capability, and
   `Persona::can_plug()` is what the config validator (`Issue::PersonaNotImplemented`),
-  `RoutedBackend`, `ksx pads` and `ksx doctor` all read. The gate is that build fact and
-  **never a driver probe** — a probe flips to "installed" the moment a user installs
-  HIDMaestro, and the plug fails exactly as before, so a probe-based gate is wrong in
-  the one case it exists for. Flipping `is_implemented()` in the same commit that lands
-  a real driver re-opens every one of those paths with nothing else to change.
-- `ksx doctor` reports HIDMaestro's absence at **Info** severity (`hidmaestro-missing`)
-  and says nothing depends on it, because nothing does: a cabinet on
-  xbox360/playstation loses nothing by not having it, and neither does anyone else.
-  The separate `personas-not-implemented` note is what explains the three personas, and
-  it prints whether or not the driver is present.
+  `RoutedBackend`, `ksx pads` and `ksx doctor` all read. The gate is a build fact and
+  **never a driver probe** — installing HIDMaestro cannot expose an unimplemented
+  persona. A persona is enabled only in the same change that lands and verifies that
+  exact implementation, without accidentally enabling its siblings.
+- `ksx doctor` reports whether the Driver Store prerequisite for DualSense is
+  present and separately names the unfinished Switch Pro/Xbox Series profiles.
+- The installed product includes a checked, explicit HIDMaestro driver task.
+  Driver installation/repair is isolated from Play-time authority.
 
-**Verified vs written-to-spec** is stated in `ksx-hidmaestro`'s crate docs as a table.
-Short version: the seqlock discipline, keepalive cadence, axis-by-name routing and
-lifecycle order are tested (the seqlock with a real writer/reader thread race); the
-decode table is pinned to the audit's fixtures but unverified on bytes; **the shared
-section's name and byte layout are unknown** and are the one thing the protocol map
-does not contain — PadForge consumes the SDK in-process and never opens the section.
-Finishing M8 means transcribing that from HIDMaestro's own MIT sources
-(`driver.c` / `companion.c`); everything above it is already written.
+**The former source-fact blocker is closed.** HIDMaestro's author supplied the exact
+mapping/event/config names and pointed KSX to the authoritative MIT sources:
+`driver/driver.h` for the packed shared structures and bounds, and
+`sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs` for the creator/writer protocol.
+The supported `HMContext` / `HMController` SDK surface is also available.
 
-**Slots 1–4 never move.** `Persona::backend()` pins xbox360 and playstation to ViGEmBus
-permanently — HIDMaestro's XInput is a synthesis layer and the direct cause of its WGI
-double-input bug, and ViGEm's X360 target is Microsoft's own `xusb22.sys`.
+That does **not** make the removed Rust adapter salvageable. It modeled a small
+private latch, while the real protocol includes creator-owned mappings and events,
+native HID/GIP/extended input payloads, an output ring, PID/feedback state and
+controller configuration. M8 now starts from the supported SDK boundary, but only
+through a runtime-only candidate, authenticated host transport and a pinned installer.
+It must still measure create/update/feedback/teardown across the Windows input APIs
+on clean hardware before broad release. The
+previously cited WGI double-input issue was fixed upstream; KSX will test the current
+release instead of preserving that stale rationale.
+
+HIDMaestro controller creation is privileged. The production shape is a narrow
+installed host/broker with an allowlisted controller-state protocol; the ordinary KSX
+daemon, Studio and launched games remain at normal user integrity. Elevating the whole
+current daemon would elevate user-editable game launches and local control surfaces,
+which is not an acceptable accidental side effect.
+
+The pinned SDK spike, sprint slices and their exact exit criteria live in
+[`HIDMAESTRO.md`](HIDMAESTRO.md). That file is the implementation checklist;
+this section remains the product decision and capability-routing record.
+
+### E1.1 — VIIPER virtual USB and network lane
+
+VIIPER is scheduled **after the HIDMaestro production spike**, but the architecture is
+parallel rather than subordinate:
+
+1. Run VIIPER as a separately installed/server component first; do not embed its
+   GPL-3.0 core into KSX without an explicit licensing review. Prefer its documented
+   process/network boundary and a narrowly scoped client.
+2. Prove a virtual keyboard and one virtual controller locally on Linux and across a
+   Windows/Linux pair. Include output feedback, disconnect/reconnect, authentication,
+   latency and loss behavior; a localhost demo is not network-product evidence.
+3. Generalize `VirtualPadBackend` only when the spike proves the need: gamepads keep
+   `PadState`, while keyboard/mouse output use typed device-specific states rather than
+   pretending every USB device is a pad.
+4. Keep installation honest. Linux uses its USB/IP support; Windows requires a
+   validated USB/IP client/driver path. No roadmap line enables a persona until the
+   exact packaged path passes clean-machine and uninstall gates.
+
+VirtualHere remains a possible **external raw-USB passthrough integration**. It moves
+an existing physical USB device; VIIPER creates a new software-defined one. VirtualHere
+is proprietary and may be user-installed or covered by a future OEM agreement, but it
+is not a required KSX backend.
 
 ## E2 — Lean into Steam Input?
 
@@ -83,7 +128,7 @@ double-input bug, and ViGEm's X360 target is Microsoft's own `xusb22.sys`.
 
 ## E3 — Emulate keyboards too (key→key remapping / synthetic keys)
 
-**Verdict: cheap and worth doing — new `Binding::Key` output.**
+**Verdict: two useful levels, deliberately separate.**
 
 - The engine already owns per-device capture; adding a binding variant that emits a
   *different* keystroke (via `interception_send` on the Interception backend, or
@@ -93,9 +138,10 @@ double-input bug, and ViGEm's X360 target is Microsoft's own `xusb22.sys`.
 - Use cases: I-PAC admin buttons → frontend hotkeys; one panel button → Alt+F4;
   "create keys first, then controllers" flows.
 - Config shape is already compatible: `bindings` values just gain a `key:X` form.
-- **Priority: medium, after M4** (needs the capture backends live). A full *virtual
-  keyboard device* (VHF-based) is not needed for any current use case — synthetic
-  injection covers it.
+- Local key injection remains the cheap path for frontend/admin hotkeys. A full
+  *virtual keyboard device* is a different capability: software that enumerates as
+  hardware, including on another machine. That belongs to the VIIPER lane above and
+  must not be represented as equivalent to `SendInput`/Interception injection.
 
 ## E4 — More than 4 controllers — **MEASURED 2026-08-04: cheap after all**
 

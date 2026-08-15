@@ -561,6 +561,7 @@ function Get-MsbuildProperties {
     $pathMap = $CandidateRoot + '=/_/candidate,' +
         $ObjectRoot + '=/_/object,' + $OutputRoot + '=/_/output,' +
         $TempRoot + '=/_/temp'
+    $pathMapSwitchValue = $pathMap.Replace(',', '%2C')
     return @(
         '-p:Configuration=Release',
         '-p:RuntimeIdentifier=win-x64',
@@ -571,7 +572,7 @@ function Get-MsbuildProperties {
         '-p:Deterministic=true',
         '-p:ContinuousIntegrationBuild=true',
         '-p:DeterministicSourcePaths=true',
-        "-p:PathMap=$pathMap",
+        "-p:PathMap=$pathMapSwitchValue",
         '-p:DebugType=portable',
         '-p:DebugSymbols=true',
         '-p:EmbedAllSources=false',

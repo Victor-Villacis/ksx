@@ -1047,9 +1047,9 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'AAEF42063EA093B29C51543D3984F7107D887228D155E49910A7FE256180A039' -or
+                '0FF03B9215CC68B26E8F2A5B67D9EFDBB45BE048BD8666D105A05F780F5FBEAB' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
-                '62F6A2AFFF092A5FCEF2FB783E9D513E6E0A1A952C835E1F785FE3B8C9AF150B') {
+                '3D43337292C54BFDE8669E407A5FDC5DC043C16A601389AA682B2FC71011925D') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'
           }
 
@@ -1058,10 +1058,10 @@ jobs:
           if ($report.schemaVersion -ne 1 -or
               $report.assurance -cne 'static-source-only-s1.5e-observation-infrastructure' -or
               $report.ok -ne $true -or
-              $report.checkCount -ne 204 -or
-              $report.passedCount -ne 204 -or
+              $report.checkCount -ne 205 -or
+              $report.passedCount -ne 205 -or
               $report.failedCount -ne 0 -or
-              @($report.checks).Count -ne 204 -or
+              @($report.checks).Count -ne 205 -or
               @($report.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
               $report.observationEstablished -ne $false -or
               $report.candidateBuilt -ne $false -or

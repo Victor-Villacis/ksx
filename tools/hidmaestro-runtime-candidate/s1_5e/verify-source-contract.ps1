@@ -410,6 +410,11 @@ Assert-Check 'runner.candidate-source-contract-root' `
      (Has-Literal $runner 'Stage-ExactCandidate -SourceContractRoot $toolRoot') -and
      -not (Has-Literal $runner '$source = Join-Path $Workspace ([string]$entry.path)')) `
     'S1.5d candidate paths resolve against the runtime-candidate contract root.'
+Assert-Check 'runner.pathmap-msbuild-switch-escaping' `
+    ((Has-Literal $runner "`$pathMapSwitchValue = `$pathMap.Replace(',', '%2C')") -and
+     (Has-Literal $runner '"-p:PathMap=$pathMapSwitchValue"') -and
+     (Has-Literal $runner "PathMap = (`$CandidateRoot + '=/_/candidate,'")) `
+    'The MSBuild switch escapes comma separators while evaluated PathMap remains a comma list.'
 Assert-Check 'runner.no-source-parameter' `
     (-not (Has-Regex $runner '(?m)^\s*\[string\]\s+\$(SourceRoot|Repository|Commit)\b')) `
     'Runner exposes no caller-selected source/repository/commit parameter.'

@@ -19,8 +19,10 @@ try {
 
     $project = Join-Path $workspace 'tools\hidmaestro-driver-installer\HidMaestroDriverInstaller.csproj'
     & dotnet publish $project -c Release -r win-x64 --self-contained true `
-        -p:PublishSingleFile=true -p:PublishTrimmed=false -o $publishRoot
-    if ($LASTEXITCODE -ne 0) { throw 'The HIDMaestro driver installer publish failed.' }
+        -p:PublishSingleFile=true -p:PublishTrimmed=false -o $publishRoot 2>&1 |
+        ForEach-Object { Write-Host ([string] $_) }
+    $publishExitCode = $LASTEXITCODE
+    if ($publishExitCode -ne 0) { throw 'The HIDMaestro driver installer publish failed.' }
 
     $forbidden = @(
         Get-ChildItem -LiteralPath $publishRoot -Recurse -File |

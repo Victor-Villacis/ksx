@@ -78,8 +78,9 @@ try {
         --self-contained true `
         -p:PublishAot=true `
         -p:HidMaestroSourceRoot=$source `
-        -o $publish
-    if ($LASTEXITCODE -ne 0) { throw 'The production HIDMaestro host publish failed.' }
+        -o $publish 2>&1 | ForEach-Object { Write-Host ([string] $_) }
+    $publishExitCode = $LASTEXITCODE
+    if ($publishExitCode -ne 0) { throw 'The production HIDMaestro host publish failed.' }
 
     $exe = Join-Path $publish 'ksx-hidmaestro-host.exe'
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {

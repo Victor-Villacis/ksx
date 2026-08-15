@@ -1,8 +1,8 @@
 # HIDMaestro M8 execution plan
 
-Status: **non-executing catalog, host-contract, unsigned-package audit, pure
-rendezvous policy and SDK-free authenticated transport checkpoints complete;
-live use blocked on the production host, provenance and hardware evidence; no
+Status: **catalog, host/transport, structural-package and S1.5c source-contract
+checkpoints complete; live use blocked on candidate source implementation,
+production artifacts, signed-driver ABI/provenance and hardware evidence; no
 HIDMaestro persona is enabled**.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
@@ -200,7 +200,9 @@ Two routing changes prepare S4 without enabling a driver:
 | S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
 | S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
 | S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
-| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | **In progress.** [Actions run 31852136380](https://github.com/Victor-Villacis/ksx/actions/runs/31852136380) proved the exact v1.6.1 source baseline and the pure native-bootstrap policy. No runtime-only SDK assembly or production host was built, no SDK lifecycle ran, and every artifact/distribution gate remains false. Remaining work includes exhaustive source/API/profile/feedback/driver-ABI contracts, the actual native bootstrap and managed host, signer/catalog/revocation proof, and clean-VM lifecycle evidence |
+| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | **In progress (parent track).** The exact v1.6.1 source baseline and pure native-bootstrap policy are frozen. No runtime-only SDK, production bootstrap/managed host, signed package, signed-driver ABI binding or clean-VM lifecycle evidence exists |
+| S1.5c — one-DualSense source contract | Freeze the exact source target without building or loading it | **Done — source evidence only.** [Actions run 31860063900](https://github.com/Victor-Villacis/ksx/actions/runs/31860063900) freezes 9 public types and 100 logical entries; classifies all 51 Core units as 1 retained, 13 replacement-required and 37 excluded; manifests 231 profile files as 228 embedded sources, 130 deployable descriptors and 3 exclusions with zero duplicate IDs; and compiles one canonical pure-Rust DualSense reducer through both the workspace and a standalone 16-vector contract. No managed replacements, runtime artifact, driver or hardware was exercised |
+| S1.5d — inert managed-source candidate | Materialize and hash-freeze the replacement tree named by the S1.5c compile contract | **Next — source only.** Review every planned replacement, the explicit project/resource manifest and its dependency/capability closure. Do not build or load the candidate, touch the driver, or change any artifact, driver, distribution or hardware gate in this slice |
 | S1.6a — pure one-use rendezvous policy | Freeze launch correlation and peer-acceptance rules without acquiring OS authority | **Done.** A 32-byte token has one exact lowercase encoding, pipe names use one fixed prefix, host argv is exactly `serve-v1`, token and daemon PID, and peer policy requires non-forgeable authenticated process evidence. The module does not create a pipe, launch or elevate a process, load the SDK or touch a device |
 | S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Done.** [Actions run 31849073410](https://github.com/Victor-Villacis/ksx/actions/runs/31849073410) built the fixed SDK-free apphost, deleted every SDK input before executing it, passed the authenticated Rust/.NET pipe test, and then passed the complete Rust and release/installer gates. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
@@ -209,14 +211,15 @@ Two routing changes prepare S4 without enabling a driver:
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1, S1.3, S1.5a, the current S1.5b source/policy contracts, S1.6a and
-the S1.6b fake do not request administrator
-authority or mutate the
-system. The S1 reader runs on an administrator Actions runner only because that
-is GitHub's hosted Windows topology; the target DLL remains inert bytes. S2 is
-blocked by S1.5b and is intentionally not automated on a developer workstation:
-it changes trust, driver and device state and needs an explicit supervised
-hardware gate.
+S1, S1.3, S1.5a, the completed S1.5b/S1.5c source and policy contracts,
+S1.6a and the S1.6b fake do not request administrator authority or mutate the
+system. S1.5d is likewise source-only: it may materialize inert candidate text,
+but it does not authorize building, loading or executing it. The S1 reader runs
+on an administrator Actions runner only because that is GitHub's hosted Windows
+topology; the target DLL remains inert bytes. S2 remains blocked by the
+unfinished S1.5 parent track and is intentionally not automated on a developer
+workstation: it changes trust, driver and device state and needs an explicit
+supervised hardware gate.
 
 ### S1 measured result
 
@@ -300,31 +303,51 @@ another process mutates the tree. Its machine-readable assurance is therefore
 file identities before any audit result can authorize signing, packaging or
 execution.
 
-### S1.5b runtime-candidate checkpoint
+### S1.5b/S1.5c runtime-candidate checkpoint
 
-The first S1.5b checkpoint is intentionally non-executable. The
-`tools/hidmaestro-runtime-candidate` contract pins the exact upstream v1.6.1
-commit, 36 reviewed source/license/version inputs and 82 source-byte/fact
-checks. It narrows the first future lifecycle experiment to one plain USB
-DualSense (`054C:0CE6`) on a disposable machine with a preinstalled signed HID
-package and no other HIDMaestro consumer. The source audit neither builds nor
-loads upstream code.
+S1.5b's first checkpoint pinned the exact upstream v1.6.1 source baseline and
+the pure native-bootstrap policy without building or loading upstream code.
+S1.5c completes the source-design freeze for one plain USB DualSense
+(`dualsense`, `054C:0CE6`) at controller index 0.
 
-The machine-readable contract keeps these gates explicitly false:
+The green S1.5c gate records four completed source-only facts:
 
-- exhaustive public API and compile-source allowlists;
-- complete profile-source-to-228-resource catalog binding;
-- the raw DualSense feedback adapter over separate `ReportId` and `Data`
-  coordinates;
-- source-layout-to-signed-installed-driver ABI binding; and
-- distribution readiness.
+- `sourcePublicApiContractFrozen`: an exact nine-type, 100-entry public target;
+- `sourceCompilationDispositionFrozen`: all 51 upstream Core units classified
+  exactly once as 1 retained, 13 replacement-required and 37 excluded;
+- `profileSourceManifestFrozen`: all 231 profile-tree files classified into 228
+  intended embedded resources and 3 exclusions, with 130 deployable descriptors
+  and no duplicate profile IDs; and
+- `rawFeedbackContractFrozen`: the raw `HidOutput(0)` / report `0x02` /
+  47-byte-data boundary and conservative effective-motor policy frozen in one
+  dependency-free Rust reducer and 16 golden vectors.
 
-It also requires transactional exact-device ownership: capture the parent
-identity immediately after registration, retain partial-owned state across
-later failures, and roll back only those exact identities before creation can
-fail cleanly. Until those false gates are replaced by artifact evidence, this
-contract cannot authorize a runtime build, signing, packaging, persona
-enablement or execution on a development PC.
+These are source contracts, not artifact evidence. The aggregate contract
+therefore still keeps all six runtime/distribution gates false:
+
+- `artifactPublicApiAllowlistFrozen`;
+- `artifactCompileAllowlistFrozen`;
+- `profileSourceCatalogBound`;
+- `rawFeedbackDecoderFrozen`;
+- `driverRuntimeAbiBound`; and
+- `distributionReady`.
+
+Closing those gates still requires reviewed replacement sources, a built
+runtime-only assembly whose metadata, compile closure and 228 resources match
+the source contracts, a managed feedback adapter passing the same 16 vectors,
+binding the source layout to the exact signed installed driver binary/catalog,
+the production native-bootstrap/managed-host graph, signer/catalog/revocation
+proof and clean-VM lifecycle evidence.
+
+The next source-only slice is S1.5d: materialize and hash-pin the candidate tree
+named by `api/source-compilation.contract.json`, including its explicit project
+and resource manifest. That slice must not build or load the candidate and must
+leave every artifact, driver, distribution and hardware gate false.
+
+The source contract also requires transactional exact-device ownership: capture
+the parent identity immediately after registration, retain partial-owned state
+across later failures, and roll back only those exact identities before creation
+can fail cleanly.
 
 The separate `tools/hidmaestro-bootstrap-policy` harness freezes the future
 elevation topology without containing a binary target, dependency, unsafe code

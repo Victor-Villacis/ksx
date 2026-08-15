@@ -405,6 +405,11 @@ Assert-Check 'runner.tool-discovery-before-environment-seal' `
         'Set-HardenedProcessEnvironment -DotnetHome',
         [StringComparison]::Ordinal)) `
     'The first validated application paths are scalar before the child environment is sealed.'
+Assert-Check 'runner.candidate-source-contract-root' `
+    ((Has-Literal $runner '$source = Join-Path $SourceContractRoot') -and
+     (Has-Literal $runner 'Stage-ExactCandidate -SourceContractRoot $toolRoot') -and
+     -not (Has-Literal $runner '$source = Join-Path $Workspace ([string]$entry.path)')) `
+    'S1.5d candidate paths resolve against the runtime-candidate contract root.'
 Assert-Check 'runner.no-source-parameter' `
     (-not (Has-Regex $runner '(?m)^\s*\[string\]\s+\$(SourceRoot|Repository|Commit)\b')) `
     'Runner exposes no caller-selected source/repository/commit parameter.'

@@ -475,7 +475,7 @@ function Test-CanonicalProfile {
 
 function Stage-ExactCandidate {
     param(
-        [Parameter(Mandatory)][string] $Workspace,
+        [Parameter(Mandatory)][string] $SourceContractRoot,
         [Parameter(Mandatory)][string] $UpstreamRoot,
         [Parameter(Mandatory)][string] $BuildRoot,
         [Parameter(Mandatory)] $S1dLock,
@@ -487,7 +487,7 @@ function Stage-ExactCandidate {
     $expectedPaths = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $S1dLock.candidateFiles) {
         $relative = ([string]$entry.path).Substring('candidate/'.Length)
-        $source = Join-Path $Workspace ([string]$entry.path).Replace('/', '\')
+        $source = Join-Path $SourceContractRoot ([string]$entry.path).Replace('/', '\')
         $destination = Join-Path $candidateRoot $relative.Replace('/', '\')
         Copy-ExactFile -Source $source -Destination $destination `
             -ExpectedNormalizedSha256 ([string]$entry.sha256) -WriteCanonicalText
@@ -1399,10 +1399,10 @@ try {
         -RelativePaths $upstreamSelectedPaths -ByteMode Normalized
 
     $script:Phase = 'exact-staging'
-    $stageA = Stage-ExactCandidate -Workspace $workspace -UpstreamRoot $sourceRoot `
+    $stageA = Stage-ExactCandidate -SourceContractRoot $toolRoot -UpstreamRoot $sourceRoot `
         -BuildRoot $buildA -S1dLock $s1d -ProfileLock $profiles `
         -RetainedRawSha256 ([string]$contract.sourceCandidate.retainedSourceRawSha256)
-    $stageB = Stage-ExactCandidate -Workspace $workspace -UpstreamRoot $sourceRoot `
+    $stageB = Stage-ExactCandidate -SourceContractRoot $toolRoot -UpstreamRoot $sourceRoot `
         -BuildRoot $buildB -S1dLock $s1d -ProfileLock $profiles `
         -RetainedRawSha256 ([string]$contract.sourceCandidate.retainedSourceRawSha256)
     if ($stageA.RawTreeSha256 -cne $stageB.RawTreeSha256 -or

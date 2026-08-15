@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 203,
+  "expectedSourceVerifierCheckCount": 204,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -167,11 +167,11 @@
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "03F39EF3415B1C3AE248D423CDF30BD8440AB00D4F902CC86B82AE4987345B99"
+      "sha256": "8A3EF6CFA80C1C0D2A80CEA0D3789118050842EC63297673BF96405087B066BE"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "802E22547DEF3C9DAA0B9C9233F3FAFACE5FCB797BB53EB105AF7D8196C2C3EE"
+      "sha256": "62F6A2AFFF092A5FCEF2FB783E9D513E6E0A1A952C835E1F785FE3B8C9AF150B"
     }
   ],
   "gateState": {

@@ -287,7 +287,11 @@ mod tests {
             );
             assert!(!err.is_not_installed(), "{err}");
             let msg = err.to_string();
-            assert!(msg.contains("on any machine, installed or not"), "{msg}");
+            assert!(
+                msg.contains("experimental latch is not wire-compatible"),
+                "{msg}"
+            );
+            assert!(msg.contains("DualSense remains available"), "{msg}");
         }
     }
 

@@ -2757,12 +2757,13 @@ mod tests {
         ));
     }
 
-    /// The protocol may know a profile before the product supports it. This is
-    /// the broken probe-based gate in executable form: vocabulary must never
-    /// turn into availability merely because a host can parse the name.
+    /// Protocol vocabulary does not enable unfinished product personas. The
+    /// production DualSense profile is live, while Switch Pro and Xbox Series
+    /// remain independently gated even though the host can parse their names.
     #[test]
-    fn protocol_profiles_do_not_enable_product_personas() {
-        for profile in ProfileId::ALL {
+    fn protocol_profiles_enable_only_finished_product_personas() {
+        assert!(ProfileId::DualSense.persona().can_plug());
+        for profile in [ProfileId::SwitchPro, ProfileId::XboxSeries] {
             assert!(!profile.persona().can_plug(), "{profile:?}");
         }
         let (_harness, transport) = Harness::new();

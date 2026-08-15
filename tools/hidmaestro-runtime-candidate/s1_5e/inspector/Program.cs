@@ -95,16 +95,18 @@ internal static class Program
 
         using var pe = new PEReader(artifact, PEStreamOptions.LeaveOpen);
         Require(checks, "pe.hasMetadata", pe.HasMetadata, true);
-        if (!pe.HasMetadata || pe.PEHeaders.CorHeader is null || pe.PEHeaders.PEHeader is null)
+        if (!pe.HasMetadata)
             throw new BadImageFormatException("The candidate is not a managed PE image.");
+        PEHeader peHeader = pe.PEHeaders.PEHeader
+            ?? throw new BadImageFormatException("The candidate PE header is absent.");
+        CorHeader corHeader = pe.PEHeaders.CorHeader
+            ?? throw new BadImageFormatException("The candidate COR header is absent.");
 
         MetadataReader metadata = pe.GetMetadataReader();
         Require(checks, "metadata.isAssembly", metadata.IsAssembly, true);
         if (!metadata.IsAssembly)
             throw new BadImageFormatException("The candidate has no assembly definition.");
 
-        PEHeader peHeader = pe.PEHeaders.PEHeader;
-        CorHeader corHeader = pe.PEHeaders.CorHeader;
         AssemblyDefinition assembly = metadata.GetAssemblyDefinition();
         string assemblyName = metadata.GetString(assembly.Name);
         string assemblyVersion = assembly.Version.ToString();
@@ -946,14 +948,14 @@ internal static class Program
             string algorithm = document.HashAlgorithm.IsNil
                 ? ""
                 : pdb.GetGuid(document.HashAlgorithm).ToString("D");
-            string checksum = document.Hash.IsNil
+            string documentChecksum = document.Hash.IsNil
                 ? ""
                 : Convert.ToHexString(pdb.GetBlobBytes(document.Hash));
             documents.Add(new PortablePdbDocument(
                 MetadataTokens.GetRowNumber(handle),
                 name,
                 algorithm,
-                checksum));
+                documentChecksum));
         }
 
         documents.Sort((left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
@@ -1484,7 +1486,7 @@ internal static class Program
         MethodSignature<string> signature = method.DecodeSignature(
             MetadataTypeNameProvider.Instance,
             null);
-        Dictionary<int, ParameterDefinition> parameters = method.GetParameters()
+        Dictionary<int, Parameter> parameters = method.GetParameters()
             .Select(metadata.GetParameter)
             .Where(parameter => parameter.SequenceNumber > 0)
             .ToDictionary(parameter => parameter.SequenceNumber);
@@ -1496,7 +1498,8 @@ internal static class Program
             if (typeName.EndsWith('&'))
             {
                 typeName = typeName[..^1];
-                parameters.TryGetValue(index + 1, out ParameterDefinition parameter);
+                if (!parameters.TryGetValue(index + 1, out Parameter parameter))
+                    throw new BadImageFormatException("A by-reference parameter has no metadata row.");
                 bool output = (parameter.Attributes & ParameterAttributes.Out) != 0;
                 bool input = (parameter.Attributes & ParameterAttributes.In) != 0
                     || rawType.Contains(
@@ -1514,7 +1517,7 @@ internal static class Program
     }
 
     private static string FormatMethodSignature(MethodSignature<string> signature) =>
-        $"{NormalizeTypeName(signature.ReturnType)}({string.Join(",", signature.ParameterTypes.Select(NormalizeTypeName))})|instance={signature.Header.IsInstance}|explicitThis={signature.Header.IsExplicitThis}|callingConvention={signature.Header.CallingConvention}|generic={signature.GenericParameterCount}|required={signature.RequiredParameterCount}";
+        $"{NormalizeTypeName(signature.ReturnType)}({string.Join(",", signature.ParameterTypes.Select(NormalizeTypeName))})|instance={signature.Header.IsInstance}|explicitThis={signature.Header.HasExplicitThis}|callingConvention={signature.Header.CallingConvention}|generic={signature.GenericParameterCount}|required={signature.RequiredParameterCount}";
 
     private static string DescribeAccessors(
         MetadataReader metadata,

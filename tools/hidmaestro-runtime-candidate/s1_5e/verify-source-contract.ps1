@@ -489,6 +489,20 @@ Assert-Check 'program.no-native-entrypoint-zero-confusion' `
 Assert-Check 'program.no-absolute-artifact-path-in-report' `
     (Has-Literal $program '"candidate-dll"') `
     'The receipt uses an artifact role rather than the absolute input path.'
+Assert-Check 'program.net10-metadata-api-shape' `
+    ((Has-Literal $program 'PEHeader peHeader = pe.PEHeaders.PEHeader') -and
+     (Has-Literal $program 'The candidate PE header is absent.') -and
+     (Has-Literal $program 'CorHeader corHeader = pe.PEHeaders.CorHeader') -and
+     (Has-Literal $program 'The candidate COR header is absent.') -and
+     (Has-Literal $program 'string documentChecksum = document.Hash.IsNil') -and
+     (Has-Literal $program 'Dictionary<int, Parameter> parameters = method.GetParameters()') -and
+     (Has-Literal $program 'out Parameter parameter') -and
+     (Has-Literal $program 'A by-reference parameter has no metadata row.') -and
+     (Has-Literal $program 'signature.Header.HasExplicitThis') -and
+     -not (Has-Literal $program 'string checksum = document.Hash.IsNil') -and
+     -not (Has-Literal $program 'ParameterDefinition') -and
+     -not (Has-Literal $program 'signature.Header.IsExplicitThis')) `
+    'The inspector uses the released .NET 10 System.Reflection.Metadata API and unambiguous local names.'
 
 $runner = Get-Content -LiteralPath (Join-Path $leafRoot 'run-actions-proof.ps1') -Raw
 $absoluteDrivePattern = '(?i)(?<![a-z])[a-z]:[\\/]'

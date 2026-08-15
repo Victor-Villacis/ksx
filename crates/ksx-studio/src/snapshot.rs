@@ -407,7 +407,7 @@ impl ProfilesDerived {
             presets_summary: presets_summary(p.presets.presets.len(), presets_failed),
             templates_summary: templates_summary(p.presets.templates.len(), presets_failed),
             templates_intro: templates_intro(&p.presets.templates, presets_failed),
-            play_status: play_status(&p.session),
+            play_status: session_play_status(&p.session),
             daemon_cmd: crate::render::daemon_command(&p.session),
             max_slots: ksx_api::MAX_SLOTS,
             max_player: p
@@ -617,7 +617,7 @@ fn templates_intro(templates: &[ksx_api::TemplateRow], failed: bool) -> String {
         .to_owned()
 }
 
-fn play_status(session: &crate::control::SessionView) -> String {
+fn session_play_status(session: &crate::control::SessionView) -> String {
     if !session.reachable {
         return "Play is unavailable. Reopen ksx and try again.".to_owned();
     }

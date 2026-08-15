@@ -1760,6 +1760,7 @@ name = "ksx-output"
 version = "0.4.1"
 dependencies = [
  "ksx-core",
+ "ksx-hidmaestro",
  "rusty-xinput",
  "thiserror 2.0.19",
  "tracing",

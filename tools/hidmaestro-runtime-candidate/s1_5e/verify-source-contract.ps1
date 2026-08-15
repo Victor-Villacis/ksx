@@ -768,7 +768,15 @@ Assert-Check 'runner.inspector-deps-subgates' `
      (Has-Literal $runner 'The inspector dependency manifest project library type is not exact.') -and
      (Has-Literal $runner 'The inspector dependency manifest project library is serviceable.') -and
      (Has-Literal $runner 'The inspector dependency manifest project library SHA-512 is not empty.') -and
-     -not (Has-Literal $runner 'The inspector dependency manifest is not the sole project identity.')) `
+     (Has-Literal $runner "'.NETCoreApp,Version=v10.0'") -and
+     (Has-Literal $runner "'.NETCoreApp,Version=v10.0/win-x64'") -and
+     (Has-Literal $runner 'The inspector dependency target-name set is not exact.') -and
+     (Has-Literal $runner 'The inspector dependency target identities are not unique.') -and
+     (Has-Literal $runner 'The inspector dependency portable compile target is not empty.') -and
+     (Has-Literal $runner "`$targets.Count -ne 2") -and
+     (Has-Literal $runner "`$entries = @(`$ridTarget[0].Value.PSObject.Properties)") -and
+     -not (Has-Literal $runner 'The inspector dependency manifest is not the sole project identity.') -and
+     -not (Has-Literal $runner 'The inspector dependency target set is not exact.')) `
     'Inspector dependency identity failures use fixed non-value subgate diagnostics.'
 Assert-Check 'runner.targeting-pack-sanitization' `
     ((Has-Literal $runner 'function ConvertTo-AnalyzerFreeTargetingPack') -and

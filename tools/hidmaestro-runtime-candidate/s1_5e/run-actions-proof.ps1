@@ -2198,11 +2198,28 @@ function Assert-InspectorHostClosure {
         throw 'The inspector dependency manifest project library SHA-512 is not empty.'
     }
     $targets = @($deps.targets.PSObject.Properties)
-    if ($targets.Count -ne 1 -or
-        $targets[0].Name -cne '.NETCoreApp,Version=v10.0/win-x64') {
-        throw 'The inspector dependency target set is not exact.'
+    $targetNames = Get-OrdinalSorted -Values @($targets | ForEach-Object Name)
+    $expectedTargetNames = Get-OrdinalSorted -Values @(
+        '.NETCoreApp,Version=v10.0',
+        '.NETCoreApp,Version=v10.0/win-x64')
+    if ($targets.Count -ne 2 -or
+        [string]::Join("`n", $targetNames) -cne
+            [string]::Join("`n", $expectedTargetNames)) {
+        throw 'The inspector dependency target-name set is not exact.'
     }
-    $entries = @($targets[0].Value.PSObject.Properties)
+    $portableTarget = @($targets | Where-Object {
+        $_.Name -ceq '.NETCoreApp,Version=v10.0'
+    })
+    $ridTarget = @($targets | Where-Object {
+        $_.Name -ceq '.NETCoreApp,Version=v10.0/win-x64'
+    })
+    if ($portableTarget.Count -ne 1 -or $ridTarget.Count -ne 1) {
+        throw 'The inspector dependency target identities are not unique.'
+    }
+    if (@($portableTarget[0].Value.PSObject.Properties).Count -ne 0) {
+        throw 'The inspector dependency portable compile target is not empty.'
+    }
+    $entries = @($ridTarget[0].Value.PSObject.Properties)
     if ($entries.Count -ne 1 -or $entries[0].Name -cne $libraries[0].Name) {
         throw 'The inspector target dependency closure is not exact.'
     }

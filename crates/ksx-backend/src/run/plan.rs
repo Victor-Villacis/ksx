@@ -900,7 +900,7 @@ fn yes_no(b: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ksx_core::Key;
+    use ksx_core::{Key, Persona};
 
     /// **Resolution happens at the seam start and reload SHARE.**
     ///

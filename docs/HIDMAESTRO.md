@@ -200,7 +200,7 @@ Two routing changes prepare S4 without enabling a driver:
 | S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
 | S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
 | S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
-| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | Pending. Pin the KSX signer identity, verify every INF/DLL as a member of its signed catalog, isolate fixed installed helpers, add online revocation and clean-runner install/repair/uninstall proof, and coordinate the upstream security report |
+| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | **In progress.** [Actions run 31852136380](https://github.com/Victor-Villacis/ksx/actions/runs/31852136380) proved the exact v1.6.1 source baseline and the pure native-bootstrap policy. No runtime-only SDK assembly or production host was built, no SDK lifecycle ran, and every artifact/distribution gate remains false. Remaining work includes exhaustive source/API/profile/feedback/driver-ABI contracts, the actual native bootstrap and managed host, signer/catalog/revocation proof, and clean-VM lifecycle evidence |
 | S1.6a — pure one-use rendezvous policy | Freeze launch correlation and peer-acceptance rules without acquiring OS authority | **Done.** A 32-byte token has one exact lowercase encoding, pipe names use one fixed prefix, host argv is exactly `serve-v1`, token and daemon PID, and peer policy requires non-forgeable authenticated process evidence. The module does not create a pipe, launch or elevate a process, load the SDK or touch a device |
 | S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Done.** [Actions run 31849073410](https://github.com/Victor-Villacis/ksx/actions/runs/31849073410) built the fixed SDK-free apphost, deleted every SDK input before executing it, passed the authenticated Rust/.NET pipe test, and then passed the complete Rust and release/installer gates. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
 | S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
@@ -209,7 +209,8 @@ Two routing changes prepare S4 without enabling a driver:
 | S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
 | S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
 
-S1, S1.3, S1.5a, S1.6a and the S1.6b fake do not request administrator
+S1, S1.3, S1.5a, the current S1.5b source/policy contracts, S1.6a and
+the S1.6b fake do not request administrator
 authority or mutate the
 system. The S1 reader runs on an administrator Actions runner only because that
 is GitHub's hosted Windows topology; the target DLL remains inert bytes. S2 is
@@ -298,6 +299,52 @@ another process mutates the tree. Its machine-readable assurance is therefore
 `structural-only-quiescent-tree`. S1.5b must use an immutable snapshot or stable
 file identities before any audit result can authorize signing, packaging or
 execution.
+
+### S1.5b runtime-candidate checkpoint
+
+The first S1.5b checkpoint is intentionally non-executable. The
+`tools/hidmaestro-runtime-candidate` contract pins the exact upstream v1.6.1
+commit, 36 reviewed source/license/version inputs and 82 source-byte/fact
+checks. It narrows the first future lifecycle experiment to one plain USB
+DualSense (`054C:0CE6`) on a disposable machine with a preinstalled signed HID
+package and no other HIDMaestro consumer. The source audit neither builds nor
+loads upstream code.
+
+The machine-readable contract keeps these gates explicitly false:
+
+- exhaustive public API and compile-source allowlists;
+- complete profile-source-to-228-resource catalog binding;
+- the raw DualSense feedback adapter over separate `ReportId` and `Data`
+  coordinates;
+- source-layout-to-signed-installed-driver ABI binding; and
+- distribution readiness.
+
+It also requires transactional exact-device ownership: capture the parent
+identity immediately after registration, retain partial-owned state across
+later failures, and roll back only those exact identities before creation can
+fail cleanly. Until those false gates are replaced by artifact evidence, this
+contract cannot authorize a runtime build, signing, packaging, persona
+enablement or execution on a development PC.
+
+The separate `tools/hidmaestro-bootstrap-policy` harness freezes the future
+elevation topology without containing a binary target, dependency, unsafe code
+or process authority. A fixed native bootstrap—not the managed host directly—
+must connect to the authenticated pipe, create the fixed managed child
+suspended with a fresh allowlisted environment and one inherited handle,
+atomically contain it in a kill-on-close job, verify the sealed image/session/
+elevation graph, and only then resume it. The managed entry must immediately
+clear and verify the pipe's inherit flag before threads, SDK work or logging.
+Its working directory, runtimeconfig/deps graph and native module origins are
+also fixed protected inputs rather than inherited search state.
+
+[Actions run 31852136380](https://github.com/Victor-Villacis/ksx/actions/runs/31852136380)
+passed the hash-pinned source audit, strict bootstrap-policy formatting,
+Clippy/tests, static SDK inventory, SDK-free fake-host transport, full workspace
+and feature matrices, the existing WinUSB provider smoke,
+portable/installer builds, hostile-junction refusal and install-twice gate.
+That evidence validates the
+contracts only; it does not claim that the production bootstrap, sanitized
+runtime assembly, signed driver package or S2 hardware lifecycle exists.
 
 ### S1.6a rendezvous-policy result
 

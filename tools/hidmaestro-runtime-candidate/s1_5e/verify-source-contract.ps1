@@ -599,7 +599,8 @@ foreach ($literal in @(
     'effectiveCompilerAuxiliaryItemCount',
     'sourceGeneratorExecutionAuthorized',
     'Analyzer', 'ReferencePath', 'AdditionalFiles', 'AnalyzerConfigFiles',
-    'EditorConfigFiles', 'PotentialEditorConfigFiles', 'MSBuildAllProjects',
+    'EditorConfigFiles', 'PotentialEditorConfigFiles', 'MSBuildImportedProject',
+    'MSBuildProvideImportedProjects=true',
     'Get-NoPackageAssetsSemantic', 'project.assets.json dependency group is not empty',
     '@($fallbackFolders).Count -ne 0',
     'inspectorGeneratedRoot', 'inspectorNoPackageAssetsSemanticSha256',
@@ -626,9 +627,6 @@ Assert-Check 'runner.conditional-array-assignments-preserve-empty' `
         [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1 -and
      [regex]::Matches(
         $runner, [regex]::Escape('$fallbackFolders = @(if'),
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1 -and
-     [regex]::Matches(
-        $runner, [regex]::Escape('$libraryShape = @(if'),
         [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1) `
     'Conditional array assignments preserve a real empty array under StrictMode.'
 Assert-Check 'runner.project-item-xpath-enumeration' `
@@ -706,10 +704,45 @@ Assert-Check 'runner.strict-evaluation-diff-diagnostics' `
     ((Has-Literal $runner 'if ($evaluationA.Sha256 -cne $evaluationB.Sha256)') -and
      (Has-Literal $runner 'function Get-EvaluationManifestFieldDifferences') -and
      (Has-Literal $runner 'function Get-SafeImportDiagnostic') -and
-     (Has-Literal $runner "'^(candidate|build|object|targeting-pack|dotnet)/[^|]+\|semanticSha256=([A-F0-9]{64})$'") -and
-     (Has-Literal $runner "'role=' + `$match.Groups[1].Value") -and
-     (Has-Literal $runner "'|semanticSha256=' + `$match.Groups[2].Value") -and
+     (Has-Literal $runner "'^(object|dotnet)/([^|]+)\|importer=(candidate|dotnet)/[^|]+\|sdk=(none|microsoft-net-sdk)\|semanticSha256=([A-F0-9]{64})$'") -and
+     (Has-Literal $runner "'HIDMaestro.Core.csproj.nuget.g.props' { 'nuget-g-props' }") -and
+     (Has-Literal $runner "'HIDMaestro.Core.csproj.nuget.g.targets' { 'nuget-g-targets' }") -and
+     (Has-Literal $runner "'role=' + `$role + '|kind=' + `$kind") -and
+     (Has-Literal $runner "'|importerRole=' + `$match.Groups[3].Value") -and
+     (Has-Literal $runner "'|sdkKind=' + `$match.Groups[4].Value") -and
+     (Has-Literal $runner "'|semanticSha256=' + `$match.Groups[5].Value") -and
      (Has-Literal $runner 'An evaluated import cannot be reduced to its safe role and semantic hash.') -and
+     (Has-Literal $runner "`$importedProjectProperty = `$evaluation.Items.PSObject.Properties['MSBuildImportedProject']") -and
+     (Has-Literal $runner "MSBuildProvideImportedProjects = 'true'") -and
+     (Has-Literal $runner "`$fullPathProperty = `$importItem.PSObject.Properties['FullPath']") -and
+     (Has-Literal $runner "`$importerProperty = `$importItem.PSObject.Properties['ImportingProjectPath']") -and
+     (Has-Literal $runner "`$full.Equals(`$metadataFull, [StringComparison]::OrdinalIgnoreCase)") -and
+     (Has-Literal $runner "`$sdkProperty = `$importItem.PSObject.Properties['Sdk']") -and
+     (Has-Literal $runner "`$edgePrefix = `$rolePath + '|importer=' + `$importerRolePath + '|sdk=' + `$sdkKind") -and
+     (Has-Literal $runner 'An imported-project edge lacks exact absolute identities.') -and
+     (Has-Literal $runner 'An imported-project edge is missing or duplicates an identity.') -and
+     (Has-Literal $runner 'An imported-project edge escaped the exact candidate/dotnet roles.') -and
+     (Has-Literal $runner "`$importerRolePath -cne 'candidate/HIDMaestro.Core.csproj'") -and
+     (Has-Literal $runner "`$sdkName -cne 'Microsoft.NET.Sdk'") -and
+     (Has-Literal $runner 'A nested imported-project edge has unexpected SDK metadata.') -and
+     (Has-Literal $runner "'object/HIDMaestro.Core.csproj.nuget.g.props'") -and
+     (Has-Literal $runner "'object/HIDMaestro.Core.csproj.nuget.g.targets'") -and
+     (Has-Literal $runner 'The evaluated generated NuGet import closure is not exact.') -and
+     (Has-Literal $runner "'dotnet/sdk/10.0.400/Sdks/Microsoft.NET.Sdk/Sdk/Sdk.props'") -and
+     (Has-Literal $runner "'dotnet/sdk/10.0.400/Sdks/Microsoft.NET.Sdk/Sdk/Sdk.targets'") -and
+     (Has-Literal $runner 'The root Microsoft.NET.Sdk import closure is not exact.') -and
+     -not (Has-Literal $runner 'MSBuildAllProjects') -and
+     (Has-Literal $runner 'function Get-RoleNormalizedTextState') -and
+     (Has-Literal $runner "`$placeholder = '/_/' + [string]`$entry.Key") -and
+     (Has-Literal $runner 'function Get-SafeGeneratedImportDiagnostics') -and
+     (Has-Literal $runner "[ValidateSet('nuget-g-props', 'nuget-g-targets')]") -and
+     (Has-Literal $runner "SelectNodes('//*')") -and
+     (Has-Literal $runner 'lineSha256=$lineDigest') -and
+     (Has-Literal $runner 'childElementCount=$childElementCount') -and
+     (Has-Literal $runner "notmatch '^[A-Za-z_][A-Za-z0-9_.-]*$'") -and
+     (Has-Literal $runner 'valueSha256=$valueDigest') -and
+     (Has-Literal $runner 'attributesSha256=$attributeDigest') -and
+     (Has-Literal $runner 'SafeObjectImportDiagnostics = Get-OrdinalSorted') -and
      (Has-Literal $runner '$manifestFields = @(') -and
      (Has-Literal $runner '-not $Left.Manifest.Contains($field)') -and
      (Has-Literal $runner '@($Left.Manifest[$field])') -and
@@ -719,12 +752,24 @@ Assert-Check 'runner.strict-evaluation-diff-diagnostics' `
      (Has-Literal $runner '$safe = Get-SafeImportDiagnostic -Entry ([string]$difference.InputObject)') -and
      (Has-Literal $runner 'EVALUATION-IMPORT-DIFF {0} {1} {2}') -and
      (Has-Literal $runner '$Label, [string]$difference.SideIndicator, $safe') -and
+     (Has-Literal $runner 'EVALUATION-OBJECT-IMPORT-SHAPE-DIFF {0} {1} {2}') -and
      (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'pre-a-vs-pre-b'") -and
      (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-a-vs-pre-a'") -and
      (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-b-vs-pre-b'") -and
      (Has-Literal $runner "Write-EvaluationManifestDifference -Label 'post-a-vs-post-b'") -and
      (Has-Literal $runner 'The normalized evaluated compiler-input inventories differ in fields:')) `
-    'Pre/post A/B equality remains strict while import diagnostics expose only a role and semantic hash.'
+    'Pre/post A/B equality remains strict while import diagnostics expose only fixed kinds and structural hashes.'
+Assert-Check 'runner.inspector-deps-subgates' `
+    ((Has-Literal $runner '[string[]]$libraryShape = Get-OrdinalSorted -Values @(') -and
+     -not (Has-Literal $runner '$libraryShape = @(if ($libraries.Count -eq 1)') -and
+     (Has-Literal $runner 'The inspector dependency manifest library count is not one.') -and
+     (Has-Literal $runner 'The inspector dependency manifest project identity is not exact.') -and
+     (Has-Literal $runner 'The inspector dependency manifest project library shape is not exact.') -and
+     (Has-Literal $runner 'The inspector dependency manifest project library type is not exact.') -and
+     (Has-Literal $runner 'The inspector dependency manifest project library is serviceable.') -and
+     (Has-Literal $runner 'The inspector dependency manifest project library SHA-512 is not empty.') -and
+     -not (Has-Literal $runner 'The inspector dependency manifest is not the sole project identity.')) `
+    'Inspector dependency identity failures use fixed non-value subgate diagnostics.'
 Assert-Check 'runner.targeting-pack-sanitization' `
     ((Has-Literal $runner 'function ConvertTo-AnalyzerFreeTargetingPack') -and
      (Has-Literal $runner "GetAttribute('Type').Equals('Analyzer'") -and

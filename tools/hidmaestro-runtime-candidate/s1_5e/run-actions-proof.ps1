@@ -1201,6 +1201,7 @@ function Get-MsbuildProperties {
         "-p:CompilerGeneratedFilesOutputPath=$compilerGeneratedFilesRoot",
         '-p:ImportDirectoryBuildProps=false',
         '-p:ImportDirectoryBuildTargets=false',
+        '-p:MSBuildProvideImportedProjects=true',
         '-p:ImportDirectoryPackagesProps=false',
         '-p:ImportDirectoryPackagesTargets=false',
         '-p:CustomBeforeMicrosoftCommonTargets=',
@@ -1349,7 +1350,7 @@ function Test-ContainsAbsoluteWindowsPath {
         $Text.IndexOf('\\', [StringComparison]::Ordinal) -ge 0
 }
 
-function Get-RoleNormalizedTextSha256 {
+function Get-RoleNormalizedTextState {
     param(
         [Parameter(Mandatory)][string] $Path,
         [Parameter(Mandatory)] $Replacements
@@ -1358,16 +1359,79 @@ function Get-RoleNormalizedTextSha256 {
     $text = $script:Utf8NoBom.GetString($bytes).Replace("`r`n", "`n").Replace("`r", "`n")
     foreach ($entry in $Replacements.GetEnumerator()) {
         $root = (Get-FullPath ([string]$entry.Value)).TrimEnd('\')
-        $text = $text.Replace($root, '<' + [string]$entry.Key + '>',
+        $placeholder = '/_/' + [string]$entry.Key
+        $text = $text.Replace($root, $placeholder,
             [StringComparison]::OrdinalIgnoreCase)
-        $text = $text.Replace($root.Replace('\', '/'), '<' + [string]$entry.Key + '>',
+        $text = $text.Replace($root.Replace('\', '/'), $placeholder,
             [StringComparison]::OrdinalIgnoreCase)
     }
     if (Test-ContainsAbsoluteWindowsPath -Text $text) {
         throw 'A role-normalized generated import retains an absolute filesystem path.'
     }
     $normalized = $script:Utf8NoBom.GetBytes($text)
-    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($normalized))
+    return [pscustomobject]@{
+        Bytes = $normalized
+        Sha256 = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData($normalized))
+    }
+}
+
+function Get-SafeGeneratedImportDiagnostics {
+    param(
+        [Parameter(Mandatory)][byte[]] $NormalizedBytes,
+        [Parameter(Mandatory)][ValidateSet('nuget-g-props', 'nuget-g-targets')]
+        [string] $Kind,
+        [Parameter(Mandatory)][string] $SemanticSha256
+    )
+    $settings = [Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $stream = [IO.MemoryStream]::new($NormalizedBytes, $false)
+    $reader = [Xml.XmlReader]::Create($stream, $settings)
+    $document = [Xml.XmlDocument]::new()
+    $document.XmlResolver = $null
+    try { $document.Load($reader) } finally { $reader.Dispose(); $stream.Dispose() }
+    $nodes = @($document.SelectNodes('//*'))
+    $lines = @($script:Utf8NoBom.GetString($NormalizedBytes).Split("`n"))
+    $diagnostics = [Collections.Generic.List[string]]::new()
+    $diagnostics.Add(
+        "kind=$Kind|normalizedLength=$($NormalizedBytes.Length)|nodeCount=$($nodes.Count)|lineCount=$($lines.Count)|semanticSha256=$SemanticSha256")
+    for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
+        $lineBytes = $script:Utf8NoBom.GetBytes([string]$lines[$lineIndex])
+        $lineDigest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData($lineBytes))
+        $diagnostics.Add(
+            "kind=$Kind|lineIndex=$lineIndex|lineLength=$($lineBytes.Length)|lineSha256=$lineDigest")
+    }
+    for ($index = 0; $index -lt $nodes.Count; $index++) {
+        $node = $nodes[$index]
+        if ([string]$node.LocalName -notmatch '^[A-Za-z_][A-Za-z0-9_.-]*$') {
+            throw 'A generated NuGet import has an unsafe XML node name.'
+        }
+        $attributeRecords = [Collections.Generic.List[string]]::new()
+        foreach ($attribute in @($node.Attributes)) {
+            if ([string]$attribute.Name -notmatch '^[A-Za-z_][A-Za-z0-9_.-]*$') {
+                throw 'A generated NuGet import has an unsafe XML attribute name.'
+            }
+            $attributeBytes = $script:Utf8NoBom.GetBytes([string]$attribute.Value)
+            $attributeRecords.Add(
+                ([string]$attribute.Name + ':length=' + $attributeBytes.Length + ':sha256=' +
+                    [Convert]::ToHexString(
+                        [Security.Cryptography.SHA256]::HashData($attributeBytes))))
+        }
+        $attributeText = [string]::Join(';',
+            (Get-OrdinalSorted -Values $attributeRecords.ToArray()))
+        $attributeDigest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData(
+                $script:Utf8NoBom.GetBytes($attributeText)))
+        $valueBytes = $script:Utf8NoBom.GetBytes([string]$node.InnerText)
+        $valueDigest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData($valueBytes))
+        $childElementCount = @($node.ChildNodes | Where-Object NodeType -eq Element).Count
+        $diagnostics.Add(
+            "kind=$Kind|nodeIndex=$index|name=$($node.LocalName)|childElementCount=$childElementCount|valueLength=$($valueBytes.Length)|valueSha256=$valueDigest|attributeCount=$($node.Attributes.Count)|attributesSha256=$attributeDigest")
+    }
+    return $diagnostics.ToArray()
 }
 
 function Get-EvaluatedManifest {
@@ -1392,8 +1456,8 @@ function Get-EvaluatedManifest {
         'msbuild', $ProjectPath,
         '-noAutoResponse', '-nologo', '-verbosity:quiet', '-nodeReuse:false', '-maxcpucount:1',
         '-target:ResolveReferences',
-        '-getItem:Compile,EmbeddedResource,ReferencePath,Analyzer,AdditionalFiles,AnalyzerConfigFiles,EditorConfigFiles,PotentialEditorConfigFiles,GlobalAnalyzerConfigFiles,CompilerResponseFile',
-        '-getProperty:MSBuildAllProjects,TargetFramework,RuntimeIdentifier,PlatformTarget,SelfContained,UseAppHost,NoConfig,Deterministic,ContinuousIntegrationBuild,PathMap,UseSharedCompilation,EnableNETAnalyzers,RunAnalyzers,RunAnalyzersDuringBuild,RunAnalyzersDuringLiveAnalysis,_SkipAnalyzers,GenerateMSBuildEditorConfigFile,DiscoverEditorConfigFiles,DiscoverGlobalAnalyzerConfigFiles,GenerateAssemblyInfo,GenerateTargetFrameworkAttribute,AllowUnsafeBlocks,AppendTargetFrameworkToOutputPath,AppendRuntimeIdentifierToOutputPath,EmitCompilerGeneratedFiles,ProvideCommandLineArgs,CompilerGeneratedFilesOutputPath,ImportDirectoryBuildProps,ImportDirectoryBuildTargets,CustomBeforeMicrosoftCommonProps,CustomBeforeMicrosoftCommonTargets,CustomAfterMicrosoftCommonTargets,CustomBeforeMicrosoftCSharpTargets,CustomAfterMicrosoftCSharpTargets,PreBuildEvent,PostBuildEvent,RunPostBuildEvent,CscToolPath,CscToolExe,RoslynTargetsPath,CSharpCoreTargetsPath,NetCoreTargetingPackRoot,EnableTargetingPackDownload,EnableRuntimePackDownload,EnableAppHostPackDownload,DisableTransitiveFrameworkReferenceDownloads,DisableImplicitLibraryPacksFolder,DisableImplicitNuGetFallbackFolder,MSBuildEnableWorkloadResolver,OutDir,TargetDir,TargetPath,TargetName,TargetExt'
+        '-getItem:Compile,EmbeddedResource,ReferencePath,Analyzer,AdditionalFiles,AnalyzerConfigFiles,EditorConfigFiles,PotentialEditorConfigFiles,GlobalAnalyzerConfigFiles,CompilerResponseFile,MSBuildImportedProject',
+        '-getProperty:MSBuildProvideImportedProjects,TargetFramework,RuntimeIdentifier,PlatformTarget,SelfContained,UseAppHost,NoConfig,Deterministic,ContinuousIntegrationBuild,PathMap,UseSharedCompilation,EnableNETAnalyzers,RunAnalyzers,RunAnalyzersDuringBuild,RunAnalyzersDuringLiveAnalysis,_SkipAnalyzers,GenerateMSBuildEditorConfigFile,DiscoverEditorConfigFiles,DiscoverGlobalAnalyzerConfigFiles,GenerateAssemblyInfo,GenerateTargetFrameworkAttribute,AllowUnsafeBlocks,AppendTargetFrameworkToOutputPath,AppendRuntimeIdentifierToOutputPath,EmitCompilerGeneratedFiles,ProvideCommandLineArgs,CompilerGeneratedFilesOutputPath,ImportDirectoryBuildProps,ImportDirectoryBuildTargets,CustomBeforeMicrosoftCommonProps,CustomBeforeMicrosoftCommonTargets,CustomAfterMicrosoftCommonTargets,CustomBeforeMicrosoftCSharpTargets,CustomAfterMicrosoftCSharpTargets,PreBuildEvent,PostBuildEvent,RunPostBuildEvent,CscToolPath,CscToolExe,RoslynTargetsPath,CSharpCoreTargetsPath,NetCoreTargetingPackRoot,EnableTargetingPackDownload,EnableRuntimePackDownload,EnableAppHostPackDownload,DisableTransitiveFrameworkReferenceDownloads,DisableImplicitLibraryPacksFolder,DisableImplicitNuGetFallbackFolder,MSBuildEnableWorkloadResolver,OutDir,TargetDir,TargetPath,TargetName,TargetExt'
     ) + $Properties
     $evaluationText = Invoke-Captured -File $Dotnet -Arguments $arguments `
         -WorkingDirectory $BuildRoot
@@ -1430,6 +1494,7 @@ function Get-EvaluatedManifest {
         CompilerGeneratedFilesOutputPath = (Get-FullPath (Join-Path $ObjectRoot 'generated'))
         ImportDirectoryBuildProps = 'false'
         ImportDirectoryBuildTargets = 'false'
+        MSBuildProvideImportedProjects = 'true'
         CustomBeforeMicrosoftCommonTargets = ''
         CustomAfterMicrosoftCommonTargets = ''
         CustomBeforeMicrosoftCommonProps = ''
@@ -1542,14 +1607,77 @@ function Get-EvaluatedManifest {
 
     $importsList = [Collections.Generic.List[string]]::new()
     $rawImportsList = [Collections.Generic.List[string]]::new()
-    foreach ($importPath in ([string]$evaluation.Properties.MSBuildAllProjects).Split(
-        ';', [StringSplitOptions]::RemoveEmptyEntries)) {
-        $full = Get-FullPath $importPath
+    $safeObjectImportDiagnostics = [Collections.Generic.List[string]]::new()
+    $importedProjectProperty = $evaluation.Items.PSObject.Properties['MSBuildImportedProject']
+    if ($null -eq $importedProjectProperty) {
+        throw 'MSBuild did not expose its imported-project closure.'
+    }
+    $importedProjects = @($importedProjectProperty.Value)
+    if ($importedProjects.Count -eq 0) {
+        throw 'The evaluated imported-project closure is empty.'
+    }
+    $importedIdentitySet = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $objectImportSet = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $candidateSdkEdgeSet = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($importItem in $importedProjects) {
+        $identityProperty = $importItem.PSObject.Properties['Identity']
+        $fullPathProperty = $importItem.PSObject.Properties['FullPath']
+        $importerProperty = $importItem.PSObject.Properties['ImportingProjectPath']
+        if ($null -eq $identityProperty -or $null -eq $fullPathProperty -or
+            $null -eq $importerProperty -or
+            [string]::IsNullOrWhiteSpace([string]$identityProperty.Value) -or
+            [string]::IsNullOrWhiteSpace([string]$fullPathProperty.Value) -or
+            [string]::IsNullOrWhiteSpace([string]$importerProperty.Value) -or
+            -not [IO.Path]::IsPathFullyQualified([string]$identityProperty.Value) -or
+            -not [IO.Path]::IsPathFullyQualified([string]$fullPathProperty.Value) -or
+            -not [IO.Path]::IsPathFullyQualified([string]$importerProperty.Value)) {
+            throw 'An imported-project edge lacks exact absolute identities.'
+        }
+        $full = Get-FullPath ([string]$identityProperty.Value)
+        $metadataFull = Get-FullPath ([string]$fullPathProperty.Value)
+        $importerFull = Get-FullPath ([string]$importerProperty.Value)
+        if (-not $full.Equals($metadataFull, [StringComparison]::OrdinalIgnoreCase) -or
+            -not [IO.File]::Exists($full) -or -not [IO.File]::Exists($importerFull) -or
+            -not $importedIdentitySet.Add($full)) {
+            throw 'An imported-project edge is missing or duplicates an identity.'
+        }
         $rolePath = Get-RolePath -Path $full -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
             -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
             -TargetingPackRoot $TargetingPackRoot
-        $rawImportsList.Add($rolePath + '|rawSha256=' + (Get-RawSha256 -Path $full))
+        $importerRolePath = Get-RolePath -Path $importerFull `
+            -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
+            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
+            -TargetingPackRoot $TargetingPackRoot
+        if ((-not $rolePath.StartsWith('object/', [StringComparison]::Ordinal) -and
+                -not $rolePath.StartsWith('dotnet/', [StringComparison]::Ordinal)) -or
+            (-not $importerRolePath.StartsWith('candidate/', [StringComparison]::Ordinal) -and
+                -not $importerRolePath.StartsWith('dotnet/', [StringComparison]::Ordinal))) {
+            throw 'An imported-project edge escaped the exact candidate/dotnet roles.'
+        }
+        $sdkProperty = $importItem.PSObject.Properties['Sdk']
+        $sdkName = if ($null -eq $sdkProperty) { '' } else { [string]$sdkProperty.Value }
+        if ($importerRolePath.StartsWith('candidate/', [StringComparison]::Ordinal)) {
+            if ($importerRolePath -cne 'candidate/HIDMaestro.Core.csproj' -or
+                $sdkName -cne 'Microsoft.NET.Sdk' -or
+                -not $candidateSdkEdgeSet.Add($rolePath)) {
+                throw 'A root SDK import edge is not exact.'
+            }
+            $sdkKind = 'microsoft-net-sdk'
+        } else {
+            if ($sdkName.Length -ne 0) {
+                throw 'A nested imported-project edge has unexpected SDK metadata.'
+            }
+            $sdkKind = 'none'
+        }
+        $edgePrefix = $rolePath + '|importer=' + $importerRolePath + '|sdk=' + $sdkKind
+        $rawImportsList.Add($edgePrefix + '|rawSha256=' + (Get-RawSha256 -Path $full))
         if ($rolePath.StartsWith('object/', [StringComparison]::Ordinal)) {
+            if (-not $objectImportSet.Add($rolePath)) {
+                throw 'A generated NuGet import appears more than once.'
+            }
             $basename = [IO.Path]::GetFileName($full)
             if ($basename -notmatch '^HIDMaestro\.Core\.csproj\.nuget\.g\.(props|targets)$') {
                 throw 'An object-role MSBuild import is not an exact generated NuGet props/targets file.'
@@ -1564,17 +1692,43 @@ function Get-EvaluatedManifest {
             if ($document.DocumentElement.LocalName -cne 'Project') {
                 throw 'A generated NuGet import has an unexpected XML root.'
             }
-            $hash = Get-RoleNormalizedTextSha256 -Path $full -Replacements ([ordered]@{
+            $normalizedState = Get-RoleNormalizedTextState -Path $full -Replacements ([ordered]@{
                 object = $ObjectRoot
                 packages = $PackagesRoot
             })
-        } elseif ($rolePath.StartsWith('build/', [StringComparison]::Ordinal) -or
-            $rolePath.StartsWith('targeting-pack/', [StringComparison]::Ordinal)) {
-            throw 'An unexpected build/targeting-pack MSBuild import was evaluated.'
+            $hash = $normalizedState.Sha256
+            $kind = switch -CaseSensitive ($basename) {
+                'HIDMaestro.Core.csproj.nuget.g.props' { 'nuget-g-props' }
+                'HIDMaestro.Core.csproj.nuget.g.targets' { 'nuget-g-targets' }
+                default { throw 'An object-role import basename escaped its exact allowlist.' }
+            }
+            foreach ($diagnostic in @(Get-SafeGeneratedImportDiagnostics `
+                -NormalizedBytes $normalizedState.Bytes -Kind $kind `
+                -SemanticSha256 $normalizedState.Sha256)) {
+                $safeObjectImportDiagnostics.Add([string]$diagnostic)
+            }
         } else {
             $hash = Get-RawSha256 -Path $full
         }
-        $importsList.Add($rolePath + '|semanticSha256=' + $hash)
+        $importsList.Add($edgePrefix + '|semanticSha256=' + $hash)
+    }
+    $expectedObjectImports = Get-OrdinalSorted -Values @(
+        'object/HIDMaestro.Core.csproj.nuget.g.props',
+        'object/HIDMaestro.Core.csproj.nuget.g.targets')
+    $actualObjectImports = Get-OrdinalSorted -Values @($objectImportSet)
+    if ($actualObjectImports.Count -ne 2 -or
+        [string]::Join("`n", $actualObjectImports) -cne
+            [string]::Join("`n", $expectedObjectImports)) {
+        throw 'The evaluated generated NuGet import closure is not exact.'
+    }
+    $expectedCandidateSdkEdges = Get-OrdinalSorted -Values @(
+        'dotnet/sdk/10.0.400/Sdks/Microsoft.NET.Sdk/Sdk/Sdk.props',
+        'dotnet/sdk/10.0.400/Sdks/Microsoft.NET.Sdk/Sdk/Sdk.targets')
+    $actualCandidateSdkEdges = Get-OrdinalSorted -Values @($candidateSdkEdgeSet)
+    if ($actualCandidateSdkEdges.Count -ne 2 -or
+        [string]::Join("`n", $actualCandidateSdkEdges) -cne
+            [string]::Join("`n", $expectedCandidateSdkEdges)) {
+        throw 'The root Microsoft.NET.Sdk import closure is not exact.'
     }
     $imports = Get-OrdinalSorted -Values $importsList.ToArray()
     $rawImports = Get-OrdinalSorted -Values $rawImportsList.ToArray()
@@ -1630,6 +1784,8 @@ function Get-EvaluatedManifest {
         Sha256 = Get-RawSha256 -Path $ManifestPath
         Manifest = $manifest
         RawImports = $rawImports
+        SafeObjectImportDiagnostics = Get-OrdinalSorted -Values `
+            $safeObjectImportDiagnostics.ToArray()
     }
 }
 
@@ -1659,13 +1815,24 @@ function Get-SafeImportDiagnostic {
     param([Parameter(Mandatory)][string] $Entry)
     $match = [regex]::Match(
         $Entry,
-        '^(candidate|build|object|targeting-pack|dotnet)/[^|]+\|semanticSha256=([A-F0-9]{64})$',
+        '^(object|dotnet)/([^|]+)\|importer=(candidate|dotnet)/[^|]+\|sdk=(none|microsoft-net-sdk)\|semanticSha256=([A-F0-9]{64})$',
         [Text.RegularExpressions.RegexOptions]::CultureInvariant)
     if (-not $match.Success) {
         throw 'An evaluated import cannot be reduced to its safe role and semantic hash.'
     }
-    return 'role=' + $match.Groups[1].Value +
-        '|semanticSha256=' + $match.Groups[2].Value
+    $role = $match.Groups[1].Value
+    $kind = 'other'
+    if ($role -ceq 'object') {
+        $kind = switch -CaseSensitive ($match.Groups[2].Value) {
+            'HIDMaestro.Core.csproj.nuget.g.props' { 'nuget-g-props' }
+            'HIDMaestro.Core.csproj.nuget.g.targets' { 'nuget-g-targets' }
+            default { throw 'An object import diagnostic escaped its exact kind allowlist.' }
+        }
+    }
+    return 'role=' + $role + '|kind=' + $kind +
+        '|importerRole=' + $match.Groups[3].Value +
+        '|sdkKind=' + $match.Groups[4].Value +
+        '|semanticSha256=' + $match.Groups[5].Value
 }
 
 function Write-EvaluationManifestDifference {
@@ -1687,6 +1854,13 @@ function Write-EvaluationManifestDifference {
             $safe = Get-SafeImportDiagnostic -Entry ([string]$difference.InputObject)
             Write-Host ('EVALUATION-IMPORT-DIFF {0} {1} {2}' -f
                 $Label, [string]$difference.SideIndicator, $safe)
+        }
+        foreach ($difference in @(Compare-Object `
+            @($Left.SafeObjectImportDiagnostics) @($Right.SafeObjectImportDiagnostics) `
+            -CaseSensitive)) {
+            Write-Host ('EVALUATION-OBJECT-IMPORT-SHAPE-DIFF {0} {1} {2}' -f
+                $Label, [string]$difference.SideIndicator,
+                [string]$difference.InputObject)
         }
     }
 }
@@ -2002,17 +2176,26 @@ function Assert-InspectorHostClosure {
         throw 'The inspector dependency runtime target is not exact.'
     }
     $libraries = @($deps.libraries.PSObject.Properties)
-    $libraryShape = @(if ($libraries.Count -eq 1) {
-        Get-OrdinalSorted -Values @($libraries[0].Value.PSObject.Properties | ForEach-Object Name)
-    } else { @() })
-    if ($libraries.Count -ne 1 -or
-        $libraries[0].Name -cne 'KSX.HIDMaestro.ArtifactInspector/1.0.0' -or
-        [string]::Join("`n", $libraryShape) -cne
-            [string]::Join("`n", (Get-OrdinalSorted -Values @('serviceable', 'sha512', 'type'))) -or
-        [string]$libraries[0].Value.type -cne 'project' -or
-        $libraries[0].Value.serviceable -ne $false -or
-        [string]$libraries[0].Value.sha512 -cne '') {
-        throw 'The inspector dependency manifest is not the sole project identity.'
+    if ($libraries.Count -ne 1) {
+        throw 'The inspector dependency manifest library count is not one.'
+    }
+    [string[]]$libraryShape = Get-OrdinalSorted -Values @(
+        $libraries[0].Value.PSObject.Properties | ForEach-Object Name)
+    if ($libraries[0].Name -cne 'KSX.HIDMaestro.ArtifactInspector/1.0.0') {
+        throw 'The inspector dependency manifest project identity is not exact.'
+    }
+    if ([string]::Join("`n", $libraryShape) -cne
+        [string]::Join("`n", (Get-OrdinalSorted -Values @('serviceable', 'sha512', 'type')))) {
+        throw 'The inspector dependency manifest project library shape is not exact.'
+    }
+    if ([string]$libraries[0].Value.type -cne 'project') {
+        throw 'The inspector dependency manifest project library type is not exact.'
+    }
+    if ($libraries[0].Value.serviceable -ne $false) {
+        throw 'The inspector dependency manifest project library is serviceable.'
+    }
+    if ([string]$libraries[0].Value.sha512 -cne '') {
+        throw 'The inspector dependency manifest project library SHA-512 is not empty.'
     }
     $targets = @($deps.targets.PSObject.Properties)
     if ($targets.Count -ne 1 -or

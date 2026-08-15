@@ -409,8 +409,8 @@ try {
         ($lock.contractId -ceq 'hidmaestro-s1.5d-inert-managed-source-candidate') `
         'lock identifies the S1.5d inert managed-source candidate'
     Add-Check 'lock.status' `
-        ($lock.status -ceq 'source-frozen-not-built-or-loaded') `
-        'lock status is explicitly source-only'
+        ($lock.status -ceq 'source-frozen-verifier-does-not-build-or-load') `
+        'lock status explicitly scopes no-build/no-load truth to the S1.5d verifier'
     Add-Check 'lock.assurance' ($lock.assurance -ceq $assurance) `
         'lock assurance is the source/project XML boundary'
     Add-Check 'lock.noBom' (!$lockRecord.hadUtf8Bom) 'lock is UTF-8 without BOM'
@@ -678,9 +678,53 @@ try {
          [int]$managedSource.compileItemCount -eq [int]$lock.expectedCounts.compileItemCount -and
          [int]$managedSource.embeddedResourceCount -eq [int]$lock.expectedCounts.embeddedResourceCount -and
          $managedSource.sourceAndProjectXmlFrozen -eq $true -and
-         $managedSource.artifactBuilt -eq $false -and
-         $managedSource.artifactLoaded -eq $false) `
-        'aggregate records exact S1.5d source/project counts without claiming a built or loaded artifact'
+         $managedSource.sourceVerifierBuildAuthorized -eq $false -and
+         $managedSource.sourceVerifierBuiltArtifact -eq $false -and
+         $managedSource.sourceVerifierLoadedArtifact -eq $false -and
+         $aggregate.status -ceq 's1.5e-source-frozen-observation-not-established-not-built-or-loaded' -and
+         $aggregate.artifact.observation.contractPath -ceq 's1_5e/contract.lock.json' -and
+         $aggregate.artifact.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $aggregate.artifact.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $aggregate.artifact.observation.actionsObservationBuildAuthorized -eq $true -and
+         $aggregate.artifact.observation.sourceVerifierBuildAuthorized -eq $false -and
+         $aggregate.artifact.observation.localBuildAuthorized -eq $false -and
+         $aggregate.artifact.observation.productBuildAuthorized -eq $false -and
+         $aggregate.artifact.observation.loadAuthorized -eq $false -and
+         $aggregate.artifact.observation.executionAuthorized -eq $false -and
+         $aggregate.artifact.observation.observationEstablished -eq $false -and
+         $aggregate.artifact.observation.actionsObservationArtifactBuilt -eq $false -and
+         $aggregate.artifact.observation.metadataMatched -eq $false -and
+         $aggregate.artifact.observation.compileClosureMatched -eq $false -and
+         $aggregate.artifact.observation.resourceCatalogMatched -eq $false -and
+         $aggregate.sourceContracts.publicApi.actionsObservationMetadataMatched -eq $false -and
+         $aggregate.sourceContracts.publicApi.artifactMetadataAllowlistAdopted -eq $false -and
+         $api.artifact.buildAuthorization.sourceVerifier -eq $false -and
+         $api.artifact.buildAuthorization.s1_5eActionsObservation -eq $true -and
+         $api.artifact.buildAuthorization.local -eq $false -and
+         $api.artifact.buildAuthorization.product -eq $false -and
+         $api.artifact.observation.contractPath -ceq '../s1_5e/contract.lock.json' -and
+         $api.artifact.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $api.artifact.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $api.artifact.observation.observationEstablished -eq $false -and
+         $api.artifact.observation.actionsObservationArtifactBuilt -eq $false -and
+         $api.artifact.observation.metadataMatched -eq $false -and
+         $api.artifact.loadAuthorized -eq $false -and
+         $api.artifact.executionAuthorized -eq $false -and
+         $source.futureCompileManifest.state -ceq 'source-candidate-present-hash-frozen-s1.5e-source-frozen-observation-not-established' -and
+         $source.futureCompileManifest.observation.actionsObservationBuildAuthorized -eq $true -and
+         $source.futureCompileManifest.observation.sourceVerifierBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.localBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.productBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.contractPath -ceq '../s1_5e/contract.lock.json' -and
+         $source.futureCompileManifest.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $source.futureCompileManifest.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $source.futureCompileManifest.observation.loadAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.executionAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.observationEstablished -eq $false -and
+         $source.futureCompileManifest.observation.actionsObservationArtifactBuilt -eq $false -and
+         $source.futureCompileManifest.observation.metadataMatched -eq $false -and
+         $source.futureCompileManifest.observation.compileClosureMatched -eq $false) `
+        'S1.5d remains no-build/no-load while the source-frozen S1.5e Actions observation alone is authorized but not established'
 
     $projectRecord = $candidateRecords[$lock.project.path]
     $projectText = $projectRecord.text

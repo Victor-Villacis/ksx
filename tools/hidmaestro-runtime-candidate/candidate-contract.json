@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "candidate": "s1.5c-dualsense-conformance",
-  "status": "s1.5d-source-candidate-present-hash-frozen-not-built-or-loaded",
+  "status": "s1.5e-source-frozen-observation-not-established-not-built-or-loaded",
   "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
   "artifact": {
     "assemblyName": "HIDMaestro.Core",
@@ -12,6 +12,23 @@
     },
     "targetFramework": "net10.0-windows10.0.26100.0",
     "runtimeIdentifier": "win-x64",
+    "observation": {
+      "phase": "s1.5e",
+      "contractPath": "s1_5e/contract.lock.json",
+      "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+      "contractReferenceState": "source-frozen-observation-not-established",
+      "actionsObservationBuildAuthorized": true,
+      "sourceVerifierBuildAuthorized": false,
+      "localBuildAuthorized": false,
+      "productBuildAuthorized": false,
+      "loadAuthorized": false,
+      "executionAuthorized": false,
+      "observationEstablished": false,
+      "actionsObservationArtifactBuilt": false,
+      "metadataMatched": false,
+      "compileClosureMatched": false,
+      "resourceCatalogMatched": false
+    },
     "embeddedResourcePolicy": {
       "allowedPrefix": "HIDMaestro.Profiles.",
       "resourceCount": 228,
@@ -41,7 +58,8 @@
       "path": "api/public-api.contract.json",
       "publicTypeCount": 9,
       "logicalMemberCount": 100,
-      "artifactMetadataVerified": false
+      "actionsObservationMetadataMatched": false,
+      "artifactMetadataAllowlistAdopted": false
     },
     "compilationDisposition": {
       "path": "api/source-compilation.contract.json",
@@ -58,8 +76,9 @@
       "compileItemCount": 11,
       "embeddedResourceCount": 228,
       "sourceAndProjectXmlFrozen": true,
-      "artifactBuilt": false,
-      "artifactLoaded": false
+      "sourceVerifierBuildAuthorized": false,
+      "sourceVerifierBuiltArtifact": false,
+      "sourceVerifierLoadedArtifact": false
     },
     "profileCatalog": {
       "path": "profiles/catalog.lock.json",
@@ -141,7 +160,7 @@
     ],
     "HIDMaestro.HMOutputSource": "required raw-feedback source enum"
   },
-  "feedbackBoundary": "The intended boundary is raw HMController.OutputReceived packets. The pure DualSense reduction contract and managed adapter source are frozen, HMOutputPacket.ReportId is separate, and HMOutputPacket.Data excludes that report-ID byte. The adapter has not been compiled or executed against the 16 vectors, so this is source presence rather than behavior proof. The broader OutputDecoded surface is not required for this checkpoint.",
+  "feedbackBoundary": "The intended boundary is raw HMController.OutputReceived packets. The pure DualSense reduction contract and managed adapter source are frozen, HMOutputPacket.ReportId is separate, and HMOutputPacket.Data excludes that report-ID byte. The source verifiers do not compile or execute the adapter against the 16 vectors, the S1.5e observation leaf is source-frozen but its Actions observation is not established, and no behavior proof is claimed. The broader OutputDecoded surface is not required for this checkpoint.",
   "implementationSafetySummary": {
     "nonAuthoritative": true,
     "authoritativeSourceDisposition": "api/source-compilation.contract.json",
@@ -253,7 +272,8 @@
     "on-demand installation or repair"
   ],
   "notAuthorized": [
-    "building or loading a runtime artifact from this source-only candidate before the separate Actions artifact gate",
+    "building outside the exact source-frozen S1.5e GitHub Actions observation",
+    "loading or executing any candidate artifact, including an S1.5e observation output",
     "treating the frozen source API target as proof of a built artifact's metadata",
     "treating source/project closure as proof that the candidate compiles or that its artifact contains only the intended members and resources",
     "treating the release-DLL catalog hash as a source-tree catalog binding",

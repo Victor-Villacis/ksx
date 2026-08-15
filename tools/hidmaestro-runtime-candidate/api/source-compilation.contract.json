@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "hidmaestro-s1.5c-dualsense-source-compilation",
-  "status": "exhaustive-upstream-classification-source-candidate-present-not-built-or-loaded",
+  "status": "exhaustive-upstream-classification-s1.5e-source-frozen-observation-not-established",
   "upstream": {
     "repository": "https://github.com/hifihedgehog/HIDMaestro",
     "tag": "v1.6.1",
@@ -203,7 +203,22 @@
     }
   ],
   "futureCompileManifest": {
-    "state": "source-candidate-present-hash-frozen-not-built-or-loaded",
+    "state": "source-candidate-present-hash-frozen-s1.5e-source-frozen-observation-not-established",
+    "observation": {
+      "contractPath": "../s1_5e/contract.lock.json",
+      "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+      "contractReferenceState": "source-frozen-observation-not-established",
+      "actionsObservationBuildAuthorized": true,
+      "sourceVerifierBuildAuthorized": false,
+      "localBuildAuthorized": false,
+      "productBuildAuthorized": false,
+      "loadAuthorized": false,
+      "executionAuthorized": false,
+      "observationEstablished": false,
+      "actionsObservationArtifactBuilt": false,
+      "metadataMatched": false,
+      "compileClosureMatched": false
+    },
     "compileUnits": [
       "candidate/HMContext.cs",
       "candidate/HMController.cs",
@@ -228,12 +243,13 @@
     },
     "allReplacementUnitsPresent": true,
     "artifactCompileAllowlistFrozen": false,
-    "reason": "Every planned source path exists and is hash-frozen by the S1.5d static source/project verifier. The project has not been built or loaded, so artifact compile closure and metadata remain unproven."
+    "reason": "Every planned source path exists and is hash-frozen by the S1.5d static source/project verifier, and the exact S1.5e observation infrastructure is source-frozen. Its bounded GitHub Actions build is authorized, but no observation has yet been established, no artifact has been built or loaded under that scope, and artifact compile closure remains unproven and unadopted."
   },
   "assuranceBoundary": [
     "The classification is exhaustive over the pinned upstream Core .cs/.csproj tree and says exactly which upstream bytes may be copied unchanged.",
     "Every planned candidate unit now exists and is hash-frozen, but source presence does not prove compilation, behavior, metadata closure, or safety to execute.",
-    "The artifact compile allowlist remains false until an isolated build proves the explicit project items close without an implicit or generated authority-bearing unit.",
+    "The source-frozen S1.5e GitHub Actions observation may build the staged candidate and parse its inert bytes; the source verifier, local workstation and product paths remain unauthorized to build it, and every load or execution path remains unauthorized.",
+    "The artifact compile allowlist remains false before the observation and requires a later explicit evidence-adoption decision even after an isolated build proves the explicit project items close without an implicit or generated authority-bearing unit.",
     "The full 228-resource input set is authoritative only through the hash-pinned profile source manifest; the one-DualSense S2 restriction applies to CreateController, not catalog inclusion.",
     "Neither the candidate nor any upstream project, target, assembly, helper or driver is built, loaded or executed by the source verifier."
   ]

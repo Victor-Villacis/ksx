@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+  "status": "observation-infrastructure-source-present-actions-not-run",
+  "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
+  "canonicalization": "UTF-8 without BOM; CRLF and bare CR become LF before normalized SHA-256; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
+  "observationEstablished": false,
+  "expectedSourceVerifierCheckCount": 196,
+  "toolchain": {
+    "dotnetSdk": "10.0.400",
+    "runnerOs": "Windows",
+    "configuration": "Release",
+    "runtimeIdentifier": "win-x64",
+    "platformTarget": "x64",
+    "inspectorRuntimeFrameworkVersion": "10.0.11",
+    "buildCount": 2,
+    "localBuildAuthorized": false,
+    "actionsObservationBuildAuthorized": true,
+    "candidateLoadAuthorized": false,
+    "candidateExecutionAuthorized": false,
+    "artifactRetentionAuthorized": false
+  },
+  "upstream": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro",
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "windowsCheckoutCoreAutocrlf": true
+  },
+  "sourceCandidate": {
+    "relativeProject": "candidate/HIDMaestro.Core.csproj",
+    "treeFraming": "ordinal candidate-relative path, NUL, normalized UTF-8 bytes, NUL",
+    "normalizedTreeSha256": "4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393",
+    "candidateFileCount": 12,
+    "compileItemCount": 11,
+    "embeddedResourceCount": 228,
+    "deployableProfileCount": 130,
+    "stagedInputFileCount": 241,
+    "fixedStagingPrefix": ".pinned-upstream-v1.6.1/",
+    "workspaceCandidateStagingBytes": "canonical-utf8-lf-after-normalized-hash-verification",
+    "upstreamStagingBytes": "exact-observed-windows-checkout-raw-bytes-after-raw-or-canonical-verification",
+    "retainedSourcePath": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+    "retainedSourceRawSha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+    "profileRawCatalogSha256": null,
+    "profileCanonicalCatalogSha256": null
+  },
+  "artifactExpectation": {
+    "assemblyName": "HIDMaestro.Core",
+    "assemblyVersion": "1.6.1.0",
+    "fileVersion": "1.6.1.0",
+    "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "targetFramework": ".NETCoreApp,Version=v10.0",
+    "machine": "Amd64",
+    "peMagic": "PE32Plus",
+    "managedEntryPointTokenOrRva": 0,
+    "nativeAddressOfEntryPointExpectedNonzero": true,
+    "allowedNativeBootstrapModule": "mscoree.dll",
+    "allowedNativeBootstrapSymbol": "_CorDllMain",
+    "publicTypeCount": 9,
+    "publicLogicalEntryCount": 100,
+    "manifestResourceCount": 228,
+    "deployableProfileCount": 130,
+    "dllSha256": null,
+    "pdbSha256": null,
+    "depsJsonSha256": null,
+    "mvid": null,
+    "portablePdbId": null,
+    "assemblyReferenceAllowlist": null,
+    "typeReferenceAllowlist": null,
+    "memberReferenceAllowlist": null,
+    "methodSpecificationAllowlist": null,
+    "ilTokenClosureAllowlist": null,
+    "analyzerAllowlist": null
+  },
+  "staticRejectPolicy": {
+    "pinvokeRows": 0,
+    "moduleReferenceRows": 0,
+    "declarativeSecurityRows": 0,
+    "moduleInitializerCount": 0,
+    "generatedCompilerSourceCount": 0,
+    "packageReferenceCount": 0,
+    "analyzerAllowlistFrozen": false,
+    "strongNameSigned": false,
+    "authenticodePresent": false,
+    "readyToRunPresent": false,
+    "forbiddenIlOpcodes": [
+      "calli",
+      "jmp",
+      "localloc"
+    ],
+    "forbiddenReferenceFragments": [
+      "System.Diagnostics.Process",
+      "Microsoft.Win32.Registry",
+      "System.ServiceProcess",
+      "System.Net.",
+      "System.Reflection.Assembly::Load",
+      "System.Runtime.Loader.AssemblyLoadContext",
+      "System.Activator",
+      "System.Runtime.InteropServices.NativeLibrary",
+      "System.Security.Cryptography.X509Certificates",
+      "PnPUtil",
+      "DriverBuilder",
+      "UsbipDriverInstaller"
+    ]
+  },
+  "expectedOutputBasenames": [
+    "HIDMaestro.Core.deps.json",
+    "HIDMaestro.Core.dll",
+    "HIDMaestro.Core.pdb"
+  ],
+  "sourceInputs": [
+    {
+      "path": "tools/hidmaestro-runtime-candidate/candidate-contract.json",
+      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/api/public-api.contract.json",
+      "sha256": "FC9DF9A192831385A7BE56C2B8B9E9B4DD52D4DF854D798F4F1A63FC9B333D2E"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/api/source-compilation.contract.json",
+      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/profiles/catalog.lock.json",
+      "sha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/source.lock.json",
+      "sha256": "F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json",
+      "sha256": "01DD327F4C280FC996484141A8E664B1E415A12BE748587A9670287FBD0401EA"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
+      "sha256": "9B7FBEF83B420F1143EEEF9EF31FEF923EE8F36CC15F9DE0B94198EB7BBF3861"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/HIDMaestro.ArtifactInspector.csproj",
+      "sha256": "A9C4C759DE81E08E1A8126AB60CCAE9D4593251B7191F7379C3E82D92A16DA66"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
+      "sha256": "88B79BB4BE829096A8910A57A7361D4BFC48A06B28334CA4501EA864328F029C"
+    },
+    {
+      "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
+      "sha256": "3760A60B38FBE5AA3BDB90E6FC4BD44F31F310016D371D30C66AF5D6FE897025"
+    }
+  ],
+  "leafFiles": [
+    {
+      "path": "README.md",
+      "sha256": "9E4B94CCBC6904A23D9BB2097F37374BEFFC1D8E40631579C6AB2A7E672FA79B"
+    },
+    {
+      "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
+      "sha256": "A9C4C759DE81E08E1A8126AB60CCAE9D4593251B7191F7379C3E82D92A16DA66"
+    },
+    {
+      "path": "inspector/Program.cs",
+      "sha256": "88B79BB4BE829096A8910A57A7361D4BFC48A06B28334CA4501EA864328F029C"
+    },
+    {
+      "path": "run-actions-proof.ps1",
+      "sha256": "368BC075FCF45186E0341CBB6DAA7E1D5DBDB6FBDD9ECE362BBC319FD4D6FF63"
+    },
+    {
+      "path": "verify-source-contract.ps1",
+      "sha256": "9DE236B3E2DC21D024868AC65E190EFE6456F6637D387DCA5252928265EDAD49"
+    }
+  ],
+  "gateState": {
+    "artifactPublicApiAllowlistFrozen": false,
+    "artifactCompileAllowlistFrozen": false,
+    "profileSourceCatalogBound": false,
+    "rawFeedbackDecoderFrozen": false,
+    "driverRuntimeAbiBound": false,
+    "distributionReady": false
+  },
+  "limitations": [
+    "This source lock authorizes and describes an Actions-only observation; it is not evidence that the observation has run.",
+    "No post-build hash, MVID, portable-PDB identity, or metadata-reference allowlist is asserted before the first green receipt is reviewed.",
+    "The profile manifest freezes canonical text bytes but not the Windows-checkout raw catalog digest; the observation reports that digest without promoting it to an expectation.",
+    "A successful observation proves deterministic byte equality and static structure only; it does not prove driver ABI, device behavior, candidate execution safety, or distribution readiness."
+    ,"The observer constrains the sole native import to mscoree.dll!_CorDllMain and requires an empty TLS directory, but does not interpret the native entry-point trampoline or prove its IAT target."
+  ]
+}

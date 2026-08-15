@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "hidmaestro-s1.5d-inert-managed-source-candidate",
-  "status": "source-frozen-not-built-or-loaded",
+  "status": "source-frozen-verifier-does-not-build-or-load",
   "assurance": "hash-pinned-static-candidate-source-and-project-xml-closure-only",
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
   "expectedVerifierCheckCount": 453,
@@ -26,25 +26,25 @@
       "id": "aggregate-contract",
       "path": "../candidate-contract.json",
       "format": "json",
-      "sha256": "EAEC16372ADDDF25A8EBFCA449BCEE0BCDD76DA5E570382125E8F6B9C53000BF"
+      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
     },
     {
       "id": "api-lock",
       "path": "../api/contract.lock.json",
       "format": "json",
-      "sha256": "C065E01871987A1C8AC9DA72167B9EFAB82AEBF7E0D5D4B965DBAB2DC883239E"
+      "sha256": "1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5"
     },
     {
       "id": "public-api-contract",
       "path": "../api/public-api.contract.json",
       "format": "json",
-      "sha256": "E2D2C282994CF6E8A5FFFA5FF0693F15EFC01912B375DE95692C33256BAE0185"
+      "sha256": "FC9DF9A192831385A7BE56C2B8B9E9B4DD52D4DF854D798F4F1A63FC9B333D2E"
     },
     {
       "id": "source-compilation-contract",
       "path": "../api/source-compilation.contract.json",
       "format": "json",
-      "sha256": "DE4A02770A9F77ACB75943F88BD89D3AA70C119D6DC172DB69B7BE57277820E4"
+      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
     },
     {
       "id": "profile-catalog-lock",
@@ -499,8 +499,8 @@
   "limitations": [
     "This lock proves reviewed source identity and static project/source relationships only; it does not prove compilation, metadata, behavior, binary identity, or runtime safety.",
     "The fixed .pinned-upstream-v1.6.1 staging directory is absent and ignored. The verifier checks only literal project-to-manifest identities and never reads staged upstream bytes.",
-    "The DualSense input contract and candidate source relation are hash-pinned, but the encoder and 64-to-63-byte seam have not been compiled or executed against the 37 frames; no artifact or runtime gate changes.",
-    "The managed feedback adapter is source-present, but its behavior has not been compiled or executed against the 16 vectors, so rawFeedbackDecoderFrozen remains false.",
-    "No SDK, candidate assembly, release DLL, signed driver, device, registry, service, process, network, elevation, hardware, or distribution path is built, loaded, inspected, or exercised."
+    "The S1.5d verifier does not compile or execute the DualSense encoder or 64-to-63-byte seam against the 37 frames; the separately authorized S1.5e observation infrastructure is source-frozen, its Actions observation is not established, and no artifact or runtime gate changes.",
+    "The S1.5d verifier does not compile or execute the source-present managed feedback adapter against the 16 vectors, so rawFeedbackDecoderFrozen remains false.",
+    "This verifier builds, loads, inspects and exercises no SDK, candidate assembly, release DLL, signed driver, device, registry, service, process, network, elevation, hardware, or distribution path."
   ]
 }

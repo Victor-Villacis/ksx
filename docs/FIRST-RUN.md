@@ -111,9 +111,10 @@ Two things must be said on that screen, not buried:
 
 ## §4 What the installer must do (moment 2)
 
-- **Install the controller drivers, having asked.** Without ViGEmBus
-  there is no bus for a virtual pad to appear on, so every one of the moments
-  below can be performed perfectly and moment 7 still plugs nothing. Setup
+- **Install the controller drivers, having asked.** Without ViGEmBus, an Xbox
+  360 or PlayStation stage has no bus for its virtual pad to appear on, so
+  every one of the moments below can be performed perfectly and moment 7 still
+  plugs nothing for those personas. Setup
   already owns an administrator token and the user has consented to that driver
   (`ksx install-drivers` itself never self-elevates), so it is the right place
   this particular controller driver can be installed without a terminal — and
@@ -214,13 +215,19 @@ be opened).
   keyboard's card, so in each of those states the way out was this repo's
   recovery runbook and an elevated shell — §6's last line, live in the shipped
   build.
-- **Say it if Play cannot work.** A machine with no ViGEmBus can walk every
-  moment above and plug nothing at the end, so whether a pad can be created is
-  read (`MachineSource::pad_bus`) and stated before the Play button. Three
-  states, not two: cannot, could-not-tell, and fine — and the remedy is a
-  sentence naming the installer, never a button, because §3 of
-  `docs/SURFACES.md` marks driver installation `never` for this surface and
-  that has not changed.
+- **Say it if Play cannot work — for the controllers actually staged.**
+  `MachineSource::controller_outputs` derives requirements from each supported
+  staged persona: Xbox 360/PlayStation require ViGEmBus, DualSense requires
+  HIDMaestro, a mixed setup requires both, and an empty stage requires neither.
+  The page must not warn a DualSense-only setup about ViGEmBus or paint a
+  healthy ViGEmBus result over missing HIDMaestro. Known blocked, could-not-tell,
+  fully preflighted, and **verified when Play starts** are separate states.
+  HIDMaestro's exact package/hash probe proves its installed prerequisite, not
+  a controller endpoint that does not exist until the protected Play
+  transaction. A blocked or unread required output disables Play but never
+  Save: saving writes files and plugs nothing. Remedies name the installer,
+  never an install button, because §3 of `docs/SURFACES.md` still marks driver
+  installation `never` for this surface.
 
 ## §6 What must never happen
 

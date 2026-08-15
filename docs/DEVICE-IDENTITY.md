@@ -7,7 +7,10 @@
 > device pick` / `ksx device remove` ship as CLI verbs
 > (`ksx-backend/src/device_scan.rs`, `ksx-backend/src/device_edit.rs`, wired in
 > `ksx-app/src/main.rs`). `remove` is a fifth verb this document never
-> specified — it is listed in §9 now. Only item 5, press-to-identify, is absent.
+> specified — it is listed in §9 now. Item 5, press-to-identify, is now the
+> Studio hardware-step action: the daemon-owned learner hears both ordinary
+> and already prepared panels, and MachineSource resolves its exact-generation
+> device identity through the same inventory used by `device scan`.
 >
 > Section numbers are load-bearing, and by far more than this note used to
 > admit. It named one file. It is **fifteen source files and fifty references,
@@ -415,11 +418,16 @@ The gap, smallest-first. Items 1–4 are **built**; only item 5 is not:
    operator screen. `ksx device remove` is in the same position. That is task #22
    and `docs/SURFACES.md` §3 row 3, where the matrix has been corrected to say
    so rather than implying a screen exists.
-5. **Press-to-identify**, for twins. Reuse the existing learn verbs rather than
-   inventing a mechanism. Two honest limits, surfaced as refusals rather than
-   silence: identify cannot hear a board that is already WinUSB-claimed (it is
-   off the input stack — identify *before* claiming, which is the twins
-   workflow anyway), and cannot run while a session holds the keyboards.
+5. ~~**Press-to-identify**, for twins.~~ Built in Studio by reusing the existing
+   daemon learn verbs rather than inventing a second observer. The action binds
+   every poll to the generation returned by `learn-key`, resolves only that
+   hit's device path through the current board inventory, and applies the
+   result through the reversible stage writer. Because the daemon owns the
+   prepared panel tap, this also works for an already WinUSB-claimed board;
+   opening a second Raw Input observer in the Studio process would not. The
+   honest remaining runtime limit is unchanged: learning refuses while a live
+   session holds the keyboards, and Studio reports that refusal instead of
+   guessing.
 
 ## §10 "Default device" needs no new concept
 

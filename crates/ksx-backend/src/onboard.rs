@@ -248,6 +248,7 @@ pub fn state() -> Result<SetupView, Refusal> {
         blocking: config.settings.block_keyboards.as_str().to_owned(),
         blocking_options: ksx_api::BlockingOption::roster(),
         socd_options: ksx_api::SocdOption::roster(),
+        persona_options: ksx_api::PersonaOption::roster(),
         config_root: root.dir().display().to_string(),
         config_exists: store.config_source().path.is_file(),
         devices,

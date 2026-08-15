@@ -90,7 +90,13 @@ pub enum Request {
     StagePlay,
     LearnKey,
     LearnPoll,
-    LearnCancel,
+    LearnCancel {
+        /// Cancel only the learner attempt the caller actually opened. Older
+        /// clients omit this and retain the legacy unconditional cancel; new
+        /// Studio flows send it so a stale tab cannot stop a newer listener.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+    },
 }
 
 impl Request {
@@ -117,7 +123,7 @@ impl Request {
             Self::StagePlay => "stage-play",
             Self::LearnKey => "learn-key",
             Self::LearnPoll => "learn-poll",
-            Self::LearnCancel => "learn-cancel",
+            Self::LearnCancel { .. } => "learn-cancel",
         }
     }
 
@@ -681,7 +687,7 @@ impl Response {
             Request::Stage | Request::StageEdit(_) | Request::StageCommit | Request::StagePlay => {
                 Self::Stage(serde_json::from_value(value).map_err(read(verb))?)
             }
-            Request::LearnKey | Request::LearnPoll | Request::LearnCancel => {
+            Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. } => {
                 Self::Learn(serde_json::from_value(value).map_err(read(verb))?)
             }
         })
@@ -727,6 +733,23 @@ macro_rules! refusal_of {
 
 /// `status`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSessionResponse {
+    /// Monotonic session age as measured by the daemon that owns the run.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Number of distinct physical keyboards feeding the running plan.
+    #[serde(default)]
+    pub keyboards: u32,
+    /// Human-safe capture policy/backend summary. Never contains a device path.
+    #[serde(default)]
+    pub capture: String,
+    /// One served, path-free controller row per live slot.
+    #[serde(default)]
+    pub controllers: Vec<String>,
+}
+
+/// `status`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub ok: bool,
     /// `stopped` | `starting` | `running` | `failed` | `quitting`.
@@ -747,6 +770,11 @@ pub struct StatusResponse {
     /// resume puts an unsaved setup back or replaces it.
     #[serde(default)]
     pub origin: Option<String>,
+    /// Details bound to the runner that actually started. `None` from older
+    /// daemons and whenever no session is live; surfaces must not reconstruct
+    /// these from a config file that may have changed after Play began.
+    #[serde(default)]
+    pub active: Option<ActiveSessionResponse>,
     /// The daemon's own one-line self-description — the tray tooltip.
     #[serde(default)]
     pub tooltip: Option<String>,
@@ -1152,7 +1180,17 @@ mod tests {
         assert_eq!(Request::Quit.to_line(), r#"{"verb":"quit"}"#);
         assert_eq!(Request::LearnKey.to_line(), r#"{"verb":"learn-key"}"#);
         assert_eq!(Request::LearnPoll.to_line(), r#"{"verb":"learn-poll"}"#);
-        assert_eq!(Request::LearnCancel.to_line(), r#"{"verb":"learn-cancel"}"#);
+        assert_eq!(
+            Request::LearnCancel { generation: None }.to_line(),
+            r#"{"verb":"learn-cancel"}"#
+        );
+        assert_eq!(
+            Request::LearnCancel {
+                generation: Some(7)
+            }
+            .to_line(),
+            r#"{"verb":"learn-cancel","generation":7}"#
+        );
         assert_eq!(
             Request::Start { profile: None }.to_line(),
             r#"{"verb":"start"}"#

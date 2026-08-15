@@ -149,6 +149,70 @@ jobs:
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
 
+  # Browser validation is deliberately isolated from the asset and Rust gate.
+  # It downloads Chromium and runs the Studio fixture, so keep that work on a
+  # stable GitHub-hosted Windows image instead of the unreliable development CPU.
+  studio-browser:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: studio-browser
+      - uses: actions/setup-node@v4
+        with:
+          # Match the Forma authoring gate's declared Node floor.
+          node-version: '20.19.0'
+          cache: npm
+          cache-dependency-path: |
+            studio-ui/package-lock.json
+            studio-ui/pwtest/package-lock.json
+      - name: Verify the browser checkout serves current Forma assets
+        working-directory: studio-ui
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Studio registry install failed' }
+          node build.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Studio asset build failed' }
+          git -C .. diff --exit-code -- crates/ksx-studio/assets
+          if ($LASTEXITCODE -ne 0) {
+            throw 'browser checkout assets differ from the current Studio source'
+          }
+          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets
+          if ($untracked) {
+            throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+          }
+      - name: Install browser-test dependencies
+        working-directory: studio-ui/pwtest
+        run: npm ci
+      - name: Install pinned Playwright Chromium
+        working-directory: studio-ui/pwtest
+        # `npm exec` resolves the Playwright version pinned by package-lock.json.
+        run: npm exec -- playwright install chromium
+      - name: Run Studio browser validation
+        working-directory: studio-ui/pwtest
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}\ksx-studio-browser-target
+          # Keep parity fixtures clear of the macro fixture's port even if a
+          # prior Windows process takes a moment to release its listening socket.
+          KSX_PWTEST_PARITY_PORT: '4488'
+          KSX_PWTEST_VISUAL_PORT: '4500'
+          KSX_PWTEST_SCREENSHOT_DIR: ${{ runner.temp }}\ksx-studio-browser-screenshots
+        run: npm test
+      - name: Upload Studio browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-browser-screenshots
+          path: ${{ runner.temp }}\ksx-studio-browser-screenshots
+          # Dependency or browser-install failures can precede the first capture.
+          if-no-files-found: warn
+          retention-days: 30
+
   # Keep the HIDMaestro contract work off the unreliable development CPU too.
   # GitHub's Windows runner is an administrator with UAC disabled, so it must
   # never load or initialize the external SDK assembly. The probe hashes one
@@ -1333,7 +1397,7 @@ jobs:
   # walk through the Actions tab. `release.yml` is what turns the same two files
   # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
-    needs: [test, hidmaestro-contracts, hidmaestro-artifact-observation]
+    needs: [test, studio-browser, hidmaestro-contracts, hidmaestro-artifact-observation]
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

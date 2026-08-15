@@ -42,6 +42,11 @@ impl StatusSource for FixedStatus {
         StatusSnapshot {
             generated_at: "test".into(),
             vigem: "installed".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed".into(),
             daemon_running: true,
             daemon_detail: "test".into(),
@@ -157,6 +162,11 @@ struct ScriptedControl {
     played: AtomicBool,
     committed: AtomicBool,
     learning: AtomicBool,
+    learn_generation: AtomicUsize,
+    /// Optional one-shot daemon learner hit. Ordinary mapper fixtures leave
+    /// this empty and continue reporting `listening`; the Identify route test
+    /// supplies the exact interface path a real daemon panel tap returns.
+    identify_hit: Mutex<Option<String>>,
     bound_with: std::sync::Mutex<Option<BindRequest>>,
     restored_with: std::sync::Mutex<Option<(String, String)>>,
     cleared: std::sync::Mutex<Option<String>>,
@@ -175,6 +185,8 @@ impl ScriptedControl {
             played: AtomicBool::new(false),
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
+            learn_generation: AtomicUsize::new(0),
+            identify_hit: Mutex::new(None),
             bound_with: std::sync::Mutex::new(None),
             restored_with: std::sync::Mutex::new(None),
             cleared: std::sync::Mutex::new(None),
@@ -189,6 +201,11 @@ impl ScriptedControl {
             no_daemon: true,
             ..Self::new(true)
         }
+    }
+
+    fn with_identify_hit(self, device: impl Into<String>) -> Self {
+        *self.identify_hit.lock().unwrap() = Some(device.into());
+        self
     }
 }
 
@@ -275,6 +292,7 @@ impl ControlSource for ScriptedControl {
                 line: "running — 4 pad(s)".into(),
                 profile: Some("Example Game".into()),
                 origin: ksx_api::SessionOrigin::Config,
+                active: None,
             }
         } else {
             SessionView {
@@ -283,6 +301,7 @@ impl ControlSource for ScriptedControl {
                 line: "idle".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             }
         }
     }
@@ -324,9 +343,11 @@ impl ControlSource for ScriptedControl {
 
     fn learn_start(&self) -> LearnView {
         self.learning.store(true, Ordering::SeqCst);
+        let generation = self.learn_generation.fetch_add(1, Ordering::SeqCst) + 1;
         LearnView {
             ok: true,
             state: "listening".into(),
+            generation: Some(generation as u64),
             remaining_ms: Some(10_000),
             device: None,
             key: None,
@@ -336,9 +357,22 @@ impl ControlSource for ScriptedControl {
 
     fn learn_poll(&self) -> LearnView {
         if self.learning.load(Ordering::SeqCst) {
+            if let Some(device) = self.identify_hit.lock().unwrap().take() {
+                self.learning.store(false, Ordering::SeqCst);
+                return LearnView {
+                    ok: true,
+                    state: "hit".into(),
+                    generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
+                    remaining_ms: None,
+                    device: Some(device),
+                    key: Some("A".into()),
+                    error: None,
+                };
+            }
             LearnView {
                 ok: true,
                 state: "listening".into(),
+                generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
                 remaining_ms: Some(9_000),
                 device: None,
                 key: None,
@@ -348,6 +382,7 @@ impl ControlSource for ScriptedControl {
             LearnView {
                 ok: true,
                 state: "idle".into(),
+                generation: None,
                 remaining_ms: None,
                 device: None,
                 key: None,
@@ -361,11 +396,20 @@ impl ControlSource for ScriptedControl {
         LearnView {
             ok: true,
             state: "cancelled".into(),
+            generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
             remaining_ms: None,
             device: None,
             key: None,
             error: None,
         }
+    }
+
+    fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+        let current = self.learn_generation.load(Ordering::SeqCst) as u64;
+        if generation.is_some_and(|generation| generation != current) {
+            return self.learn_poll();
+        }
+        self.learn_cancel()
     }
 
     // ── The staged setup, the way the daemon holds it ────────────────────
@@ -555,6 +599,10 @@ impl ControlSource for ScriptedControl {
 struct ScriptedMachine {
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
+    /// Raw daemon learner identities presented for safe inventory resolution.
+    /// They never cross the HTTP response; this proves the route did not ask
+    /// the machine provider to open a competing observer.
+    identified_from: Mutex<Vec<String>>,
     /// Refuse the read — the "this surface cannot enumerate devices" path.
     refuse: bool,
     /// The scan ANSWERS but the USB enumeration inside it failed: empty lists
@@ -587,6 +635,10 @@ struct ScriptedMachine {
     prepare_instance: Mutex<Option<String>>,
     release_state: Mutex<Option<String>>,
     release_instance: Mutex<Option<String>>,
+    /// 0 = every required probe passes; 1 = each required backend is known
+    /// missing; 2 = the required probes refuse. The stage still decides which
+    /// rows exist, so this cannot accidentally make ViGEmBus universal again.
+    output_mode: AtomicUsize,
 }
 
 impl Default for ScriptedMachine {
@@ -594,6 +646,7 @@ impl Default for ScriptedMachine {
         Self {
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
+            identified_from: Mutex::new(Vec::new()),
             refuse: false,
             blind: false,
             created_profile: Mutex::new(None),
@@ -611,8 +664,10 @@ impl Default for ScriptedMachine {
             prepare_instance: Mutex::new(None),
             release_state: Mutex::new(None),
             release_instance: Mutex::new(None),
+            output_mode: AtomicUsize::new(0),
         }
     }
+
 }
 
 const IPAC_KB: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
@@ -732,6 +787,47 @@ impl ScriptedMachine {
 }
 
 impl ksx_api::MachineSource for ScriptedMachine {
+    fn controller_outputs(
+        &self,
+        staged: &ksx_api::StagedSetupView,
+    ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+        let mode = self.output_mode.load(Ordering::SeqCst);
+        let rows = ksx_api::ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .map(|requirement| {
+                if mode == 2 {
+                    return ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        "the scripted machine refused the output read",
+                    );
+                }
+                let backend = requirement.backend.clone();
+                match backend.as_str() {
+                    "vigem" => ksx_api::ControllerOutputView::vigem(
+                        requirement,
+                        if mode == 1 {
+                            ksx_api::vigem_output_codes::MISSING
+                        } else {
+                            ksx_api::vigem_output_codes::HEALTHY
+                        },
+                        (mode == 0).then(|| "1.22.0.0".to_owned()),
+                    ),
+                    "hidmaestro" => ksx_api::ControllerOutputView::hidmaestro(
+                        requirement,
+                        mode == 0,
+                        false,
+                        (mode == 0).then(|| "1.6.1".to_owned()),
+                    ),
+                    other => ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        format!("no scripted probe for {other}"),
+                    ),
+                }
+            })
+            .collect();
+        Ok(ksx_api::ControllerOutputsView::from_required(rows))
+    }
+
     fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
         if self.refuse {
             return Err(Refusal::not_here("listing devices", "run `ksx devices`"));
@@ -848,6 +944,27 @@ impl ksx_api::MachineSource for ScriptedMachine {
             }],
             Vec::new(),
         ))
+    }
+
+    fn device_identify(
+        &self,
+        observed_instance: &str,
+    ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+        self.identified_from
+            .lock()
+            .unwrap()
+            .push(observed_instance.to_owned());
+        if !observed_instance.eq_ignore_ascii_case(IPAC_KB) {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the observed interface did not match the scripted board",
+            ));
+        }
+        Ok(ksx_api::DeviceIdentifyView {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "panel".to_owned(),
+            label: "Ultimarc I-PAC 4X".to_owned(),
+        })
     }
 
     fn device_pick(
@@ -1593,6 +1710,9 @@ fn start_server_with_sources(
         fn learn_cancel(&self) -> LearnView {
             self.0.learn_cancel()
         }
+        fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+            self.0.learn_cancel_generation(generation)
+        }
         fn bind(&self, request: &BindRequest) -> BindOutcome {
             self.0.bind(request)
         }
@@ -1623,8 +1743,20 @@ fn start_server_with_sources(
     }
     struct SharedMachine(Arc<dyn ksx_api::MachineSource>);
     impl ksx_api::MachineSource for SharedMachine {
+        fn controller_outputs(
+            &self,
+            staged: &ksx_api::StagedSetupView,
+        ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+            self.0.controller_outputs(staged)
+        }
         fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
             self.0.device_scan()
+        }
+        fn device_identify(
+            &self,
+            observed_instance: &str,
+        ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+            self.0.device_identify(observed_instance)
         }
         fn device_pick(
             &self,
@@ -1998,7 +2130,27 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     let polled = get(addr, "/api/learn");
     let learn: serde_json::Value = serde_json::from_str(body_of(&polled)).expect("json");
     assert_eq!(learn["state"], "listening");
-    let cancelled = post_json(addr, "/api/learn/cancel", "");
+    // Browser cancellation is generation-qualified. A cached pre-generation
+    // tab cannot issue an empty cancel that stops the listener a fresh tab now
+    // owns.
+    let unqualified = post_json(addr, "/api/learn/cancel", r#"{}"#);
+    assert!(
+        !unqualified.starts_with("HTTP/1.1 200"),
+        "{unqualified}"
+    );
+    let still_listening: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).expect("json");
+    assert_eq!(still_listening["state"], "listening");
+    assert_eq!(still_listening["generation"], learn["generation"]);
+    let stale = post_json(addr, "/api/learn/cancel", r#"{"generation":0}"#);
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).expect("json");
+    assert_eq!(stale["state"], "listening");
+    assert_eq!(stale["generation"], learn["generation"]);
+    let cancelled = post_json(
+        addr,
+        "/api/learn/cancel",
+        &format!(r#"{{"generation":{}}}"#, learn["generation"]),
+    );
     let learn: serde_json::Value = serde_json::from_str(body_of(&cancelled)).expect("json");
     assert_eq!(learn["state"], "cancelled");
 
@@ -4115,6 +4267,34 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
         serde_json::json!(true)
     );
     assert_eq!(payload["setup"]["view"]["steps"][2]["state"], "now");
+    assert_eq!(
+        payload["setup"]["view"]["persona_options"]
+            .as_array()
+            .expect("served persona roster")
+            .len(),
+        ksx_core::Persona::ALL.len(),
+        "the API keeps the complete capability roster"
+    );
+    let dualsense = payload["setup"]["view"]["persona_options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "dualsense")
+        .expect("the canonical DualSense option");
+    assert_eq!(dualsense["backend"], "hidmaestro");
+    assert_eq!(dualsense["backend_label"], "HIDMaestro");
+    assert_eq!(dualsense["instance_limit"], 1);
+    assert_eq!(dualsense["available"], true);
+    assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
+    assert_eq!(
+        payload["rows"]["persona_options"],
+        serde_json::json!([
+            {"value": "xbox360", "label": "Xbox 360 · ViGEmBus"},
+            {"value": "playstation", "label": "PlayStation · ViGEmBus"},
+            {"value": "dualsense", "label": "DualSense · HIDMaestro · one per session"}
+        ]),
+        "the form rows contain every live persona and no gated one"
+    );
     assert_eq!(payload["learn"]["state"], "idle");
     // A poll is not an action.
     assert_eq!(payload["flash"], serde_json::json!(null));
@@ -4298,6 +4478,16 @@ fn wiring_a_slot_goes_through_assign_slot_and_prints_the_daemons_own_sentence() 
         "the flash claimed a pad bounce against an idle daemon: {idle}"
     );
 
+    // Persona is the canonical value the served menu posts. The existing
+    // assign-slot verb parses it; the page owns no alias table.
+    let dualsense = post_form(
+        addr,
+        "/setup/slot",
+        "slot=2&preset=Panel+P1&persona=dualsense&profile=",
+    );
+    assert!(dualsense.starts_with("HTTP/1.1 303"), "{dualsense}");
+    assert!(dualsense.contains("DualSense"), "{dualsense}");
+
     // A running session: the bounce is named once, by the daemon, and not
     // again by this page.
     let started = post_form(addr, "/session/start", "profile=");
@@ -4413,7 +4603,15 @@ fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
     assert!(page.contains("press any button on the panel"), "{page}");
     assert!(page.contains(r#"action="/setup/prove/cancel""#), "{page}");
 
-    let stopped = post_form(addr, "/setup/prove/cancel", "");
+    // A cached form without the generation is refused without cancelling the
+    // listener a newer page owns.
+    let stale = post_form(addr, "/setup/prove/cancel", "");
+    assert!(stale.starts_with("HTTP/1.1 303"), "{stale}");
+    assert!(stale.contains("stale"), "{stale}");
+    let page = body_of(&get(addr, "/setup")).to_owned();
+    assert!(page.contains("press any button on the panel"), "{page}");
+
+    let stopped = post_form(addr, "/setup/prove/cancel", "generation=1");
     assert!(stopped.starts_with("HTTP/1.1 303"), "{stopped}");
 }
 
@@ -5681,6 +5879,118 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     assert!(control.played.load(Ordering::SeqCst), "{response}");
 }
 
+/// The API carries the full build roster and a narrower picker at the same
+/// time. Once the one-host DualSense is staged, a second one is absent from
+/// the real `/start` form and a handcrafted POST still cannot bypass the
+/// domain limit.
+#[test]
+fn start_stops_offering_a_second_dualsense_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    let first = post_form(
+        addr,
+        "/start/controller",
+        "persona=dualsense&preset=Player+1&layout=keyboard-2p",
+    );
+    assert!(!first.contains("flash=error"), "{first}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    let dualsense = payload["staged"]["personas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "dualsense")
+        .expect("the full roster keeps DualSense");
+    assert_eq!(dualsense["can_plug"], true);
+    assert_eq!(dualsense["backend"], "hidmaestro");
+    assert_eq!(dualsense["instance_limit"], 1);
+    assert_eq!(dualsense["available"], false);
+    assert!(dualsense["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("already has its one DualSense")));
+    assert!(
+        !payload["rows"]["personas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["value"] == "dualsense"),
+        "the rendered option rows offered a second DualSense: {payload}"
+    );
+    assert!(payload["rows"]["personas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|option| option["value"] == "playstation"));
+
+    let page = rendered_body(&get(addr, "/start"));
+    assert!(
+        !page.contains(r#"<option value="dualsense""#),
+        "the HTML form offered a second DualSense: {page}"
+    );
+
+    let second = post_form(
+        addr,
+        "/start/controller",
+        "persona=dualsense&preset=Player+2&layout=keyboard-2p",
+    );
+    assert!(second.contains("flash=error"), "{second}");
+    assert_eq!(
+        control.staged().slots.len(),
+        1,
+        "a handcrafted POST bypassed the one-DualSense limit"
+    );
+}
+
+/// Saving writes no controller and therefore remains available when a required
+/// output is missing or unreadable. Play has the stricter gate, repeated in
+/// the handler so a hand-authored POST cannot bypass the page.
+#[test]
+fn controller_output_readiness_blocks_play_without_blocking_save() {
+    for (mode, expected_state) in [(1, "blocked"), (2, "unknown")] {
+        let control = Arc::new(ScriptedControl::new(false));
+        let machine = Arc::new(ScriptedMachine::default());
+        machine.output_mode.store(mode, Ordering::SeqCst);
+        let addr = start_server_with_machine(Arc::clone(&control), machine);
+
+        post_form(
+            addr,
+            "/start/device",
+            "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+        );
+        let prepared = prepare_ipac(addr);
+        assert!(!prepared.contains("flash=error"), "{prepared}");
+        post_form(
+            addr,
+            "/start/controller",
+            "persona=xbox360&preset=Player+1&layout=arcade-6button",
+        );
+        post_form(addr, "/start/blocking", "blocking=bound-keys");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        assert_eq!(payload["controller_outputs"]["state"], expected_state);
+        assert_eq!(payload["flags"]["can_save"], true);
+        assert_eq!(payload["flags"]["can_play"], false);
+        assert_eq!(payload["flags"]["cannot_save"], false);
+        assert_eq!(payload["flags"]["cannot_play"], true);
+
+        let save = post_form(addr, "/start/save", "");
+        assert!(!save.contains("flash=error"), "{save}");
+        assert!(control.committed.load(Ordering::SeqCst), "{save}");
+
+        let play = post_form(addr, "/start/play", "");
+        assert!(play.contains("flash=error"), "{play}");
+        assert!(play.contains("ready%20to%20save"), "{play}");
+        assert!(!control.played.load(Ordering::SeqCst), "{play}");
+    }
+}
+
 /// **A controller with no layout is staged, refused by name, and fixable
 /// without leaving the page.**
 ///
@@ -5753,6 +6063,7 @@ fn the_start_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
     for path in [
         "/start/device",
+        "/start/device/identify",
         "/start/capture/prepare",
         "/start/capture/release",
         "/start/controller",
@@ -5777,4 +6088,36 @@ fn the_start_routes_are_behind_the_guard() {
             "{path} accepted a cross-origin POST: {response}"
         );
     }
+}
+
+/// The browser's Identify action starts the daemon-owned learner, passes that
+/// exact generation's observed interface to the machine inventory resolver,
+/// and lets the ordinary stage writer own the reversible selection. It must
+/// not require a path from the browser, open a competing local observer, or
+/// mutate capture/output state.
+#[test]
+fn start_identify_selects_the_machine_providers_exact_board() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let page = get(addr, "/start");
+    assert!(page.contains(r#"action="/start/device/identify""#), "{page}");
+    assert!(page.contains("Identify by pressing a key"), "{page}");
+
+    let response = post_form(addr, "/start/device/identify", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Keyboard%20identified"), "{response}");
+
+    let staged = control.staged();
+    let selected = staged.device.expect("the identified keyboard is staged");
+    assert_eq!(selected.label, "Ultimarc I-PAC 4X");
+    assert_eq!(selected.alias, "panel");
+    assert_eq!(selected.selector, "usb:d209:0430:00");
+    assert!(staged.slots.is_empty(), "identify must not create a controller");
+    assert_eq!(
+        *machine.identified_from.lock().unwrap(),
+        vec![IPAC_KB.to_owned()],
+        "the machine resolver must receive the daemon learner's exact identity"
+    );
 }

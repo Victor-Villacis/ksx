@@ -370,6 +370,15 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         .into_iter()
         .map(|(title, detail)| serde_json::json!({ "title": title, "detail": detail }))
         .collect();
+    let active = snap.active.as_ref().map(|active| {
+        serde_json::json!({
+            "elapsed_ms": u64::try_from(active.started.elapsed().as_millis())
+                .unwrap_or(u64::MAX),
+            "keyboards": active.facts.keyboards,
+            "capture": &active.facts.capture,
+            "controllers": &active.facts.controllers,
+        })
+    });
     serde_json::json!({
         "ok": true,
         "run": run_word(&snap.run),
@@ -381,6 +390,7 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         // indistinguishable from outside — and `resume` is the verb that acts
         // on it.
         "origin": snap.origin.as_str(),
+        "active": active,
         "tooltip": snap.tooltip(),
         "profiles": rows,
         "last": snap.last.as_ref().map(|l| serde_json::json!({
@@ -625,7 +635,21 @@ fn handle_request_with_shutdown(
             deps.learn.start()
         }
         "learn-poll" => deps.learn.poll(),
-        "learn-cancel" => deps.learn.cancel(),
+        "learn-cancel" => {
+            let generation = match request.get("generation") {
+                None => None,
+                Some(value) => match value.as_u64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return err_code(
+                            "bad-request",
+                            "learn-cancel generation must be an unsigned integer",
+                        )
+                    }
+                },
+            };
+            deps.learn.cancel(generation)
+        }
         other => err_msg(format!(
             "unknown verb '{other}' (status | start | stop | reload | quit | map | map-macro | \
              map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | \
@@ -2455,7 +2479,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             Request::Stage,
             Request::LearnKey,
             Request::LearnPoll,
-            Request::LearnCancel,
+            Request::LearnCancel { generation: None },
             // The pure dispatcher has no process-owned rendezvous and must
             // refuse rather than pretending an in-process call closed a pipe.
             Request::Quit,
@@ -2506,7 +2530,9 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                         Response::Stage(_)
                     )
                     | (
-                        Request::LearnKey | Request::LearnPoll | Request::LearnCancel,
+                        Request::LearnKey
+                            | Request::LearnPoll
+                            | Request::LearnCancel { .. },
                         Response::Learn(_)
                     )
             );
@@ -2749,7 +2775,21 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
     #[test]
     fn status_reports_state_game_and_profiles() {
         let state = shared(RunState::Running { slots: 4 });
-        state.lock().unwrap().game = Some("Example Game".into());
+        {
+            let mut snapshot = state.lock().unwrap();
+            snapshot.game = Some("Example Game".into());
+            snapshot.active = Some(super::super::ActiveSession {
+                started: Instant::now() - Duration::from_secs(2),
+                facts: super::super::ActiveSessionFacts {
+                    keyboards: 2,
+                    capture: "mapped keys captured · WinUSB + Interception".into(),
+                    controllers: vec![
+                        "P1 Xbox 360 (ViGEmBus)".into(),
+                        "P2 DualSense (HIDMaestro)".into(),
+                    ],
+                },
+            });
+        }
         let (tx, _rx) = unbounded();
         let v = handle_request(
             r#"{"verb":"status"}"#,
@@ -2761,6 +2801,9 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["slots"], 4);
         assert_eq!(v["game"], "Example Game");
         assert_eq!(v["profiles"][1]["title"], "Metal Slug");
+        assert!(v["active"]["elapsed_ms"].as_u64().unwrap() >= 2_000);
+        assert_eq!(v["active"]["keyboards"], 2);
+        assert_eq!(v["active"]["controllers"][1], "P2 DualSense (HIDMaestro)");
         assert!(v["tooltip"].as_str().unwrap().contains("running, 4 pad(s)"));
     }
 

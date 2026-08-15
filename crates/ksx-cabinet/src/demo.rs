@@ -34,6 +34,11 @@ impl StatusSource for DemoStatus {
         StatusSnapshot {
             generated_at: "2026-08-06 18:40:11 UTC".into(),
             vigem: "installed — service running — driver v1.22.0".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "not installed — every bound board is WinUSB-claimed".into(),
             daemon_running: true,
             daemon_detail: "ksx.exe alive (pid 4242) — claim held since 09:12".into(),
@@ -100,6 +105,7 @@ impl ControlSource for DemoControl {
             line: format!("running — {DEMO_PROFILE} — 4 pad(s)"),
             profile: Some(DEMO_PROFILE.into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         }
     }
 

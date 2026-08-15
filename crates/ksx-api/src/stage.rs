@@ -17,7 +17,8 @@
 //! # Every number here is SERVED, never known by the surface
 //!
 //! [`StagedSetupView`] carries `max_slots`, `max_xinput_slots`, `xinput_used`
-//! and the whole persona roster with a `can_plug` flag on each. `docs/CLAUDE.md`
+//! and the whole persona roster with build capability, immutable output route,
+//! persona ceiling and current-stage availability on each. `docs/CLAUDE.md`
 //! and `SURFACES.md` §1 make that a rule rather than a courtesy: a `16` typed
 //! into TypeScript is the specific bug the rule exists for, and the day
 //! the production HIDMaestro host lands and the roster changes underneath
@@ -133,6 +134,21 @@ pub struct PersonaOption {
     pub name: String,
     pub label: String,
     pub is_xinput: bool,
+    /// Canonical [`ksx_core::PadBackend`] name (`vigem` | `hidmaestro`).
+    ///
+    /// This is routing truth, not a setting: a surface may explain which
+    /// output package a persona needs, but must never let the user pair a
+    /// persona with a different backend.
+    #[serde(default)]
+    pub backend: String,
+    /// Human label for [`Self::backend`]. Kept beside the canonical value so a
+    /// surface does not grow a second `vigem` -> `ViGEmBus` lookup table.
+    #[serde(default)]
+    pub backend_label: String,
+    /// Maximum number of this exact persona one session may contain. `None`
+    /// means only the normal setup and XInput ceilings apply.
+    #[serde(default)]
+    pub instance_limit: Option<usize>,
     /// Can THIS BUILD create it? A fact about the binary, never a driver probe.
     pub can_plug: bool,
     /// What is missing, when it cannot — `Persona::gap()`'s own sentence, so
@@ -141,6 +157,16 @@ pub struct PersonaOption {
     /// The nearest persona this build CAN plug, so an option that is greyed out
     /// still points somewhere.
     pub instead: String,
+    /// Can an Add-controller action choose this persona in THIS staged setup?
+    ///
+    /// Older daemons did not serve the field, so absence deliberately means
+    /// true. A refreshed view always supplies the exact answer.
+    #[serde(default = "default_true")]
+    pub available: bool,
+    /// Why [`Self::available`] is false: either the build gap or the staged
+    /// persona/XInput capacity that has already been reached.
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 impl PersonaOption {
@@ -148,16 +174,72 @@ impl PersonaOption {
     pub fn roster() -> Vec<Self> {
         Persona::ALL
             .iter()
-            .map(|&persona| Self {
-                name: persona.as_str().to_owned(),
-                label: persona.label().to_owned(),
-                is_xinput: persona.is_xinput(),
-                can_plug: persona.can_plug(),
-                gap: persona.gap().map(str::to_owned),
-                instead: persona.nearest_pluggable().as_str().to_owned(),
+            .map(|&persona| Self::for_persona(persona))
+            .collect()
+    }
+
+    /// Every persona, with Add-controller availability evaluated against one
+    /// staged setup. `can_plug` stays the build capability; `available` is the
+    /// narrower, stage-specific answer a picker needs right now.
+    pub fn roster_for(setup: &StagedSetup) -> Vec<Self> {
+        let xinput_full = setup.xinput_slots() >= usize::from(MAX_XINPUT_SLOTS);
+        Self::roster()
+            .into_iter()
+            .zip(Persona::ALL.iter().copied())
+            .map(|(mut option, persona)| {
+                if !option.can_plug {
+                    return option;
+                }
+                if let Some(limit) = option.instance_limit {
+                    if setup.persona_slots(persona) >= limit {
+                        option.available = false;
+                        option.unavailable_reason = Some(if limit == 1 {
+                            format!(
+                                "This setup already has its one {} controller. Remove or change it before adding another.",
+                                option.label
+                            )
+                        } else {
+                            format!(
+                                "This setup already has the maximum of {limit} {} controllers. Remove or change one before adding another.",
+                                option.label
+                            )
+                        });
+                        return option;
+                    }
+                }
+                if option.is_xinput && xinput_full {
+                    option.available = false;
+                    option.unavailable_reason = Some(format!(
+                        "All {} Xbox-style controller places are already in use. Remove or change an Xbox-style controller before adding another.",
+                        MAX_XINPUT_SLOTS
+                    ));
+                }
+                option
             })
             .collect()
     }
+
+    fn for_persona(persona: Persona) -> Self {
+        let backend = persona.backend();
+        let gap = persona.gap().map(str::to_owned);
+        Self {
+            name: persona.as_str().to_owned(),
+            label: persona.label().to_owned(),
+            is_xinput: persona.is_xinput(),
+            backend: backend.as_str().to_owned(),
+            backend_label: backend.label().to_owned(),
+            instance_limit: persona.instance_limit(),
+            can_plug: persona.can_plug(),
+            available: persona.can_plug(),
+            unavailable_reason: gap.clone(),
+            gap,
+            instead: persona.nearest_pluggable().as_str().to_owned(),
+        }
+    }
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// One blocking answer, as `FIRST-RUN.md` §3 words it for a user.
@@ -390,7 +472,7 @@ impl StagedSetupView {
             xinput_used: setup.xinput_slots(),
             max_slots: MAX_SLOTS,
             max_xinput_slots: MAX_XINPUT_SLOTS,
-            personas: PersonaOption::roster(),
+            personas: PersonaOption::roster_for(setup),
             layouts: TemplateRow::roster(),
             default_layout: default_layout(),
             blocking_options: BlockingOption::roster(),
@@ -1817,7 +1899,27 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         for option in &view.personas {
             let persona: Persona = option.name.parse().expect("a canonical name");
             assert_eq!(option.can_plug, persona.can_plug(), "{}", option.name);
+            assert_eq!(option.available, persona.can_plug(), "{}", option.name);
+            assert_eq!(option.backend, persona.backend().as_str(), "{}", option.name);
+            assert_eq!(
+                option.backend_label,
+                persona.backend().label(),
+                "{}",
+                option.name
+            );
+            assert_eq!(
+                option.instance_limit,
+                persona.instance_limit(),
+                "{}",
+                option.name
+            );
             assert_eq!(option.gap.is_none(), option.can_plug, "{}", option.name);
+            assert_eq!(
+                option.unavailable_reason.is_none(),
+                option.available,
+                "{}",
+                option.name
+            );
             assert!(
                 view.personas
                     .iter()
@@ -1835,6 +1937,100 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .expect("the roster lists the production DualSense persona");
         assert!(dualsense.can_plug);
         assert_eq!(dualsense.gap, None);
+        assert_eq!(dualsense.backend, "hidmaestro");
+        assert_eq!(dualsense.backend_label, "HIDMaestro");
+        assert_eq!(dualsense.instance_limit, Some(1));
+    }
+
+    /// The roster answers a narrower question once a controller is staged:
+    /// the build can still create DualSense, but this setup cannot add a
+    /// second instance to the one-host HIDMaestro runtime.
+    #[test]
+    fn the_stage_roster_marks_a_persona_at_its_instance_limit_unavailable() {
+        let setup = StagedSetup::new()
+            .add_slot(1, Persona::DualSense, ksx_core::Preset::builtin_empty())
+            .expect("the first DualSense stages");
+        let view = StagedSetupView::of(&setup);
+        let dualsense = view
+            .personas
+            .iter()
+            .find(|option| option.name == "dualsense")
+            .expect("DualSense remains in the served roster");
+        assert!(dualsense.can_plug, "this remains a build capability");
+        assert!(!dualsense.available, "a second instance must not be offered");
+        assert!(
+            dualsense
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("already has its one DualSense")),
+            "{:?}",
+            dualsense.unavailable_reason
+        );
+        assert!(
+            view.personas
+                .iter()
+                .find(|option| option.name == "playstation")
+                .is_some_and(|option| option.available),
+            "the persona-specific limit must not disable unrelated HID personas"
+        );
+    }
+
+    /// The four-place XInput ceiling is also stage-specific picker truth. It
+    /// removes another Xbox choice while leaving the non-XInput lane open.
+    #[test]
+    fn the_stage_roster_marks_xinput_personas_unavailable_at_the_ceiling() {
+        let mut setup = StagedSetup::new();
+        for number in 1..=MAX_XINPUT_SLOTS {
+            setup = setup
+                .add_slot(
+                    number,
+                    Persona::Xbox360,
+                    ksx_core::Preset::builtin_empty(),
+                )
+                .expect("the four legal XInput slots stage");
+        }
+        let view = StagedSetupView::of(&setup);
+        let xbox = view
+            .personas
+            .iter()
+            .find(|option| option.name == "xbox360")
+            .expect("Xbox 360 remains in the served roster");
+        assert!(xbox.can_plug);
+        assert!(!xbox.available);
+        assert!(
+            xbox.unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("All 4 Xbox-style controller places")),
+            "{:?}",
+            xbox.unavailable_reason
+        );
+        assert!(
+            view.personas
+                .iter()
+                .find(|option| option.name == "playstation")
+                .is_some_and(|option| option.available)
+        );
+    }
+
+    /// Older daemon JSON had neither backend/capacity metadata nor the
+    /// stage-specific gate. Missing availability must remain permissive until
+    /// the next poll replaces it with a fully evaluated roster.
+    #[test]
+    fn an_older_persona_option_defaults_to_available() {
+        let option: PersonaOption = serde_json::from_value(serde_json::json!({
+            "name": "xbox360",
+            "label": "Xbox 360",
+            "is_xinput": true,
+            "can_plug": true,
+            "gap": null,
+            "instead": "xbox360"
+        }))
+        .expect("the pre-metadata wire shape remains readable");
+        assert!(option.available);
+        assert_eq!(option.backend, "");
+        assert_eq!(option.backend_label, "");
+        assert_eq!(option.instance_limit, None);
+        assert_eq!(option.unavailable_reason, None);
     }
 
     /// An unreachable daemon renders as an unreachable daemon, with the reason

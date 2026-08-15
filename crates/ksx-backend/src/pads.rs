@@ -1095,8 +1095,11 @@ pub mod surface {
     /// The whole spawn offer, every option already labelled.
     ///
     /// The counts stop at the bus's remaining headroom, so the menu can never
-    /// offer a click [`plan_spawn`] would refuse — the same invariant that
-    /// keeps unimplementable personas out of the persona list.
+    /// offer a click [`plan_spawn`] would refuse. The persona list is narrower
+    /// on purpose: `/pads` observes, prunes and restarts the ViGEm bus, so it
+    /// offers only personas that actually travel through that bus. HIDMaestro
+    /// identities are exercised by guided Setup/Play, where their endpoint
+    /// readiness and persona-specific capacities are part of the same plan.
     pub fn spawn_offer(
         session_running: bool,
         xinput_in_use: Option<u8>,
@@ -1107,7 +1110,7 @@ pub mod surface {
         let offered: Vec<Persona> = Persona::ALL
             .iter()
             .copied()
-            .filter(|p| p.can_plug())
+            .filter(|p| p.can_plug() && p.backend() == ksx_core::PadBackend::Vigem)
             .collect();
         // Whichever personas this build can actually create decide the wording
         // — nothing here spells "xbox360" or "playstation" by hand.
@@ -1135,10 +1138,11 @@ pub mod surface {
                 })
                 .collect(),
             note: format!(
-                "A spawn is a TEST: the pads plug, run the A/B/X/Y + stick pattern so you can \
-                 see them move in joy.cpl, then unplug themselves when the hold expires. \
-                 Nothing is written to config, the longest hold is {MAX_HOLD_SECS}s, and the \
-                 bus is never allowed past {MAX_SLOTS} pads in total."
+                "A spawn here is a ViGEmBus TEST: an Xbox 360 or PlayStation pad plugs, runs the \
+                 A/B/X/Y + stick pattern so you can see it move in joy.cpl, then unplugs when \
+                 the hold expires. DualSense uses HIDMaestro and is tested through guided Setup \
+                 and Play instead. Nothing is written to config, the longest hold is \
+                 {MAX_HOLD_SECS}s, and the bus is never allowed past {MAX_SLOTS} pads in total."
             ),
             refused: if session_running {
                 Some(SpawnPlan::SessionRunning.message())
@@ -1293,7 +1297,7 @@ pub mod surface {
         /// opened — a build limitation must never arrive shaped like a driver
         /// problem (the same ordering `run` keeps).
         #[test]
-        fn an_unimplementable_persona_is_refused_and_not_offered() {
+        fn the_vigem_page_offers_only_implemented_vigem_personas() {
             let plan = plan_spawn(1, Persona::SwitchPro, 30, false, IDLE.0, IDLE.1);
             assert_eq!(plan.code(), Some("persona-not-implemented"));
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
@@ -1305,12 +1309,49 @@ pub mod surface {
                 !offered.iter().any(|v| v == "switchpro"),
                 "a menu must not offer what the plan refuses: {offered:?}"
             );
+            let expected = Persona::ALL
+                .iter()
+                .copied()
+                .filter(|persona| {
+                    persona.can_plug() && persona.backend() == ksx_core::PadBackend::Vigem
+                })
+                .map(|persona| persona.as_str().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(offered, expected);
             assert!(offered.iter().any(|v| v == "xbox360"), "{offered:?}");
-            assert!(offered.iter().any(|v| v == "dualsense"), "{offered:?}");
+            assert!(offered.iter().any(|v| v == "playstation"), "{offered:?}");
+            assert!(
+                !offered.iter().any(|v| v == "dualsense"),
+                "the ViGEm diagnostic must not offer HIDMaestro: {offered:?}"
+            );
+
+            let note = spawn_offer(false, IDLE.0, IDLE.1).note;
+            assert!(note.contains("ViGEmBus TEST"), "{note}");
+            assert!(note.contains("DualSense uses HIDMaestro"), "{note}");
+        }
+
+        /// Every persona/count pair rendered by the form is accepted by the
+        /// same planner. This guards both halves of the truthful-offer rule:
+        /// no hidden backend and no count that only looks valid in the menu.
+        #[test]
+        fn every_vigem_spawn_option_cross_product_is_plannable() {
+            let offer = spawn_offer(false, Some(0), 0);
+            for persona in &offer.personas {
+                let persona: Persona = persona.value.parse().expect("a canonical persona");
+                assert_eq!(persona.backend(), ksx_core::PadBackend::Vigem);
+                for count in &offer.counts {
+                    let count: u8 = count.value.parse().expect("a served count");
+                    assert_eq!(
+                        plan_spawn(count, persona, 30, false, Some(0), 0).code(),
+                        None,
+                        "the form offered {count} x {persona}, but the planner refused it"
+                    );
+                }
+            }
         }
 
         #[test]
-        fn the_dualsense_test_surface_enforces_the_one_host_capacity() {
+        fn the_dualsense_test_plan_enforces_the_one_host_capacity() {
             assert!(matches!(
                 plan_spawn(1, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
                 SpawnPlan::Plug { .. }

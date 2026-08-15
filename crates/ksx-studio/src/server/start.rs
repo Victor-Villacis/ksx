@@ -8,16 +8,19 @@ use super::*;
 // ── /start: the first run (docs/FIRST-RUN.md moments 4–7) ──────────────────
 
 /// One fresh first-run payload: the staged setup, the device enumeration, the
-/// presets on disk and whether a pad can be plugged at all.
+/// presets on disk and whether the currently staged controller personas can
+/// be materialized by their required output backends.
 ///
-/// Four reads with four failure modes, kept apart all the way to the page —
+/// Independent reads with independent failure modes, kept apart all the way to the page —
 /// `SURFACES.md` §1b. A dead daemon must not read as "you have staged
 /// nothing", a refused enumeration must not read as "you have no keyboards",
 /// an unreadable presets folder must not read as "nothing would be replaced",
-/// and a driver check that did not answer must not read as a working bus. Each
+/// and an output check that did not answer must not read as a working backend.
+/// Each
 /// degrades to the honest value its own type provides
 /// (`StagedSetupView::unreachable`, `DeviceScanView::default`, a non-empty
-/// `presets_error`, `PadBusView::unreadable`) and never to `Default::default()`.
+/// `presets_error`, `ControllerOutputsView::unreadable`) and never to a
+/// success-shaped default.
 ///
 /// Never cached, and that is `FIRST-RUN.md` §5's visible-rescan requirement
 /// met by construction: a user who plugs a keyboard in while this page is open
@@ -35,13 +38,16 @@ pub(super) async fn collect_start(state: &Arc<AppState>) -> StartPayload {
             Ok(view) => (view.presets, String::new()),
             Err(refusal) => (Vec::new(), flash_of(refusal)),
         };
-        // A refusal becomes the UNREADABLE view, never the default one — and
-        // `PadBusView`'s default is itself unreadable, so neither path can
-        // paint a healthy bus onto a machine nobody looked at.
-        let pad_bus = start_state
+        // Requirements come from the live stage, so an Xbox/PlayStation setup
+        // probes only ViGEmBus, a DualSense-only setup probes only HIDMaestro,
+        // and an empty stage probes neither. A refusal preserves those
+        // requirements as UNKNOWN rows rather than painting them healthy.
+        let controller_outputs = start_state
             .machine
-            .pad_bus()
-            .unwrap_or_else(|refusal| ksx_api::PadBusView::unreadable(flash_of(refusal)));
+            .controller_outputs(&staged)
+            .unwrap_or_else(|refusal| {
+                ksx_api::ControllerOutputsView::unreadable(&staged, flash_of(refusal))
+            });
         // A refusal leaves the card UNREADABLE rather than "off": a scheduler
         // nobody could ask has not told us the cabinet is unconfigured.
         let (autostart_read, autostart_error) = match start_state.machine.autostart() {
@@ -52,7 +58,7 @@ pub(super) async fn collect_start(state: &Arc<AppState>) -> StartPayload {
             staged,
             scan,
             session,
-            pad_bus,
+            controller_outputs,
             unavailable,
             presets,
             presets_error,
@@ -65,11 +71,15 @@ pub(super) async fn collect_start(state: &Arc<AppState>) -> StartPayload {
     })
     .await
     .unwrap_or_else(|_| {
+        let staged = ksx_api::StagedSetupView::unreachable("the first-run collection panicked");
         StartPayload {
-            staged: ksx_api::StagedSetupView::unreachable("the first-run collection panicked"),
+            controller_outputs: ksx_api::ControllerOutputsView::unreadable(
+                &staged,
+                "the first-run collection panicked",
+            ),
+            staged,
             scan: ksx_api::DeviceScanView::default(),
             session: SessionView::unreachable("the first-run collection panicked"),
-            pad_bus: ksx_api::PadBusView::unreadable("the first-run collection panicked"),
             unavailable: "the device scan panicked — nothing below is a reading of this machine"
                 .to_owned(),
             presets_error: "the preset read panicked".to_owned(),
@@ -201,6 +211,15 @@ pub(super) enum StartAction {
 
 pub(super) const START_EDIT_OK: &str = "Setup updated. Nothing has been saved or started.";
 
+pub(super) const START_IDENTIFY_OK: &str =
+    "Keyboard identified and selected. Nothing has been captured, saved, or started.";
+
+pub(super) const START_IDENTIFY_TIMEOUT: &str =
+    "error: No keyboard answered in time. Nothing changed; try Identify again and press one key.";
+
+pub(super) const START_IDENTIFY_ERROR: &str =
+    "error: That key press could not be matched to one selectable keyboard. Nothing changed; Rescan and try again.";
+
 pub(super) const START_DISCARD_OK: &str = "Setup cleared. Nothing was saved or started.";
 
 pub(super) const START_SAVE_OK: &str = "Setup saved for later. Play has not started.";
@@ -301,8 +320,11 @@ pub(super) const START_AUTOSTART_STILL_STALE: &str =
 pub(super) const START_AUTOSTART_ERROR: &str =
     "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
 
-pub(super) const START_FLASH_ALLOWLIST: [&str; 31] = [
+pub(super) const START_FLASH_ALLOWLIST: [&str; 34] = [
     START_EDIT_OK,
+    START_IDENTIFY_OK,
+    START_IDENTIFY_TIMEOUT,
+    START_IDENTIFY_ERROR,
     START_AUTOSTART_ON,
     START_AUTOSTART_OFF,
     START_AUTOSTART_CONSENT,
@@ -440,6 +462,83 @@ pub(super) async fn start_form_device(
         StartAction::Edit,
     )
     .await
+}
+
+/// POST /start/device/identify — ask the daemon-owned panel tap to listen for
+/// one real key press, resolve that exact generation's device identity against
+/// the current board inventory, then make the same reversible staged choice as
+/// `/start/device`. It never opens a competing capture source, claims a driver,
+/// writes a file, or starts a controller. Raw device identity and provider
+/// errors never cross the presentation boundary.
+pub(super) async fn start_form_identify(State(state): State<Arc<AppState>>) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        let mut learn = state.control.learn_start();
+        let Some(generation) = learn.generation else {
+            return StartIdentifyResult::Failed;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(11);
+        loop {
+            if !learn.ok || learn.generation != Some(generation) {
+                return StartIdentifyResult::Failed;
+            }
+            match learn.state.as_str() {
+                "hit" => {
+                    let Some(observed_instance) = learn
+                        .device
+                        .as_deref()
+                        .filter(|instance| !instance.trim().is_empty())
+                    else {
+                        return StartIdentifyResult::Failed;
+                    };
+                    let identified = match state.machine.device_identify(observed_instance) {
+                        Ok(identified) => identified,
+                        Err(_) => return StartIdentifyResult::Failed,
+                    };
+                    let outcome =
+                        state
+                            .control
+                            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                                selector: identified.selector,
+                                alias: identified.alias,
+                                label: identified.label,
+                            });
+                    return if outcome.ok {
+                        StartIdentifyResult::Selected
+                    } else {
+                        StartIdentifyResult::Failed
+                    };
+                }
+                "listening" => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = state.control.learn_cancel_generation(Some(generation));
+                        return StartIdentifyResult::TimedOut;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    learn = state.control.learn_poll();
+                }
+                "timeout" => return StartIdentifyResult::TimedOut,
+                "idle" | "cancelled" | "failed" | "unavailable" | "unknown" => {
+                    return StartIdentifyResult::Failed;
+                }
+                _ => return StartIdentifyResult::Failed,
+            }
+        }
+    })
+    .await
+    .unwrap_or(StartIdentifyResult::Failed);
+    let flash = match result {
+        StartIdentifyResult::Selected => START_IDENTIFY_OK,
+        StartIdentifyResult::TimedOut => START_IDENTIFY_TIMEOUT,
+        StartIdentifyResult::Failed => START_IDENTIFY_ERROR,
+    };
+    Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartIdentifyResult {
+    Selected,
+    TimedOut,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -909,10 +1008,11 @@ pub(super) async fn start_form_save(State(state): State<Arc<AppState>>) -> Respo
     // The domain validates the staged shape; the Studio seam additionally
     // validates that its selected capture backend is usable on this machine
     // now. A hand-authored POST must not bypass the disabled button.
-    if !collect_start(&state).await.flags.ready {
+    let current = collect_start(&state).await;
+    if !current.flags.can_save {
         return start_redirect(
             StartAction::Save,
-            Err("the selected capture path is not ready".to_owned()),
+            Err(current.lines.save_status),
         );
     }
     let outcome = tokio::task::spawn_blocking(move || {
@@ -938,10 +1038,11 @@ pub(super) async fn start_form_save(State(state): State<Arc<AppState>>) -> Respo
 /// (`ksx-backend`'s `stage::plan`), so a session that starts here means exactly
 /// what the screen showed.
 pub(super) async fn start_form_play(State(state): State<Arc<AppState>>) -> Response {
-    if !collect_start(&state).await.flags.ready {
+    let current = collect_start(&state).await;
+    if !current.flags.can_play {
         return start_redirect(
             StartAction::Play,
-            Err("the selected capture path is not ready".to_owned()),
+            Err(current.lines.play_status),
         );
     }
     let outcome = tokio::task::spawn_blocking(move || {

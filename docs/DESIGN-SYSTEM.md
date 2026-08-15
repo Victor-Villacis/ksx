@@ -4,10 +4,23 @@ The one place that says what a thing should look like. `studio-ui/src/studio.css
 is the implementation; this file is the reasoning. If the two disagree, the CSS
 is the bug.
 
-Two screens use it: **Status** (`/`, StatusIsland.ts) and the **Mapper**
-(`/map`, MapIsland.ts). Both are viewed on a desk monitor *and* on an arcade
-cabinet panel from across a room, in a light and a dark theme, with and without
-JavaScript. Everything below is chosen against those four constraints at once.
+Eight Studio routes use it. The stable product journey is **Keyboard**
+(`/start#keyboard`) → **Controller** (`/start#controller`) → **Mapping**
+(`/map`) → **Play** (`/`). Test inputs, the game library, hardware recovery,
+ViGEm pad diagnostics, and import/recovery stay one deliberate Tools action
+away; they do not compete with the primary path. Every route is viewed on a
+desk monitor *and* on an arcade cabinet panel from across a room, in a light and
+a dark theme, with and without JavaScript. Everything below is chosen against
+those constraints at once.
+
+The numbered rail is orientation, not a locked wizard: an expert can jump to
+any stage, and the staged setup remains the single source of truth. Page heroes
+state an outcome; cards carry one decision; advanced maintenance lives in a
+disclosure or the Tools menu. The Mapping route is the intentional exception to
+the ordinary single-column card stack: on a wide screen the controller remains
+dominant at left and the exact binding inventory is a contextual inspector at
+right. DOM order remains controller then inspector for narrow screens and
+assistive technology.
 
 ---
 
@@ -141,7 +154,7 @@ pass: it *was* a list, and in the rendered output the list was false. `select`
 and `input[type=text|number]` re-declare `min-height: var(--ctl-h)` in §4.4,
 below the list and at equal specificity, so the later rule won and **every
 field on every screen rendered 36 px on a touch panel** — /pads' three spawn
-selects, /profiles' six new-profile fields, /setup's four selects, /devices'
+selects, /profiles' six new-profile fields, /setup's five selects, /devices'
 alias box, all measured with touch emulation against the HTML the server
 actually sends. A custom property set on `:root` is not in the cascade with the
 component rules that read it, so nothing added later can shadow it, and every
@@ -559,12 +572,14 @@ This app is read from six feet away on an arcade panel. What that changes:
 
 The system above is what things look like. This is where they go.
 
-### Status — three tiers, and they look like three tiers
+### Play — three tiers, and they look like three tiers
 
 1. **Primary — Session.** A hero bar: the state at 38 px on the left, the one
    action (Start / Stop + Reload) on the right.
-2. **Secondary — Virtual pads**, then **Profiles** (what starts them).
-3. **Tertiary — System.** Drivers, autostart, daemon process, config root, as
+2. **Secondary — ViGEm pad inventory**, then **Profiles** (what starts any
+   supported controller output). DualSense is not misreported as a ViGEm child.
+3. **Tertiary — System.** ViGEmBus, HIDMaestro package evidence, Interception,
+   autostart, daemon process, and config root, as
    key-value rows on a quiet panel at the *bottom*. Previously these were two
    half-empty cards in the middle of the page, shouting as loudly as the
    session; one of them was 80 % whitespace.

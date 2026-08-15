@@ -10,6 +10,7 @@ import {
   StartIsland,
   applyFlash,
   applyStart,
+  applyStartJourneyLocation,
   applyUnreachable,
   type StartPayload,
 } from "./StartIsland";
@@ -83,6 +84,18 @@ const pendingForms = new WeakSet<HTMLFormElement>();
 async function submitForm(form: HTMLFormElement): Promise<void> {
   if (pendingForms.has(form)) return;
   pendingForms.add(form);
+  const identifying = new URL(form.action).pathname === "/start/device/identify";
+  const identifyButton = form.querySelector<HTMLButtonElement>("[data-identify-submit]");
+  const identifyHelp = document.getElementById("identify-help");
+  const identifyButtonText = identifyButton?.textContent ?? "";
+  const identifyHelpText = identifyHelp?.textContent ?? "";
+  if (identifying) {
+    if (identifyButton) identifyButton.textContent = "Listening… press one key";
+    if (identifyHelp) {
+      identifyHelp.textContent =
+        "Listening for 10 seconds. Press one key on the keyboard you want to use.";
+    }
+  }
   const submits = Array.from(
     form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
       'button[type="submit"], input[type="submit"]',
@@ -115,6 +128,8 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
       // enabled state.
       if (control.isConnected) control.disabled = false;
     });
+    if (identifyButton?.isConnected) identifyButton.textContent = identifyButtonText;
+    if (identifyHelp?.isConnected) identifyHelp.textContent = identifyHelpText;
   }
   void poll();
 }
@@ -149,9 +164,20 @@ activateIslands({
         // The flash arrived via /start?flash=…; clean the URL so a manual
         // reload does not replay stale feedback about a save that happened
         // once.
-        window.history.replaceState(null, "", "/start");
+        const url = new URL(window.location.href);
+        url.searchParams.delete("flash");
+        const search = url.searchParams.toString();
+        window.history.replaceState(
+          null,
+          "",
+          `${url.pathname}${search === "" ? "" : `?${search}`}${url.hash}`,
+        );
       }
     }
+    applyStartJourneyLocation(window.location.hash);
+    window.addEventListener("hashchange", () => {
+      applyStartJourneyLocation(window.location.hash);
+    });
     wireForms(el);
     window.setInterval(() => void poll(), POLL_MS);
     return StartIsland();

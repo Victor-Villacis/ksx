@@ -320,6 +320,24 @@ pub struct ApplyReport {
     pub message: String,
 }
 
+/// Path-free facts captured from the exact [`SessionRunner`] that was moved
+/// into the live thread. Keeping them beside the daemon state means Studio
+/// never describes a running session by re-reading a config that may already
+/// have changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActiveSessionFacts {
+    pub keyboards: u32,
+    pub capture: String,
+    pub controllers: Vec<String>,
+}
+
+/// The live facts plus a monotonic clock owned by the daemon process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveSession {
+    pub started: Instant,
+    pub facts: ActiveSessionFacts,
+}
+
 /// The state the tray polls. Small, cloneable, no borrows of anything live.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DaemonState {
@@ -336,6 +354,9 @@ pub struct DaemonState {
     /// Refreshed by the control loop while a session runs; cleared when it is
     /// reaped, at which point [`Self::last`] is the truth again.
     pub live: Option<LiveHealth>,
+    /// Exact plan facts and age for the session that is running right now.
+    /// Cleared on every non-running transition.
+    pub active: Option<ActiveSession>,
     /// The verdict of the last binding-apply. Never cleared: a caller
     /// identifies its own answer by generation, not by presence.
     pub apply: Option<ApplyReport>,
@@ -496,6 +517,13 @@ pub trait SessionRunner: Send {
     /// Pads the plan will ask for — reported while starting, before any driver
     /// call, so the tooltip is useful during the slow part.
     fn slots(&self) -> usize;
+
+    /// Path-free facts from the plan this runner will actually execute.
+    /// Test and third-party runners may omit them; surfaces then show the
+    /// session controls without inventing active hardware details.
+    fn facts(&self) -> Option<ActiveSessionFacts> {
+        None
+    }
 
     /// Where this session will publish its capture health.
     ///
@@ -1110,12 +1138,13 @@ fn start(
         }
     };
     let slots = runner.slots();
+    let facts = runner.facts();
     // Grabbed before the runner moves onto its own thread; the runner publishes
     // into it as soon as its capture backend is up.
     let health = runner.health_slot();
     let swap = runner.hot_swap_slot();
     let stop = Arc::new(AtomicBool::new(false));
-    let handle = std::thread::Builder::new()
+    let handle = match std::thread::Builder::new()
         .name("ksx-session".into())
         .spawn({
             let stop = stop.clone();
@@ -1127,8 +1156,16 @@ fn start(
                 runner.run(stop, &mut err)
             }
         })
-        .ok()?;
-    set_run(state, RunState::Running { slots });
+    {
+        Ok(handle) => handle,
+        Err(err) => {
+            let message = format!("could not start the session thread: {err}");
+            let _ = writeln!(out, "[FAIL] cannot start: {message}");
+            set_run(state, RunState::Failed { message });
+            return None;
+        }
+    };
+    set_running(state, slots, facts);
     let _ = writeln!(out, "started ({slots} slot(s))");
     Some(LiveSession {
         stop,
@@ -1170,6 +1207,7 @@ fn reap(mut live: LiveSession, state: &SharedState, out: &mut dyn Write) {
                 } else {
                     RunState::Stopped
                 };
+                s.active = None;
             }
         }
         Ok(Err(err)) => {
@@ -1196,6 +1234,17 @@ fn reap(mut live: LiveSession, state: &SharedState, out: &mut dyn Write) {
 fn set_run(state: &SharedState, run: RunState) {
     if let Ok(mut s) = state.lock() {
         s.run = run;
+        s.active = None;
+    }
+}
+
+fn set_running(state: &SharedState, slots: usize, facts: Option<ActiveSessionFacts>) {
+    if let Ok(mut s) = state.lock() {
+        s.run = RunState::Running { slots };
+        s.active = facts.map(|facts| ActiveSession {
+            started: Instant::now(),
+            facts,
+        });
     }
 }
 
@@ -2573,6 +2622,7 @@ mod tests {
                 ..LastSession::default()
             }),
             live: None,
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),
@@ -2591,6 +2641,7 @@ mod tests {
             cabinet_ready: false,
             last: None,
             live: None,
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),
@@ -2619,6 +2670,7 @@ mod tests {
                 reboot_required: true,
                 ..LiveHealth::default()
             }),
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),
@@ -2673,6 +2725,7 @@ mod tests {
                 ..LastSession::default()
             }),
             live: Some(LiveHealth::default()),
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),
@@ -2696,6 +2749,7 @@ mod tests {
                 watchdog_tripped: true,
                 ..LiveHealth::default()
             }),
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),
@@ -2719,6 +2773,7 @@ mod tests {
             }),
             game: None,
             cabinet_ready: true,
+            active: None,
             apply: None,
             staged: Default::default(),
             origin: Default::default(),

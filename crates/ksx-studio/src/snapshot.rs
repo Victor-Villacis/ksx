@@ -1129,6 +1129,11 @@ pub struct SetupRows {
     /// literal in either language.
     pub slot_options: Vec<SetupOptionRowView>,
     pub preset_options: Vec<SetupTextRowView>,
+    /// Controller identities this build can actually create. The full served
+    /// roster remains on [`ksx_api::SetupView::persona_options`] so unavailable
+    /// identities are not erased from the contract; this form intentionally
+    /// omits them rather than offering a write the daemon must refuse.
+    pub persona_options: Vec<SetupOptionRowView>,
     pub profile_options: Vec<SetupTextRowView>,
     pub notes: Vec<SetupTextRowView>,
     /// The split-or-freeze answers, current one marked. Composed here so the
@@ -1192,6 +1197,15 @@ impl SetupRows {
                 .presets
                 .iter()
                 .map(|name| SetupTextRowView { text: name.clone() })
+                .collect(),
+            persona_options: view
+                .persona_options
+                .iter()
+                .filter(|option| option.can_plug)
+                .map(|option| SetupOptionRowView {
+                    value: option.name.clone(),
+                    label: persona_picker_label(option),
+                })
                 .collect(),
             profile_options: view
                 .profiles
@@ -1294,13 +1308,13 @@ impl SetupPayload {
 /// the same one-struct-one-serializer rule as [`StatusPayload`], parity pinned
 /// in `render_start.rs`.
 ///
-/// **Five reads, five failure modes, five fields.** They are kept apart for the
+/// **Independent reads keep independent failure states.** They are kept apart for the
 /// reason `docs/SURFACES.md` §1b gives: a daemon that is down and a machine
 /// with no boards are opposite advice, and collapsing either into an empty
 /// value is how a page ends up saying "you have staged nothing" when the truth
 /// is "nothing answered". [`Self::staged`] carries its own `reachable` +
-/// `error`; [`Self::pad_bus`] carries its own `readable`; the other two carry
-/// theirs beside them.
+/// `error`; [`Self::controller_outputs`] carries per-required-backend read
+/// state; the other reads carry theirs beside them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartPayload {
     /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
@@ -1310,20 +1324,21 @@ pub struct StartPayload {
     /// read `/devices` renders.
     pub scan: ksx_api::DeviceScanView,
     pub session: crate::control::SessionView,
-    /// **Whether a pad can be plugged at all**, from `MachineSource::pad_bus`.
+    /// Output readiness for exactly the supported personas currently staged,
+    /// from `MachineSource::controller_outputs`.
     ///
-    /// The one machine fact this page cannot get from the daemon or from the
-    /// device list, and the one that decides whether moment 7 can happen: with
-    /// no ViGEmBus every step above works perfectly and Play plugs nothing.
+    /// The machine fact this page cannot get from the daemon or device list,
+    /// and the one that decides whether moment 7 can happen: a missing backend
+    /// required by a staged persona leaves every authoring step functional but
+    /// cannot materialize that controller.
     /// Read-only — `docs/SURFACES.md` §3 marks driver installation `never` for
     /// the browser, and this is how a page obeys that rule and still tells the
-    /// truth before the button.
-    ///
-    /// It carries its own `readable`, so a refused read becomes
-    /// `PadBusView::unreadable(...)` rather than a default that would render
-    /// as a healthy bus.
+    /// truth before the button. ViGEmBus is considered only for staged
+    /// Xbox/PlayStation personas; HIDMaestro only for staged DualSense. A
+    /// refused read preserves those requirements as unknown, and an installed
+    /// HIDMaestro package remains `verified-on-play` rather than false green.
     #[serde(default)]
-    pub pad_bus: ksx_api::PadBusView,
+    pub controller_outputs: ksx_api::ControllerOutputsView,
     /// Empty when the scan answered. Otherwise the refusal, verbatim.
     #[serde(default)]
     pub unavailable: String,
@@ -1358,6 +1373,12 @@ pub struct StartPayload {
     /// One-shot action feedback (the `?flash=` query). Always `None` from
     /// `/api/start` — a poll is not an action.
     pub flash: Option<String>,
+    /// Backend-owned progress semantics for the persistent four-stage rail.
+    /// The browser never infers completion or invents blocker reasons from a
+    /// route: these four rows are composed from the same staged/capture/output
+    /// facts that gate Save and Play.
+    #[serde(default)]
+    pub journey: StartJourney,
     /// The page's sentences, composed from the four above. Derived, never
     /// authored — [`StartPayload::composed`] fills it.
     #[serde(default)]
@@ -1382,6 +1403,7 @@ impl StartPayload {
         self.lines = StartLines::of(&self);
         self.flags = StartFlags::of(&self);
         self.rows = StartRows::of(&self);
+        self.journey = StartJourney::of(&self);
         self
     }
 
@@ -1612,8 +1634,17 @@ pub struct StartLines {
     /// Ready to save or play, or a customer-facing next step selected from the
     /// staged facts. Raw domain refusals remain support data.
     pub ready_line: String,
-    /// The driver banner's heading. What the SENTENCES say is
-    /// `ksx_api::PadBusView`'s and arrives composed; what this page decides is
+    /// Save and Play have different prerequisites. Save needs a complete
+    /// staged setup and capture path; controller output is irrelevant because
+    /// saving plugs nothing. Play additionally needs a readable, non-blocked
+    /// output view. These separate lines keep a driver problem from making a
+    /// valid setup look unsaveable.
+    #[serde(default)]
+    pub save_status: String,
+    #[serde(default)]
+    pub play_status: String,
+    /// The output banner's heading. What the SENTENCES say is
+    /// `ksx_api::ControllerOutputsView`'s and arrives composed; what this page decides is
     /// how to introduce it — "cannot" and "could not be checked" are two
     /// different headings and a page that used one for both would be asserting
     /// the machine's state from a read that failed.
@@ -1707,9 +1738,11 @@ impl StartLines {
             },
             preset_line: preset_line(p),
             mapper_line: MAPPER_LINE.to_owned(),
-            bus_heading: bus_heading(&p.pad_bus).to_owned(),
-            bus_cls: bus_cls(&p.pad_bus).to_owned(),
-            ready_line: ready_line(p),
+            bus_heading: bus_heading(&p.controller_outputs).to_owned(),
+            bus_cls: bus_cls(&p.controller_outputs).to_owned(),
+            ready_line: play_status(p),
+            save_status: save_status(p),
+            play_status: play_status(p),
             play_line: PLAY_LINE.to_owned(),
             guide_line: GUIDE_LINE.to_owned(),
             escape_line: ESCAPE_LINE.to_owned(),
@@ -1728,42 +1761,251 @@ impl StartLines {
     }
 }
 
-fn ready_line(payload: &StartPayload) -> String {
+fn setup_prerequisite(payload: &StartPayload) -> Option<String> {
     let staged = &payload.staged;
     if !staged.reachable {
-        return "Setup is temporarily unavailable. Close and reopen ksx; nothing has been \
-                changed."
-            .to_owned();
+        return Some(
+            "Setup is temporarily unavailable. Close and reopen ksx; nothing has been changed."
+                .to_owned(),
+        );
     }
     if staged.device.is_none() {
-        return "Choose a keyboard before saving or playing.".to_owned();
+        return Some("Choose a keyboard before saving or playing.".to_owned());
     }
     if !payload.capture.ready() {
-        return if payload.capture.prepare() {
+        return Some(if payload.capture.prepare() {
             "Prepare the selected keyboard before saving or playing.".to_owned()
         } else {
             "The selected keyboard is not ready for capture. Follow the highlighted keyboard \
              guidance before saving or playing."
                 .to_owned()
-        };
+        });
     }
     if staged.slots.is_empty() {
-        return "Add at least one controller before saving or playing.".to_owned();
+        return Some("Add at least one controller before saving or playing.".to_owned());
     }
     if let Some(slot) = staged.slots.iter().find(|slot| slot.bindings == 0) {
-        return format!(
+        return Some(format!(
             "Player {} has no controls yet. Choose a ready-made layout or open Controls before \
              saving or playing.",
             slot.number
-        );
+        ));
     }
     if staged.blocking.is_none() {
-        return "Choose whether this keyboard should freeze or keep typing before saving or \
-                playing."
-            .to_owned();
+        return Some(
+            "Choose whether this keyboard should freeze or keep typing before saving or playing."
+                .to_owned(),
+        );
     }
     if !staged.ready {
-        return "Finish the highlighted Setup choices before saving or playing.".to_owned();
+        return Some("Finish the highlighted Setup choices before saving or playing.".to_owned());
+    }
+    None
+}
+
+/// One rail destination. `cls` is presentation state only; `badge` is its
+/// glanceable word and `detail` is the full accessible explanation rendered
+/// beside the destination for assistive technology.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartJourneyStep {
+    pub cls: String,
+    pub badge: String,
+    pub detail: String,
+}
+
+/// Truthful progress for the four-stage setup journey.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartJourney {
+    pub keyboard: StartJourneyStep,
+    pub controller: StartJourneyStep,
+    pub mapping: StartJourneyStep,
+    pub play: StartJourneyStep,
+}
+
+impl StartJourneyStep {
+    fn new(base: &str, state: &str, badge: &str, detail: String) -> Self {
+        Self {
+            cls: if state.is_empty() {
+                format!("navlink workflow-link {base}")
+            } else {
+                format!("navlink workflow-link {base} workflow-{state}")
+            },
+            badge: badge.to_owned(),
+            detail,
+        }
+    }
+}
+
+impl StartJourney {
+    fn of(p: &StartPayload) -> Self {
+        let staged = &p.staged;
+        let keyboard_complete = staged.device.is_some();
+        let keyboard = if keyboard_complete {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "complete",
+                "done",
+                "Keyboard complete: one physical keyboard is selected.".to_owned(),
+            )
+        } else if !staged.reachable
+            || !p.scan_read()
+            || (!p.flags.has_boards && !p.flags.has_experimental)
+        {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "blocked",
+                "blocked",
+                format!("Keyboard blocked: {}", p.lines.device_line),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "pending",
+                "next",
+                "Keyboard next: choose the physical keyboard you want to play with.".to_owned(),
+            )
+        };
+
+        let controller_complete = keyboard_complete && !staged.slots.is_empty();
+        let controller = if controller_complete {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "complete",
+                "done",
+                format!(
+                    "Controller complete: {} virtual controller{} staged.",
+                    staged.slots.len(),
+                    if staged.slots.len() == 1 { "" } else { "s" }
+                ),
+            )
+        } else if !keyboard_complete {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "upcoming",
+                "waiting",
+                "Controller waiting: choose a keyboard first.".to_owned(),
+            )
+        } else if p.flags.can_add {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "pending",
+                "next",
+                "Controller next: add at least one virtual controller.".to_owned(),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "blocked",
+                "blocked",
+                format!("Controller blocked: {}", p.lines.controller_line),
+            )
+        };
+
+        let unmapped = staged.slots.iter().find(|slot| slot.bindings == 0);
+        let mapping_complete = staged.ready;
+        let mapping = if mapping_complete {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "complete",
+                "done",
+                "Mapping complete: controls and keyboard behavior are ready.".to_owned(),
+            )
+        } else if !controller_complete {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "upcoming",
+                "waiting",
+                "Mapping waiting: create a controller first.".to_owned(),
+            )
+        } else if p.flags.can_layout || staged.blocking.is_none() {
+            let detail = unmapped.map_or_else(
+                || "Mapping next: choose how the keyboard behaves while playing.".to_owned(),
+                |slot| {
+                    format!(
+                        "Mapping next: Player {} needs at least one mapped control.",
+                        slot.number
+                    )
+                },
+            );
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "pending",
+                "next",
+                detail,
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "blocked",
+                "blocked",
+                format!("Mapping blocked: {}", p.lines.save_status),
+            )
+        };
+
+        let play = if p.session.reachable && p.session.running {
+            StartJourneyStep::new(
+                "workflow-play",
+                "live",
+                "active",
+                "Play active: a gameplay session is starting or running.".to_owned(),
+            )
+        } else if p.flags.can_play {
+            StartJourneyStep::new(
+                "workflow-play",
+                "ready",
+                "ready",
+                "Play ready: this staged setup can start.".to_owned(),
+            )
+        } else if staged.ready {
+            StartJourneyStep::new(
+                "workflow-play",
+                "blocked",
+                "blocked",
+                format!("Play blocked: {}", p.lines.play_status),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-play",
+                "upcoming",
+                "waiting",
+                format!("Play waiting: {}", p.lines.play_status),
+            )
+        };
+
+        Self {
+            keyboard,
+            controller,
+            mapping,
+            play,
+        }
+    }
+}
+
+fn save_status(payload: &StartPayload) -> String {
+    match setup_prerequisite(payload) {
+        Some(problem) => problem,
+        None => "Ready to save. Saving keeps this setup for later and starts nothing.".to_owned(),
+    }
+}
+
+fn play_status(payload: &StartPayload) -> String {
+    if let Some(problem) = setup_prerequisite(payload) {
+        return problem;
+    }
+    if payload.controller_outputs.blocked {
+        return "This setup is ready to save, but Play cannot create every staged controller \
+                until the highlighted controller-output problem is repaired."
+            .to_owned();
+    }
+    if payload.controller_outputs.unknown {
+        return "This setup is ready to save, but controller output could not be checked. Reopen \
+                ksx or use the advanced driver check before Play."
+            .to_owned();
+    }
+    if payload.controller_outputs.verified_on_play {
+        return "Ready. Save keeps this setup for later; Play verifies the DualSense endpoint \
+                while starting it and saves nothing."
+            .to_owned();
     }
     "Ready. Save keeps this setup for later; Play starts it without saving.".to_owned()
 }
@@ -1988,11 +2230,12 @@ const MAPPER_LINE: &str =
 
 /// **What Play does**, stated before the button rather than after it.
 ///
-/// The two halves are the ones a first-run user has no way to predict: a pad
-/// appears on the ViGEm bus (so a game finds a controller that was not there a
-/// second ago) and their keyboard changes behaviour (which, under Freeze, means
-/// it stops typing). Both are reversible and the sentence says how — Stop, or
-/// the escape latch, which is the same one §3's card carries.
+/// The two halves are the ones a first-run user has no way to predict: one pad
+/// appears through each persona's routed output backend (so a game finds a
+/// controller that was not there a second ago) and their keyboard changes
+/// behaviour (which, under Freeze, means it stops typing). Both are reversible
+/// and the sentence says how — Stop, or the escape latch, which is the same one
+/// §3's card carries.
 const PLAY_LINE: &str =
     "Play makes one game controller for each controller above and uses the keyboard you picked \
      to operate them. Stop removes those game controllers and returns the keyboard to normal — \
@@ -2021,7 +2264,7 @@ const GUIDE_LINE: &str =
      controller to open Game Bar” is turned on in Windows Settings > Gaming > Game Bar. ksx does \
      not change that Windows setting.";
 
-/// The driver banner's heading, and the only place this page words the
+/// The output banner's heading, and the only place this page words the
 /// difference between the two reasons it appears.
 ///
 /// A `blocked` bus is a statement about the machine and reads like one. An
@@ -2029,14 +2272,19 @@ const GUIDE_LINE: &str =
 /// — and must never borrow the first heading, because "ksx cannot plug a
 /// controller" is a claim nothing here is entitled to make.
 ///
-/// A healthy bus gets the EMPTY string, not the nearest of the two. The banner
-/// is hidden either way (`StartFlags::bus_warn`), but the payload block is
+/// A fully preflighted requirement set gets the EMPTY string, not the nearest
+/// of the three. The banner is hidden either way (`StartFlags::bus_warn`), but the payload block is
 /// served verbatim to the island and to `/api/start`, so a heading left lying
 /// in it would be a sentence about a machine that is fine, saying it is not.
-fn bus_heading(bus: &ksx_api::PadBusView) -> &'static str {
-    match (bus.blocked, bus.unknown) {
-        (true, _) => "Play cannot plug a controller on this machine yet",
-        (_, true) => "The controller driver could not be checked",
+fn bus_heading(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
+    match (
+        outputs.blocked,
+        outputs.unknown,
+        outputs.verified_on_play,
+    ) {
+        (true, _, _) => "Play cannot plug a controller on this machine yet",
+        (_, true, _) => "The required controller output could not be checked",
+        (_, _, true) => "DualSense is verified when Play starts",
         _ => "",
     }
 }
@@ -2044,17 +2292,22 @@ fn bus_heading(bus: &ksx_api::PadBusView) -> &'static str {
 /// Red for a bus that is known not to work, amber for one nothing is known
 /// about, and nothing at all for a healthy one — same rule as
 /// [`bus_heading`]. Both banners are `.card.alarm`; `.alarm.warn` is the amber
-/// variant (`studio.css` §4.9).
-fn bus_cls(bus: &ksx_api::PadBusView) -> &'static str {
-    match (bus.blocked, bus.unknown) {
-        (true, _) => "card alarm",
-        (_, true) => "card alarm warn",
+/// variant (`studio.css` §4.9). The deferred HIDMaestro check is amber too:
+/// it is neither a false green nor a known failure.
+fn bus_cls(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
+    match (
+        outputs.blocked,
+        outputs.unknown,
+        outputs.verified_on_play,
+    ) {
+        (true, _, _) => "card alarm",
+        (_, true, _) | (_, _, true) => "card alarm warn",
         _ => "",
     }
 }
 
 fn controller_line(staged: &ksx_api::StagedSetupView) -> String {
-    match staged.slots.len() {
+    let base = match staged.slots.len() {
         0 => format!(
             "Pick what the keyboard should become. Nothing is plugged and nothing is written — \
              changing your mind costs a click. Up to {} controllers.",
@@ -2067,6 +2320,38 @@ fn controller_line(staged: &ksx_api::StagedSetupView) -> String {
             "{n} controllers are ready to customize. They are still only on this screen, and \
              Remove leaves no trace."
         ),
+    };
+    let capacity = staged
+        .personas
+        .iter()
+        .filter(|persona| persona.can_plug && !persona.available)
+        .filter_map(|persona| persona.unavailable_reason.as_deref())
+        .collect::<Vec<_>>();
+    if capacity.is_empty() {
+        base
+    } else {
+        format!("{base} {}", capacity.join(" "))
+    }
+}
+
+/// A persona picker says both the public identity and the immutable output
+/// route. A per-session ceiling belongs in the option too: it is useful before
+/// the first pick, while [`ksx_api::PersonaOption::available`] prevents an impossible
+/// later pick from appearing at all.
+fn persona_picker_label(option: &ksx_api::PersonaOption) -> String {
+    let backend = if option.backend_label.trim().is_empty() {
+        option.backend.as_str()
+    } else {
+        option.backend_label.as_str()
+    };
+    match option.instance_limit {
+        Some(1) => format!("{} · {} · one per session", option.label, backend),
+        Some(limit) => format!(
+            "{} · {} · up to {limit} per session",
+            option.label, backend
+        ),
+        None if backend.trim().is_empty() => option.label.clone(),
+        None => format!("{} · {}", option.label, backend),
     }
 }
 
@@ -2121,12 +2406,10 @@ pub struct StartFlags {
     pub scan_down: bool,
     /// The preset read refused.
     pub presets_down: bool,
-    /// **The pad bus needs saying before the Play button.** True when ksx is
-    /// known to be unable to plug a pad, and true when that could not be
-    /// determined — the two look different (`bus_cls`, `bus_heading`) but both
-    /// are things a user is entitled to read before pressing a button that
-    /// depends on them. False only for a bus `ksx doctor` has nothing to say
-    /// about.
+    /// **A required output needs saying before the Play button.** Known
+    /// blockers, unknown reads, and HIDMaestro's Play-time verification are
+    /// distinct states. False only when no backend is required or every
+    /// required backend is fully preflighted.
     pub bus_warn: bool,
     /// A keyboard is staged.
     pub has_device: bool,
@@ -2168,7 +2451,20 @@ pub struct StartFlags {
     pub can_layout: bool,
     /// §3 has been answered.
     pub blocking_answered: bool,
-    /// The setup is complete enough to save or play.
+    /// Save and Play deliberately have different gates. Controller-output
+    /// readiness affects Play only: committing the staged files is safe and
+    /// useful even on a machine whose required driver is missing or unread.
+    #[serde(default)]
+    pub can_save: bool,
+    #[serde(default)]
+    pub can_play: bool,
+    #[serde(default)]
+    pub cannot_save: bool,
+    #[serde(default)]
+    pub cannot_play: bool,
+    /// Compatibility pair for the current island while it migrates to the
+    /// split shows. They mirror Save's gate so a driver problem never hides a
+    /// valid Save action; the server independently guards Play with `can_play`.
     pub ready: bool,
     pub not_ready: bool,
     /// Anything at all is staged, so "Start over" means something.
@@ -2188,6 +2484,8 @@ impl StartFlags {
         let scan_read = p.scan_read();
         let flash = p.flash.as_deref().unwrap_or_default().trim();
         let flash_error = flash.starts_with("error");
+        let can_save = staged.reachable && staged.ready && p.capture.ready();
+        let can_play = can_save && p.controller_outputs.can_play;
         Self {
             pill_running: session.reachable && session.running,
             pill_idle: session.reachable && !session.running,
@@ -2200,7 +2498,7 @@ impl StartFlags {
             // "unknown" is the one state where saying nothing is indefensible,
             // because the page would be resolving the doubt in the machine's
             // favour on the user's behalf.
-            bus_warn: !p.pad_bus.silent(),
+            bus_warn: !p.controller_outputs.silent(),
             has_device: staged.device.is_some(),
             has_prepared: !held_boards(p).is_empty(),
             capture_prepare: p.capture.prepare(),
@@ -2231,13 +2529,20 @@ impl StartFlags {
             can_add: staged.reachable
                 && staged.device.is_some()
                 && staged.next_slot.is_some()
-                && staged.personas.iter().any(|p| p.can_plug),
+                && staged
+                    .personas
+                    .iter()
+                    .any(|p| p.can_plug && p.available),
             slots_full: staged.reachable && staged.device.is_some() && staged.next_slot.is_none(),
             has_gaps: staged.personas.iter().any(|p| !p.can_plug),
             can_layout: staged.reachable && !staged.slots.is_empty() && !staged.layouts.is_empty(),
             blocking_answered: staged.blocking.is_some(),
-            ready: staged.reachable && staged.ready && p.capture.ready(),
-            not_ready: !staged.reachable || !staged.ready || !p.capture.ready(),
+            can_save,
+            can_play,
+            cannot_save: !can_save,
+            cannot_play: !can_play,
+            ready: can_save,
+            not_ready: !can_save,
             can_discard: staged.reachable && !staged.empty,
             session_live: session.reachable && session.running,
             flash_ok: !flash.is_empty() && !flash_error,
@@ -2406,9 +2711,10 @@ pub struct StartRows {
     pub other: Vec<StartOtherRow>,
     pub notes: Vec<StartTextRow>,
     pub slots: Vec<StartSlotRow>,
-    /// The personas this build CAN plug, in `Persona::ALL` order. Nothing here
-    /// is spelled in TypeScript: `docs/SURFACES.md` §10 already settled that
-    /// the roster is served with a `can_plug` flag per entry.
+    /// The personas this build can plug AND this stage can still add, in
+    /// `Persona::ALL` order. Nothing here is spelled in TypeScript:
+    /// `docs/SURFACES.md` §10 already settled that the full roster is served
+    /// with build capability plus stage-specific availability per entry.
     pub personas: Vec<StartOptionRow>,
     /// The ones it cannot, listed rather than hidden — a menu that silently
     /// drops three of eight choices teaches a user the product has five.
@@ -2552,10 +2858,10 @@ impl StartRows {
             personas: staged
                 .personas
                 .iter()
-                .filter(|p| p.can_plug)
+                .filter(|p| p.can_plug && p.available)
                 .map(|p| StartOptionRow {
                     value: p.name.clone(),
-                    label: p.label.clone(),
+                    label: persona_picker_label(p),
                 })
                 .collect(),
             gaps: staged
@@ -3028,6 +3334,7 @@ mod tests {
                 // have been built from. `Unknown` is that, not a guess at
                 // `Config`.
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             ..ProfilesPayload::default()
         };
@@ -3126,6 +3433,7 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             flash: None,
         };
@@ -3243,6 +3551,7 @@ mod tests {
             line: "running — 4 pad(s)".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         }
     }
 
@@ -3250,6 +3559,7 @@ mod tests {
         crate::control::LearnView {
             ok: true,
             state: "idle".into(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -3481,6 +3791,19 @@ mod tests {
             "P1 board · Xbox 360 pad · config.toml"
         );
         assert_eq!(rows.preset_options[0].text, "Panel P1");
+        assert_eq!(
+            rows.persona_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            ["xbox360", "playstation", "dualsense"],
+            "the maintenance menu offers every live persona and no gated one"
+        );
+        assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");
+        assert_eq!(
+            rows.persona_options[2].label,
+            "DualSense · HIDMaestro · one per session"
+        );
         assert_eq!(rows.profile_options[0].text, "Example Game");
         assert_eq!(rows.notes[0].text, "a note");
 

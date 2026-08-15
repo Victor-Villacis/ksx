@@ -793,12 +793,12 @@ mod tests {
             scan: cabinet_scan(),
             // A machine whose receipt store ANSWERED and had nothing to
             // report. Stated rather than defaulted, for the reason the
-            // `pad_bus` fixtures give: the default is the UNREADABLE view, so
+            // other machine-read fixtures give: the default is the UNREADABLE view, so
             // every fixture here would otherwise be rendering the "could not
             // be read" warning and the tests that care about it would prove
             // nothing.
             // A receipt store that ANSWERED and had one thing to report.
-            // Stated rather than defaulted for the reason the `pad_bus`
+            // Stated rather than defaulted for the reason those machine-read
             // fixtures give — the default is the UNREADABLE view, so every
             // fixture would otherwise render the "could not be read" warning
             // and the tests that care about it would prove nothing. One ROW
@@ -836,6 +836,7 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             unavailable: String::new(),
             flash: None,

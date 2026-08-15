@@ -62,6 +62,25 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// Resolve one physical key observation from the daemon learner through
+    /// the same board inventory as [`Self::device_scan`], and return the exact
+    /// served values a subsequent [`Self::device_pick`] would use.
+    ///
+    /// The caller obtains `observed_instance` through the control source's
+    /// daemon-owned learner. That ownership is load-bearing on Windows: a
+    /// prepared panel can already be exclusively claimed by the daemon and a
+    /// second local observer cannot hear it. Resolution itself remains
+    /// observational: it does not suppress the key, capture the keyboard,
+    /// write configuration, or start a session. A surface may use the result
+    /// as the explicit human selection in its ordinary staging flow; the
+    /// stage writer remains the authority for that mutation.
+    fn device_identify(&self, _observed_instance: &str) -> Result<DeviceIdentifyView, Refusal> {
+        Err(Refusal::not_here(
+            "identifying a keyboard by key press",
+            "run `ksx setup`",
+        ))
+    }
+
     /// `ksx device pick` — write the `[[device]]` entry for one board.
     ///
     /// Not a claim, and the distinction is load-bearing
@@ -259,23 +278,25 @@ pub trait MachineSource: Send + Sync {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
     }
 
-    /// **Can a virtual controller be created right now?** — the one slice of
-    /// [`Self::doctor`] a first run has to know before it offers to Play.
+    /// **Can the currently staged controller personas be materialized?**
     ///
-    /// Its own method, and not a field on [`DoctorView`], for two reasons that
-    /// both matter at the poll rate `/start` runs at: the full report walks the
-    /// Interception class filters, probes HIDMaestro, reads the CI policy and
-    /// takes a process snapshot, none of which this question needs; and
-    /// [`DoctorView`] is prose plus advice rows, while a page deciding what to
-    /// say before a button needs something it can branch on.
+    /// This is deliberately persona-aware. Xbox 360 and PlayStation slots
+    /// require ViGEmBus; DualSense requires HIDMaestro; an empty stage requires
+    /// neither. A universal "pad bus" check is wrong in both directions: it
+    /// warns a DualSense-only setup about a bus it never uses and paints a
+    /// green ViGEmBus result over a missing HIDMaestro package.
     ///
-    /// Read-only, exactly like the rest of this trait's reads: it queries the
-    /// registry and the service manager and installs nothing. `SURFACES.md` §3
-    /// keeps installing off the browser surface entirely, and this method is
-    /// what lets a page obey that rule while still telling the truth.
-    fn pad_bus(&self) -> Result<PadBusView, Refusal> {
+    /// The provider probes only the backends named by supported personas in
+    /// `staged`. The returned rows keep a machine prerequisite separate from a
+    /// runtime promise: HIDMaestro's exact package can be proved here, while
+    /// its protected host and controller endpoint are verified only when Play
+    /// starts. Read-only; no driver is installed or controller plugged.
+    fn controller_outputs(
+        &self,
+        _staged: &crate::StagedSetupView,
+    ) -> Result<ControllerOutputsView, Refusal> {
         Err(Refusal::not_here(
-            "the controller-driver state",
+            "the controller-output state",
             "run `ksx doctor`",
         ))
     }
@@ -2044,206 +2065,539 @@ pub struct AdviceRow {
 }
 
 // ---------------------------------------------------------------------------
-// The pad bus, as the one question a first run has to ask about it
+// Controller outputs required by the currently staged personas
 // ---------------------------------------------------------------------------
 
-/// Stable [`PadBusView::code`] values — `ksx doctor`'s own ViGEmBus advice
-/// codes, spelled once so a match arm cannot drift from the producer.
-///
-/// They are `ksx_platform::advice`'s, not a second vocabulary: the whole point
-/// of this view is that `/start` and `ksx doctor` reach the same verdict from
-/// the same function. `HEALTHY` is the one addition, because "doctor said
-/// nothing" needs a name on the wire.
-pub mod pad_bus_codes {
-    /// Doctor has nothing to say: registered, file present, service running.
-    pub const HEALTHY: &str = "";
-    /// No `ViGEmBus` service key at all.
-    pub const MISSING: &str = "vigembus-missing";
-    /// Service key registered, `ViGEmBus.sys` gone — a broken install.
-    pub const FILE_MISSING: &str = "vigembus-file-missing";
-    /// Installed, service not running. Usually a machine that has not rebooted.
-    pub const NOT_RUNNING: &str = "vigembus-not-running";
-    /// Installed, and Windows would not say what the service is doing.
-    pub const STATE_UNKNOWN: &str = "vigembus-state-unknown";
-    /// The read itself failed. **Not** a state of the driver (`SURFACES.md`
-    /// §1b) — a state of our knowledge.
-    pub const UNREADABLE: &str = "vigembus-unreadable";
+/// Stable states for [`ControllerOutputView::state`] and
+/// [`ControllerOutputsView::state`].
+pub mod controller_output_states {
+    /// Every required machine prerequisite was proved before Play.
+    pub const READY: &str = "ready";
+    /// A required prerequisite is known not to work.
+    pub const BLOCKED: &str = "blocked";
+    /// The prerequisite could not be read. This is never treated as missing.
+    pub const UNKNOWN: &str = "unknown";
+    /// The installed prerequisite was proved, but the endpoint can be verified
+    /// only as part of the transactional Play start.
+    pub const VERIFIED_ON_PLAY: &str = "verified-on-play";
 }
 
-/// **Can ksx create a virtual controller on this machine right now?**
+/// The exact board choice produced by a press-to-identify observation.
 ///
-/// One fact, because it is the one fact a first run cannot discover for
-/// itself: every persona ksx can plug goes out through ViGEmBus, so a machine
-/// without that driver stages perfectly, saves perfectly, and then plugs
-/// nothing. `docs/FIRST-RUN.md` §6 forbids exactly that shape — "a screen
-/// reports success while nothing works" — which is why this is stated *before*
-/// the button rather than diagnosed after it.
+/// No raw instance path leaves the trusted provider/handler boundary. The
+/// provider uses that path only to join the daemon observation to
+/// [`DeviceScanView`], then returns the same typed selector, alias and human
+/// label the picker already serves.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentifyView {
+    /// `ksx_core::DeviceSelector` spelling chosen by the backend.
+    pub selector: String,
+    /// Existing configured alias, otherwise the board's safe alias hint.
+    pub alias: String,
+    /// Friendly board name for confirmation copy.
+    pub label: String,
+}
+
+/// Stable ViGEmBus codes shared with `ksx doctor`.
+pub mod vigem_output_codes {
+    pub const HEALTHY: &str = "";
+    pub const MISSING: &str = "vigembus-missing";
+    pub const FILE_MISSING: &str = "vigembus-file-missing";
+    pub const NOT_RUNNING: &str = "vigembus-not-running";
+    pub const STATE_UNKNOWN: &str = "vigembus-state-unknown";
+}
+
+/// The supported staged personas that require one output backend.
 ///
-/// **Three states, not two.** `blocked` and `unknown` are separate fields and
-/// never both set: "the driver is not installed" and "I could not find out" are
-/// different sentences, and a user acts on them differently (`SURFACES.md`
-/// §1b). The default value of this type is the `unknown` one, so a payload
-/// nobody filled in cannot read as a healthy bus.
+/// Canonical persona ids and customer labels are both carried so a surface
+/// never parses or relabels them. Requirements are unique per backend and are
+/// ordered by [`ksx_core::PadBackend::ALL`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerOutputRequirement {
+    pub backend: String,
+    pub label: String,
+    pub personas: Vec<String>,
+    pub persona_labels: Vec<String>,
+}
+
+/// Evidence for one output backend.
 ///
-/// **The verdict is not re-derived here.** [`Self::code`] is a `ksx doctor`
-/// advice code, produced by `ksx_platform::advice::vigembus_advice` — the same
-/// function `ksx doctor` prints from. What this type adds is the *wording* for
-/// somebody who has never opened a terminal, which is the audience `FIRST-RUN`
-/// is written about and not the audience `ksx doctor` is written for.
+/// `/start` carries only rows the current stage requires. Status/System also
+/// uses the HIDMaestro row as explicit system inventory; the persona list then
+/// names what that installed prerequisite can support without implying one is
+/// staged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PadBusView {
-    /// The driver state was read at all. `false` means every judgement below
-    /// is "unknown", never "absent".
-    pub readable: bool,
-    /// One of [`pad_bus_codes`].
+pub struct ControllerOutputView {
+    pub backend: String,
+    pub label: String,
+    pub personas: Vec<String>,
+    pub persona_labels: Vec<String>,
+    /// A stable provider/detail code. ViGEm values are the same codes Doctor
+    /// emits; HIDMaestro has `hidmaestro-*` equivalents.
     pub code: String,
-    /// **Known** to be unable to plug a pad.
+    /// One of [`controller_output_states`].
+    pub state: String,
+    /// The machine prerequisite was read. `false` means unknown, never absent.
+    pub readable: bool,
+    /// Known unable to materialize the staged personas.
     pub blocked: bool,
-    /// Could not be determined — the read failed, the service state was
-    /// unreadable, or this build does not recognise the code it got back.
+    /// The read did not produce a verdict.
     pub unknown: bool,
-    /// The driver file's version, when one could be read.
+    /// The installed prerequisite is present, but the endpoint is verified as
+    /// part of Play. This is intentionally neither green nor red.
+    pub verified_on_play: bool,
+    /// Driver/package file version when the probe supplied one.
     pub version: Option<String>,
-    /// What is true, in a first-run user's words.
     pub line: String,
-    /// What to do about it, **no-terminal route first**. Empty when there is
-    /// nothing to do. `FIRST-RUN.md` §6: "the only way out of a mistake is a
-    /// shell command" is on the list of things that must never happen, so the
-    /// shell command is named second and never alone.
+    /// No-terminal route first. Empty when there is no action to take.
     pub remedy: String,
 }
 
-/// The honest zero value: nothing has been read, so nothing is known.
-///
-/// Hand-written rather than derived because a derived `Default` would be
-/// `readable: false` with an empty `line` and `unknown: false` — a view that
-/// claims nothing is wrong while having looked at nothing, which is the exact
-/// failure this type exists to prevent.
-impl Default for PadBusView {
+/// The honest zero value: no provider answered, so no output is known ready.
+impl Default for ControllerOutputView {
     fn default() -> Self {
-        Self::unreadable("the controller-driver state has not been read")
+        Self {
+            backend: "unknown".to_owned(),
+            label: "Controller output".to_owned(),
+            personas: Vec::new(),
+            persona_labels: Vec::new(),
+            code: "controller-output-unreadable".to_owned(),
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            blocked: false,
+            unknown: true,
+            verified_on_play: false,
+            version: None,
+            line: "The controller-output prerequisite has not been read. This does not mean a \
+                   driver is missing."
+                .to_owned(),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+        }
     }
 }
 
-impl PadBusView {
-    /// The read failed or never happened.
-    pub fn unreadable(reason: impl std::fmt::Display) -> Self {
-        Self {
-            readable: false,
-            code: pad_bus_codes::UNREADABLE.to_owned(),
-            blocked: false,
-            unknown: true,
-            version: None,
-            line: format!(
-                "Whether the ViGEmBus controller driver is installed could not be determined \
-                 ({reason}). That is not the same as it being missing — nothing here knows \
-                 either way."
-            ),
-            remedy: NO_BUS_READ_REMEDY.to_owned(),
-        }
-    }
-
-    /// Build the view from `ksx doctor`'s verdict.
-    ///
-    /// `code` is the first advice code `vigembus_advice` returned, or
-    /// [`pad_bus_codes::HEALTHY`] when it returned none. An unrecognised code
-    /// lands in [`Self::unknown`] with the code quoted: a producer that grew a
-    /// state this build has never heard of has said something, and rendering
-    /// that as "all fine" would be inventing an answer.
-    pub fn from_doctor(code: &str, version: Option<String>) -> Self {
-        let base = Self {
-            readable: true,
-            code: code.to_owned(),
-            blocked: false,
-            unknown: false,
-            version: version.clone(),
-            line: String::new(),
-            remedy: String::new(),
-        };
+impl ControllerOutputView {
+    /// Build the ViGEm row from Doctor's own stable verdict.
+    pub fn vigem(
+        requirement: ControllerOutputRequirement,
+        code: &str,
+        version: Option<String>,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let base = Self::base(requirement, code, version.clone());
         match code {
-            pad_bus_codes::HEALTHY => Self {
+            vigem_output_codes::HEALTHY => Self {
+                state: controller_output_states::READY.to_owned(),
+                readable: true,
                 line: format!(
-                    "The ViGEmBus controller driver{} is installed and running, so ksx can \
-                     create virtual controllers on this machine.",
-                    match &version {
-                        Some(v) => format!(" (v{v})"),
-                        None => String::new(),
-                    }
+                    "ViGEmBus{} is installed and running for {subject}.",
+                    version
+                        .as_ref()
+                        .map(|value| format!(" v{value}"))
+                        .unwrap_or_default()
                 ),
                 ..base
             },
-            pad_bus_codes::MISSING => Self {
+            vigem_output_codes::MISSING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is NOT installed. It is the driver that \
-                       makes a virtual controller exist, so until it is there ksx can stage and \
-                       save a setup but cannot plug a single pad — and no game will see one."
-                    .to_owned(),
-                remedy: INSTALL_BUS_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is not installed, so ksx cannot create {subject} on this machine."
+                ),
+                remedy: INSTALL_VIGEM_REMEDY.to_owned(),
                 ..base
             },
-            pad_bus_codes::FILE_MISSING => Self {
+            vigem_output_codes::FILE_MISSING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is registered with Windows but its driver \
-                       file is gone — a broken install. ksx cannot plug a pad through it."
-                    .to_owned(),
-                remedy: INSTALL_BUS_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is registered with Windows but its driver file is gone, so ksx \
+                     cannot create {subject}."
+                ),
+                remedy: INSTALL_VIGEM_REMEDY.to_owned(),
                 ..base
             },
-            pad_bus_codes::NOT_RUNNING => Self {
+            vigem_output_codes::NOT_RUNNING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is installed but its service is not \
-                       running, so nothing can be plugged through it yet. A machine that has \
-                       just installed the driver and not restarted looks exactly like this."
-                    .to_owned(),
-                remedy: "Restart Windows. If it is still stopped afterwards, run the ksx \
-                         installer again and leave \"Install the ViGEmBus controller driver\" \
-                         ticked."
+                line: format!(
+                    "ViGEmBus is installed but not running, so ksx cannot create {subject} yet."
+                ),
+                remedy: "Restart Windows. If ViGEmBus is still stopped afterwards, run the ksx \
+                         installer again and leave the ViGEmBus controller-driver task selected."
                     .to_owned(),
                 ..base
             },
-            pad_bus_codes::STATE_UNKNOWN => Self {
+            vigem_output_codes::STATE_UNKNOWN => Self {
+                state: controller_output_states::UNKNOWN.to_owned(),
+                readable: true,
                 unknown: true,
-                line: "The ViGEmBus controller driver is installed, but Windows would not say \
-                       whether its service is running — so whether a pad can be plugged is not \
-                       known from here."
-                    .to_owned(),
-                remedy: NO_BUS_READ_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is installed, but Windows did not report whether it is running, so \
+                     readiness for {subject} is unknown."
+                ),
+                remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
                 ..base
             },
             other => Self {
+                state: controller_output_states::UNKNOWN.to_owned(),
+                readable: true,
                 unknown: true,
                 line: format!(
-                    "The controller driver reported a state this build does not recognise \
-                     (\"{other}\"), so whether a pad can be plugged is not known from here."
+                    "ViGEmBus reported an unrecognized state (\"{other}\"), so readiness for \
+                     {subject} is unknown."
                 ),
-                remedy: NO_BUS_READ_REMEDY.to_owned(),
+                remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
                 ..base
             },
         }
     }
 
-    /// Nothing is wrong and nothing needs saying before the button.
-    pub fn silent(&self) -> bool {
-        !self.blocked && !self.unknown
+    /// Build the HIDMaestro row from the exact package/hash probe Doctor uses.
+    ///
+    /// `installed` proves the pinned package prerequisite. It does not promise
+    /// that a virtual DualSense already exists: the protected host handshake
+    /// and endpoint creation are intentionally transactional with Play.
+    pub fn hidmaestro(
+        requirement: ControllerOutputRequirement,
+        installed: bool,
+        partial: bool,
+        version: Option<String>,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let base = Self::base(
+            requirement,
+            if installed {
+                "hidmaestro-verified-on-play"
+            } else if partial {
+                "hidmaestro-partial"
+            } else {
+                "hidmaestro-missing"
+            },
+            version.clone(),
+        );
+        if installed {
+            return Self {
+                state: controller_output_states::VERIFIED_ON_PLAY.to_owned(),
+                readable: true,
+                verified_on_play: true,
+                line: format!(
+                    "The exact HIDMaestro package{} required for {subject} is installed. ksx \
+                     verifies the protected controller endpoint when Play starts; no controller \
+                     is running yet.",
+                    version
+                        .as_ref()
+                        .map(|value| format!(" v{value}"))
+                        .unwrap_or_default()
+                ),
+                ..base
+            };
+        }
+        if partial {
+            return Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
+                blocked: true,
+                line: format!(
+                    "The HIDMaestro installation is incomplete or does not match the pinned \
+                     package, so ksx cannot create {subject}."
+                ),
+                remedy: INSTALL_HIDMAESTRO_REMEDY.to_owned(),
+                ..base
+            };
+        }
+        Self {
+            state: controller_output_states::BLOCKED.to_owned(),
+            readable: true,
+            blocked: true,
+            line: format!(
+                "HIDMaestro is not installed, so ksx cannot create {subject} on this machine."
+            ),
+            remedy: INSTALL_HIDMAESTRO_REMEDY.to_owned(),
+            ..base
+        }
+    }
+
+    /// Machine-inventory view for the one supported HIDMaestro lane.
+    ///
+    /// Unlike [`ControllerOutputsView::requirements`], this does not imply a
+    /// DualSense is staged. It names the backend's supported personas because
+    /// the Status/System panel inventories installed plumbing, while retaining
+    /// the same package-versus-endpoint distinction the staged Play gate uses.
+    pub fn hidmaestro_inventory(
+        installed: bool,
+        partial: bool,
+        version: Option<String>,
+    ) -> Self {
+        Self::hidmaestro(
+            output_requirement(ksx_core::PadBackend::HidMaestro, |_| true),
+            installed,
+            partial,
+            version,
+        )
+    }
+
+    /// The Status/System inventory could not read the HIDMaestro prerequisite.
+    /// This remains unknown rather than being collapsed into "not installed".
+    pub fn hidmaestro_inventory_unreadable(reason: impl std::fmt::Display) -> Self {
+        Self::unreadable(
+            output_requirement(ksx_core::PadBackend::HidMaestro, |_| true),
+            reason,
+        )
+    }
+
+    /// A provider refusal is a state of knowledge, not a missing driver.
+    pub fn unreadable(
+        requirement: ControllerOutputRequirement,
+        reason: impl std::fmt::Display,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let code = format!("{}-unreadable", requirement.backend);
+        Self {
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            unknown: true,
+            line: format!(
+                "The output required by {subject} could not be checked ({reason}). That is not \
+                 the same as its driver being missing."
+            ),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+            ..Self::base(requirement, &code, None)
+        }
+    }
+
+    fn base(
+        requirement: ControllerOutputRequirement,
+        code: &str,
+        version: Option<String>,
+    ) -> Self {
+        Self {
+            backend: requirement.backend,
+            label: requirement.label,
+            personas: requirement.personas,
+            persona_labels: requirement.persona_labels,
+            code: code.to_owned(),
+            state: String::new(),
+            readable: false,
+            blocked: false,
+            unknown: false,
+            verified_on_play: false,
+            version,
+            line: String::new(),
+            remedy: String::new(),
+        }
     }
 }
 
-/// The remedy for every state where the bus is known to be unusable.
+/// Readiness of exactly the output backends required by the current stage.
 ///
-/// The installer comes first and the command second, on purpose: the installer
-/// is elevated already, it is the one moment the user has consented to an
-/// administrator token, and it is a route that needs no terminal. The command
-/// is named anyway because someone who has one should not have to guess it.
-pub const INSTALL_BUS_REMEDY: &str =
-    "Run the ksx installer again and leave \"Install the ViGEmBus controller driver\" ticked — \
-     the driver is bundled with ksx and nothing is downloaded. From a terminal opened as \
-     administrator, `ksx install-drivers --yes` does the same thing.";
+/// `ready` is deliberately stricter than `can_play`: HIDMaestro's exact
+/// package check yields `verified_on_play`, not a false green `ready`, while
+/// Play may still proceed and perform the authoritative host/endpoint check.
+/// A provider read that failed is not evidence that the driver is missing, but
+/// it still cannot license the Play button. A successful `verified-on-play`
+/// preflight may proceed to the authoritative session transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerOutputsView {
+    pub required: Vec<ControllerOutputView>,
+    /// Aggregate state, using blocked > unknown > verified-on-play > ready.
+    pub state: String,
+    pub readable: bool,
+    pub ready: bool,
+    pub can_play: bool,
+    pub blocked: bool,
+    pub unknown: bool,
+    pub verified_on_play: bool,
+    /// All required row facts, preserved in backend order for the existing
+    /// scalar banner and non-JavaScript first paint.
+    pub line: String,
+    /// Unique row remedies in backend order.
+    pub remedy: String,
+}
 
-/// The remedy when the answer itself is unknown. It cannot promise a fix,
-/// because it does not know there is anything to fix.
-pub const NO_BUS_READ_REMEDY: &str =
-    "Nothing needs doing in advance. If Play starts and no controller appears in your game, the \
-     Start menu's \"ksx (advanced) > driver check\" prints what this machine really has.";
+impl Default for ControllerOutputsView {
+    fn default() -> Self {
+        Self {
+            required: Vec::new(),
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            ready: false,
+            can_play: false,
+            blocked: false,
+            unknown: true,
+            verified_on_play: false,
+            line: "The controller outputs required by this setup have not been read. This does \
+                   not mean a driver is missing."
+                .to_owned(),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+        }
+    }
+}
+
+impl ControllerOutputsView {
+    /// Which output stacks this staged value actually requires. Unsupported
+    /// personas cannot enter a valid stage and are intentionally excluded if a
+    /// malformed external fixture constructs one by hand.
+    pub fn requirements(staged: &crate::StagedSetupView) -> Vec<ControllerOutputRequirement> {
+        if !staged.reachable {
+            return Vec::new();
+        }
+        ksx_core::PadBackend::ALL
+            .iter()
+            .filter_map(|backend| {
+                let requirement = output_requirement(*backend, |persona| {
+                    staged
+                        .slots
+                        .iter()
+                        .any(|slot| slot.persona == persona.as_str())
+                });
+                (!requirement.personas.is_empty()).then_some(requirement)
+            })
+            .collect()
+    }
+
+    /// Compose aggregate flags and copy from provider rows.
+    pub fn from_required(required: Vec<ControllerOutputView>) -> Self {
+        if required.is_empty() {
+            return Self::not_required();
+        }
+        let blocked = required.iter().any(|row| row.blocked);
+        let unknown = required.iter().any(|row| row.unknown);
+        let verified_on_play = required.iter().any(|row| row.verified_on_play);
+        let state = if blocked {
+            controller_output_states::BLOCKED
+        } else if unknown {
+            controller_output_states::UNKNOWN
+        } else if verified_on_play {
+            controller_output_states::VERIFIED_ON_PLAY
+        } else {
+            controller_output_states::READY
+        };
+        let line = required
+            .iter()
+            .map(|row| row.line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut remedies = Vec::new();
+        for row in &required {
+            let remedy = row.remedy.trim();
+            if !remedy.is_empty() && !remedies.iter().any(|known| known == &remedy) {
+                remedies.push(remedy);
+            }
+        }
+        // `remedies` borrows the rows in `required`; finish the aggregate
+        // sentence before moving those rows into the returned view.
+        let remedy = remedies.join(" ");
+        Self {
+            readable: required.iter().all(|row| row.readable),
+            ready: state == controller_output_states::READY,
+            can_play: !blocked && !unknown,
+            blocked,
+            unknown,
+            verified_on_play,
+            required,
+            state: state.to_owned(),
+            line,
+            remedy,
+        }
+    }
+
+    /// No staged supported persona means no output prerequisite. This is a
+    /// successful empty requirement set, not an unread machine.
+    pub fn not_required() -> Self {
+        Self {
+            required: Vec::new(),
+            state: controller_output_states::READY.to_owned(),
+            readable: true,
+            ready: true,
+            can_play: true,
+            blocked: false,
+            unknown: false,
+            verified_on_play: false,
+            line: "No controller output is required until a supported controller is staged."
+                .to_owned(),
+            remedy: String::new(),
+        }
+    }
+
+    /// Preserve the stage's requirements when the provider read refuses.
+    pub fn unreadable(
+        staged: &crate::StagedSetupView,
+        reason: impl std::fmt::Display,
+    ) -> Self {
+        let requirements = Self::requirements(staged);
+        if requirements.is_empty() {
+            return if staged.reachable && staged.slots.is_empty() {
+                Self::not_required()
+            } else {
+                Self::default()
+            };
+        }
+        let reason = reason.to_string();
+        Self::from_required(
+            requirements
+                .into_iter()
+                .map(|requirement| ControllerOutputView::unreadable(requirement, &reason))
+                .collect(),
+        )
+    }
+
+    /// Nothing needs saying only when no backend is required or every required
+    /// backend is fully preflighted. `verified-on-play` remains visible because
+    /// hiding it would turn a deferred check into a green promise.
+    pub fn silent(&self) -> bool {
+        self.state == controller_output_states::READY
+    }
+}
+
+fn output_requirement(
+    backend: ksx_core::PadBackend,
+    include: impl Fn(ksx_core::Persona) -> bool,
+) -> ControllerOutputRequirement {
+    let personas: Vec<ksx_core::Persona> = ksx_core::Persona::ALL
+        .iter()
+        .copied()
+        .filter(|persona| persona.can_plug() && persona.backend() == backend)
+        .filter(|persona| include(*persona))
+        .collect();
+    ControllerOutputRequirement {
+        backend: backend.as_str().to_owned(),
+        label: backend.label().to_owned(),
+        personas: personas
+            .iter()
+            .map(|persona| persona.as_str().to_owned())
+            .collect(),
+        persona_labels: personas
+            .iter()
+            .map(|persona| persona.label().to_owned())
+            .collect(),
+    }
+}
+
+fn requirement_subject(requirement: &ControllerOutputRequirement) -> String {
+    match requirement.persona_labels.as_slice() {
+        [] => "controller support".to_owned(),
+        [only] => format!("{only} controllers"),
+        many => format!("{} controllers", many.join(" and ")),
+    }
+}
+
+pub const INSTALL_VIGEM_REMEDY: &str =
+    "Run the ksx installer again and leave the ViGEmBus controller-driver task selected. The \
+     driver is bundled with ksx; `ksx install-drivers --yes` from an administrator terminal is \
+     the advanced equivalent.";
+
+pub const INSTALL_HIDMAESTRO_REMEDY: &str =
+    "Run the ksx installer again and leave the HIDMaestro DualSense-driver task selected. It \
+     uses the pinned official package and may require internet access.";
+
+pub const NO_OUTPUT_READ_REMEDY: &str =
+    "Nothing needs to be installed based on this message alone. Reopen ksx to retry; the Start \
+     menu's \"ksx (advanced) > driver check\" can show the detailed machine report.";
 
 // ---------------------------------------------------------------------------
 // First run, and the config in/out that has no path in it
@@ -2301,6 +2655,15 @@ pub struct SetupView {
     /// same reason the blocking answers are: the wording is the domain's.
     #[serde(default)]
     pub socd_options: Vec<crate::stage::SocdOption>,
+    /// Controller identities this build knows, with the same build-capability
+    /// flags, immutable output backend and persona-specific ceiling the guided
+    /// `/start` flow uses. The setup surface renders only
+    /// entries whose [`crate::stage::PersonaOption::can_plug`] is true; keeping
+    /// the full roster here means every surface starts from the same answer and
+    /// a newly implemented persona cannot be forgotten by this maintenance
+    /// screen.
+    #[serde(default = "default_persona_options")]
+    pub persona_options: Vec<crate::stage::PersonaOption>,
     /// **Support detail, never an interface.** A person setting a cabinet up
     /// does not operate on a directory — they import, export, and follow the
     /// steps. This is here so a bug report can quote it, and it belongs in
@@ -2342,6 +2705,10 @@ fn default_max_slots() -> u8 {
     ksx_core::MAX_SLOTS
 }
 
+fn default_persona_options() -> Vec<crate::stage::PersonaOption> {
+    crate::stage::PersonaOption::roster()
+}
+
 impl Default for SetupView {
     /// Hand-written for one field: `max_slots` defaults to the ceiling this
     /// build really has. A derived `Default` would hand every caller a zero,
@@ -2354,6 +2721,7 @@ impl Default for SetupView {
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
             socd_options: crate::stage::SocdOption::roster(),
+            persona_options: default_persona_options(),
             config_root: String::new(),
             config_exists: false,
             devices: Vec::new(),
@@ -3198,70 +3566,204 @@ mod tests {
         assert_eq!(back.max_slots, ksx_core::MAX_SLOTS);
     }
 
-    /// **A default `PadBusView` must never read as a healthy bus.**
-    ///
-    /// Fails against a `#[derive(Default)]` on that struct — which is the
-    /// obvious thing to write and was the first thing written here. The
-    /// derived value is `blocked: false, unknown: false, line: ""`, so
-    /// `silent()` is true and a page renders nothing: a payload nobody filled
-    /// in would look exactly like a machine with a working driver, on the one
-    /// screen whose whole job is to say otherwise before the button.
+    /// A setup document written before controller choices were served still
+    /// receives this build's canonical roster. An empty list would make the
+    /// maintenance form look as though no controller identity exists.
     #[test]
-    fn an_uncollected_pad_bus_is_unknown_and_not_silent() {
-        let view = PadBusView::default();
+    fn an_older_setup_view_receives_this_builds_persona_roster() {
+        let older: SetupView = serde_json::from_str(
+            r#"{"generated_at":"","config_root":"","config_exists":false,
+                 "devices":[],"slots":[],"presets":[],"profiles":[],"steps":[],"notes":[]}"#,
+        )
+        .expect("an older document must still deserialize");
+        assert_eq!(older.persona_options, crate::PersonaOption::roster());
+
+        let defaults = SetupView::default();
+        assert_eq!(defaults.persona_options, crate::PersonaOption::roster());
+        assert!(defaults.persona_options.iter().any(|option| {
+            option.name == "dualsense" && option.can_plug
+        }));
+    }
+
+    fn staged_personas(personas: &[&str]) -> crate::StagedSetupView {
+        crate::StagedSetupView {
+            reachable: true,
+            slots: personas
+                .iter()
+                .enumerate()
+                .map(|(index, persona)| crate::StagedSlotView {
+                    number: u8::try_from(index + 1).unwrap(),
+                    persona: (*persona).to_owned(),
+                    ..crate::StagedSlotView::default()
+                })
+                .collect(),
+            ..crate::StagedSetupView::default()
+        }
+    }
+
+    fn requirement(staged: &crate::StagedSetupView, backend: &str) -> ControllerOutputRequirement {
+        ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .find(|requirement| requirement.backend == backend)
+            .unwrap_or_else(|| panic!("no {backend} requirement"))
+    }
+
+    /// An output document nobody collected is unknown and cannot license Play.
+    #[test]
+    fn uncollected_outputs_are_unknown_not_missing_or_ready() {
+        let row = ControllerOutputView::default();
+        assert_eq!(row.state, controller_output_states::UNKNOWN);
+        assert!(!row.readable);
+        assert!(row.unknown);
+        assert!(!row.blocked);
+        assert!(!row.line.trim().is_empty());
+
+        let view = ControllerOutputsView::default();
         assert!(!view.readable);
-        assert!(view.unknown, "an unread bus is unknown, never fine");
-        assert!(!view.blocked, "unknown is not the same as blocked");
-        assert!(!view.silent(), "a page must have something to say here");
-        assert_eq!(view.code, pad_bus_codes::UNREADABLE);
+        assert!(view.unknown);
+        assert!(!view.blocked);
+        assert!(!view.ready);
+        assert!(!view.can_play);
+        assert!(!view.silent());
+        assert_eq!(view.state, controller_output_states::UNKNOWN);
         assert!(!view.line.trim().is_empty());
     }
 
-    /// The three states stay three, and only one of them licenses silence.
+    /// Requirements come only from supported personas actually in the stage.
     #[test]
-    fn every_doctor_code_lands_in_exactly_one_state() {
+    fn staged_personas_choose_their_real_backends() {
+        assert!(ControllerOutputsView::requirements(&staged_personas(&[])).is_empty());
+
+        let compatibility = ControllerOutputsView::requirements(&staged_personas(&[
+            "xbox360",
+            "playstation",
+            "xbox360",
+        ]));
+        assert_eq!(compatibility.len(), 1);
+        assert_eq!(compatibility[0].backend, "vigem");
+        assert_eq!(
+            compatibility[0].personas,
+            vec![String::from("xbox360"), String::from("playstation")]
+        );
+
+        let dualsense = ControllerOutputsView::requirements(&staged_personas(&["dualsense"]));
+        assert_eq!(dualsense.len(), 1);
+        assert_eq!(dualsense[0].backend, "hidmaestro");
+        assert_eq!(dualsense[0].personas, vec![String::from("dualsense")]);
+
+        let mixed = ControllerOutputsView::requirements(&staged_personas(&[
+            "dualsense",
+            "xbox360",
+        ]));
+        assert_eq!(
+            mixed
+                .iter()
+                .map(|row| row.backend.as_str())
+                .collect::<Vec<_>>(),
+            ["vigem", "hidmaestro"]
+        );
+    }
+
+    /// Doctor's ViGEm states remain three-way, but are scoped to the personas
+    /// that use ViGEmBus.
+    #[test]
+    fn every_vigem_code_lands_in_exactly_one_state() {
+        let staged = staged_personas(&["xbox360"]);
         for (code, blocked, unknown) in [
-            (pad_bus_codes::HEALTHY, false, false),
-            (pad_bus_codes::MISSING, true, false),
-            (pad_bus_codes::FILE_MISSING, true, false),
-            (pad_bus_codes::NOT_RUNNING, true, false),
-            (pad_bus_codes::STATE_UNKNOWN, false, true),
-            // A code from a future ksx-platform. Unknown, never silent.
+            (vigem_output_codes::HEALTHY, false, false),
+            (vigem_output_codes::MISSING, true, false),
+            (vigem_output_codes::FILE_MISSING, true, false),
+            (vigem_output_codes::NOT_RUNNING, true, false),
+            (vigem_output_codes::STATE_UNKNOWN, false, true),
             ("vigembus-something-new", false, true),
         ] {
-            let view = PadBusView::from_doctor(code, None);
-            assert_eq!(view.blocked, blocked, "blocked for {code:?}");
-            assert_eq!(view.unknown, unknown, "unknown for {code:?}");
-            assert!(
-                !(view.blocked && view.unknown),
-                "{code:?} claims both at once"
-            );
-            assert!(view.readable, "{code:?} came from a read that answered");
-            assert!(!view.line.trim().is_empty(), "{code:?} says nothing");
-            assert_eq!(
-                view.silent(),
-                code == pad_bus_codes::HEALTHY,
-                "only a healthy bus is silent ({code:?})"
-            );
-            // Anything that is not silent owes the user a next step, and
-            // FIRST-RUN.md §6 forbids that step being a shell command ALONE.
-            if !view.silent() {
-                assert!(!view.remedy.trim().is_empty(), "{code:?} has no remedy");
-                assert!(
-                    view.remedy.contains("installer") || view.remedy.contains("Start menu"),
-                    "{code:?}'s remedy needs a route with no terminal in it: {}",
-                    view.remedy
-                );
-            }
+            let row = ControllerOutputView::vigem(requirement(&staged, "vigem"), code, None);
+            assert_eq!(row.blocked, blocked, "blocked for {code:?}");
+            assert_eq!(row.unknown, unknown, "unknown for {code:?}");
+            assert!(!(row.blocked && row.unknown));
+            assert!(row.readable);
+            assert!(!row.line.trim().is_empty());
+            let view = ControllerOutputsView::from_required(vec![row]);
+            assert_eq!(view.silent(), code == vigem_output_codes::HEALTHY);
+            assert_eq!(view.can_play, !blocked && !unknown);
         }
+    }
+
+    /// An exact HIDMaestro package is evidence, but not a false green endpoint.
+    #[test]
+    fn hidmaestro_is_verified_on_play_or_blocked_by_its_own_probe() {
+        let staged = staged_personas(&["dualsense"]);
+        let installed = ControllerOutputsView::from_required(vec![
+            ControllerOutputView::hidmaestro(
+                requirement(&staged, "hidmaestro"),
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
+        ]);
+        assert_eq!(installed.state, controller_output_states::VERIFIED_ON_PLAY);
+        assert!(installed.verified_on_play);
+        assert!(!installed.ready);
+        assert!(installed.can_play);
+        assert!(!installed.silent());
+        assert!(installed.line.contains("when Play starts"));
+
+        for partial in [false, true] {
+            let missing = ControllerOutputsView::from_required(vec![
+                ControllerOutputView::hidmaestro(
+                    requirement(&staged, "hidmaestro"),
+                    false,
+                    partial,
+                    None,
+                ),
+            ]);
+            assert!(missing.blocked);
+            assert!(!missing.can_play);
+            assert_eq!(missing.state, controller_output_states::BLOCKED);
+            assert!(missing.remedy.contains("HIDMaestro"));
+        }
+    }
+
+    /// A healthy backend must not hide another required backend's failure.
+    #[test]
+    fn mixed_output_aggregate_keeps_each_backend_independent() {
+        let staged = staged_personas(&["xbox360", "dualsense"]);
+        let view = ControllerOutputsView::from_required(vec![
+            ControllerOutputView::vigem(
+                requirement(&staged, "vigem"),
+                vigem_output_codes::HEALTHY,
+                Some("1.22.0.0".into()),
+            ),
+            ControllerOutputView::hidmaestro(
+                requirement(&staged, "hidmaestro"),
+                false,
+                false,
+                None,
+            ),
+        ]);
+        assert_eq!(view.required.len(), 2);
+        assert!(view.blocked);
+        assert!(!view.ready);
+        assert!(!view.can_play);
+        assert!(view.line.contains("ViGEmBus"));
+        assert!(view.line.contains("HIDMaestro"));
     }
 
     /// The version is evidence, so it is printed only when it was read.
     #[test]
-    fn a_healthy_bus_names_its_version_only_when_there_is_one() {
-        let known = PadBusView::from_doctor(pad_bus_codes::HEALTHY, Some("1.22.0.0".into()));
+    fn a_healthy_vigem_row_names_its_version_only_when_there_is_one() {
+        let staged = staged_personas(&["xbox360"]);
+        let known = ControllerOutputView::vigem(
+            requirement(&staged, "vigem"),
+            vigem_output_codes::HEALTHY,
+            Some("1.22.0.0".into()),
+        );
         assert!(known.line.contains("v1.22.0.0"), "{}", known.line);
-        let unknown = PadBusView::from_doctor(pad_bus_codes::HEALTHY, None);
-        assert!(!unknown.line.contains("(v"), "{}", unknown.line);
+        let unknown = ControllerOutputView::vigem(
+            requirement(&staged, "vigem"),
+            vigem_output_codes::HEALTHY,
+            None,
+        );
+        assert!(!unknown.line.contains("v1.22.0.0"), "{}", unknown.line);
     }
 }

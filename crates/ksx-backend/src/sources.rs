@@ -25,7 +25,7 @@ use ksx_api::{
     PresetsView, ProfileRow, Refusal, StatusSnapshot, StatusSource, TemplateRow,
 };
 use ksx_platform::autostart;
-use ksx_platform::{BusDriverReport, InterceptionReport, ServiceState};
+use ksx_platform::{BusDriverReport, HidMaestroReport, InterceptionReport, ServiceState};
 
 pub fn configured_profile() -> Option<String> {
     let root = ksx_config::ConfigRoot::discover().ok()?;
@@ -313,10 +313,17 @@ fn collect_snapshot() -> StatusSnapshot {
     let report = ksx_platform::collect();
     let (daemon_running, daemon_detail) = daemon_check();
     let (profiles, config_root) = load_profiles();
+    let (hidmaestro_installed, hidmaestro_partial, hidmaestro_version) =
+        hidmaestro_prerequisite(&report.hidmaestro);
 
     StatusSnapshot {
         generated_at: now_utc(),
         vigem: bus_line(&report.vigembus),
+        hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+            hidmaestro_installed,
+            hidmaestro_partial,
+            hidmaestro_version,
+        ),
         interception: interception_line(&report.interception),
         daemon_running,
         daemon_detail,
@@ -373,6 +380,18 @@ fn bus_line(bus: &BusDriverReport) -> String {
         Some(version) => format!("installed — {state} — driver v{version}"),
         None => format!("installed — {state} — driver version unknown"),
     }
+}
+
+/// The package facts shared by Status/System and `/start`'s persona-aware
+/// output row. One interpretation of the exact Doctor probe: a service key or
+/// candidate DLL without the pinned package is partial, never installed.
+fn hidmaestro_prerequisite(report: &HidMaestroReport) -> (bool, bool, Option<String>) {
+    let version = report
+        .driver_file
+        .as_ref()
+        .and_then(|file| file.file_version.clone());
+    let partial = !report.installed && (report.service_key || report.driver_file.is_some());
+    (report.installed, partial, version)
 }
 
 fn interception_line(icpt: &InterceptionReport) -> String {
@@ -1153,6 +1172,69 @@ impl ksx_api::MachineSource for LocalMachine {
         ))
     }
 
+    /// Resolve the daemon learner's press-to-identify observation for Studio's
+    /// hardware step. Observation and selection stay separate: the daemon
+    /// owns the live panel tap, this joins its returned instance path to the
+    /// same board inventory as `device_scan`, and the Studio stage writer
+    /// performs the later reversible choice.
+    #[cfg(windows)]
+    fn device_identify(
+        &self,
+        observed_instance: &str,
+    ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+        if observed_instance.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the observed keyboard has no device identity",
+            ));
+        }
+        let scan = self.device_scan()?;
+        let matches = scan
+            .boards
+            .into_iter()
+            .filter(|board| {
+                board
+                    .keyboard
+                    .as_deref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(observed_instance))
+                    || board.interfaces.iter().any(|interface| {
+                        interface
+                            .instance_id
+                            .eq_ignore_ascii_case(observed_instance)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let [board] = matches.as_slice() else {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the pressed key did not resolve to exactly one selectable keyboard",
+            ));
+        };
+        if !board.pickable {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the pressed device is not a keyboard ksx can select",
+            ));
+        }
+        let selector = board.selector.clone().ok_or_else(|| {
+            Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the pressed keyboard has no exact selector",
+            )
+        })?;
+        if board.alias_hint.trim().is_empty() || board.name.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the pressed keyboard has no safe display identity",
+            ));
+        }
+        Ok(ksx_api::DeviceIdentifyView {
+            selector,
+            alias: board.alias_hint.clone(),
+            label: board.name.clone(),
+        })
+    }
+
     /// Write one `[[device]]` entry — the plan/apply pair, never the CLI verb.
     ///
     /// `crate::device_edit::pick` looks like the obvious call and would kill
@@ -1284,34 +1366,64 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::onboard::import(request)
     }
 
-    /// **Can a pad be plugged on this machine right now?**
+    /// Output readiness for exactly the supported personas in the live stage.
     ///
-    /// One read (`collect_vigembus`) and one judgement
-    /// (`ksx_platform::advice::vigembus_advice`) — deliberately the SAME
-    /// judgement `ksx doctor` prints, reached through the same function, so a
-    /// first-run page and the driver report can never disagree about whether
-    /// this machine has a bus. Re-deriving "installed and running" here would
-    /// have been three lines and a second opinion.
+    /// The requirement list comes from `Persona::backend()` through ksx-api;
+    /// this provider never assumes ViGEmBus is universal. It performs no probe
+    /// for an empty stage, only the ViGEm probe for Xbox 360/PlayStation, only
+    /// the exact HIDMaestro package probe for DualSense, and both for a mixed
+    /// setup. Switch Pro and Xbox Series cannot enter a valid stage in this
+    /// build, so installing HIDMaestro never makes those unfinished personas
+    /// appear ready.
     ///
-    /// Read-only: two registry reads, one service query, one file-version
-    /// read. Nothing is installed, and nothing here could install anything —
-    /// `docs/SURFACES.md` §3 marks driver installation `never` for the browser
-    /// surface, and this is what lets a browser page obey that while still
-    /// saying, before the button, that the button cannot work.
-    fn pad_bus(&self) -> Result<ksx_api::PadBusView, Refusal> {
-        let bus = ksx_platform::collect_vigembus();
-        let version = bus
-            .driver_file
-            .as_ref()
-            .and_then(|file| file.file_version.clone());
-        // At most one piece of advice comes back per bus (each arm returns),
-        // and none at all means healthy. `first()` rather than an index so a
-        // future second entry degrades to "the worst thing doctor said" rather
-        // than a panic.
-        let code = ksx_platform::advice::vigembus_advice(&bus)
-            .first()
-            .map_or(ksx_api::pad_bus_codes::HEALTHY, |advice| advice.code);
-        Ok(ksx_api::PadBusView::from_doctor(code, version))
+    /// The HIDMaestro row deliberately stops at "verified on Play" after a
+    /// successful package probe. The protected host handshake and endpoint
+    /// creation belong to the session transaction; probing the package cannot
+    /// truthfully turn those future operations green.
+    fn controller_outputs(
+        &self,
+        staged: &ksx_api::StagedSetupView,
+    ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+        let requirements = ksx_api::ControllerOutputsView::requirements(staged);
+        let mut rows = Vec::with_capacity(requirements.len());
+        for requirement in requirements {
+            let backend = requirement.backend.clone();
+            let row = match backend.as_str() {
+                "vigem" => {
+                    let bus = ksx_platform::collect_vigembus();
+                    let version = bus
+                        .driver_file
+                        .as_ref()
+                        .and_then(|file| file.file_version.clone());
+                    // At most one entry comes back for the bus; silence is the
+                    // healthy Doctor verdict.
+                    let code = ksx_platform::advice::vigembus_advice(&bus)
+                        .first()
+                        .map_or(ksx_api::vigem_output_codes::HEALTHY, |advice| {
+                            advice.code
+                        });
+                    ksx_api::ControllerOutputView::vigem(requirement, code, version)
+                }
+                "hidmaestro" => {
+                    let report = ksx_platform::collect_hidmaestro();
+                    let (installed, partial, version) = hidmaestro_prerequisite(&report);
+                    ksx_api::ControllerOutputView::hidmaestro(
+                        requirement,
+                        installed,
+                        partial,
+                        version,
+                    )
+                }
+                // Requirements are created from PadBackend::ALL. Keep a new
+                // backend loud if core grows before this provider does.
+                other => ksx_api::ControllerOutputView::unreadable(
+                    requirement,
+                    format!("this build has no machine probe for output backend {other}"),
+                ),
+            };
+            rows.push(row);
+        }
+        Ok(ksx_api::ControllerOutputsView::from_required(rows))
     }
 
     /// Everything `ksx pads` and `ksx pads --prune` know, in one read.
@@ -1393,6 +1505,17 @@ impl ksx_api::MachineSource for LocalMachine {
                 "pick a persona from the list",
             )
         })?;
+        if persona.backend() != ksx_core::PadBackend::Vigem {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                format!(
+                    "{} is not a ViGEm compatibility controller, so it cannot be started from \
+                     the ViGEm diagnostics page",
+                    persona.label()
+                ),
+                "use guided Setup and Play for HIDMaestro controller personas",
+            ));
+        }
         // Re-read at ACTION time, deliberately: the view a page is rendering
         // may be two seconds old, and two seconds is long enough for a
         // session to start or for another submit's pads to land on the bus.

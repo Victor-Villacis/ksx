@@ -159,10 +159,13 @@ into MAME's `joystick_map`. Direction glyphs are unified on arrows everywhere,
 including the art's zone labels: a diagonal that did not look like the same
 family as its two parents would defeat the lens.
 
-**Build A — core shipped.** The visual controller, legend, multi-key editing,
-conflict handling, recovery actions, macros, and persona-aware vocabulary are
-in Studio. Remaining polish is passive press-to-select and live echo directly
-on the mapping surface; `/check` is the shipped reference consumer for echo.
+**Build A — core shipped.** The visual controller, binding inspector, physical
+key inventory, multi-key editing, conflict handling, recovery actions, macros,
+persona-aware vocabulary, and direct live echo are in Studio. `/map` and
+`/check` consume the same read-only SSE feed. The mapper paints it only when
+the running session origin matches the saved config or staged draft currently
+on screen; matching player numbers alone are not enough. The remaining
+interaction polish is passive press-to-select.
 
 **Build B — product first run shipped.** `/start` holds a complete setup in the
 idle daemon, and `/map?target=stage&slot=N` points this same mapper at it.
@@ -198,8 +201,12 @@ control name and the key that drives it. The roster is the BACKEND's —
 `MapperSlot::bindings`' key set, unbound controls included, because that is
 exactly the control somebody is standing at the cabinet trying to test.
 
-*What is left of commandment 2.* The echo ON the mapping surface itself. The
-feed it needs now exists and `/check` is the reference consumer.
+*Commandment 2 is now visible in place.* `/map` consumes the same read-only
+feed as `/check`, but paints it only after a fresh map/session-origin
+handshake proves the running setup matches the saved or staged target on
+screen. Controller hits and the selected keyboard's physical keys illuminate
+in the mapper; observable stream/session changes clear the ledger before any
+new frame is accepted.
 
 ## Explicitly deferred (recorded so they're chosen, not forgotten)
 
@@ -211,9 +218,10 @@ feed it needs now exists and `/check` is the reference consumer.
 - Steam-style activators (hold/double-press) — engine feature first, UI
   after; belongs with shift-layers vocabulary from the PadForge audit.
 - Community preset sharing (Steam's playtime-ranked configs) — M7+.
-- WinUSB-claimed panels can't be learned via RawInput (injected typethrough
-  is invisible) — the learn path needs a capture-side tap when M6 migration
-  becomes real; recorded in CONTROL-SURFACE.
+- ~~WinUSB-claimed panels cannot be learned through RawInput.~~ The current
+  learner is daemon-owned and observes the capture-side panel tap. Studio
+  binds Identify and Mapping results to the exact daemon generation, so a
+  competing tab/action cannot lend its key to the wrong write.
 
 ## The 2026-native layer (what no tool in the field study could do)
 
@@ -227,9 +235,9 @@ the capabilities that stack only for us, ranked by leverage:
    backend. Press a panel button → ksx translates → the virtual pad changes
    → the mapper's render lights up. That is END-TO-END verification of the
    entire product pipeline, drawn on the mapping surface (commandment 2),
-   and it makes Build C's core value buildable TODAY: the physical-side
-   echo still wants the live socket, but the virtual-side echo — the half
-   users actually need to trust the chain — is free. (Caveats: page must be
+   and it complements Build C's shipped physical-side SSE echo with an
+   independent virtual-side proof of the final controller state. (Caveats:
+   the page must be
    visible, first read needs a user gesture, mapping-order quirks per
    browser — feature-detect and degrade to socket echo later.)
 2. **AI-assisted mapping (E5 grown up).** Every mapper in the study makes
@@ -260,7 +268,7 @@ the capabilities that stack only for us, ranked by leverage:
    proved config UIs should be drivable from the thing being configured —
    on a cabinet, that's the panel).
 
-Current placement: Build B's product first run and Build C's live check are
-shipped. Direct mapper echo, QR/LAN pairing, PWA presentation, the command
-palette, and multi-surface sync remain future work; none is part of the current
-fresh-install acceptance claim.
+Current placement: Build B's product first run, Build C's live check, and the
+mapper's direct physical-side echo are shipped. Virtual-side Gamepad API echo,
+QR/LAN pairing, PWA presentation, the command palette, and multi-surface sync
+remain future work; none is part of the current fresh-install acceptance claim.

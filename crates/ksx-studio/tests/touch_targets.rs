@@ -17,7 +17,7 @@
 //! query does nothing. Measured against the HTML `render_pads` /
 //! `render_profiles` / `render_setup` / `render_devices` actually emit, in
 //! Chromium with touch emulation on: /pads' three spawn selects, /profiles'
-//! six new-profile fields, /setup's four selects and /devices' alias box all
+//! six new-profile fields, /setup's five selects and /devices' alias box all
 //! rendered 36 px. Nobody had ever measured them, because reading the source
 //! shows a `@media (pointer: coarse)` block that says 2.5rem and looks right —
 //! the same "audit the OUTPUT, not the source" failure that

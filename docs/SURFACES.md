@@ -135,7 +135,8 @@ absence sentence renders too.
 ## §2 Build order
 
 1. **Backend verb** — typed spec, pure plan, tested against synthetic fixtures.
-2. **CLI** — the cheapest surface to test and the one CI can drive headlessly.
+2. **CLI** — the cheapest backend surface to test; CI also drives Studio
+   headlessly for Playwright browser validation.
 3. **The surface the task is actually performed on** (§3, §4).
 
 There is no "egui first or web first" question. That framing assumes a surface
@@ -347,9 +348,16 @@ prerequisite before Studio binds beyond loopback.
 
 Pad testing keeps its different contract. A test-pad action cannot lock out the
 keyboard, so it needs state bounds and clear consequences rather than UAC
-device ownership. `/start` still cannot install ViGEmBus: that belongs to the
-installer's explicit checkbox. A surface may own one narrowly designed elevated
-transaction without becoming a generic driver console.
+device ownership. `/pads` is specifically the ViGEmBus diagnostic: its spawn
+picker contains only implemented personas whose canonical backend is `vigem`.
+DualSense is deliberately absent there because its HIDMaestro endpoint and
+one-instance capacity are proved through guided Setup/Play, not through a page
+whose inventory and prune verb both describe the ViGEm child bus. `/start`
+still cannot install ViGEmBus or HIDMaestro: those
+belong to the installer's explicit controller-driver checkboxes. It may only
+report the output backends required by the currently staged supported personas.
+A surface may own one narrowly designed elevated transaction without becoming
+a generic driver console.
 
 ### §3b Record / replay, and why both other cells say `planned`
 
@@ -632,9 +640,18 @@ crossing is a design smell worth a second look.
     slot and preset selects that already POST `slot-assign`. **Not `/profiles`,
     which has no slot rows**: a second slot editor on a second page would be
     two front doors onto one verb, which is the drift §1 forbids. The option
-    list is `SetupView::personas`, served by the backend with a `can_plug` flag
-    and a `why_not` sentence per entry; nothing about personas is spelled in
-    TypeScript.
+    list is `SetupView::persona_options`, the canonical `PersonaOption` roster
+    served by the backend with `can_plug`, `gap`, canonical `backend`, its
+    display label and `instance_limit` on every entry.
+    `snapshot.rs::SetupRows` offers only the entries this build can actually
+    plug, and TypeScript renders already-composed name/label rows that say the
+    immutable backend and any per-session ceiling. The guided `/start` roster
+    also carries stage-specific `available` / `unavailable_reason`: after one
+    DualSense, or after all four XInput places are occupied, the impossible
+    persona is removed from Add/Change while the other live personas remain.
+    The full roster is never erased. The
+    blank first option means changing a preset, SOCD rule, or profile location
+    asks for no persona change at all.
   - **egui** — renders the persona in the Presets screen's slot rows. No
     picker: §4's rule is that anything needing text entry or a menu of five
     belongs elsewhere, and re-personaing is a between-sessions authoring act,

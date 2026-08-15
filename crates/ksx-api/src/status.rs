@@ -54,6 +54,16 @@ pub struct StatusSnapshot {
     pub generated_at: String,
     /// One line describing ViGEmBus (installed / service state / version).
     pub vigem: String,
+    /// HIDMaestro's exact installed-package evidence for the supported
+    /// DualSense lane.
+    ///
+    /// This is system inventory, not a claim that a controller endpoint is
+    /// already live. An installed package therefore remains
+    /// `verified-on-play`; the protected host handshake and endpoint creation
+    /// are proved by the Play transaction. Missing/partial and unreadable are
+    /// distinct typed states inherited from `ControllerOutputView`.
+    #[serde(default)]
+    pub hidmaestro: crate::ControllerOutputView,
     /// One line describing the Interception keyboard filter.
     pub interception: String,
     /// A ksx process other than the caller is alive right now.
@@ -78,6 +88,7 @@ impl StatusSnapshot {
         Self {
             generated_at: "(unavailable)".to_owned(),
             vigem: reason.to_owned(),
+            hidmaestro: crate::ControllerOutputView::hidmaestro_inventory_unreadable(reason),
             interception: reason.to_owned(),
             daemon_running: false,
             daemon_detail: reason.to_owned(),
@@ -401,6 +412,11 @@ mod tests {
         StatusSnapshot {
             generated_at: "2026-08-04 12:00:00 UTC".into(),
             vigem: "installed — service running — driver v1.21.442.0".into(),
+            hidmaestro: crate::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed — keyboard filter active".into(),
             daemon_running: true,
             daemon_detail: "ksx.exe alive (pid 4242)".into(),
@@ -434,6 +450,16 @@ mod tests {
                 "installed — service running — driver v1.21.442.0"
             ))
         );
+        assert_eq!(
+            v.pointer("/hidmaestro/state"),
+            Some(&serde_json::json!(
+                crate::controller_output_states::VERIFIED_ON_PLAY
+            ))
+        );
+        assert_eq!(
+            v.pointer("/hidmaestro/personas/0"),
+            Some(&serde_json::json!("dualsense"))
+        );
         assert_eq!(v.pointer("/daemon_running"), Some(&serde_json::json!(true)));
         assert_eq!(
             v.pointer("/pads/0/persona"),
@@ -456,6 +482,12 @@ mod tests {
         ] {
             assert_eq!(line, "collector panicked");
         }
+        assert_eq!(
+            snap.hidmaestro.state,
+            crate::controller_output_states::UNKNOWN
+        );
+        assert!(!snap.hidmaestro.readable);
+        assert!(snap.hidmaestro.line.contains("collector panicked"));
         assert!(!snap.daemon_running);
         assert!(snap.pads.is_empty() && snap.profiles.is_empty());
     }

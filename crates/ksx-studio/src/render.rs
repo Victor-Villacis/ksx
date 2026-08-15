@@ -243,7 +243,7 @@ const ISLAND_COMPONENT: &str = "StatusIsland";
 /// inserted mid-document — is GONE (dogfood ledger #4/#14, adopted
 /// 2026-08-06). [`show_values`] now yields `(slot name, value)` pairs, so
 /// document order is documentation, not contract.
-const SHOW_COUNT: usize = 17;
+const SHOW_COUNT: usize = 21;
 
 /// Bare-named slots this page renders and the seam deliberately never fills.
 /// EMPTY here, and that is the claim: every signal `StatusIsland.ts` binds to
@@ -358,12 +358,20 @@ pub(crate) fn daemon_command(session: &SessionView) -> String {
     }
 }
 
-/// Pick the art for a persona LABEL ("PlayStation (DS4) pad") or persona id
-/// ("playstation"). Anything un-PlayStation renders as the Xbox pad — the
-/// cabinet's default persona.
+/// Pick the art for a PlayStation-family persona label or id. DualSense is a
+/// live HIDMaestro persona and therefore uses Sony vocabulary and the closest
+/// bundled PlayStation diagram rather than silently falling through to Xbox.
+/// Anything outside that family renders as the cabinet's default Xbox pad.
 pub(crate) fn art_for(persona: &str) -> &'static str {
     let lower = persona.to_ascii_lowercase();
-    if lower.contains("playstation") || lower.contains("ds4") || lower.contains("ps4") {
+    if lower.contains("playstation")
+        || lower.contains("dualsense")
+        || lower.contains("dualshock")
+        || lower.contains("ds4")
+        || lower.contains("ds5")
+        || lower.contains("ps4")
+        || lower.contains("ps5")
+    {
         ART_DS4
     } else {
         ART_XBOX
@@ -376,9 +384,12 @@ fn scalar_slots(
     session: &SessionView,
     flash: Option<&str>,
 ) -> serde_json::Value {
+    let active = session.active.as_ref();
     serde_json::json!({
         "generatedAt": snap.generated_at,
         "vigemLine": snap.vigem,
+        "hidmaestroLine": snap.hidmaestro.line,
+        "hidmaestroRemedy": snap.hidmaestro.remedy,
         "interceptionLine": snap.interception,
         "daemonYesNo": if snap.daemon_running { "yes" } else { "no" },
         "daemonDetail": snap.daemon_detail,
@@ -387,6 +398,19 @@ fn scalar_slots(
         "profilesSummary": profiles_summary(snap),
         "configRoot": snap.config_root,
         "sessionLine": session.line,
+        "sessionElapsed": active.map_or("starting…", |facts| facts.elapsed.as_str()),
+        "activeInput": active.map_or(
+            "The daemon is starting the selected input pipeline.",
+            |facts| facts.input.as_str(),
+        ),
+        "activeOutputs": active.map_or(
+            "Controller endpoints are being created.",
+            |facts| facts.outputs.as_str(),
+        ),
+        "escapeHatch": active.map_or(
+            ksx_api::stage::ESCAPE_HATCH_LINE,
+            |facts| facts.escape_hatch.as_str(),
+        ),
         "flashLine": flash.unwrap_or(""),
         // FIX 1: the copyable remedy, with this machine's profile flag.
         "daemonCmd": daemon_command(session),
@@ -524,12 +548,19 @@ fn show_values(
         ("show:flashError", flash_err),
         ("show:canStart", can_start),
         ("show:canStop", running),
+        ("show:activeDetails", running && session.active.is_some()),
         ("show:daemonDown", !session.reachable),
         // profile rows: with Start buttons / inert.
         ("show:rowsLive", can_start),
         ("show:rowsPlain", !can_start),
         ("show:vigemOk", vigem_ok(snap)),
         ("show:vigemWarn", !vigem_ok(snap)),
+        (
+            "show:hidmaestroVerifiedOnPlay",
+            snap.hidmaestro.verified_on_play,
+        ),
+        ("show:hidmaestroBlocked", snap.hidmaestro.blocked),
+        ("show:hidmaestroUnknown", snap.hidmaestro.unknown),
         ("show:icptBorrowed", interception_installed(snap)),
         ("show:icptAbsent", !interception_installed(snap)),
         ("show:autostartOn", autostart_on(snap)),
@@ -822,6 +853,11 @@ mod tests {
         StatusSnapshot {
             generated_at: "2026-08-04 12:00:00 UTC".into(),
             vigem: "installed — service running — driver v1.21.442.0".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed — keyboard filter active".into(),
             daemon_running: true,
             daemon_detail: "ksx.exe alive (pid 4242)".into(),
@@ -851,6 +887,7 @@ mod tests {
             line: "idle — daemon reachable".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         }
     }
 
@@ -861,6 +898,12 @@ mod tests {
             line: "running — Example Game — 4 pad(s)".into(),
             profile: Some("Example Game".into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: Some(ksx_api::ActiveSessionView {
+                elapsed: "2m 07s".into(),
+                input: "1 selected keyboard · mapped keys captured · WinUSB".into(),
+                outputs: "P1 Xbox 360 (ViGEmBus) · P2 DualSense (HIDMaestro)".into(),
+                escape_hatch: ksx_api::stage::ESCAPE_HATCH_LINE.into(),
+            }),
         }
     }
 
@@ -872,6 +915,59 @@ mod tests {
         let ir_name = page.manifest.route("/").unwrap().ir.clone().unwrap();
         let bytes = Assets::get(&ir_name).unwrap().data;
         assert_eq!(&bytes[0..6], b"FMIR\x02\x00");
+    }
+
+    /// System inventory keeps HIDMaestro's package evidence distinct from a
+    /// controller endpoint: installed is deferred to Play, missing is blocked,
+    /// and a failed read is unknown. Exactly one badge is licensed each time.
+    #[test]
+    fn hidmaestro_system_shows_are_typed_and_exclusive() {
+        let session = idle_session();
+        for (view, expected) in [
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory(
+                    true,
+                    false,
+                    Some("1.6.1".into()),
+                ),
+                "show:hidmaestroVerifiedOnPlay",
+            ),
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory(false, false, None),
+                "show:hidmaestroBlocked",
+            ),
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory_unreadable(
+                    "the system probe refused",
+                ),
+                "show:hidmaestroUnknown",
+            ),
+        ] {
+            let snapshot = StatusSnapshot {
+                hidmaestro: view,
+                ..sample()
+            };
+            let values: std::collections::BTreeMap<&str, bool> =
+                show_values(&snapshot, &session, None).into_iter().collect();
+            let names = [
+                "show:hidmaestroVerifiedOnPlay",
+                "show:hidmaestroBlocked",
+                "show:hidmaestroUnknown",
+            ];
+            let selected = names
+                .into_iter()
+                .filter(|name| values.get(*name).copied().unwrap_or(false))
+                .count();
+            assert_eq!(
+                selected,
+                1,
+                "HIDMaestro must render exactly one system state: {values:?}"
+            );
+            assert!(
+                values.get(expected).copied().unwrap_or(false),
+                "expected {expected}: {values:?}"
+            );
+        }
     }
 
     /// Pins the slot-table contract the seam depends on: every scalar signal
@@ -1060,6 +1156,30 @@ mod tests {
                     .html
                     .contains("&quot;vigemLine&quot;:&quot;installed — service running"),
             "props must carry the injected slot VALUES: {}",
+            out.html
+        );
+        assert!(
+            out.html.contains(r#""hidmaestroLine":"The exact HIDMaestro package v1.6.1"#)
+                || out.html.contains(
+                    "&quot;hidmaestroLine&quot;:&quot;The exact HIDMaestro package v1.6.1",
+                ),
+            "props must carry HIDMaestro's package evidence: {}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains(r#""show:hidmaestroVerifiedOnPlay":true"#)
+                || out
+                    .html
+                    .contains("&quot;show:hidmaestroVerifiedOnPlay&quot;:true"),
+            "installed HIDMaestro must stay a Play-time check: {}",
+            out.html
+        );
+        assert!(out.html.contains("HIDMaestro"), "{}", out.html);
+        assert!(out.html.contains("check at Play"), "{}", out.html);
+        assert!(
+            out.html.contains("when Play starts; no controller is running yet"),
+            "the System row invented endpoint readiness: {}",
             out.html
         );
         assert!(
@@ -1303,6 +1423,8 @@ mod tests {
         assert_eq!(art_for("xbox360"), ART_XBOX);
         assert_eq!(art_for("PlayStation (DS4) pad"), ART_DS4);
         assert_eq!(art_for("playstation"), ART_DS4);
+        assert_eq!(art_for("DualSense"), ART_DS4);
+        assert_eq!(art_for("PS5 controller"), ART_DS4);
         assert_eq!(art_for("something unknown"), ART_XBOX, "default persona");
     }
 
@@ -1398,6 +1520,14 @@ mod tests {
         assert!(out.html.contains(r#"action="/session/stop""#));
         assert!(out.html.contains(r#"action="/config/reload""#));
         assert!(!out.html.contains(r#"action="/session/start""#));
+        assert!(out.html.contains("2m 07s"), "{}", out.html);
+        assert!(out.html.contains("mapped keys captured"), "{}", out.html);
+        assert!(out.html.contains("DualSense (HIDMaestro)"), "{}", out.html);
+        assert!(
+            out.html.contains("LeftCtrl five times always toggles keyboard capture"),
+            "{}",
+            out.html
+        );
     }
 
     /// No control channel: every control renders DISABLED with the reason —

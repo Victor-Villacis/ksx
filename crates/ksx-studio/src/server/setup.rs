@@ -420,10 +420,27 @@ pub(super) async fn setup_form_prove(State(state): State<Arc<AppState>>) -> Resp
     ))
 }
 
-/// POST /setup/prove/cancel — `ControlSource::learn_cancel`.
-pub(super) async fn setup_form_prove_cancel(State(state): State<Arc<AppState>>) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || state.control.learn_cancel())
-        .await
-        .unwrap_or_else(|_| crate::control::LearnView::unavailable("the control call panicked"));
+#[derive(Default, Deserialize)]
+pub(super) struct SetupLearnCancelForm {
+    #[serde(default)]
+    generation: String,
+}
+
+/// POST /setup/prove/cancel — cancel only the listener generation rendered in
+/// this form, so a stale page cannot stop a newer Identify/Mapping attempt.
+pub(super) async fn setup_form_prove_cancel(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SetupLearnCancelForm>,
+) -> Response {
+    let Ok(generation) = form.generation.trim().parse::<u64>() else {
+        return setup_redirect(Err(
+            "this listening window is stale — start listening again".to_owned(),
+        ));
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.control.learn_cancel_generation(Some(generation))
+    })
+    .await
+    .unwrap_or_else(|_| crate::control::LearnView::unavailable("the control call panicked"));
     setup_redirect(learn_flash(outcome, "Stopped listening."))
 }

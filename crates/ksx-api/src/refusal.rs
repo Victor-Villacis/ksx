@@ -40,6 +40,8 @@ pub mod codes {
     pub const MACRO_INVALID: &str = "macro-invalid";
     /// A restore mode / verb argument this build does not know.
     pub const BAD_REQUEST: &str = "bad-request";
+    /// A press was heard but could not be joined to exactly one selectable board.
+    pub const IDENTIFY_UNMATCHED: &str = "identify-unmatched";
     /// The operation exists, but not on this surface — the remedy names the
     /// one that has it. This is the honest answer a defaulted trait method
     /// gives, and it is never a silent no-op.

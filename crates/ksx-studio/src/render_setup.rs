@@ -88,6 +88,7 @@ use crate::snapshot::SetupPayload;
 const LIST_SLOT_STEPS: &str = "list:stepRows:array";
 const LIST_SLOT_SLOT_OPTIONS: &str = "list:slotOptions:array";
 const LIST_SLOT_PRESET_OPTIONS: &str = "list:presetOptions:array";
+const LIST_SLOT_PERSONA_OPTIONS: &str = "list:personaOptions:array";
 const LIST_SLOT_PROFILE_OPTIONS: &str = "list:profileOptions:array";
 const LIST_SLOT_DEVICES: &str = "list:deviceRows:array";
 const LIST_SLOT_SLOTS: &str = "list:slotRows:array";
@@ -141,6 +142,11 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
         "exportLine": lines.export,
         "proveLine": lines.prove,
         "proveKey": payload.learn.key.clone().unwrap_or_default(),
+        "proveGeneration": payload
+            .learn
+            .generation
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         "setupSource": payload.setup.source,
         "wireBlocked": lines.wire_blocked,
         "proveBlocked": lines.prove_blocked,
@@ -157,7 +163,7 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
 /// which is docs/SURFACES.md §1 drift with a runtime cost: the two copies
 /// could disagree between the SSR paint and the first poll. Now both read the
 /// rows `SetupPayload::composed` filled, so they cannot.
-fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
+fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 10] {
     let rows = &payload.rows;
 
     let steps = SlotValue::array(
@@ -197,6 +203,17 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
     };
     let socd_options = SlotValue::array(
         rows.socd_options
+            .iter()
+            .map(|option| {
+                SlotValue::object(vec![
+                    ("value".to_owned(), SlotValue::Text(option.value.clone())),
+                    ("label".to_owned(), SlotValue::Text(option.label.clone())),
+                ])
+            })
+            .collect(),
+    );
+    let persona_options = SlotValue::array(
+        rows.persona_options
             .iter()
             .map(|option| {
                 SlotValue::object(vec![
@@ -247,6 +264,7 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
         (LIST_SLOT_STEPS, steps),
         (LIST_SLOT_SLOT_OPTIONS, slot_options),
         (LIST_SLOT_PRESET_OPTIONS, presets),
+        (LIST_SLOT_PERSONA_OPTIONS, persona_options),
         (LIST_SLOT_PROFILE_OPTIONS, profiles),
         (LIST_SLOT_DEVICES, devices),
         (LIST_SLOT_SLOTS, slots),
@@ -431,6 +449,7 @@ mod tests {
             line: "idle — daemon reachable".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         }
     }
 
@@ -438,6 +457,7 @@ mod tests {
         LearnView {
             ok: true,
             state: "idle".into(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -454,6 +474,7 @@ mod tests {
             line: "running — 4 pad(s)".into(),
             profile: Some("Example Game".into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         }
     }
 
@@ -547,6 +568,7 @@ mod tests {
                 LIST_SLOT_STEPS,
                 LIST_SLOT_SLOT_OPTIONS,
                 LIST_SLOT_PRESET_OPTIONS,
+                LIST_SLOT_PERSONA_OPTIONS,
                 LIST_SLOT_SOCD_OPTIONS,
                 LIST_SLOT_PROFILE_OPTIONS,
                 LIST_SLOT_DEVICES,
@@ -771,6 +793,47 @@ mod tests {
             out.html
         );
         assert!(out.html.contains("Nothing is running"), "{}", out.html);
+    }
+
+    /// The backend accepted persona changes before this control existed. The
+    /// form now exposes the same canonical roster as `/start`, while its blank
+    /// first option preserves the slot identity during an unrelated edit.
+    #[test]
+    fn the_slot_form_can_change_controller_without_changing_it_by_default() {
+        let page = EmbeddedPage::load("/setup").unwrap();
+        let out = render_setup(&page, &configured(), None);
+        let form = out
+            .html
+            .split(r#"action="/setup/slot""#)
+            .nth(1)
+            .expect("slot form");
+        let form = &form[..form.find("</form>").expect("closed slot form")];
+
+        assert!(form.contains(r#"for="setup-persona""#), "{form}");
+        assert!(
+            form.contains(r#"id="setup-persona" name="persona""#)
+                || form.contains(r#"name="persona" id="setup-persona""#),
+            "{form}"
+        );
+        let blank = form.find("(leave as it is)").expect("preserving sentinel");
+        for (name, label) in [
+            ("xbox360", "Xbox 360"),
+            ("playstation", "PlayStation"),
+            ("dualsense", "DualSense"),
+        ] {
+            let at = form
+                .find(&format!(r#"value="{name}""#))
+                .unwrap_or_else(|| panic!("missing {label} option: {form}"));
+            assert!(blank < at, "the preserving sentinel must be first: {form}");
+            assert!(form.contains(label), "missing {label}: {form}");
+        }
+        assert!(form.contains("Xbox 360 · ViGEmBus"), "{form}");
+        assert!(
+            form.contains("DualSense · HIDMaestro · one per session"),
+            "{form}"
+        );
+        assert!(!form.contains(r#"value="switchpro""#), "{form}");
+        assert!(!form.contains(r#"value="xboxseries""#), "{form}");
     }
 
     /// The slot menu offers every slot the BACKEND accepts — the ceiling it

@@ -77,8 +77,9 @@ source, not another Rust package.
 `docs/SURFACES.md` is the authority; the short version:
 
 - **CLI** — the development surface and the intended first driver for backend
-  capabilities. It is the cheapest thing to test and the only surface CI can
-  drive headlessly. Two current parity debts are named rather than hidden:
+  capabilities. It is the cheapest backend surface to test and the broadest
+  one CI drives headlessly; CI also drives Studio through its pinned Playwright
+  browser checks. Two current parity debts are named rather than hidden:
   staged setup and profile CRUD have typed backend contracts and Studio faces,
   while `ksx stage` and `ksx games new|update|delete` remain planned
   (`docs/SURFACES.md` §3c and §10). The product does not require either CLI face
@@ -311,8 +312,8 @@ orient, at enormous cost.
 
 **Push your branch; let CI gate it.** `rust-toolchain.toml` pins 1.97.1 and CI
 runs on every branch: fmt, workspace clippy, **all four feature combinations**,
-the full suite, plus the installer compile. Do not run the four-way matrix
-locally.
+the full suite, the pinned-Chromium Studio parity/visual-smoke job, plus the
+installer compile. Do not run the four-way matrix locally.
 
 > **Only a clean CI runner produces shippable binaries.** Local builds are useful
 > diagnostics, but they include developer-host state and are not release
@@ -333,8 +334,8 @@ reached main through that gap.
 **Never hand-merge generated assets** (`crates/ksx-studio/assets/*`). Regenerate
 with `cd studio-ui && node build.mjs`. They are `-text` in `.gitattributes`, so
 a clean rebuild leaves `git status` clean — if it does not, something really
-changed. A hand-resolved manifest yields a page whose HTML and JS disagree, and
-that fails in a browser and in no Rust test.
+changed. A hand-resolved manifest yields a page whose HTML and JS disagree. No
+Rust test sees that seam; the CI Playwright parity guard does.
 
 **Doc section numbers are load-bearing.** ~30 code sites cite
 `DEVICE-IDENTITY.md` by §number, and `crates/ksx-app/tests/docs.rs` fails the
@@ -361,9 +362,10 @@ commit in the notes.
 `AppVersion` is also `VersionInfoVersion` and the Apps & Features row.
 
 A clean CI/ISCC run proves compilation, packaging and reproducible committed
-Forma assets. It does **not** prove installation behavior. Before tagging, run
-the fresh-customer product gate and the still-open Gate 3 in `docs/GATES.md`;
-record the exact setup.exe SHA in the gate log.
+Forma assets, and runs Studio's Playwright parity and visual-smoke checks. It
+does **not** prove installation behavior or replace human visual review. Before
+tagging, run the fresh-customer product gate and the still-open Gate 3 in
+`docs/GATES.md`; record the exact setup.exe SHA in the gate log.
 
 ---
 

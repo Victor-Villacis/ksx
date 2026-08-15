@@ -490,6 +490,7 @@ const ANCHORS: &[Anchors] = &[
         // did until `/start/controller/layout` existed.
         studio: &[
             "/start",
+            "/start/device/identify",
             "/start/controller/layout",
             "/start/save",
             "/start/play",
@@ -715,9 +716,11 @@ const EXEMPT: &[Exempt] = &[
               setup is the one place an admin token already exists and has already been \
               consented to (packaging/ksx.iss, docs/DRIVERS.md \"Who runs it, and when\"). \
               That is still not a surface — it happens once, before any surface exists. \
-              What the surfaces carry is the STATE: `MachineSource::pad_bus` is read by \
-              /start and said before the Play button, which is the row §3 already gives \
-              them (\"Is it working: pads, drivers\").",
+              What the surfaces carry is the STATE: `MachineSource::controller_outputs` \
+              evaluates only the backends required by the currently staged supported \
+              personas and is said before the Play button; Status/System inventories both \
+              installed output stacks without claiming HIDMaestro's endpoint exists before \
+              Play. That is the row §3 already gives them (\"Is it working: pads, drivers\").",
     },
     Exempt {
         verb: "studio",

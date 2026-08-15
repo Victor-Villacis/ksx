@@ -189,7 +189,7 @@ export function customerFeedReason(reason: string | null | undefined): string {
     return "Live testing needs ksx to be reopened.";
   }
   if (lower.includes("no session") || lower.includes("not running")) {
-    return "Press Play in Setup to start live testing.";
+    return "Open Step 4 in guided setup and press Play to start live testing.";
   }
   // Refusals originate below the presentation boundary and may contain pipe
   // names, commands, paths, or other support detail. An unfamiliar one still

@@ -81,7 +81,8 @@ pub use ksx_core::MAX_SLOTS;
 pub use client::{Client, VerbSink};
 pub use control::{
     map_request, multi_key_refusal, with_key, without_key, BindConflict, BindOutcome, BindRequest,
-    ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin, SessionView, SlotOutcome,
+    ActiveSessionView, ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin,
+    SessionView, SlotOutcome,
 };
 pub use live::{
     KeyHit, LiveEnvelope, LiveFeed, LiveFrame, LiveSource, LiveStream, NoFeed, NoLiveSource,
@@ -89,17 +90,19 @@ pub use live::{
 };
 pub use live_pipe::PipeLiveSource;
 pub use machine::{
-    pad_bus_codes, setup_states, setup_steps, AdviceRow, AutostartSpec, AutostartView,
-    BlockingSpec, BlockingView, BoardRow, ConfigExport, ConfiguredDevice, DeletePreset,
-    DeleteProfile, DevicePickSpec, DevicePickView, DeviceRemoveSpec, DeviceRemoveView,
-    DeviceScanView, DevicesView, DoctorRow, DoctorView, ExportRequest, ImportReport, ImportRequest,
-    ImportWrite, KeyboardRow, MachineSource, NewPreset, NewProfile, PadBusView, PadsSpawnSpec,
-    PadsView, PresetRow, PresetsView, ProfileDetail, ProfilesView, PrunePlanView, RenamePreset,
-    SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer, SpawnOption, TemplateRow,
-    UpdateProfile, UsbRow, VirtualPadRow, WinusbCertificateSweepSpec, WinusbMutationView,
-    WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow, WinusbResidueView, WinusbView,
-    CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD, INSTALL_BUS_REMEDY, NO_BOARDS_LINE, NO_BUS_READ_REMEDY,
-    RELEASE_LEAD, UNREAD_BOARDS_LINE, UNREAD_CONFIGURED_LINE,
+    controller_output_states, setup_states, setup_steps, vigem_output_codes, AdviceRow,
+    AutostartSpec, AutostartView, BlockingSpec, BlockingView, BoardRow, ConfigExport,
+    ConfiguredDevice, ControllerOutputRequirement, ControllerOutputView, ControllerOutputsView,
+    DeletePreset, DeleteProfile, DeviceIdentifyView, DevicePickSpec, DevicePickView,
+    DeviceRemoveSpec, DeviceRemoveView, DeviceScanView, DevicesView, DoctorRow, DoctorView,
+    ExportRequest, ImportReport, ImportRequest, ImportWrite, KeyboardRow, MachineSource, NewPreset,
+    NewProfile, PadsSpawnSpec, PadsView, PresetRow, PresetsView, ProfileDetail, ProfilesView,
+    PrunePlanView, RenamePreset, SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer,
+    SpawnOption, TemplateRow, UpdateProfile, UsbRow, VirtualPadRow, WinusbCertificateSweepSpec,
+    WinusbMutationView, WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow,
+    WinusbResidueView, WinusbView, CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD,
+    INSTALL_HIDMAESTRO_REMEDY, INSTALL_VIGEM_REMEDY, NO_BOARDS_LINE,
+    NO_OUTPUT_READ_REMEDY, RELEASE_LEAD, UNREAD_BOARDS_LINE, UNREAD_CONFIGURED_LINE,
 };
 pub use pipe::{PipeTransport, TransportError, NO_CHANNEL};
 pub use refusal::{codes, Refusal, Refused};

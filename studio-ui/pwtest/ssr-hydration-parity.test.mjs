@@ -28,12 +28,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
+import { stopFixtureProcess } from "./fixture-process.mjs";
 
-/** Our own port — never 4460 (a real `ksx studio`) and never the macro
- *  suite's. The two suites must not run at the same time either: they share
- *  one `macro_fixture.exe`, and Windows will not relink a running binary. See
- *  `--test-concurrency=1` in package.json. */
-const PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4477);
+/** Our own range — never 4460 (a real `ksx studio`) or 4478 (the macro
+ *  suite). The files still run serially because they share one
+ *  `macro_fixture.exe`, which Windows will not relink while it is running. */
+const FIRST_PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4488);
 
 /** ONE PORT PER SESSION STATE, and here is why that matters.
  *
@@ -52,9 +52,9 @@ const PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4477);
  *  why the fixture learned to be running" — was the one state never actually
  *  checked, on every run since it was added.
  *
- *  A port per state removes the reuse entirely; nothing has to wait on
- *  Windows releasing a socket. */
-const portFor = (session) => PORT + 1 + SESSIONS.indexOf(session);
+ *  A port per state removes the reuse entirely. Teardown still waits for the
+ *  process exit so the next FILE cannot race its executable handle. */
+const portFor = (session) => FIRST_PORT + SESSIONS.indexOf(session);
 const baseFor = (session) => `http://127.0.0.1:${portFor(session)}`;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -68,10 +68,20 @@ const exe = path.join(
   process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
 );
 
-/** The routes that render server-side. `/start` includes the scalar capture
- *  preparation branch, whose hidden exact-target values must survive adoption
- *  without a first-paint swap. */
-const ROUTES = ["/", "/map", "/map?slot=1", "/start"];
+/** Every server-rendered route, plus the mapper's alternate slot view.
+ *  `/start` includes the scalar capture preparation branch, whose hidden
+ *  exact-target values must survive adoption without a first-paint swap. */
+const ROUTES = [
+  "/start",
+  "/",
+  "/map",
+  "/map?slot=1",
+  "/check",
+  "/pads",
+  "/devices",
+  "/profiles",
+  "/setup",
+];
 
 /** The session states the show pairs actually move between. `modal open` is
  *  deliberately absent: every modal show (`show:modalOpen` and its three inner
@@ -228,8 +238,8 @@ for (const session of SESSIONS) {
       }
     });
 
-    after(() => {
-      server?.kill();
+    after(async () => {
+      await stopFixtureProcess(server, `parity fixture (${session})`);
     });
 
     for (const route of ROUTES) {
@@ -243,8 +253,7 @@ for (const session of SESSIONS) {
           hydrated,
           `${route} (session ${session}) flashes: the server paints one thing and the ` +
             `client replaces it on adoption. Whichever side is wrong, the two ` +
-            `derivations have drifted — server: render.rs / render_map.rs, client: ` +
-            `StatusIsland.ts / MapIsland.ts.\n${firstDifference(ssr, hydrated)}`,
+            `derivations for this route have drifted.\n${firstDifference(ssr, hydrated)}`,
         );
       });
     }

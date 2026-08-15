@@ -114,6 +114,11 @@ impl StatusSource for Store {
         StatusSnapshot {
             generated_at: "fixture".into(),
             vigem: "installed".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed".into(),
             daemon_running: true,
             daemon_detail: "fixture".into(),
@@ -172,6 +177,7 @@ fn fixture_session() -> SessionView {
             line: "running — Fixture — 1 pad(s)".into(),
             profile: Some("Fixture".into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         },
         Ok("down") => SessionView::unreachable("no daemon control channel"),
         _ => SessionView {
@@ -180,6 +186,7 @@ fn fixture_session() -> SessionView {
             line: "idle".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         },
     }
 }

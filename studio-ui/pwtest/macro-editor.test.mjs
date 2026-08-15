@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
+import { stopFixtureProcess } from "./fixture-process.mjs";
 
 /** OUR port, never the 4460 a real `ksx studio` sits on — and never a port
  *  another checkout's fixture might already be sitting on either (the `before`
@@ -97,8 +98,11 @@ before(async () => {
 });
 
 after(async () => {
-  await browser?.close();
-  server?.kill();
+  try {
+    await browser?.close();
+  } finally {
+    await stopFixtureProcess(server, "macro fixture");
+  }
 });
 
 /** A page with the macro card OPEN — it ships collapsed (`<details>`), and

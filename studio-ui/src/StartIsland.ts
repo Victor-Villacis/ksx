@@ -16,9 +16,10 @@ import { h, createSignal, createList, createShow } from "@getforma/core";
 //
 //   - MAX_SLOTS and MAX_XINPUT_SLOTS appear in its copy. A `16` typed here is
 //     the exact bug the rule exists for (§1a records the Profiles page's).
-//   - The persona list is a ROSTER with a can_plug flag per entry. Hardcoding
-//     five names would keep offering `dualsense` after it starts plugging, or
-//     keep offering it while it cannot.
+//   - The persona list is a served ROSTER with backend and stage-capacity
+//     availability per entry. Hardcoding names would keep offering `dualsense`
+//     after its one-per-session limit is already staged, or keep offering an
+//     XInput persona after the shared slot ceiling is full.
 //   - The split-or-freeze wording, the escape hatch and its scope are safety
 //     facts. Paraphrasing the first one is not a style slip: it is the only
 //     thing standing between a frozen keyboard and a reboot.
@@ -51,6 +52,8 @@ export interface StartLines {
   bus_heading: string;
   bus_cls: string;
   ready_line: string;
+  save_status: string;
+  play_status: string;
   play_line: string;
   guide_line: string;
   escape_line: string;
@@ -86,6 +89,10 @@ export interface StartFlags {
   blocking_answered: boolean;
   ready: boolean;
   not_ready: boolean;
+  can_save: boolean;
+  can_play: boolean;
+  cannot_save: boolean;
+  cannot_play: boolean;
   can_discard: boolean;
   session_live: boolean;
   flash_ok: boolean;
@@ -204,10 +211,34 @@ export interface SessionView {
   profile: string | null;
 }
 
-/** `ksx_api::PadBusView` — can ksx create a virtual controller right now.
- *  Only the two sentences are read here; `blocked` vs `unknown` was already
- *  decided in Rust and arrives as `flags.bus_warn` plus `lines.bus_cls`. */
-export interface PadBusView {
+/** One output stack required by the controllers currently on the stage. */
+export interface ControllerOutputView {
+  backend: string;
+  label: string;
+  personas: string[];
+  persona_labels: string[];
+  code: string;
+  state: string;
+  readable: boolean;
+  blocked: boolean;
+  unknown: boolean;
+  verified_on_play: boolean;
+  version: string | null;
+  line: string;
+  remedy: string;
+}
+
+/** Persona-aware controller-output readiness. The backend composes both the
+ *  aggregate and the per-backend rows; this island only presents the result. */
+export interface ControllerOutputsView {
+  required: ControllerOutputView[];
+  state: string;
+  readable: boolean;
+  ready: boolean;
+  can_play: boolean;
+  blocked: boolean;
+  unknown: boolean;
+  verified_on_play: boolean;
   line: string;
   remedy: string;
 }
@@ -218,6 +249,19 @@ export interface PadBusView {
 export interface StartCaptureView {
   expected_selector: string;
   instance_id: string;
+}
+
+export interface StartJourneyStep {
+  cls: string;
+  badge: string;
+  detail: string;
+}
+
+export interface StartJourney {
+  keyboard: StartJourneyStep;
+  controller: StartJourneyStep;
+  mapping: StartJourneyStep;
+  play: StartJourneyStep;
 }
 
 /** What GET /api/start serves and what the island props carry — one shape
@@ -242,10 +286,11 @@ export interface StartAutostartView {
 export interface StartPayload {
   staged: StagedSetupView;
   session: SessionView;
-  pad_bus: PadBusView;
+  controller_outputs: ControllerOutputsView;
   capture: StartCaptureView;
   autostart: StartAutostartView;
   flash: string | null;
+  journey: StartJourney;
   lines: StartLines;
   flags: StartFlags;
   rows: StartRows;
@@ -282,7 +327,8 @@ const [busHeading, setBusHeading] = createSignal("not collected");
 const [busCls, setBusCls] = createSignal("card alarm");
 const [busLine, setBusLine] = createSignal("not collected");
 const [busRemedy, setBusRemedy] = createSignal("");
-const [readyLine, setReadyLine] = createSignal("not collected");
+const [saveStatus, setSaveStatus] = createSignal("not collected");
+const [playStatus, setPlayStatus] = createSignal("not collected");
 const [playLine, setPlayLine] = createSignal("not collected");
 const [guideLine, setGuideLine] = createSignal("not collected");
 const [escapeLine, setEscapeLine] = createSignal("not collected");
@@ -292,6 +338,20 @@ const [scanError, setScanError] = createSignal("");
 const [presetsError, setPresetsError] = createSignal("");
 const [nextPreset, setNextPreset] = createSignal("");
 const [flashLine, setFlashLine] = createSignal("");
+const [journeyKeyboardCls, setJourneyKeyboardCls] = createSignal("navlink workflow-link workflow-keyboard workflow-pending");
+const [journeyKeyboardBadge, setJourneyKeyboardBadge] = createSignal("next");
+const [journeyKeyboardDetail, setJourneyKeyboardDetail] = createSignal("Keyboard next: choose a keyboard.");
+const [journeyControllerCls, setJourneyControllerCls] = createSignal("navlink workflow-link workflow-controller workflow-blocked");
+const [journeyControllerBadge, setJourneyControllerBadge] = createSignal("blocked");
+const [journeyControllerDetail, setJourneyControllerDetail] = createSignal("Controller blocked: choose a keyboard first.");
+const [journeyMappingCls, setJourneyMappingCls] = createSignal("navlink workflow-link workflow-mapping workflow-blocked");
+const [journeyMappingBadge, setJourneyMappingBadge] = createSignal("blocked");
+const [journeyMappingDetail, setJourneyMappingDetail] = createSignal("Mapping blocked: create a controller first.");
+const [journeyPlayCls, setJourneyPlayCls] = createSignal("navlink workflow-link workflow-play workflow-blocked");
+const [journeyPlayBadge, setJourneyPlayBadge] = createSignal("blocked");
+const [journeyPlayDetail, setJourneyPlayDetail] = createSignal("Play blocked: finish setup first.");
+const [journeyKeyboardCurrent, setJourneyKeyboardCurrent] = createSignal("location");
+const [journeyControllerCurrent, setJourneyControllerCurrent] = createSignal("false");
 
 const [pillRunning, setPillRunning] = createSignal(false);
 const [pillIdle, setPillIdle] = createSignal(false);
@@ -319,8 +379,10 @@ const [slotsFull, setSlotsFull] = createSignal(false);
 const [hasGaps, setHasGaps] = createSignal(false);
 const [canLayout, setCanLayout] = createSignal(false);
 const [blockingAnswered, setBlockingAnswered] = createSignal(false);
-const [ready, setReady] = createSignal(false);
-const [notReady, setNotReady] = createSignal(false);
+const [canSave, setCanSave] = createSignal(false);
+const [canPlay, setCanPlay] = createSignal(false);
+const [cannotSave, setCannotSave] = createSignal(true);
+const [cannotPlay, setCannotPlay] = createSignal(true);
 const [canDiscard, setCanDiscard] = createSignal(false);
 const [sessionLive, setSessionLive] = createSignal(false);
 const [flashOk, setFlashOk] = createSignal(false);
@@ -348,6 +410,7 @@ export function applyStart(p: StartPayload): void {
   const l = p.lines;
   const f = p.flags;
   const r = p.rows;
+  const j = p.journey;
 
   setSessionLine(p.session.line);
   setDeviceLine(l.device_line);
@@ -379,15 +442,15 @@ export function applyStart(p: StartPayload): void {
   setBlockingLine(l.blocking_line);
   setPresetLine(l.preset_line);
   setMapperLine(l.mapper_line);
-  // The driver banner: heading and severity class from the page's own lines,
-  // the two sentences straight off `ksx_api::PadBusView`. Nothing here decides
-  // whether the bus is broken or merely unread — that is `flags.bus_warn`
-  // plus the class, both settled in Rust.
+  // The output-stack banner is persona-aware in Rust. Nothing here infers
+  // whether ViGEmBus or HIDMaestro is needed, nor whether a known prerequisite
+  // is blocked, unreadable, or must be verified when Play starts.
   setBusHeading(l.bus_heading);
   setBusCls(l.bus_cls);
-  setBusLine(p.pad_bus.line);
-  setBusRemedy(p.pad_bus.remedy);
-  setReadyLine(l.ready_line);
+  setBusLine(p.controller_outputs.line);
+  setBusRemedy(p.controller_outputs.remedy);
+  setSaveStatus(l.save_status);
+  setPlayStatus(l.play_status);
   setPlayLine(l.play_line);
   setGuideLine(l.guide_line);
   setStageError(l.stage_error);
@@ -396,6 +459,18 @@ export function applyStart(p: StartPayload): void {
   setEscapeLine(l.escape_line);
   setScopeLine(l.scope_line);
   setNextPreset(p.staged.next_preset ?? "");
+  setJourneyKeyboardCls(j.keyboard.cls);
+  setJourneyKeyboardBadge(j.keyboard.badge);
+  setJourneyKeyboardDetail(j.keyboard.detail);
+  setJourneyControllerCls(j.controller.cls);
+  setJourneyControllerBadge(j.controller.badge);
+  setJourneyControllerDetail(j.controller.detail);
+  setJourneyMappingCls(j.mapping.cls);
+  setJourneyMappingBadge(j.mapping.badge);
+  setJourneyMappingDetail(j.mapping.detail);
+  setJourneyPlayCls(j.play.cls);
+  setJourneyPlayBadge(j.play.badge);
+  setJourneyPlayDetail(j.play.detail);
 
   setPillRunning(f.pill_running);
   setPillIdle(f.pill_idle);
@@ -420,8 +495,10 @@ export function applyStart(p: StartPayload): void {
   setHasGaps(f.has_gaps);
   setCanLayout(f.can_layout);
   setBlockingAnswered(f.blocking_answered);
-  setReady(f.ready);
-  setNotReady(f.not_ready);
+  setCanSave(f.can_save);
+  setCanPlay(f.can_play);
+  setCannotSave(f.cannot_save);
+  setCannotPlay(f.cannot_play);
   setCanDiscard(f.can_discard);
   setSessionLive(f.session_live);
 
@@ -463,12 +540,26 @@ export function applyUnreachable(): void {
     "ksx is not responding, so this keyboard's capture state is unknown. Nothing was changed.",
   );
   setCaptureDetail("Reopen the app before preparing, releasing, saving, or playing.");
-  setReady(false);
-  setNotReady(true);
-  setReadyLine(
-    "ksx is not responding, so Save and Play are temporarily unavailable.",
-  );
+  setCanSave(false);
+  setCanPlay(false);
+  setCannotSave(true);
+  setCannotPlay(true);
+  setSaveStatus("Reconnect to ksx before saving this setup.");
+  setPlayStatus("Reconnect to ksx before starting a gameplay session.");
   setCanDiscard(false);
+  const unavailable = "blocked: reconnect to ksx before continuing.";
+  setJourneyKeyboardCls("navlink workflow-link workflow-keyboard workflow-blocked");
+  setJourneyKeyboardBadge("blocked");
+  setJourneyKeyboardDetail(`Keyboard ${unavailable}`);
+  setJourneyControllerCls("navlink workflow-link workflow-controller workflow-blocked");
+  setJourneyControllerBadge("blocked");
+  setJourneyControllerDetail(`Controller ${unavailable}`);
+  setJourneyMappingCls("navlink workflow-link workflow-mapping workflow-blocked");
+  setJourneyMappingBadge("blocked");
+  setJourneyMappingDetail(`Mapping ${unavailable}`);
+  setJourneyPlayCls("navlink workflow-link workflow-play workflow-blocked");
+  setJourneyPlayBadge("blocked");
+  setJourneyPlayDetail(`Play ${unavailable}`);
 }
 
 /** One-shot action feedback (POST outcome or the seed's ?flash= value). */
@@ -494,12 +585,21 @@ export function applyFlash(flash: string | null | undefined): void {
   flashTimer = setTimeout(() => applyFlash(null), FLASH_MS);
 }
 
+/** The fragment is client-owned (HTTP never receives it), while progress is
+ * server-owned above. Keep the two concerns separate: this marks which Start
+ * section is in view without re-judging completion or blockers. */
+export function applyStartJourneyLocation(hash: string): void {
+  const controller = hash.toLowerCase() === "#controller";
+  setJourneyKeyboardCurrent(controller ? "false" : "location");
+  setJourneyControllerCurrent(controller ? "location" : "false");
+}
+
 // ── The screen (the slot layout test pins its names) ───────────────────────
 
 export function StartIsland() {
   return h(
     "div",
-    { class: "studio" },
+    { class: "studio startflow" },
     h(
       "header",
       { class: "top" },
@@ -511,10 +611,25 @@ export function StartIsland() {
       ),
       h(
         "nav",
-        { class: "topnav", "aria-label": "screens" },
-        h("a", { class: "navlink on", href: "/start", "aria-current": "page" }, "Setup"),
-        h("a", { class: "navlink", href: "/map" }, "Controls"),
-        h("a", { class: "navlink", href: "/check" }, "Test"),
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: () => journeyKeyboardCls(), href: "/start#keyboard", "aria-current": () => journeyKeyboardCurrent() }, h("span", { class: "workflow-num" }, "1"), "Keyboard", h("span", { class: "workflow-state" }, () => journeyKeyboardBadge()), h("span", { class: "workflow-detail" }, () => journeyKeyboardDetail())),
+        h("a", { class: () => journeyControllerCls(), href: "/start#controller", "aria-current": () => journeyControllerCurrent() }, h("span", { class: "workflow-num" }, "2"), "Controller", h("span", { class: "workflow-state" }, () => journeyControllerBadge()), h("span", { class: "workflow-detail" }, () => journeyControllerDetail())),
+        h("a", { class: () => journeyMappingCls(), href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping", h("span", { class: "workflow-state" }, () => journeyMappingBadge()), h("span", { class: "workflow-detail" }, () => journeyMappingDetail())),
+        h("a", { class: () => journeyPlayCls(), href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play", h("span", { class: "workflow-state" }, () => journeyPlayBadge()), h("span", { class: "workflow-detail" }, () => journeyPlayDetail())),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink", "aria-label": "Open Studio tools" }, "Tools"),
+        h(
+          "nav",
+          { class: "appmenu-panel", "aria-label": "Studio tools" },
+          h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+        ),
       ),
       createShow(
         () => pillRunning(),
@@ -532,6 +647,25 @@ export function StartIsland() {
     h(
       "main",
       null,
+      h(
+        "section",
+        { class: "workflow-hero", "aria-labelledby": "start-title" },
+        h("p", { class: "eyebrow" }, "Guided setup"),
+        h("h1", { id: "start-title" }, "Turn your keyboard into a controller"),
+        h(
+          "p",
+          { class: "workflow-lede" },
+          "Choose the hardware, shape each virtual controller, map the keys, then play. ",
+          "Every choice remains revisitable until you save or start the session.",
+        ),
+        h(
+          "div",
+          { class: "workflow-promise", role: "list", "aria-label": "How setup works" },
+          h("span", { role: "listitem" }, "Nothing changes when you browse"),
+          h("span", { role: "listitem" }, "Hardware changes ask first"),
+          h("span", { role: "listitem" }, "Play uses this exact setup"),
+        ),
+      ),
       // ── The three failed reads. Each says what did not happen; none of
       // them draws an empty machine. ──────────────────────────────────────
       createShow(
@@ -567,11 +701,16 @@ export function StartIsland() {
       ),
       createShow(
         () => flashOk(),
-        () => h("p", { class: "flash flash-ok" }, () => flashLine()),
+        () =>
+          h(
+            "p",
+            { class: "flash flash-ok", role: "status", "aria-live": "polite" },
+            () => flashLine(),
+          ),
       ),
       createShow(
         () => flashError(),
-        () => h("p", { class: "flash flash-err" }, () => flashLine()),
+        () => h("p", { class: "flash flash-err", role: "alert" }, () => flashLine()),
       ),
       // ── KEYBOARDS KSX IS HOLDING — the way back, before anything else ───
       //
@@ -680,8 +819,9 @@ export function StartIsland() {
       // ── STEP 1 (moment 4): CHOOSE A KEYBOARD ────────────────────────────
       h(
         "section",
-        { class: "card wide dv-card" },
-        h("h2", null, "1 · Choose a keyboard"),
+        { class: "card wide dv-card journey-step", id: "keyboard" },
+        h("p", { class: "step-kicker" }, "Step 1 · Hardware"),
+        h("h2", null, "Choose the keyboard you want to use"),
         h("p", { class: "cardline" }, () => deviceLine()),
         createShow(
           () => hasDevice(),
@@ -701,6 +841,41 @@ export function StartIsland() {
               { class: "dv-line" },
               "Choose the keyboard you recognize. Bluetooth keyboards can be ",
               "split too; unusual devices appear separately below.",
+            ),
+        ),
+        createShow(
+          () => hasBoards(),
+          () =>
+            h(
+              "aside",
+              { class: "dv-identify", "aria-labelledby": "identify-title" },
+              h("div", null,
+                h("h3", { id: "identify-title" }, "Not sure which keyboard is which?"),
+                h(
+                  "p",
+                  {
+                    class: "dv-note",
+                    id: "identify-help",
+                    role: "status",
+                    "aria-live": "polite",
+                  },
+                  "Choose Identify, then press one key on the keyboard within 10 seconds. KSX selects the matching board through the running KSX service without capturing it, changing a driver, saving, or starting Play.",
+                ),
+              ),
+              h(
+                "form",
+                { class: "dv-form identify-form", method: "post", action: "/start/device/identify" },
+                h(
+                  "button",
+                  {
+                    class: "btn",
+                    type: "submit",
+                    "aria-describedby": "identify-help",
+                    "data-identify-submit": "",
+                  },
+                  "Identify by pressing a key",
+                ),
+              ),
             ),
         ),
         h(
@@ -918,156 +1093,12 @@ export function StartIsland() {
             ),
         ),
       ),
-      // ── CAPTURE PREPARATION — scalar state, never another device list ───
-      //
-      // These are three sibling shows because Rust has already decided the
-      // mutually-exclusive state. The forms post the exact served guards and
-      // explicit consent only; neither carries a backend or helper command.
-      createShow(
-        () => capturePrepare(),
-        () =>
-          h(
-            "section",
-            { class: () => capturePrepareCls() },
-            h("h2", null, () => captureHeading()),
-            h("p", { class: "cardline" }, () => captureLine()),
-            h("p", { class: "dv-note" }, () => captureDetail()),
-            h(
-              "form",
-              {
-                class: "capture-form",
-                method: "post",
-                action: "/start/capture/prepare",
-              },
-              h("input", {
-                type: "hidden",
-                name: "expected_selector",
-                value: () => captureSelector(),
-              }),
-              h("input", {
-                type: "hidden",
-                name: "instance_id",
-                value: () => captureInstance(),
-              }),
-              h(
-                "label",
-                { class: "capture-consent" },
-                h("input", {
-                  type: "checkbox",
-                  name: "confirm_spare_keyboard",
-                  value: "yes",
-                  required: "",
-                }),
-                h("span", null, "I connected and tested a different keyboard that can still type."),
-              ),
-              h(
-                "label",
-                { class: "capture-consent" },
-                h("input", {
-                  type: "checkbox",
-                  name: "confirm_rebind",
-                  value: "yes",
-                  required: "",
-                }),
-                h(
-                  "span",
-                  null,
-                  "I understand this selected keyboard will stop ordinary typing until I release it here, and I will release it before connecting another identical keyboard.",
-                ),
-              ),
-              h(
-                "label",
-                { class: "capture-consent" },
-                h("input", {
-                  type: "checkbox",
-                  name: "confirm_machine_certificate",
-                  value: "yes",
-                  required: "",
-                }),
-                h(
-                  "span",
-                  null,
-                  "I allow ksx to install a machine-local signing certificate for this computer's generated device package.",
-                ),
-              ),
-              h(
-                "p",
-                { class: "pactrow" },
-                h(
-                  "button",
-                  { class: () => captureButtonCls(), type: "submit" },
-                  () => captureButton(),
-                ),
-              ),
-            ),
-            h(
-              "p",
-              { class: "dv-note" },
-              "Windows will show a permission prompt. The app stays open and does not show a command window.",
-            ),
-          ),
-      ),
-      createShow(
-        () => captureRelease(),
-        () =>
-          h(
-            "section",
-            { class: "card wide capture-card capture-ready" },
-            h("h2", null, () => captureHeading()),
-            h("p", { class: "cardline" }, () => captureLine()),
-            h("p", { class: "dv-note" }, () => captureDetail()),
-            h(
-              "form",
-              {
-                class: "capture-form",
-                method: "post",
-                action: "/start/capture/release",
-              },
-              h("input", {
-                type: "hidden",
-                name: "expected_selector",
-                value: () => captureSelector(),
-              }),
-              h("input", {
-                type: "hidden",
-                name: "instance_id",
-                value: () => captureInstance(),
-              }),
-              h(
-                "label",
-                { class: "capture-consent" },
-                h("input", {
-                  type: "checkbox",
-                  name: "confirm_release",
-                  value: "yes",
-                  required: "",
-                }),
-                h("span", null, "I want to return this selected keyboard to ordinary typing."),
-              ),
-              h(
-                "p",
-                { class: "pactrow" },
-                h("button", { class: "btn", type: "submit" }, "Release selected keyboard"),
-              ),
-            ),
-          ),
-      ),
-      createShow(
-        () => captureBlocked(),
-        () =>
-          h(
-            "section",
-            { class: "card wide alarm warn capture-card" },
-            h("h2", null, () => captureHeading()),
-            h("p", { class: "alarmlead" }, () => captureLine()),
-            h("p", { class: "alarmlead" }, () => captureDetail()),
-          ),
-      ),
       // ── STEP 2 (moment 5): CHOOSE A CONTROLLER ──────────────────────────
       h(
         "section",
-        { class: "card wide" },
-        h("h2", null, "2 · Choose a controller"),
+        { class: "card wide journey-step", id: "controller" },
+        h("p", { class: "step-kicker" }, "Step 2 · Virtual controller"),
+        h("h2", null, "Create the controller your game should see"),
         h("p", { class: "cardline" }, () => controllerLine()),
         h(
           "ul",
@@ -1107,7 +1138,7 @@ export function StartIsland() {
                 h(
                   "div",
                   { class: "pactrow" },
-                  h("a", { class: "btn btn-primary", href: s.map_href }, "Choose controls"),
+                  h("a", { class: "btn btn-primary", href: s.map_href }, "Map controls"),
                   h(
                     "form",
                     { method: "post", action: "/start/controller/remove" },
@@ -1243,8 +1274,9 @@ export function StartIsland() {
       // ── STEP 3 (moment 6): MAP IT, AND THE ONE QUESTION ─────────────────
       h(
         "section",
-        { class: "card wide" },
-        h("h2", null, "3 · Map it"),
+        { class: "card wide journey-step", id: "mapping-start" },
+        h("p", { class: "step-kicker" }, "Step 3 · Mapping"),
+        h("h2", null, "Choose a layout, then make it yours"),
         h("p", { class: "cardline" }, () => presetLine()),
         createShow(
           () => presetsDown(),
@@ -1327,8 +1359,9 @@ export function StartIsland() {
       ),
       h(
         "section",
-        { class: "card wide warnbox" },
-        h("h2", null, "Freeze this keyboard, or split it?"),
+        { class: "card wide warnbox play-behavior" },
+        h("p", { class: "step-kicker" }, "When you play · Required choice"),
+        h("h2", null, "Should this keyboard keep typing?"),
         h(
           "p",
           { class: "cardline" },
@@ -1379,11 +1412,10 @@ export function StartIsland() {
       ),
       // ── The driver, said BEFORE the button that needs it ─────────────────
       //
-      // Every persona ksx can plug goes out through ViGEmBus, so a machine
-      // without it stages perfectly, saves perfectly and then plugs nothing.
-      // That is FIRST-RUN.md §6's first forbidden shape — a screen reporting
-      // success while nothing works — and the only place to prevent it is
-      // above the button.
+      // The banner is derived from the personas actually staged: ViGEm-backed
+      // controllers need ViGEmBus; DualSense needs HIDMaestro. A known missing
+      // output blocks Play but never blocks Save. A package that can only be
+      // verified at plug time is explained truthfully rather than shown green.
       //
       // ONE createShow, deliberately: `bus_warn` is true both for a bus known
       // not to work and for one nothing could be learned about, and the two
@@ -1405,12 +1437,162 @@ export function StartIsland() {
             h("p", { class: "alarmlead" }, () => busRemedy()),
           ),
       ),
+      // ── CAPTURE PREPARATION — only after output readiness is visible ───
+      //
+      // Preparing a keyboard can change its Windows driver binding. Keeping
+      // this after controller selection and the persona-aware output warning
+      // means a known ViGEm/HIDMaestro blocker is visible before that mutation.
+      // These remain three sibling shows because Rust owns the exclusive
+      // state; the forms carry only its served guards and explicit consent.
+      createShow(
+        () => capturePrepare(),
+        () =>
+          h(
+            "section",
+            { class: () => capturePrepareCls() },
+            h("p", { class: "step-kicker" }, "Play prerequisite · Keyboard capture"),
+            h("h2", null, () => captureHeading()),
+            h("p", { class: "cardline" }, () => captureLine()),
+            h("p", { class: "dv-note" }, () => captureDetail()),
+            h(
+              "form",
+              {
+                class: "capture-form",
+                method: "post",
+                action: "/start/capture/prepare",
+              },
+              h("input", {
+                type: "hidden",
+                name: "expected_selector",
+                value: () => captureSelector(),
+              }),
+              h("input", {
+                type: "hidden",
+                name: "instance_id",
+                value: () => captureInstance(),
+              }),
+              h(
+                "label",
+                { class: "capture-consent" },
+                h("input", {
+                  type: "checkbox",
+                  name: "confirm_spare_keyboard",
+                  value: "yes",
+                  required: "",
+                }),
+                h("span", null, "I connected and tested a different keyboard that can still type."),
+              ),
+              h(
+                "label",
+                { class: "capture-consent" },
+                h("input", {
+                  type: "checkbox",
+                  name: "confirm_rebind",
+                  value: "yes",
+                  required: "",
+                }),
+                h(
+                  "span",
+                  null,
+                  "I understand this selected keyboard will stop ordinary typing until I release it here, and I will release it before connecting another identical keyboard.",
+                ),
+              ),
+              h(
+                "label",
+                { class: "capture-consent" },
+                h("input", {
+                  type: "checkbox",
+                  name: "confirm_machine_certificate",
+                  value: "yes",
+                  required: "",
+                }),
+                h(
+                  "span",
+                  null,
+                  "I allow ksx to install a machine-local signing certificate for this computer's generated device package.",
+                ),
+              ),
+              h(
+                "p",
+                { class: "pactrow" },
+                h(
+                  "button",
+                  { class: () => captureButtonCls(), type: "submit" },
+                  () => captureButton(),
+                ),
+              ),
+            ),
+            h(
+              "p",
+              { class: "dv-note" },
+              "Windows will show a permission prompt. The app stays open and does not show a command window.",
+            ),
+          ),
+      ),
+      createShow(
+        () => captureRelease(),
+        () =>
+          h(
+            "section",
+            { class: "card wide capture-card capture-ready" },
+            h("p", { class: "step-kicker" }, "Play prerequisite · Keyboard capture"),
+            h("h2", null, () => captureHeading()),
+            h("p", { class: "cardline" }, () => captureLine()),
+            h("p", { class: "dv-note" }, () => captureDetail()),
+            h(
+              "form",
+              {
+                class: "capture-form",
+                method: "post",
+                action: "/start/capture/release",
+              },
+              h("input", {
+                type: "hidden",
+                name: "expected_selector",
+                value: () => captureSelector(),
+              }),
+              h("input", {
+                type: "hidden",
+                name: "instance_id",
+                value: () => captureInstance(),
+              }),
+              h(
+                "label",
+                { class: "capture-consent" },
+                h("input", {
+                  type: "checkbox",
+                  name: "confirm_release",
+                  value: "yes",
+                  required: "",
+                }),
+                h("span", null, "I want to return this selected keyboard to ordinary typing."),
+              ),
+              h(
+                "p",
+                { class: "pactrow" },
+                h("button", { class: "btn", type: "submit" }, "Release selected keyboard"),
+              ),
+            ),
+          ),
+      ),
+      createShow(
+        () => captureBlocked(),
+        () =>
+          h(
+            "section",
+            { class: "card wide alarm warn capture-card" },
+            h("p", { class: "step-kicker" }, "Play prerequisite · Keyboard capture"),
+            h("h2", null, () => captureHeading()),
+            h("p", { class: "alarmlead" }, () => captureLine()),
+            h("p", { class: "alarmlead" }, () => captureDetail()),
+          ),
+      ),
       // ── STEP 4 (moment 7): PLAY ─────────────────────────────────────────
       h(
         "section",
-        { class: "card wide" },
-        h("h2", null, "4 · Play"),
-        h("p", { class: "cardline" }, () => readyLine()),
+        { class: "card wide journey-step play-ready", id: "play" },
+        h("p", { class: "step-kicker" }, "Step 4 · Ready check"),
+        h("h2", null, "Save it for later or start playing now"),
         h("p", { class: "cardline" }, () => playLine()),
         h(
           "p",
@@ -1429,33 +1611,49 @@ export function StartIsland() {
               "it with the setup on this screen. Nothing is saved unless you choose Save.",
             ),
         ),
-        createShow(
-          () => ready(),
-          () =>
-            h(
-              "div",
-              { class: "pactrow" },
-              h(
-                "form",
-                { method: "post", action: "/start/save" },
-                h("button", { class: "btn", type: "submit" }, "Save this setup"),
-              ),
-              h(
-                "form",
-                { method: "post", action: "/start/play" },
-                h("button", { class: "btn btn-primary", type: "submit" }, "Play now"),
-              ),
+        h(
+          "div",
+          { class: "play-decisions" },
+          h(
+            "section",
+            { class: "action-choice save-choice" },
+            h("p", { class: "action-eyebrow" }, "Keep for later"),
+            h("h3", null, "Save this setup"),
+            h("p", { class: "dv-note" }, () => saveStatus()),
+            createShow(
+              () => canSave(),
+              () =>
+                h(
+                  "form",
+                  { method: "post", action: "/start/save" },
+                  h("button", { class: "btn", type: "submit" }, "Save this setup"),
+                ),
             ),
-        ),
-        createShow(
-          () => notReady(),
-          () =>
-            h(
-              "div",
-              { class: "controls off" },
-              h("button", { class: "btn", disabled: "" }, "Save this setup"),
-              h("button", { class: "btn", disabled: "" }, "Play now"),
+            createShow(
+              () => cannotSave(),
+              () => h("button", { class: "btn", disabled: "" }, "Save this setup"),
             ),
+          ),
+          h(
+            "section",
+            { class: "action-choice play-choice" },
+            h("p", { class: "action-eyebrow" }, "Use it now"),
+            h("h3", null, "Play this setup"),
+            h("p", { class: "dv-note" }, () => playStatus()),
+            createShow(
+              () => canPlay(),
+              () =>
+                h(
+                  "form",
+                  { method: "post", action: "/start/play" },
+                  h("button", { class: "btn btn-primary btn-play", type: "submit" }, "Start playing"),
+                ),
+            ),
+            createShow(
+              () => cannotPlay(),
+              () => h("button", { class: "btn btn-play", disabled: "" }, "Start playing"),
+            ),
+          ),
         ),
         h("p", { class: "dv-note" }, () => guideLine()),
         h(
@@ -1488,9 +1686,14 @@ export function StartIsland() {
       // here is sized to what is actually at risk, unlike the capture card
       // above it.
       h(
-        "section",
-        { class: "card wide" },
-        h("h2", null, "4 · Start on its own"),
+        "details",
+        { class: "card wide disclosure secondary-setup" },
+        h(
+          "summary",
+          null,
+          h("span", { class: "sumtitle" }, "Start KSX automatically"),
+          h("span", { class: "sumnote" }, "Optional"),
+        ),
         h("p", { class: "cardline" }, () => autostartLine()),
         createShow(
           () => autostartStale(),
@@ -1536,9 +1739,14 @@ export function StartIsland() {
         ),
       ),
       h(
-        "section",
-        { class: "card wide" },
-        h("h2", null, "Saved games"),
+        "details",
+        { class: "card wide disclosure secondary-setup" },
+        h(
+          "summary",
+          null,
+          h("span", { class: "sumtitle" }, "Saved games"),
+          h("span", { class: "sumnote" }, "Optional"),
+        ),
         h(
           "p",
           { class: "cardline" },

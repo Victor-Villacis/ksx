@@ -58,7 +58,25 @@ export interface SetupSlotRow {
   device: string;
   preset: string;
   persona: string;
+  socd: string;
   source: string;
+}
+
+export interface SetupPersonaOption {
+  name: string;
+  label: string;
+  is_xinput: boolean;
+  /** Immutable output routing served by ksx-core, never a user choice. */
+  backend: string;
+  backend_label: string;
+  /** Null means no persona-specific ceiling beyond the normal slot limits. */
+  instance_limit: number | null;
+  can_plug: boolean;
+  gap: string | null;
+  instead: string;
+  /** Static on /setup; stage-specific on /start's StagedSetupView roster. */
+  available: boolean;
+  unavailable_reason: string | null;
 }
 
 export interface SetupView {
@@ -69,6 +87,9 @@ export interface SetupView {
   slots: SetupSlotRow[];
   presets: string[];
   profiles: string[];
+  /** The canonical roster for this build. The rendered form consumes the
+   *  already-filtered `rows.persona_options` below. */
+  persona_options: SetupPersonaOption[];
   steps: SetupStep[];
   notes: string[];
   /** The highest slot number this build accepts (`ksx_core::MAX_SLOTS`). The
@@ -136,6 +157,7 @@ export interface LearnView {
   ok: boolean;
   /** `idle` | `listening` | `hit` | `unavailable`. */
   state: string;
+  generation: number | null;
   remaining_ms: number | null;
   device: string | null;
   key: string | null;
@@ -190,6 +212,7 @@ export interface SetupRows {
   slots: RowPair[];
   slot_options: OptionRow[];
   preset_options: TextRow[];
+  persona_options: OptionRow[];
   profile_options: TextRow[];
   notes: TextRow[];
   blocking: BlockingRow[];
@@ -219,6 +242,7 @@ const [libraryLine, setLibraryLine] = createSignal("not collected");
 const [exportLine, setExportLine] = createSignal("not collected");
 const [proveLine, setProveLine] = createSignal("not collected");
 const [proveKey, setProveKey] = createSignal("");
+const [proveGeneration, setProveGeneration] = createSignal("");
 const [setupSource, setSetupSource] = createSignal("not collected");
 const [wireBlocked, setWireBlocked] = createSignal("not collected");
 const [proveBlocked, setProveBlocked] = createSignal("not collected");
@@ -256,6 +280,7 @@ const [deviceRows, setDeviceRows] = createSignal<RowPair[]>([]);
 const [slotRows, setSlotRows] = createSignal<RowPair[]>([]);
 const [slotOptions, setSlotOptions] = createSignal<OptionRow[]>([]);
 const [presetOptions, setPresetOptions] = createSignal<TextRow[]>([]);
+const [personaOptions, setPersonaOptions] = createSignal<OptionRow[]>([]);
 const [profileOptions, setProfileOptions] = createSignal<TextRow[]>([]);
 const [noteRows, setNoteRows] = createSignal<TextRow[]>([]);
 const [blockingRows, setBlockingRows] = createSignal<BlockingRow[]>([]);
@@ -285,6 +310,7 @@ export function applySetup(p: SetupPayload): void {
   setConfigRoot(view.config_root === "" ? "(unknown)" : view.config_root);
   setSetupSource(p.setup.source);
   setProveKey(p.learn.key ?? "");
+  setProveGeneration(p.learn.generation === null ? "" : String(p.learn.generation));
 
   setConfigLine(lines.config);
   setBoardsSummary(lines.boards);
@@ -327,6 +353,7 @@ export function applySetup(p: SetupPayload): void {
   setSlotRows(p.rows.slots);
   setSlotOptions(p.rows.slot_options);
   setPresetOptions(p.rows.preset_options);
+  setPersonaOptions(p.rows.persona_options);
   setProfileOptions(p.rows.profile_options);
   setNoteRows(p.rows.notes);
   setBlockingRows(p.rows.blocking);
@@ -399,13 +426,27 @@ export function SetupIsland() {
         { class: "brand" },
         h("span", { class: "brand-ksx" }, "ksx"),
         h("span", { class: "brand-studio" }, "Studio"),
+        h("span", { class: "crumb" }, "Import & recovery"),
       ),
       h(
         "nav",
-        { class: "topnav", "aria-label": "screens" },
-        h("a", { class: "navlink", href: "/start" }, "Setup"),
-        h("a", { class: "navlink", href: "/map" }, "Controls"),
-        h("a", { class: "navlink", href: "/check" }, "Test"),
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
+        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
+        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
+        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink on", "aria-label": "Open Studio tools" }, "Tools"),
+        h("nav", { class: "appmenu-panel", "aria-label": "Studio tools" },
+          h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup", "aria-current": "page" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+        ),
       ),
       createShow(
         () => pillRunning(),
@@ -423,6 +464,16 @@ export function SetupIsland() {
     h(
       "main",
       null,
+      h(
+        "section",
+        { class: "utility-hero", "aria-labelledby": "recovery-title" },
+        h("div", null,
+          h("p", { class: "eyebrow" }, "Advanced workspace"),
+          h("h1", { id: "recovery-title" }, "Import, export, and recover"),
+          h("p", { class: "workflow-lede" }, "Maintain the saved configuration without turning the everyday setup journey into an administration screen."),
+        ),
+        h("a", { class: "btn btn-primary", href: "/start" }, "Open guided setup"),
+      ),
       // The same banner, word for word, as / and /map (render.rs
       // NO_DAEMON_HEADLINE is the oracle that keeps the three in step).
       createShow(
@@ -608,8 +659,8 @@ export function SetupIsland() {
           h(
             "p",
             { class: "cardline" },
-            "A slot is one player: which preset it uses, and where that lives — ",
-            "your config, or one game profile.",
+            "A slot is one player: which controller it becomes, which preset it uses, ",
+            "and where that lives — your config, or one game profile.",
           ),
           createShow(
             () => canWire(),
@@ -635,6 +686,20 @@ export function SetupIsland() {
                     () => presetOptions(),
                     (o) => o.text,
                     (o) => h("option", null, o.text),
+                  ),
+                ),
+                h("label", { for: "setup-persona" }, "controller"),
+                h(
+                  "select",
+                  { id: "setup-persona", name: "persona" },
+                  // Blank FIRST and blank by default: changing a preset, SOCD
+                  // rule, or profile location must not silently change which
+                  // controller the slot presents as.
+                  h("option", { value: "" }, "(leave as it is)"),
+                  createList(
+                    () => personaOptions(),
+                    (o) => o.value + "|" + o.label,
+                    (o) => h("option", { value: o.value }, o.label),
                   ),
                 ),
                 h("label", { for: "setup-socd" }, "opposite directions"),
@@ -712,6 +777,7 @@ export function SetupIsland() {
               h(
                 "form",
                 { class: "controls", method: "post", action: "/setup/prove/cancel" },
+                h("input", { type: "hidden", name: "generation", value: () => proveGeneration() }),
                 h("button", { class: "btn", type: "submit" }, "Stop listening"),
               ),
           ),

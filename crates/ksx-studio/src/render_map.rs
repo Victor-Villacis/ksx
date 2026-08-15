@@ -830,6 +830,10 @@ fn slot_tabs(payload: &MapPayload, selected: Option<&MapperSlot>) -> SlotValue {
                         "cls".to_owned(),
                         SlotValue::Text(if active { "tab active" } else { "tab" }.to_owned()),
                     ),
+                    (
+                        "current".to_owned(),
+                        SlotValue::Text(if active { "page" } else { "false" }.to_owned()),
+                    ),
                     // v14: the management table's columns. Same array, second
                     // reader — no new payload, no new verb.
                     (
@@ -3285,6 +3289,7 @@ mod tests {
                 line: "idle".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             learn: LearnView {
                 ok: true,
@@ -3921,6 +3926,22 @@ mod tests {
         assert!(
             out.html.contains("options"),
             "Sony start label: {}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains(r#"<nav class="tabs" aria-label="Controllers">"#),
+            "the controller switcher is labeled navigation: {}",
+            out.html
+        );
+        assert!(
+            out.html.contains(r#"aria-current="page""#),
+            "the selected controller is announced: {}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"role="tablist""#),
+            "plain links must not claim incomplete tab semantics: {}",
             out.html
         );
     }

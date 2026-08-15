@@ -88,6 +88,12 @@ pub trait ControlSource: Send + Sync {
     fn learn_cancel(&self) -> LearnView {
         LearnView::unavailable("this control source has no learner")
     }
+    /// Stop only the exact listener generation the caller opened. The
+    /// default preserves compatibility for in-process/test providers; the
+    /// daemon pipe implementation performs the atomic generation check.
+    fn learn_cancel_generation(&self, _generation: Option<u64>) -> LearnView {
+        self.learn_cancel()
+    }
 
     /// Write one binding (pipe `map`). `request.key == None` clears it.
     fn bind(&self, _request: &BindRequest) -> BindOutcome {
@@ -681,6 +687,10 @@ pub fn without_key(keys: &[String], key: &str) -> Vec<String> {
 pub struct LearnView {
     pub ok: bool,
     pub state: String,
+    /// Daemon-owned attempt identity. A caller that starts an observation and
+    /// then polls must keep this exact value so another tab cannot supersede
+    /// the attempt and have its key mistaken for the first caller's result.
+    pub generation: Option<u64>,
     /// Countdown for the mapper's visible timer (the PadForge gap the design
     /// closes) — `Some` only while listening.
     pub remaining_ms: Option<u64>,
@@ -696,6 +706,7 @@ impl LearnView {
         Self {
             ok: false,
             state: "unavailable".to_owned(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -965,6 +976,18 @@ impl SessionOrigin {
 /// [`crate::StatusSnapshot`]: the provider composes the line, a surface only
 /// places it and picks which controls to render.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSessionView {
+    /// Short clock derived from the daemon's monotonic age (for example 2m 07s).
+    pub elapsed: String,
+    /// One path-free sentence covering selected keyboards and capture policy.
+    pub input: String,
+    /// One path-free sentence covering the controller persona/backend roster.
+    pub outputs: String,
+    /// The exact emergency gesture served from the domain contract.
+    pub escape_hatch: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionView {
     /// A daemon control channel answered. `false` renders every control
     /// disabled with the reason — never hidden, never silently inert.
@@ -992,6 +1015,10 @@ pub struct SessionView {
     /// what Resume will put back instead of guessing.
     #[serde(default)]
     pub origin: SessionOrigin,
+    /// Facts captured from the runner that actually started, never inferred
+    /// from the mutable config currently on disk.
+    #[serde(default)]
+    pub active: Option<ActiveSessionView>,
 }
 
 impl SessionView {
@@ -1005,7 +1032,22 @@ impl SessionView {
             // Nothing answered, so nothing is known about what ran. `Unknown`
             // is the whole point of the variant.
             origin: SessionOrigin::Unknown,
+            active: None,
         }
+    }
+}
+
+fn elapsed_label(elapsed_ms: u64) -> String {
+    let total_seconds = elapsed_ms / 1_000;
+    let hours = total_seconds / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -1036,6 +1078,27 @@ impl From<crate::wire::StatusResponse> for SessionView {
             "quitting" => "daemon shutting down…".to_owned(),
             other => format!("daemon state: {other}"),
         };
+        let active = status.active.map(|active| {
+            let keyboard_noun = if active.keyboards == 1 {
+                "keyboard"
+            } else {
+                "keyboards"
+            };
+            let outputs = if active.controllers.is_empty() {
+                "No controller outputs are attached to this session.".to_owned()
+            } else {
+                active.controllers.join(" · ")
+            };
+            ActiveSessionView {
+                elapsed: elapsed_label(active.elapsed_ms),
+                input: format!(
+                    "{} selected {keyboard_noun} · {}",
+                    active.keyboards, active.capture
+                ),
+                outputs,
+                escape_hatch: crate::stage::ESCAPE_HATCH_LINE.to_owned(),
+            }
+        });
         Self {
             reachable: true,
             running,
@@ -1044,6 +1107,7 @@ impl From<crate::wire::StatusResponse> for SessionView {
             // A daemon that does not send the field said nothing, and
             // `parse` turns "nothing" into `Unknown` rather than into a guess.
             origin: SessionOrigin::parse(status.origin.as_deref().unwrap_or_default()),
+            active,
         }
     }
 }
@@ -1198,6 +1262,28 @@ mod tests {
         assert!(running.reachable && running.running);
         assert_eq!(running.line, "running — Example Game — 4 pad(s)");
         assert_eq!(running.profile.as_deref(), Some("Example Game"));
+
+        let active = SessionView::from(crate::wire::StatusResponse {
+            ok: true,
+            run: "running".into(),
+            slots: Some(2),
+            active: Some(crate::wire::ActiveSessionResponse {
+                elapsed_ms: 127_000,
+                keyboards: 1,
+                capture: "mapped keys captured · WinUSB".into(),
+                controllers: vec![
+                    "P1 Xbox 360 (ViGEmBus)".into(),
+                    "P2 DualSense (HIDMaestro)".into(),
+                ],
+            }),
+            ..Default::default()
+        });
+        let facts = active.active.expect("the live runner facts are carried");
+        assert_eq!(facts.elapsed, "2m 07s");
+        assert!(facts.input.contains("1 selected keyboard"), "{}", facts.input);
+        assert!(facts.input.contains("WinUSB"), "{}", facts.input);
+        assert!(facts.outputs.contains("DualSense (HIDMaestro)"));
+        assert_eq!(facts.escape_hatch, crate::stage::ESCAPE_HATCH_LINE);
 
         let idle = SessionView::from(crate::wire::StatusResponse {
             ok: true,

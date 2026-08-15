@@ -185,6 +185,7 @@ fn learn_view(answer: LearnResponse) -> LearnView {
         } else {
             answer.state
         },
+        generation: answer.generation,
         remaining_ms: answer.remaining_ms,
         device: answer.device,
         key: answer.key,
@@ -238,7 +239,11 @@ impl<S: VerbSink> ControlSource for Client<S> {
     }
 
     fn learn_cancel(&self) -> LearnView {
-        self.learn(Request::LearnCancel)
+        self.learn(Request::LearnCancel { generation: None })
+    }
+
+    fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+        self.learn(Request::LearnCancel { generation })
     }
 
     fn bind(&self, request: &BindRequest) -> BindOutcome {
@@ -451,6 +456,23 @@ mod tests {
                 .clone()
                 .ok_or_else(|| Refusal::new(codes::PIPE_ERROR, "the fake was given no answer"))
         }
+    }
+
+    #[test]
+    fn learner_attempt_generation_survives_the_typed_control_seam() {
+        let client = Client::new(Fake::answering(Response::Learn(LearnResponse {
+            ok: true,
+            state: "hit".into(),
+            generation: Some(42),
+            device: Some(r"USB\VID_D209&PID_0430&MI_00".into()),
+            key: Some("A".into()),
+            ..LearnResponse::default()
+        })));
+
+        let learned = client.learn_start();
+        assert_eq!(learned.generation, Some(42));
+        assert_eq!(learned.state, "hit");
+        assert_eq!(client.sink().last(), Request::LearnKey);
     }
 
     #[test]

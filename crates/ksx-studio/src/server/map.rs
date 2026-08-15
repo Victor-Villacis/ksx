@@ -175,8 +175,19 @@ pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Respo
     control_json(state, |control| control.learn_start()).await
 }
 
-pub(super) async fn api_learn_cancel(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_cancel()).await
+#[derive(Deserialize)]
+pub(super) struct LearnCancelBody {
+    generation: u64,
+}
+
+pub(super) async fn api_learn_cancel(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<LearnCancelBody>,
+) -> Response {
+    control_json(state, move |control| {
+        control.learn_cancel_generation(Some(body.generation))
+    })
+    .await
 }
 
 pub(super) struct TargetBind<'a> {

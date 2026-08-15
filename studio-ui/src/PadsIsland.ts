@@ -246,7 +246,7 @@ export function applyPads(p: PadsPayload): void {
       instance: pad.instance_id,
       // Mirrors render.rs art_for(): PlayStation-ish personas get the DS4 art,
       // everything else the Xbox pad.
-      art: /playstation|ds4|ps4/i.test(pad.persona)
+      art: /playstation|dualsense|dualshock|ds[45]|ps[45]/i.test(pad.persona)
         ? "/_assets/pad-ds4.svg"
         : "/_assets/pad-xbox.svg",
     })),
@@ -325,13 +325,27 @@ export function PadsIsland() {
         { class: "brand" },
         h("span", { class: "brand-ksx" }, "ksx"),
         h("span", { class: "brand-studio" }, "Studio"),
+        h("span", { class: "crumb" }, "Virtual controllers"),
       ),
       h(
         "nav",
-        { class: "topnav", "aria-label": "screens" },
-        h("a", { class: "navlink", href: "/start" }, "Setup"),
-        h("a", { class: "navlink", href: "/map" }, "Controls"),
-        h("a", { class: "navlink", href: "/check" }, "Test"),
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
+        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
+        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
+        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink on", "aria-label": "Open Studio tools" }, "Tools"),
+        h("nav", { class: "appmenu-panel", "aria-label": "Studio tools" },
+          h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads", "aria-current": "page" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+        ),
       ),
       createShow(
         () => pillRunning(),
@@ -349,6 +363,16 @@ export function PadsIsland() {
     h(
       "main",
       null,
+      h(
+        "section",
+        { class: "utility-hero", "aria-labelledby": "pads-title" },
+        h("div", null,
+          h("p", { class: "eyebrow" }, "Studio tool"),
+          h("h1", { id: "pads-title" }, "Virtual controllers"),
+          h("p", { class: "workflow-lede" }, "Inspect what is connected, prove the XInput ceiling, and safely remove only stale KSX pads."),
+        ),
+        h("a", { class: "btn btn-primary", href: "/start#controller" }, "Create a controller"),
+      ),
       // ── The read failed. An empty pad list would read as "your bus is
       // clean", which is the one thing it must never say by accident. ──────
       createShow(

@@ -375,6 +375,7 @@ pub fn serve(
             .route("/start", get(start_page))
             .route("/api/start", get(api_start))
             .route("/start/device", post(start_form_device))
+            .route("/start/device/identify", post(start_form_identify))
             .route("/start/capture/prepare", post(start_form_capture_prepare))
             .route("/start/capture/release", post(start_form_capture_release))
             .route("/start/controller", post(start_form_controller))

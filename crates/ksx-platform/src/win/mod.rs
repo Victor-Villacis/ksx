@@ -67,10 +67,10 @@ pub fn collect_virtual_pads() -> VirtualPadReport {
 /// Just the ViGEm bus's own health, without the rest of the driver stack.
 ///
 /// Same reason as [`collect_virtual_pads`], for a different caller: `/start`
-/// polls every 2 s and needs exactly one fact — can a pad be plugged right now
-/// — while [`collect`] walks the Interception class filters, probes HIDMaestro,
-/// reads the CI policy and takes a process snapshot. This is two registry
-/// reads, one SCM query and one file-version read.
+/// polls this only when a staged Xbox 360 or PlayStation persona requires
+/// ViGEmBus. [`collect`] would also walk the Interception class filters, probe
+/// HIDMaestro, read CI policy and snapshot processes. This smaller entry point
+/// is two registry reads, one SCM query and one file-version read.
 ///
 /// It is the SAME [`bus_driver`] call [`collect`] makes, so the judgement
 /// [`crate::advice::vigembus_advice`] reaches from it is the judgement
@@ -78,6 +78,20 @@ pub fn collect_virtual_pads() -> VirtualPadReport {
 /// would be worse than the cost it saved.
 pub fn collect_vigembus() -> BusDriverReport {
     bus_driver(VIGEMBUS_SERVICE, &windir())
+}
+
+/// Just the exact HIDMaestro package prerequisite, without the rest of the
+/// driver-health report.
+///
+/// `/start` polls this only when a staged supported persona routes through
+/// HIDMaestro. It is the same hash-pinned [`hidmaestro`] probe [`collect`]
+/// uses; the smaller entry point avoids walking unrelated class filters,
+/// virtual pads, process owners and code-integrity policy every two seconds.
+/// This proves the installed package only. The protected host handshake and
+/// virtual-controller endpoint are created and verified transactionally when
+/// Play starts.
+pub fn collect_hidmaestro() -> HidMaestroReport {
+    hidmaestro(&windir())
 }
 
 /// Collect the full driver-health report from the live machine.

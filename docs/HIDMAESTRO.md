@@ -1,8 +1,9 @@
 # HIDMaestro M8 execution plan
 
-Status: **the installed product path for one plain-USB DualSense is implemented;
-clean-machine hardware/API/force-kill acceptance remains. Switch Pro and Xbox
-Series are still gated.**
+Status: **the installed product path for one plain-USB DualSense is implemented
+and has passed clean-runner build, byte-inspection, packaging, and installer
+acceptance; supervised hardware/API/force-kill acceptance remains. Switch Pro
+and Xbox Series are still gated.**
 
 The implementation uses a fixed NativeAOT elevated sibling, authenticated
 one-use IPC, one exact controller slot, creator-owned shared memory, a five-second
@@ -119,7 +120,7 @@ missing product code.
 | Capacity and configuration | **Implemented.** The one-controller ceiling is enforced by setup, validation, game profiles, slot mutation, pad testing, routing and host dispatch. |
 | Installer/package | **Implemented.** Checked, internet-disclosed HIDMaestro setup task; runtime hash-pinned official download; protected installed host; cleanup; notices/licenses; and intentional portable omission. |
 | Other rich personas | **Gated.** Switch Pro and Xbox Series remain known configuration vocabulary but cannot be selected as working outputs. |
-| Automated software acceptance | **In progress for this product integration.** GitHub Actions is the compiler/test/package authority. |
+| Automated software acceptance | **Passed.** [Main Actions run 31898250940](https://github.com/Victor-Villacis/ksx/actions/runs/31898250940) passed contracts, the isolated A/B build and 1,465-check byte-only artifact inspection, the full test/feature matrix, portable packaging, installer safety checks, and repeated install verification. |
 | Physical release acceptance | **Pending.** Clean Windows 10/11, DirectInput/SDL/Steam/browser/WGI, coexistence, force-kill and residue checks require a supervised controller machine. |
 
 The earlier S1.x sections below are retained as the provenance trail that led

@@ -16,28 +16,34 @@
 
 ## New in this release
 
-- **Your keyboard settings can be changed after you set them up.** Two answers
-  used to be permanent once first run was over. Whether a keyboard is frozen
-  for play or split between the game and typing can now be changed on the
-  Setup screen. And what a stick does when it is pushed left and right at the
-  same time - which decides whether a fighting-game motion comes out as a jump
-  or a crouch - can be set per player, where before it could only be reached by
-  editing a file by hand.
+- **One plain-USB DualSense is now a real installed output option.** A game
+  profile can request a DualSense instead of an Xbox 360 or DS4 controller.
+  ksx sends the complete controller state through a fixed HIDMaestro host and
+  receives bounded rumble feedback, while the ordinary ksx process remains
+  non-administrative.
 
-- **ksx shows what it has left behind.** Preparing a keyboard writes a note to
-  itself so it can undo the change later. Those notes were never shown
-  anywhere, so a computer could be carrying nine finished jobs it had never
-  tidied up while every screen reported everything was fine. The Devices screen
-  now says so, and says plainly whether it matters - stale notes about
-  keyboards that are working are housekeeping, and a keyboard that was never
-  given back is not.
+- **DualSense setup is part of the installer.** The wizard offers a separate,
+  clearly labelled HIDMaestro task. If selected, setup downloads the exact
+  official v1.6.1 archive, verifies its pinned bytes before using it, installs
+  the driver, and removes the temporary SDK. Normal Play never downloads or
+  installs a package.
+
+- **The new controller has a fail-safe lifetime.** ksx authenticates the one
+  elevated helper it launches, permits one owned virtual device, renews a
+  short lease while Play is healthy, and neutralizes and removes that device
+  on normal stop, a broken connection, or an expired lease.
 
 ## Fixed in this release
 
-- **A keyboard ksx is holding no longer says "Ready to use".** The banner at
-  the top of the first-run screen would say a keyboard was being held and could
-  not type, and the list ten lines below would call the same keyboard ready.
-  One keyboard, one screen, two answers.
+- **A DualSense request no longer depends on ViGEmBus.** Controller backends
+  are opened only when a profile needs them. A missing HIDMaestro driver is
+  reported before ksx blocks a keyboard, while Xbox 360 and DS4 profiles keep
+  their existing ViGEmBus path.
+
+- **Unsupported rich-controller requests now refuse plainly.** The live lane
+  is exactly one USB DualSense. A second HIDMaestro controller, Switch Pro, and
+  Xbox Series requests fail instead of silently changing controller identity
+  or pretending a gated path works.
 
 ## Get it
 
@@ -45,13 +51,17 @@ Download **{{SETUP_NAME}}** from Assets below and double-click it. Click through
 the wizard; at the end it offers to open ksx, and it leaves an icon on your
 desktop either way.
 
-One box in that wizard is worth reading: **Install the ViGEmBus controller
-driver**. It is ticked, and it is what makes a virtual controller possible at
-all - leave it ticked unless you already have ViGEmBus from something else. The
-driver is bundled here, nothing is downloaded, and ksx checks its SHA-256 and
-its signature before running it. If you clear it, ksx still installs and still
-maps; it just cannot create a controller until you run the installer again with
-the box ticked.
+The wizard offers two controller-driver tasks. **Install the bundled ViGEmBus
+controller driver** enables Xbox 360 and DS4 outputs. Its installer is bundled,
+nothing is downloaded, and ksx checks its SHA-256 and signature before running
+it. **Download and install the pinned HIDMaestro v1.6.1 controller driver**
+enables the new USB DualSense output and requires internet access. Its official
+archive and required assemblies are hash-checked before the installer API is
+called. You can clear either task and re-run this installer later.
+
+The HIDMaestro lane deliberately supports one plain-USB DualSense. It does not
+claim Switch Pro, Xbox Series, Bluetooth, or a second HIDMaestro controller.
+Those requests are refused rather than substituted.
 
 On a clean machine, the first-run screen can also prepare one exact supported
 USB keyboard for KSX's built-in Windows USB mode. It is not automatic. Before
@@ -93,14 +103,17 @@ developer machine touched these bytes.
 
 - **{{SETUP_NAME}}** - the installer. This is the supported first-run file. It
   includes the console-free elevated WinUSB helper, its prepare-only provider,
-  recovery cleanup, and the provider's corresponding source.
+  recovery cleanup, the fixed HIDMaestro runtime host and verified setup
+  bootstrap, and the provider's corresponding source.
 - **{{PORTABLE_NAME}}** - `ksx.exe`, the console-free launcher, product
   licenses, `NOTICE`, and all third-party license texts, for people who want no
   installer. It has no Start menu entry, desktop icon, bundled ViGEmBus driver,
-  WinUSB helper, prepare provider, or supported prepare/release path. It is for
-  advanced Interception or already-prepared setups; use the installer for first
-  run.
+  WinUSB helper, prepare provider, HIDMaestro host/bootstrap, or supported
+  prepare/release path. It cannot use the installed-only DualSense lane. It is
+  for advanced Interception or already-prepared setups; use the installer for
+  first run.
 
-Nothing installs a driver behind your back. The installer asks about ViGEmBus
-in the ticked box described above, and the later WinUSB action has its own three
-confirmations plus UAC. The portable distribution has neither driver path.
+Nothing installs a driver behind your back. The installer shows separate
+ViGEmBus and HIDMaestro tasks, and the later WinUSB action has its own three
+confirmations plus UAC. The portable distribution has none of those driver
+paths.

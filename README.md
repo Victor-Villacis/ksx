@@ -440,18 +440,20 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.2.0 release candidate**. Its software workflow
-covers guided setup, controller mapping, saved games, Play, recovery, and
-packaging. It is not described here as released or physically accepted: the
-supervised cabinet checks in [`docs/GATES.md`](docs/GATES.md) remain the authority
-for hardware evidence. Current implementation state and known limits are in
-[`docs/HANDOFF.md`](docs/HANDOFF.md); future ideas are tracked in
-[`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).
+The current tree is the **KSX 0.4.0 release line**. Its software workflow covers
+guided setup, controller mapping, saved games, Play, recovery, packaging, and
+one installed USB DualSense through the bounded HIDMaestro backend. The
+supervised cabinet and controller checks in [`docs/GATES.md`](docs/GATES.md)
+remain the authority for physical hardware evidence. Current implementation
+state and known limits are in [`docs/HANDOFF.md`](docs/HANDOFF.md); future ideas
+are tracked in [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).
 
-The workflow contains a clean-runner reproducibility/elevated-provider smoke,
-but that runner job and physical Gates 1–4 are **NOT RUN** for this candidate
-until Actions and the gate ledgers record results against its exact commit and
-installer hash. A local build or diagnostic DLL hash is not release evidence.
+CI now exercises the clean-runner provider smoke, the exact HIDMaestro A/B
+build and byte-only artifact inspection, the portable distribution, and the
+installer's safety and repeat-install paths. A pushed release tag repeats that
+whole pipeline before publishing. Those results are software and distribution
+evidence; a local build is not, and physical Gates 1–4 remain open until their
+ledgers name supervised hardware results.
 
 ## Workspace
 

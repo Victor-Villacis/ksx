@@ -1,10 +1,10 @@
-//! The transport-neutral contract for a future privileged HIDMaestro host.
+//! The transport-neutral contract for the privileged HIDMaestro host.
 //!
 //! This module deliberately contains no named-pipe code, process launch,
 //! elevation, SDK loading, driver installation, controller creation or global
 //! cleanup. It freezes the small vocabulary that may eventually cross that
-//! boundary and supplies a client state machine which can be exercised against
-//! an in-memory host. A real transport is a later M8 slice.
+//! boundary and supplies the client state machine used by both the in-memory
+//! contract tests and the authenticated production Windows transport.
 //!
 //! # Security shape
 //!
@@ -82,8 +82,9 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One of the fixed catalog identities KSX may eventually request.
 ///
-/// This is protocol vocabulary, not a capability gate. All three corresponding
-/// [`Persona`] values remain disabled by `Persona::can_plug()`.
+/// This is protocol vocabulary, not a capability gate. The production host
+/// currently enables DualSense only; Switch Pro and Xbox Series remain gated
+/// independently by [`Persona::can_plug()`].
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ProfileId {
@@ -186,7 +187,8 @@ pub struct HostReady {
     /// Echo of the client's challenge. A different value means this is not the
     /// process conversation the client initiated.
     pub nonce: [u8; NONCE_BYTES],
-    /// SHA-256 of the exact `HIDMaestro.Core.dll` loaded by the host.
+    /// SHA-256 of the exact KSX runtime contract implemented by the host. The
+    /// wire field name is retained for protocol-v1 compatibility.
     pub sdk_sha256: [u8; 32],
     /// SHA-256 of the embedded profile catalog observed by the host.
     pub catalog_sha256: [u8; 32],

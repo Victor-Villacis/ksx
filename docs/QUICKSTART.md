@@ -9,6 +9,11 @@ Download `ksx-<version>-setup.exe` from the release page and run it.
 
 - Leave **Install the ViGEmBus controller driver** selected unless it is
   already installed.
+- Leave **Install the HIDMaestro controller driver** selected when you want the
+  DualSense persona. This optional setup task needs an internet connection: it
+  downloads the exact official v1.6.1 archive, verifies pinned hashes, installs
+  the driver, and removes the downloaded SDK. Ordinary Play never downloads,
+  installs, or updates the package.
 - Leave **Launch ksx** selected to open the app when setup finishes, or use the
   **ksx** shortcut afterward.
 - The optional desktop icon and the Start-menu entry open the same app. Neither
@@ -60,6 +65,10 @@ supported USB keyboard. A refusal leaves the draft and saved files unchanged.
 
 Pick the virtual controller the keyboard should become, then add it. You can
 change its type or remove it while the setup is still a draft.
+
+The current rich-controller lane supports one DualSense per session. Additional
+players can use Xbox 360 or PlayStation personas; Setup refuses a second
+DualSense before saving or plugging anything.
 
 ksx supports as many as 16 players. Xbox-style controllers occupy the four
 places Windows games normally expose through XInput; supported additional

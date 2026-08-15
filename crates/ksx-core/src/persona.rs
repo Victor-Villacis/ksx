@@ -80,8 +80,7 @@ pub enum PadBackend {
 }
 
 const HIDMAESTRO_BUILD_GAP: &str =
-    "ksx does not yet ship a production HIDMaestro host for this controller persona, \
-     so this build cannot plug it; installing HIDMaestro does not change it";
+    "this HIDMaestro controller persona has not yet completed its independent production runtime";
 
 impl PadBackend {
     pub const ALL: &'static [PadBackend] = &[PadBackend::Vigem, PadBackend::HidMaestro];
@@ -134,7 +133,7 @@ impl PadBackend {
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
-            (PadBackend::HidMaestro, Persona::DualSense) => false,
+            (PadBackend::HidMaestro, Persona::DualSense) => true,
             (PadBackend::HidMaestro, Persona::SwitchPro) => false,
             (PadBackend::HidMaestro, Persona::XboxSeries) => false,
             _ => false,
@@ -299,6 +298,21 @@ impl Persona {
         self.backend().supports(self)
     }
 
+    /// Maximum number of this exact persona one ksx session may create.
+    ///
+    /// `None` means the backend has no persona-specific ceiling beyond ksx's
+    /// normal slot limits. The first production HIDMaestro runtime deliberately
+    /// owns one fixed device and one fixed shared-memory endpoint, so exposing
+    /// a second DualSense would make configuration appear valid and then fail
+    /// halfway through startup. Keep the bound here so setup, config, the slot
+    /// writer, and `ksx pads` all make the same decision.
+    pub const fn instance_limit(self) -> Option<usize> {
+        match self {
+            Persona::DualSense => Some(1),
+            _ => None,
+        }
+    }
+
     /// Why this exact persona cannot be plugged by this build.
     ///
     /// Product surfaces use this instead of a backend-wide gap so enabling one
@@ -313,12 +327,13 @@ impl Persona {
     /// **Never a substitution.** Nothing calls this to downgrade a slot behind
     /// the user's back — silently handing a PS5 name a DS4 is precisely what
     /// [`FromStr`] refuses to do. It exists so the message that turns down
-    /// `dualsense` can name `playstation` in the same breath.
+    /// an unfinished profile can name a working compatibility persona in the
+    /// same breath.
     pub const fn nearest_pluggable(self) -> Persona {
         match self {
-            // ✕○△□ prompts with no second driver: the DS4 clone ViGEmBus does
-            // emulate. Costs the DualSense VID/PID sniff and adaptive triggers.
-            Persona::DualSense => Persona::PlayStation,
+            // The production HIDMaestro host now materializes one exact USB
+            // DualSense, so a DualSense request needs no fallback.
+            Persona::DualSense => Persona::DualSense,
             // Nintendo has no ViGEmBus equivalent at all, and Xbox Series is an
             // XInput pad, so both land on the most compatible pad there is —
             // Nintendo prompts then need a remap in the emulator.
@@ -508,11 +523,9 @@ mod tests {
     }
 
     #[test]
-    fn the_three_hidmaestro_personas_cannot_be_plugged_by_this_build() {
-        // The fact this gate exists for: the output crate deliberately carries
-        // no safe live HIDMaestro adapter yet. Offering any of these personas
-        // would therefore promise a controller this build cannot create.
-        for p in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+    fn only_the_independently_finished_hidmaestro_persona_can_plug() {
+        assert!(Persona::DualSense.can_plug());
+        for p in [Persona::SwitchPro, Persona::XboxSeries] {
             assert!(!p.can_plug(), "{p} must not be offered");
         }
         // ...and the two the cabinet actually runs on are unaffected.
@@ -521,15 +534,28 @@ mod tests {
     }
 
     #[test]
+    fn the_first_hidmaestro_runtime_has_one_explicit_device_slot() {
+        assert_eq!(Persona::DualSense.instance_limit(), Some(1));
+        for persona in [
+            Persona::Xbox360,
+            Persona::PlayStation,
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+        ] {
+            assert_eq!(persona.instance_limit(), None, "{persona}");
+        }
+    }
+
+    #[test]
     fn a_refused_persona_still_parses_and_still_has_a_name() {
         // Deleting the variant, or making it stop parsing, would turn every
         // existing `persona = "dualsense"` into "unknown persona" — which is
         // false, and points the reader at a typo they did not make.
-        let p: Persona = "dualsense".parse().unwrap();
-        assert_eq!(p, Persona::DualSense);
+        let p: Persona = "switchpro".parse().unwrap();
+        assert_eq!(p, Persona::SwitchPro);
         assert!(!p.can_plug());
         assert!(Persona::ALL.contains(&p));
-        assert_eq!(p.as_str(), "dualsense");
+        assert_eq!(p.as_str(), "switchpro");
     }
 
     #[test]
@@ -547,7 +573,7 @@ mod tests {
         }
         // The two suggestions that carry meaning: Sony stays Sony (✕○△□ is
         // what the user wanted), Nintendo/Series fall back to XInput.
-        assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::PlayStation);
+        assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::Xbox360);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::Xbox360);
     }
@@ -559,13 +585,12 @@ mod tests {
         for &b in PadBackend::ALL {
             assert_eq!(b.gap().is_none(), b.is_implemented(), "{b}");
         }
+        assert_eq!(PadBackend::HidMaestro.gap(), None);
         let gap = PadBackend::HidMaestro
-            .gap()
-            .expect("HIDMaestro is unimplemented");
-        // The sentence has to close off the wrong fix explicitly: "not
-        // installed" is the reading that costs a pointless driver install.
+            .gap_for(Persona::SwitchPro)
+            .expect("Switch Pro remains unimplemented");
         assert!(
-            gap.contains("installing HIDMaestro does not change it"),
+            gap.contains("has not yet completed its independent production runtime"),
             "{gap}"
         );
     }

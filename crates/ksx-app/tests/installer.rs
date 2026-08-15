@@ -1099,6 +1099,10 @@ fn installer_and_portable_zip_carry_complete_license_material() {
             "Nefarius Software Solutions e.U.",
         ),
         (
+            "THIRD-PARTY-LICENSES/HIDMaestro.txt",
+            "Copyright (c) 2026 HIDMaestro Contributors",
+        ),
+        (
             "THIRD-PARTY-LICENSES/Forma-MIT.txt",
             "Copyright (c) 2026 Forma",
         ),
@@ -1211,35 +1215,121 @@ fn installer_and_portable_zip_carry_complete_license_material() {
 /// first-time user cannot rank, and a checkbox nobody understands is not
 /// consent.
 #[test]
-fn the_bundled_driver_is_offered_checked_and_the_label_says_what_it_is() {
+fn both_controller_driver_tasks_are_offered_checked_and_named() {
     let text = script();
     let tasks = section(&text, "[Tasks]");
-    let task = tasks
-        .iter()
-        .find(|line| field(line.as_str(), "Name").as_deref() == Some("vigembus"))
-        .unwrap_or_else(|| {
-            panic!("no `vigembus` task: nothing in this installer installs the driver: {tasks:?}")
-        });
+    for (name, product, purpose) in [
+        ("vigembus", "ViGEmBus", "virtual controllers"),
+        ("hidmaestro", "HIDMaestro", "DualSense"),
+    ] {
+        let task = tasks
+            .iter()
+            .find(|line| field(line.as_str(), "Name").as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no `{name}` driver task: {tasks:?}"));
+        assert!(
+            !field(task, "Flags")
+                .unwrap_or_default()
+                .contains("unchecked"),
+            "the {product} box is ticked by default: {task}"
+        );
+        let description = field(task, "Description").expect("driver task Description");
+        assert!(description.contains(product), "{description}");
+        assert!(description.contains(purpose), "{description}");
+        assert!(
+            description.to_ascii_lowercase().contains("controller"),
+            "the label says what the driver is for: {description}"
+        );
+        if name == "vigembus" {
+            assert!(description.contains("bundled"), "{description}");
+            assert!(description.contains("no download"), "{description}");
+        } else {
+            assert!(description.contains("v1.6.1"), "{description}");
+            assert!(description.contains("internet required"), "{description}");
+        }
+    }
+}
 
-    assert!(
-        !field(task, "Flags")
-            .unwrap_or_default()
-            .contains("unchecked"),
-        "the driver box is ticked by default — the whole point is that a first run does \
-         not have to know it needs one: {task}"
-    );
+#[test]
+fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first() {
+    let files = section(&script(), "[Files]");
+    for source in [
+        "{#RepoRoot}\\target\\release\\{#HidMaestroHost}",
+        "{#RepoRoot}\\target\\release\\{#HidMaestroInstaller}",
+    ] {
+        let entry = files
+            .iter()
+            .find(|line| field(line, "Source").as_deref() == Some(source))
+            .unwrap_or_else(|| panic!("installer does not package {source}: {files:?}"));
+        assert_eq!(field(entry, "DestDir").as_deref(), Some("{app}"));
+    }
 
-    let description = field(task, "Description").expect("the task must carry a Description");
-    assert!(
-        description.contains("ViGEmBus"),
-        "the label names the driver, so somebody who already has one can recognise it: \
-         {description}"
+    let code = section(&script(), "[Code]").join("\n");
+    assert!(code.contains("WizardIsTaskSelected('hidmaestro')"));
+    let build_workflow = workflow("build-installer.yml");
+    assert_eq!(
+        build_workflow
+            .matches("/MERGETASKS=!vigembus,!hidmaestro,!desktopicon")
+            .count(),
+        2,
+        "installer smokes must never download or install either optional driver"
     );
+    assert!(code.contains("InstallHidMaestroDriver"));
+    assert!(code.contains("install-v1"));
+
+    let bootstrap_project =
+        read("tools/hidmaestro-driver-installer/HidMaestroDriverInstaller.csproj");
     assert!(
-        description.to_ascii_lowercase().contains("controller"),
-        "and says what it is FOR, in a word a first-run user has (`controller`), not one \
-         only we have: {description}"
+        !bootstrap_project.contains("<Reference"),
+        "the shipped bootstrap must not reference or bundle the upstream SDK"
     );
+    let bootstrap = read("tools/hidmaestro-driver-installer/Program.cs");
+    for pin in [
+        "HIDMaestro-v1.6.1.zip",
+        "00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34",
+        "ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5",
+        "C633AB241CD09846C2AA409F0BEE2026962610404A7BF132C75CBD66B0E5A9F4",
+        "BCF3A14E8712A90837FC5C0D8C8A24696AF2BD7F74E9767597EC81EDEDFB23DB",
+        "HMContext",
+        "InstallDriver",
+        "DeleteWorkingDirectory",
+        "SpecialFolder.ProgramFiles",
+        "FileAttributes.ReparsePoint",
+    ] {
+        assert!(
+            bootstrap.contains(pin),
+            "bootstrap lost required pin `{pin}`"
+        );
+    }
+
+    let build = workflow("build-installer.yml");
+    let host = build
+        .find("Build pinned production HIDMaestro host")
+        .unwrap();
+    let driver = build
+        .find("Build pinned HIDMaestro driver installer")
+        .unwrap();
+    let iscc = build.find("Build installer").unwrap();
+    assert!(host < iscc && driver < iscc);
+    assert!(build.contains("runtime-hash-pinned-download"));
+    assert!(build.contains("bundledUpstreamAssemblyCount -ne 0"));
+    assert!(build.contains("requiresNetworkAtInstall -ne $true"));
+
+    let portable = build
+        .split("- name: Package portable distribution with license material")
+        .nth(1)
+        .expect("portable packaging step")
+        .split("- uses: actions/upload-artifact@v4")
+        .next()
+        .expect("portable upload boundary");
+    for forbidden in [
+        "ksx-hidmaestro-host.exe",
+        "ksx-hidmaestro-driver-installer.exe",
+    ] {
+        assert!(
+            !portable.contains(forbidden),
+            "portable ZIP must omit installed-only {forbidden}"
+        );
+    }
 }
 
 /// **The install goes through the verb that verifies it.**

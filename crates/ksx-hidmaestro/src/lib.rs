@@ -1,68 +1,15 @@
-//! ksx-hidmaestro — HIDMaestro experiments and a future host contract.
+//! HIDMaestro support for KSX's production plain-USB DualSense persona.
 //!
-//! HIDMaestro (<https://github.com/hifihedgehog/HIDMaestro>, **MIT**) is a
-//! user-mode (UMDF2) HID descriptor emulator and KSX's planned route to richer
-//! personas than ViGEmBus provides. S1.5c freezes only a source-level,
-//! plain-USB DualSense conformance slice; Switch Pro and Xbox Series remain
-//! roadmap scope, not implemented catalog/runtime paths.
+//! HIDMaestro (<https://github.com/hifihedgehog/HIDMaestro>, MIT) is a UMDF2
+//! virtual-HID engine. The ordinary KSX daemon never opens its device mappings
+//! or mutates PnP state. [`windows_transport`] starts one fixed installed
+//! elevated sibling, authenticates that retained process over a one-use pipe,
+//! and [`host`] carries bounded create/submit/feedback/destroy messages. The
+//! sibling owns the exact driver ABI and one session-owned DualSense root.
 //!
-//! # Status: experimental model, NOT a production wire client
-//!
-//! This build has no production implementation of HIDMaestro's creator/input/
-//! output protocol, regardless of whether the driver is installed. Most of this
-//! crate predates the authoritative upstream layout and was implemented against
-//! the protocol map in
-//! `docs/research/padforge-code-audit.md` §3, which was extracted from
-//! PadForge's working C# client. HIDMaestro's author has since supplied the exact
-//! object names and pointed KSX to `driver/driver.h` and
-//! `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs`. Those sources show that the
-//! real protocol is larger than this crate's custom latch: creator-owned mappings
-//! and events, native HID/GIP/extended input data, an output ring, PID state and
-//! per-controller configuration. The current encoder must not be connected to a
-//! live driver.
-//!
-//! What that means concretely:
-//!
-//! | Layer | Verified | How |
-//! |---|---|---|
-//! | Seqlock discipline ([`seqlock`]) | **Yes** — real concurrency test | writer thread vs reader loop over shared atomics |
-//! | Keepalive cadence ([`keepalive`]) | **Yes** — pure logic, derived constants | arithmetic against the three watchdogs |
-//! | Axis routing by name ([`axis`], [`state`]) | **Yes** — pure logic | including a counterfactual that reproduces the phantom-trigger bug |
-//! | Legacy lifecycle scaffold ([`context`]) | **Model only, not the supported upstream lifecycle** | recorded test-double order; it must not back production Play |
-//! | Plain-USB DualSense feedback ([`feedback`]) | **Source-pinned contract, hardware unverified** | exact raw `OutputReceived` envelope, offsets, validity policy and effective-state fixtures |
-//! | Privileged-host protocol ([`host`]) | **Yes — pure framing/state machine only** | all twelve frozen message vectors + encoded in-memory host; no SDK calls |
-//! | Windows host transport ([`windows_transport`]) | **Source complete, fake-host evidence gated** | precreated one-use pipe, authenticated endpoint, bounded framed I/O and fail-closed teardown; production launch remains unreachable without the fixed native bootstrap |
-//! | Host rendezvous policy ([`rendezvous`]) | **Yes — pure identity policy only** | fixed token/name/argv plus exact peer-evidence refusals; this policy module itself has no pipe, process or elevation calls |
-//! | Current custom latch ([`shm`], [`state::HmGamepadState::encode`]) | **Not HIDMaestro wire-compatible** | useful test scaffold; upstream layout is now known but not implemented here |
-//! | Anything touching a real device | **No** | there is no device to touch |
-//!
-//! Nothing here fakes a controller. [`driver::UnavailableDriver`] always
-//! refuses the missing KSX implementation, while `ksx doctor` separately
-//! reports install evidence.
-//!
-//! # Shape
-//!
-//! - [`seqlock`] — an isolated seqlock model and its read/write discipline. The
-//!   production SDK/driver structures have additional fields and ownership rules.
-//! - [`keepalive`] — 16 ms idle-dedup, derived from three driver watchdogs.
-//! - [`axis`] / [`state`] — HID-usage axes, routed **by role through the
-//!   profile's map**, never positionally.
-//! - [`profile`] — descriptor + axis map, PID-block detection.
-//! - [`context`] — an older lifecycle scaffold retained for tests, not the
-//!   supported `HMContext` / `HMController` production boundary.
-//! - [`feedback`] — source-pinned plain-USB DualSense raw feedback plus older
-//!   experimental Xbox/PID tables.
-//! - [`host`] — bounded/versioned future process protocol and transport-neutral
-//!   client state machine. It launches nothing and touches no driver.
-//! - [`rendezvous`] — the pure token/name/argv and peer-identity policy the
-//!   authenticated Windows transport must enforce before using [`host`].
-//! - [`windows_transport`] — the Windows-only one-use named-pipe transport. Its
-//!   only current launcher is the fixed, non-elevating inherited-token fake host
-//!   behind an explicit test feature; no production elevated-host bootstrap is
-//!   reachable yet.
-//! - [`driver`] — availability evidence plus the always-not-implemented driver.
-//! - [`shm`] (Windows) — experimental open-existing file-mapping storage; the
-//!   real writer creates named mappings/events with the upstream security contract.
+//! Switch Pro and Xbox Series remain independently build-gated. The older
+//! seqlock, profile and lifecycle modules are retained as research/test models;
+//! they are not the live driver path and cannot be selected by product routing.
 
 pub mod axis;
 pub mod context;

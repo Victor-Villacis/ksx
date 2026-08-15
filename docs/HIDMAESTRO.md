@@ -1,9 +1,14 @@
 # HIDMaestro M8 execution plan
 
-Status: **catalog, host/transport, structural-package and S1.5c source-contract
-checkpoints complete; live use blocked on candidate source implementation,
-production artifacts, signed-driver ABI/provenance and hardware evidence; no
-HIDMaestro persona is enabled**.
+Status: **the installed product path for one plain-USB DualSense is implemented;
+clean-machine hardware/API/force-kill acceptance remains. Switch Pro and Xbox
+Series are still gated.**
+
+The implementation uses a fixed NativeAOT elevated sibling, authenticated
+one-use IPC, one exact controller slot, creator-owned shared memory, a five-second
+host lease, exact-owned PnP teardown, and an explicit installer-only driver
+bootstrap pinned to the upstream v1.6.1 release. The ordinary daemon remains
+non-elevated and has no package, certificate, driver-path, or raw-handle API.
 
 HIDMaestro is KSX's chosen rich-profile Windows output backend. ViGEmBus
 remains the shipped Xbox 360 / DS4 compatibility lane, and VIIPER remains the
@@ -34,7 +39,7 @@ not the starting assumption.
 
 ## Reproducible upstream pin
 
-The spike uses the official [HIDMaestro v1.6.1 release](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v1.6.1):
+The production integration uses the official [HIDMaestro v1.6.1 release](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v1.6.1):
 
 | Item | Pinned value |
 |---|---|
@@ -44,182 +49,82 @@ The spike uses the official [HIDMaestro v1.6.1 release](https://github.com/hifih
 | `HIDMaestro.Core.dll` SHA-256 | `adadd9e2604b7b6b047f386ebdd03879feef48009c6290281e4c665e2190f6d5` |
 | Managed target | .NET 10, Windows x64 |
 
-The repository does not carry the release binary. Actions downloads the release
-to its disposable runner, proves the archive and DLL digests, and copies the DLL
-only as inert input to the probe. The build has no CLR reference to
-`HIDMaestro.Core`; CI also rejects that name in the probe's runtime dependency
-graph. Pinning is evidence for this spike, not a declaration that HIDMaestro's
-internal shared-memory layout is a stable third-party ABI.
+The repository and shipped KSX installer do not carry the upstream release
+binaries. The self-contained installer bootstrap contains only the fixed URL,
+byte lengths, and SHA-256 pins. When the user explicitly selects the setup task,
+it downloads the exact official archive, proves the archive and all three
+required managed assemblies, invokes the one pinned install API from a protected
+temporary directory, unloads it, and removes the downloaded bytes. This avoids
+redistributing the upstream SDK and its embedded WDK tools; an internet
+connection is therefore required for that optional setup task.
+[Microsoft explicitly documents SignTool as non-redistributable](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/installing-a-catalog-file-by-using-signtool),
+so this boundary is a shipping constraint, not just an installer-size choice.
 
-### Live-use blocker in the pinned SDK
+The runtime host is built separately from the exact pinned source commit and
+the reduced, reviewed KSX candidate. It embeds only the pinned profile catalog
+and one fixed runtime contract. It does not expose HIDMaestro's package install,
+certificate, arbitrary profile, raw report, or global cleanup surfaces.
 
-The v1.6.1 release is now used only as the exact hash-pinned input to a
-**non-executing static catalog measurement**. The probe opens the DLL once with
-write/delete sharing denied, hashes that handle before parsing, then uses
-`PEReader` / `MetadataReader` on the same file object. It does not ask the CLR
-to load or initialize the target, so target module initializers and lifecycle
-code cannot run through this inventory path. The administrator Actions runner
-asserts the exact version attributes, 22 CLR API signatures, 228 catalog
-resources, 130 deployable profiles, catalog hash and three KSX personas, then
-deletes every SDK copy before executing the SDK-free protocol tests. This
-closes the catalog-reader execution gap; it does **not** approve the release for
-KSX distribution, developer-workstation execution as code, or elevated use:
+## Live privilege boundary
 
-- `HIDMaestro.Core.dll` embeds `signtool.exe`, `Inf2Cat.exe` and dependencies.
-  [Microsoft's Windows driver documentation](https://learn.microsoft.com/windows-hardware/drivers/install/installing-a-catalog-file-by-using-signtool)
-  states that SignTool is not redistributable, so the release asset's MIT
-  license does not by itself grant KSX the right to redistribute that Microsoft
-  toolchain.
-- The release contains an elevated helper-staging boundary that is under
-  coordinated security review. KSX will not execute or redistribute that path;
-  implementation details belong in a private upstream report until disclosure
-  is coordinated.
-- The default developer-signing path does not meet KSX's production signing,
-  trust-ownership, or uninstall-cleanup requirements.
-- Controller indices, registry names and cleanup are machine-global. A normal
-  runtime must not sweep devices belonging to another HIDMaestro consumer, and
-  the current shared objects have no negotiated layout version or KSX ownership
-  token.
-- The audited `SubmitRawReport` bounds and its destination buffer disagree for
-  reports above 64 bytes. KSX will stay on the typed `SubmitState` path until
-  upstream resolves that mismatch and a test pins the result.
-
-That reusable, user-writable staging boundary must be treated as a potential
-local elevation path until upstream confirms an unobserved protection or a
-hardened build is available. KSX will disclose the exact finding privately,
-not publish exploit detail in a casual commit reply. The likely product fix is
-a fork/build mode that removes customer-side WDK tools, installs prebuilt
-properly licensed/signed packages through KSX's narrow elevated installer, and
-runs any required helper only from an ACL-protected installed location with
-strong identity verification. Runtime and provisioning must also be separated:
-the Play-time host never receives an install, global-sweep, driver-path or
-certificate-management operation over IPC.
-
-## Privilege boundary
-
-`InstallDriver()` and `CreateController()` require administrator rights. That
-does not mean all of KSX should run elevated. Today the daemon reads
-user-writable game configuration, launches configured programs and exposes local
-control surfaces under a same-user trust model. Elevating that whole process
-would turn those ordinary operations into privileged ones.
-
-The intended production shape is:
+Driver provisioning and controller creation require administrator authority;
+the rest of KSX does not. The shipped topology is:
 
 ```text
-ordinary KSX daemon  ->  narrow authenticated IPC  ->  HIDMaestro host
-       UI/config             fixed operations             elevated
-       game launch           bounded state only            SDK owner
+ordinary KSX daemon  ->  authenticated one-use pipe  ->  NativeAOT host
+       UI/config             fixed bounded messages          elevated
+       game launch           full controller snapshots       one device
 ```
 
-The host may ultimately be an installed service or a long-lived per-user
-elevated process. Source inspection makes a **LocalSystem** Session 0 host
-technically plausible: controller objects use the `Global\` namespace, their
-shared-object SDDL grants SYSTEM, Administrators and LocalService access,
-device creation is callback/event driven, and no interactive desktop or
-message loop is required. That SDDL is not evidence that LocalService can own
-the lifecycle; upstream source identifies authority failures for that account.
-The service experiment is LocalSystem-only, and the topology is not upstream
-documented or tested, so a disposable-machine matrix must still prove it before
-KSX chooses that design.
+The ordinary process creates the first-instance pipe before launch, retains the
+exact elevated child process, and correlates the kernel-reported pipe client to
+that process. The host independently verifies that its server is the
+non-elevated installed `ksx.exe` in the same interactive session. Both installed
+executables must pass the Program Files location and DACL proof before launch.
 
-KSX's current installer and executables are unsigned. A per-Play elevated host
-would therefore show an `Unknown publisher` UAC prompt every session. That
-prototype is acceptable on a disposable QA image, but production must either
-code-sign the host or pay the additional engineering cost of a securely
-installed on-demand service; a highest-privilege scheduled task is not an
-acceptable prompt bypass.
+The wire protocol contains only Hello, one allowlisted DualSense Create, full
+bounded state Submit, Destroy, Shutdown, and bounded feedback/fault frames. It
+contains no executable, package, certificate, descriptor, profile-path,
+registry, or raw-handle parameter. A second controller is refused in setup,
+configuration, slot mutation, `ksx pads`, the Rust backend, and the host.
 
-The first executable topology remains one host per Play session. S1.6b now
-implements the dangerous transport boundary against an SDK-free test host: the
-ordinary process creates a one-use local named pipe *before* launching the
-fixed child, retains that child process object, and binds the pipe-reported
-client PID to that exact object before sending `Hello`. It does not merely
-reopen and trust a process with the same numeric PID. The fake inherits the
-test runner's session and privilege state so hosted Actions can exercise the
-kernel path without UAC. Production admission remains stricter: the host must
-still be alive, have the expected canonical image, be elevated and run in the
-daemon's same nonzero interactive session. KSX deliberately does **not**
-require user-SID or logon-SID equality between the two production processes:
-over-the-shoulder UAC may launch the host under a different administrator
-account.
+The host proves the exact preinstalled v1.6.1 INF and UMDF DLL bytes, creates
+only its session-owned root and child identities, owns the fixed shared-memory
+objects, and removes only those captured identities. It never calls the
+upstream global sweep during Play. It republishes the last full input state at
+16 ms, while the client renews a five-second lease once per second. A broken
+pipe, dead daemon, expired lease, output-thread error, or normal stop
+neutralizes and tears down the exact controller while the host is alive. If the
+elevated host itself is forcibly terminated, the driver watchdog neutralizes
+input; the next protected host start removes only the prior KSX-owned captured
+root/key residue before creating a new controller. The force-kill timing and
+residue result still need the supervised hardware gate below.
 
-The pipe has a fixed security contract: first-instance creation,
-exactly one server instance, remote-client rejection, and a DACL limited to the
-launcher's logon SID plus Administrators and SYSTEM. The elevated client must
-request only `Identification` or `Anonymous` impersonation (with the Windows
-security-QoS flag set), so the ordinary server cannot impersonate the elevated
-client. The random rendezvous token correlates the launch, pipe name and fixed
-arguments; it is **not authentication** and never substitutes for the kernel
-process-object proof.
+The installer is the only provisioning authority. Its checked setup task runs a
+single-purpose self-contained bootstrap which downloads and verifies the pinned
+upstream archive at install time, calls `InstallDriver()` under the installer's
+existing elevation, then deletes the temporary SDK. The ordinary daemon and
+runtime host have no network or package-install authority. The host and
+bootstrap are omitted from portable packages. Current release signing and the
+supervised clean Windows/hardware matrix remain release acceptance work, not
+missing product code.
 
-Directly elevating a managed .NET host is still a **no-go**. Startup hooks,
-additional dependency paths and CLR profiler configuration can affect managed
-execution before the host's own entry point, so a protected executable path is
-not sufficient proof of a clean elevated runtime. The S1.6b executable is
-therefore SDK-free and inherits its test runner's token without requesting
-elevation. A production host will likely require an
-ACL-protected native bootstrap that neutralizes those injection surfaces before
-initializing a sanitized CoreCLR, or equivalent clean-runner evidence strong
-enough to prove the same property.
+## Delivery state
 
-The production IPC boundary must reject arbitrary executable paths, driver
-paths, descriptors, profile files and commands. It accepts only versioned
-operations, allowlisted catalog profile IDs, bounded controller state and exact
-controller handles created by that host. Cleanup is ownership-scoped; KSX must
-not call HIDMaestro's system-wide `RemoveAllVirtualControllers()` during a
-normal session because another consumer may own controllers too.
+| Product slice | State |
+|---|---|
+| One USB DualSense persona | **Implemented.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are live. |
+| Privileged host | **Implemented.** Fixed installed NativeAOT executable, UAC launch, authenticated one-use pipe, exact process/session checks and bounded protocol. |
+| Device ownership | **Implemented.** One preinstalled-package proof, one exact root, captured child identities, neutralize-before-remove and no Play-time global sweep. |
+| Capacity and configuration | **Implemented.** The one-controller ceiling is enforced by setup, validation, game profiles, slot mutation, pad testing, routing and host dispatch. |
+| Installer/package | **Implemented.** Checked, internet-disclosed HIDMaestro setup task; runtime hash-pinned official download; protected installed host; cleanup; notices/licenses; and intentional portable omission. |
+| Other rich personas | **Gated.** Switch Pro and Xbox Series remain known configuration vocabulary but cannot be selected as working outputs. |
+| Automated software acceptance | **In progress for this product integration.** GitHub Actions is the compiler/test/package authority. |
+| Physical release acceptance | **Pending.** Clean Windows 10/11, DirectInput/SDL/Steam/browser/WGI, coexistence, force-kill and residue checks require a supervised controller machine. |
 
-The host must implement `VirtualPadBackend` through a dedicated client; it must
-not revive the removed `HmDriverApi` experiment. That trait returned a
-process-local test latch and the old output adapter encoded KSX's incompatible
-80-byte frame into it. The real host owns `HMContext`, `HMController` and all
-SDK objects. It also caches the last full `PadState` and
-owns any required idle keepalive pump: KSX's engine emits state changes, so a
-cadence check called only from `VirtualPadBackend::update()` cannot fire while
-the input is held and unchanged. The ordinary client still renews a slower
-lease with an unchanged full-state submission every second. If no valid state
-arrives for five seconds, the host neutralizes and destroys that controller
-even when a wedged client keeps the pipe open.
-
-Two routing changes prepare S4 without enabling a driver:
-
-- **Done:** capability is gated per persona. A future DualSense proof can no
-  longer expose Switch Pro and Xbox Series by flipping one backend-wide bit.
-- **Routing seam done, adapter absent:** ViGEm and a future HIDMaestro backend
-  can be independently factory-backed. Existing entry points retain their
-  current eager ViGEm ordering until an exact-persona preflight proves output
-  availability before keyboard capture is armed.
-
-## Current sprint
-
-| Slice | Deliverable | Definition of done |
-|---|---|---|
-| S0 — truth reset | Correct credits, source facts and routing decision | **Done.** Existing transport says it is incompatible; personas remain gated; ViGEm behavior is unchanged |
-| S1 — SDK catalog probe | Hash-pinned, non-executing catalog measurement of `HIDMaestro.Core.dll` | **Done.** Actions hashes and statically parses the same open file object without a target AssemblyRef or CLR load, emits one machine-readable result, and proves 22 exact API signatures plus the DualSense, Switch Pro and Xbox Series catalog candidates. It deletes the SDK before running the pure protocol contracts |
-| S1.25 — exact capability gate | Replace the backend-wide product switch with one gate per rich persona | **Done.** Existing behavior is unchanged; all three still refuse, but proving one can no longer enable the other two |
-| S1.3 — host contract | Freeze a bounded, versioned Rust/.NET Play-only boundary without touching the SDK lifecycle | **Done.** Rust executes the host-side ordering, replay, timeout and teardown rules; C# mirrors all twelve wire frames plus cadence, lease, feedback and lifetime-budget simulations. There is still no real transport or SDK lifecycle call |
-| S1.4 — unsafe adapter retirement | Remove the private-latch/global-lifecycle output path | **Done.** `ksx-output` has a zero-state build refusal; it cannot construct a client, transport, SDK object or controller, and installing HIDMaestro cannot change that fact |
-| S1.5a — structural distribution gate | Statically audit an exact unsigned candidate without loading or executing it | **Done.** On a quiescent build tree, the probe checks a fixed manifest/tree, hashes, profile catalog, manifest-pinned INF metadata, allowed managed resources and known-symbol denylist. It deliberately cannot declare a package distribution-ready or prove arbitrary code safe |
-| S1.5b — provenance and elevation hardening | Produce the runtime-only SDK and signed driver/host packages | **In progress (parent track).** The exact v1.6.1 source baseline and pure native-bootstrap policy are frozen. No runtime-only SDK, production bootstrap/managed host, signed package, signed-driver ABI binding or clean-VM lifecycle evidence exists |
-| S1.5c — one-DualSense source contract | Freeze the exact source target without building or loading it | **Done — source evidence only.** [Actions run 31860063900](https://github.com/Victor-Villacis/ksx/actions/runs/31860063900) freezes 9 public types and 100 logical entries; classifies all 51 Core units as 1 retained, 13 replacement-required and 37 excluded; manifests 231 profile files as 228 embedded sources, 130 deployable descriptors and 3 exclusions with zero duplicate IDs; and compiles one canonical pure-Rust DualSense reducer through both the workspace and a standalone 16-vector contract. No managed replacements, runtime artifact, driver or hardware was exercised |
-| S1.5d — inert managed-source candidate | Materialize and hash-freeze the replacement tree named by the S1.5c compile contract | **Done — source evidence only.** [Actions run 31863647868](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868) passed all 453 static checks over the exact 12-file tree, 11 compile inputs, 228 resources, exact-owned recovery source and source bindings to the 37-frame input and 16-vector feedback contracts. The candidate was not built or loaded, and all six artifact, driver and distribution gates remain false |
-| S1.6a — pure one-use rendezvous policy | Freeze launch correlation and peer-acceptance rules without acquiring OS authority | **Done.** A 32-byte token has one exact lowercase encoding, pipe names use one fixed prefix, host argv is exactly `serve-v1`, token and daemon PID, and peer policy requires non-forgeable authenticated process evidence. The module does not create a pipe, launch or elevate a process, load the SDK or touch a device |
-| S1.6b — authenticated local transport and fake host | Exercise the V1 host contract over the real one-use pipe without the SDK | **Done.** [Actions run 31849073410](https://github.com/Victor-Villacis/ksx/actions/runs/31849073410) built the fixed SDK-free apphost, deleted every SDK input before executing it, passed the authenticated Rust/.NET pipe test, and then passed the complete Rust and release/installer gates. Direct elevation of the managed host remains forbidden until its pre-entry runtime-injection surface is neutralized |
-| S2 — one-controller conformance | Supervised plain DualSense run through the hardened supported SDK boundary | Explicit consent and UAC; one controller only; deterministic neutral/button/axis sequence is visible in Windows; bounded feedback metadata is captured; dispose removes the device; force-close recovery is separately measured |
-| S3 — privilege architecture | Per-user host and Session 0 service comparison | Author confirms supported topology or a disposable-machine experiment answers it; threat model is written; standard-user client can use only fixed operations; host owns the full-state keepalive and exact controllers; crash/restart cleanup is ownership-safe |
-| S4 — gated KSX adapter | Production `VirtualPadBackend` implementation behind a default-off gate | `PadState` translation, lifecycle and feedback have contract tests; no accidental persona substitution; missing/mismatched SDK refuses safely; ViGEm tests remain unchanged |
-| S5 — packaging and QA | Reproducible installer/repair/uninstall plus API matrix | Clean Windows 10/11 x64 install; signed/pinned payload and notices; DirectInput, XInput where applicable, SDL, Steam, WGI/GameInput and browser checks; 4 ViGEm + 1 HIDMaestro coexistence; no unexpected devices/certificates/files after uninstall |
-| S6 — native Rust decision | Evidence-based SDK-host versus native-client decision | Only pursue a native client if it has a demonstrated product benefit and upstream confirms an ABI/pinning policy; require SDK golden-vector parity and the same hardware matrix |
-
-S1, S1.3, S1.5a, the completed S1.5b/S1.5c source and policy contracts,
-S1.6a and the S1.6b fake do not request administrator authority or mutate the
-system. S1.5d is likewise source-only: it may materialize inert candidate text,
-but it does not authorize building, loading or executing it. The S1 reader runs
-on an administrator Actions runner only because that is GitHub's hosted Windows
-topology; the target DLL remains inert bytes. S2 remains blocked by the
-unfinished S1.5 parent track and is intentionally not automated on a developer
-workstation: it changes trust, driver and device state and needs an explicit
-supervised hardware gate.
+The earlier S1.x sections below are retained as the provenance trail that led
+to this implementation. Their source-only verdicts describe those historical
+checkpoints, not the capability of the current product tree.
 
 ### S1 measured result
 
@@ -474,10 +379,12 @@ disabled, and asked the two architecture questions the source does not answer:
    Windows service in Session 0, with an unelevated UI using its own narrow
    authenticated IPC channel?
 
-The next public follow-up should ask only for a private security contact and
-mention an elevated helper-staging boundary plus the SignTool redistribution
-question at a high level. Exact paths, reproduction details, and impact belong
-in a private report until disclosure is coordinated.
+The redistribution concern is closed on KSX's side: the shipped bootstrap does
+not contain SignTool, Inf2Cat, the upstream SDK, or another WDK payload. The
+explicit setup task retrieves the pinned official upstream release directly,
+executes only after exact verification, and deletes the temporary files. Any
+remaining upstream security report should still use a private contact for exact
+paths, reproduction details, and impact.
 
 Compatibility, teardown, latency, multi-controller and XInput-slot questions
 come after the probe produces reproducible logs. That gives upstream a concrete
@@ -485,8 +392,8 @@ failure or measurement to review instead of another hypothetical design.
 
 ## Go/no-go rule
 
-Do not enable any rich persona's exact capability gate and do not offer
-DualSense, Switch Pro or Xbox Series in customer configuration until S4 and S5
-pass. A successful catalog read proves the dependency can be hosted; it does
-not prove that a
-controller can be created, driven, observed, recovered or safely packaged.
+DualSense is enabled because its S4 implementation and installer boundary now
+exist. Do not enable Switch Pro or Xbox Series until their independent runtime,
+feedback and hardware gates pass. Do not call the DualSense hardware gate
+complete until the clean-machine S2/S5 matrix is recorded against the exact
+installer artifact.

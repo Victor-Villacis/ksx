@@ -672,6 +672,7 @@ fn game_title_of(issue: &Issue) -> Option<&str> {
         // `ksx run --game X` would build a plan for slots that cannot plug.
         | Issue::GameTooManyXinputSlots { game, .. }
         | Issue::GamePersonaNotImplemented { game, .. }
+        | Issue::GamePersonaCapacity { game, .. }
         | Issue::GameUserIndexOutOfRange { game, .. } => Some(game),
         _ => None,
     }

@@ -177,6 +177,17 @@ pub fn protected_winusb_helper() -> Result<ProtectedExecutable, ProtectedInstall
     protected_current_executable_sibling("ksx-winusb-helper.exe")
 }
 
+/// Resolve and seal the fixed installed HIDMaestro runtime host.
+///
+/// The basename, directory and launch image are not configurable. The host is
+/// deliberately unavailable from a portable copy: it crosses an elevation
+/// boundary and therefore requires the Program Files/DACL proof enforced by
+/// [`protected_current_executable_sibling`].
+#[cfg(windows)]
+pub fn protected_hidmaestro_host() -> Result<ProtectedExecutable, ProtectedInstallError> {
+    protected_current_executable_sibling("ksx-hidmaestro-host.exe")
+}
+
 fn validate_protected_executable_name(
     canonical: &Path,
     expected_name: &'static str,
@@ -297,6 +308,11 @@ pub fn protected_install_sibling(
 
 #[cfg(not(windows))]
 pub fn protected_winusb_helper() -> Result<ProtectedExecutable, ProtectedInstallError> {
+    Err(ProtectedInstallError::Unsupported)
+}
+
+#[cfg(not(windows))]
+pub fn protected_hidmaestro_host() -> Result<ProtectedExecutable, ProtectedInstallError> {
     Err(ProtectedInstallError::Unsupported)
 }
 
@@ -2124,13 +2140,10 @@ mod tests {
         }
     }
 
-    /// Broken version caught: a public `(current, sibling, name)` token mint
-    /// turned an opaque type back into an arbitrary Program Files elevation
-    /// authority. Only the already-shipped native WinUSB helper is allowlisted
-    /// in this checkpoint; a future HIDMaestro host needs a native bootstrap
-    /// contract before it can gain an elevation factory.
+    /// Only the two fixed installed siblings may mint elevation tokens; no
+    /// caller-selected basename or path crosses this API.
     #[test]
-    fn only_the_fixed_native_winusb_helper_can_mint_an_elevation_token() {
+    fn only_fixed_product_helpers_can_mint_an_elevation_token() {
         let source = include_str!("process.rs").replace("\r\n", "\n");
         let fixed_public = ["pub fn ", "protected_winusb_helper()"].concat();
         let generic_public = ["pub fn ", "protected_executable_sibling("].concat();
@@ -2142,7 +2155,11 @@ mod tests {
             "one Windows implementation and one non-Windows refusal"
         );
         assert!(!source.contains(generic_public.as_str()));
-        assert!(!source.contains(managed_public.as_str()));
+        assert_eq!(
+            source.matches(managed_public.as_str()).count(),
+            2,
+            "one Windows implementation and one non-Windows refusal"
+        );
         assert_eq!(source.matches(generic_private.as_str()).count(), 1);
     }
 

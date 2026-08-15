@@ -43,11 +43,10 @@ impl Shared {
 
 /// One authenticated, one-use Windows pipe conversation.
 ///
-/// There is intentionally no public constructor. In particular, callers
-/// cannot pass an executable, PID, privilege bit, raw handle, or already-open
-/// pipe. The current test-only constructor appears below its feature boundary;
-/// the future production constructor must be added with the fixed native
-/// bootstrap rather than exposing `AuthenticatedPipe` here.
+/// Callers cannot pass an executable, PID, privilege bit, raw handle, or
+/// already-open pipe. Production construction resolves one fixed protected
+/// installed sibling; the test-only constructor remains below its feature
+/// boundary.
 pub struct WindowsHostTransport {
     writer: Option<PipeWriter>,
     reader_thread: ReaderWorker,
@@ -64,10 +63,6 @@ impl std::fmt::Debug for WindowsHostTransport {
 }
 
 impl WindowsHostTransport {
-    #[allow(
-        dead_code,
-        reason = "construction remains test-feature-only until the fixed native bootstrap exists"
-    )]
     fn from_authenticated_halves(
         mut reader: PipeReader,
         writer: PipeWriter,
@@ -111,6 +106,59 @@ impl WindowsHostTransport {
         }
         self.reader_thread.join();
     }
+
+    /// Start and authenticate the one fixed installed production host, then
+    /// complete the KSXH nonce and pinned-runtime handshake.
+    pub fn connect_production(
+        expected: crate::host::HostExpectation,
+    ) -> Result<crate::host::HostClient<Self>, ProductionHostConnectError> {
+        use ksx_platform::local_pipe::{random_32, OneUsePipeServer};
+        use ksx_platform::process::{is_elevated, launch_elevated, protected_hidmaestro_host};
+
+        use crate::host::{HostClient, NONCE_BYTES};
+        use crate::rendezvous::{HostLaunchSpec, RendezvousToken};
+
+        match is_elevated() {
+            Some(false) => {}
+            Some(true) => return Err(ProductionHostConnectError::DaemonElevated),
+            None => return Err(ProductionHostConnectError::PrivilegeUnknown),
+        }
+
+        let token_bytes = random_32().map_err(setup_error)?;
+        let hello_nonce: [u8; NONCE_BYTES] = random_32().map_err(setup_error)?;
+        let launch =
+            HostLaunchSpec::new(RendezvousToken::from_bytes(token_bytes), std::process::id())
+                .map_err(setup_error)?;
+
+        // This ordering is security-significant: the first-instance listener
+        // exists before UAC can start the fixed child.
+        let server = OneUsePipeServer::create(&launch.pipe_name()).map_err(setup_error)?;
+        let executable = protected_hidmaestro_host().map_err(setup_error)?;
+        let child = launch_elevated(executable, &launch.argv()).map_err(setup_error)?;
+        let pipe = server
+            .accept_elevated(child, crate::host::HELLO_TIMEOUT)
+            .map_err(setup_error)?;
+        let (reader, writer) = pipe.into_split();
+        let transport = Self::from_authenticated_halves(reader, writer).map_err(setup_error)?;
+        HostClient::connect(transport, hello_nonce, expected).map_err(Into::into)
+    }
+}
+
+/// Failures before or during establishment of the fixed production host.
+#[derive(Debug, thiserror::Error)]
+pub enum ProductionHostConnectError {
+    #[error("the KSX daemon must not already be elevated when it starts the HIDMaestro host")]
+    DaemonElevated,
+    #[error("the KSX daemon privilege state could not be determined")]
+    PrivilegeUnknown,
+    #[error("the fixed HIDMaestro host could not be established: {0}")]
+    Setup(String),
+    #[error(transparent)]
+    Client(#[from] crate::host::HostClientError),
+}
+
+fn setup_error(error: impl std::fmt::Display) -> ProductionHostConnectError {
+    ProductionHostConnectError::Setup(error.to_string())
 }
 
 impl HostTransport for WindowsHostTransport {

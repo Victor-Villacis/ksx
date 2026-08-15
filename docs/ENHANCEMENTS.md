@@ -16,7 +16,7 @@ the requested device identity and transport:
 | Role | Backend | Product use | Status |
 |---|---|---|---|
 | Compatibility foundation and fallback | **ViGEmBus** | Proven Xbox 360 and DS4 output, including genuine `xusb22.sys` XInput slots | shipped |
-| Rich local Windows controller identities | **HIDMaestro** | Byte-exact catalog profiles such as Xbox Series, DualSense and Switch Pro, including profile-specific feedback | M8, not yet usable |
+| Rich local Windows controller identities | **HIDMaestro** | Production plain-USB DualSense now; independently gated catalog expansion later | DualSense implemented, hardware acceptance pending |
 | Software-defined virtual USB and network transport | **VIIPER** | Virtual controllers, keyboards and mice; remote input; Windows/Linux bridge | roadmap prototype, not shipped |
 
 “Fallback” never means silently turning a requested DualSense into an Xbox 360
@@ -40,37 +40,28 @@ network/cross-platform endpoint → VIIPER.
   supported fallback even after HIDMaestro works; retirement of its upstream project
   is a maintenance risk, not a reason to remove a working signed driver.
 
-### E1 status 2026-08-14 — M8 facts supplied, production adapter still absent
+### E1 status 2026-08-15 — first production adapter implemented
 
-**Feasibility check first.** Installation state is not the blocker: this build has no
-production SDK-backed HIDMaestro host or output adapter. Installing the driver would
-therefore not make these personas usable. In this build, the managed SDK is used only
-as a specification and catalog source; the roadmap's first production boundary is a
-separately hardened SDK host.
+M8 now ships a bounded first controller path:
 
-So M8 has shipped **contracts and truthful gates**, not a controller:
-
-- `crates/ksx-hidmaestro` retains the source-audited protocol research and now
-  carries a bounded `KSXH` host contract with twelve byte-for-byte Rust/.NET
-  wire vectors, controller/feedback limits, finite deadlines, lease expiry and
-  fail-closed teardown rules. It does not create a controller or call the SDK.
-- `ksx-output`: `HidMaestroBackend` is intentionally a zero-state refusal. The
-  obsolete private-latch/global-lifecycle experiment was removed, and there is
-  no client, transport, SDK object or controller map hidden behind the gate.
+- `crates/ksx-hidmaestro` carries the authenticated, bounded `KSXH` transport.
+  It resolves one fixed protected sibling, binds the UAC process identity, and
+  keeps raw driver/shared-memory authority out of the ordinary daemon.
+- `ksx-output::HidMaestroBackend` creates one exact DualSense, submits full
+  state, renews its lease, drains bounded feedback and tears the host down.
 - `ksx-core`: `Persona::{DualSense, SwitchPro, XboxSeries}` + `PadBackend`, with
   `Persona::backend()` as the single statement of the routing rule.
-- **The three personas are not offered until their exact implementations land.**
+- **Each persona is offered only when its exact implementation lands.**
   `PadBackend::supports(persona)` records that per-persona build capability, and
   `Persona::can_plug()` is what the config validator (`Issue::PersonaNotImplemented`),
   `RoutedBackend`, `ksx pads` and `ksx doctor` all read. The gate is a build fact and
   **never a driver probe** — installing HIDMaestro cannot expose an unimplemented
   persona. A persona is enabled only in the same change that lands and verifies that
   exact implementation, without accidentally enabling its siblings.
-- `ksx doctor` reports HIDMaestro's absence at **Info** severity (`hidmaestro-missing`)
-  and says nothing depends on it, because nothing does: a cabinet on
-  xbox360/playstation loses nothing by not having it, and neither does anyone else.
-  The separate `personas-not-implemented` note is what explains the three personas, and
-  it prints whether or not the driver is present.
+- `ksx doctor` reports whether the Driver Store prerequisite for DualSense is
+  present and separately names the unfinished Switch Pro/Xbox Series profiles.
+- The installed product includes a checked, explicit HIDMaestro driver task.
+  Driver installation/repair is isolated from Play-time authority.
 
 **The former source-fact blocker is closed.** HIDMaestro's author supplied the exact
 mapping/event/config names and pointed KSX to the authoritative MIT sources:
@@ -82,9 +73,9 @@ That does **not** make the removed Rust adapter salvageable. It modeled a small
 private latch, while the real protocol includes creator-owned mappings and events,
 native HID/GIP/extended input payloads, an output ring, PID/feedback state and
 controller configuration. M8 now starts from the supported SDK boundary, but only
-after a runtime-only SDK build, authenticated host transport and signed deterministic
-driver packages exist. It must then measure create/update/feedback/teardown across
-the Windows input APIs before any native Rust transcription is considered. The
+through a runtime-only candidate, authenticated host transport and a pinned installer.
+It must still measure create/update/feedback/teardown across the Windows input APIs
+on clean hardware before broad release. The
 previously cited WGI double-input issue was fixed upstream; KSX will test the current
 release instead of preserving that stale rationale.
 

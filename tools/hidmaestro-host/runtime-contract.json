@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "ksx-hidmaestro-host-v1",
+  "hostProtocol": "ksx.hidmaestro.host.v1",
+  "candidateContractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+  "upstreamRepository": "https://github.com/hifihedgehog/HIDMaestro",
+  "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "upstreamVersion": "1.6.1",
+  "catalogResourceCount": 228,
+  "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A",
+  "supportedProfiles": [
+    {
+      "id": 1,
+      "slug": "dualsense",
+      "vendorId": 1356,
+      "productId": 3302,
+      "transport": "usb"
+    }
+  ],
+  "controllerLimit": 1,
+  "leaseMilliseconds": 5000,
+  "preinstalledInfRawSha256": "187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704",
+  "preinstalledDriverRawSha256": "D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C",
+  "driverMutationAuthority": "register-and-remove-exact-session-owned-root-device-only",
+  "driverPackageInstallAuthority": false,
+  "driverPackageUpdateAuthority": false,
+  "globalDeviceSweepAuthority": false
+}

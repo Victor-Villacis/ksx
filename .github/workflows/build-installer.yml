@@ -67,6 +67,9 @@ jobs:
       portable_sha256: ${{ steps.portable.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.400
 
       # ---------------------------------------------------------------------
       # The tag and the tree must already agree. WE FAIL; WE DO NOT DERIVE.
@@ -150,6 +153,41 @@ jobs:
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
+
+      - name: Build pinned production HIDMaestro host
+        shell: pwsh
+        run: |
+          $receipt = ./tools/hidmaestro-host/publish.ps1 `
+            -WorkspaceRoot $PWD `
+            -OutputDirectory (Join-Path $PWD 'target/release')
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro host publish failed' }
+          $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
+          if ($parsed.schemaVersion -ne 1 -or
+              $parsed.upstreamCommit -cne '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
+              $parsed.runtimeContractSha256 -cne '1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0' -or
+              $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
+            throw 'The HIDMaestro host build receipt is not exact.'
+          }
+          Write-Host "ksx-hidmaestro-host.exe SHA256 $($parsed.executableSha256)"
+
+      - name: Build pinned HIDMaestro driver installer
+        shell: pwsh
+        run: |
+          $receipt = ./tools/hidmaestro-driver-installer/publish.ps1 `
+            -WorkspaceRoot $PWD `
+            -OutputDirectory (Join-Path $PWD 'target/release')
+          if ($LASTEXITCODE -ne 0) { throw 'HIDMaestro driver installer publish failed' }
+          $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
+          if ($parsed.schemaVersion -ne 1 -or
+              $parsed.upstreamVersion -cne '1.6.1' -or
+              $parsed.upstreamArchiveSha256 -cne '00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34' -or
+              $parsed.distributionMode -cne 'runtime-hash-pinned-download' -or
+              $parsed.bundledUpstreamAssemblyCount -ne 0 -or
+              $parsed.requiresNetworkAtInstall -ne $true -or
+              $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
+            throw 'The HIDMaestro driver installer build receipt is not exact.'
+          }
+          Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $($parsed.executableSha256)"
 
       # cabinet + studio is the shipping combination: the egui panel UI plus the
       # local web config server. The launcher is deliberately a separate package:
@@ -276,8 +314,10 @@ jobs:
           $exe = 'target/release/ksx.exe'
           $launcher = 'target/release/ksx-launcher.exe'
           $helper = 'target/release/ksx-winusb-helper.exe'
+          $hidmaestroHost = 'target/release/ksx-hidmaestro-host.exe'
+          $hidmaestroInstaller = 'target/release/ksx-hidmaestro-driver-installer.exe'
           $provider = 'target/release/libwdi.dll'
-          foreach ($required in @($exe, $launcher, $helper, $provider)) {
+          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroInstaller, $provider)) {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
               throw "required release binary was not built: $required"
             }
@@ -296,6 +336,18 @@ jobs:
               $helperHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
               $helperHeaders -notmatch '(?im)subsystem \(Windows GUI\)') {
             throw 'ksx-winusb-helper.exe must be an x64 Windows GUI-subsystem PE'
+          }
+          $hostHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroHost | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $hostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
+              $hostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
+            throw 'ksx-hidmaestro-host.exe must be an x64 console-subsystem PE'
+          }
+          $installerHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroInstaller | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $installerHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
+              $installerHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
+            throw 'ksx-hidmaestro-driver-installer.exe must be an x64 console-subsystem PE'
           }
           $mt = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.19041.0\x64\mt.exe'
           if (-not (Test-Path -LiteralPath $mt -PathType Leaf)) {
@@ -316,15 +368,19 @@ jobs:
           $launcherHash = (Get-FileHash $launcher -Algorithm SHA256).Hash
           $launcherKb = [math]::Round((Get-Item $launcher).Length / 1KB, 1)
           $helperHash = (Get-FileHash $helper -Algorithm SHA256).Hash
+          $hidmaestroHostHash = (Get-FileHash $hidmaestroHost -Algorithm SHA256).Hash
+          $hidmaestroInstallerHash = (Get-FileHash $hidmaestroInstaller -Algorithm SHA256).Hash
           $providerHash = (Get-FileHash $provider -Algorithm SHA256).Hash
           Write-Host "ksx.exe  $mb MB"
           Write-Host "SHA256   $h"
           Write-Host "ksx-launcher.exe  $launcherKb KB"
           Write-Host "SHA256            $launcherHash"
           Write-Host "ksx-winusb-helper.exe SHA256 $helperHash"
+          Write-Host "ksx-hidmaestro-host.exe SHA256 $hidmaestroHostHash"
+          Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $hidmaestroInstallerHash"
           Write-Host "libwdi.dll SHA256               $providerHash"
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
+          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       # The secondary release download is a PORTABLE DISTRIBUTION, not a bare
@@ -335,6 +391,8 @@ jobs:
       # the supported first-run path. The same boundary omits the elevated
       # WinUSB helper, libwdi.dll, and its corresponding source together:
       # portable is for already-prepared or Interception-capable advanced use.
+      # It also omits the elevated HIDMaestro host and installer bootstrap:
+      # those are installed-only protected siblings, not portable executables.
       - name: Package portable distribution with license material
         id: portable
         shell: pwsh
@@ -500,7 +558,7 @@ jobs:
               '/VERYSILENT'
               '/SUPPRESSMSGBOXES'
               '/NORESTART'
-              '/MERGETASKS=!vigembus,!desktopicon'
+              '/MERGETASKS=!vigembus,!hidmaestro,!desktopicon'
               "/DIR=$install"
               "/LOG=$setupLog"
             )
@@ -620,7 +678,7 @@ jobs:
             # protected directory, so the store initializer refused and the
             # step reported a product failure that was entirely its own.
             $a = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-                   '/MERGETASKS=!vigembus,!desktopicon',
+                   '/MERGETASKS=!vigembus,!hidmaestro,!desktopicon',
                    "/DIR=""$install""", "/LOG=""$log""")
             $p = Start-Process -FilePath $setup.FullName -ArgumentList $a -Wait -PassThru
             $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }

@@ -1,6 +1,6 @@
 [package]
 name = "ksx-hidmaestro"
-description = "HIDMaestro experiments and a bounded, versioned future host contract."
+description = "Authenticated HIDMaestro host protocol and production DualSense transport."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,9 +21,9 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Reserved for future tests against an isolated real HIDMaestro installation.
-# This build currently has no such tests or reachable install/device lifecycle;
-# never add them to ordinary CI or run them on a developer workstation.
+# Reserved for supervised hardware tests against an isolated real HIDMaestro
+# installation. The live product path exists, but destructive/device tests must
+# never enter ordinary CI or run on an unsupervised developer workstation.
 cab-tests = []
 # Exercises only the fixed, non-elevating inherited-token cross-language fake
 # host. This does not expose or select production elevated-host admission.

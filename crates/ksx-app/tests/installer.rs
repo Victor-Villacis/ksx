@@ -1308,7 +1308,7 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     let driver = build
         .find("Build pinned HIDMaestro driver installer")
         .unwrap();
-    let iscc = build.find("Build installer").unwrap();
+    let iscc = build.find("- name: Build installer").unwrap();
     assert!(host < iscc && driver < iscc);
     assert!(build.contains("runtime-hash-pinned-download"));
     assert!(build.contains("bundledUpstreamAssemblyCount -ne 0"));

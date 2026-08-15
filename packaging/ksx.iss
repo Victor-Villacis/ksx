@@ -194,7 +194,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; ASCII ONLY: this file has no UTF-8 BOM, so user-visible text is interpreted
 ; in the system code page. Comments may keep their punctuation.
 Name: "vigembus"; Description: "Install the bundled ViGEmBus controller driver (required to create virtual controllers; no download)"; GroupDescription: "Controller drivers:"
-Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 driver (required for DualSense; internet required)"; GroupDescription: "Controller drivers:"
+Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense; internet required)"; GroupDescription: "Controller drivers:"
 ; CHECKED, deliberately — docs/FIRST-RUN.md §4 bullet 1. It used to carry
 ; `Flags: unchecked`, and the audit's finding was concrete: this installer's
 ; only other hand-off is the "run it now" checkbox at the end, so a user who

@@ -321,12 +321,19 @@ Assert-Check 'lock.candidate-tree' `
     ($lock.sourceCandidate.normalizedTreeSha256 -ceq
         '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393') `
     'S1.5d candidate tree is exact.'
-Assert-Check 'lock.native-bootstrap' `
-    ($lock.artifactExpectation.managedEntryPointTokenOrRva -eq 0 -and
-     $lock.artifactExpectation.nativeAddressOfEntryPointExpectedNonzero -eq $true -and
-     $lock.artifactExpectation.allowedNativeBootstrapModule -ceq 'mscoree.dll' -and
-     $lock.artifactExpectation.allowedNativeBootstrapSymbol -ceq '_CorDllMain') `
-    'CLI managed entry point and native bootstrap are not conflated.'
+$artifactExpectationPropertyNames = @(
+    $lock.artifactExpectation.PSObject.Properties | ForEach-Object { [string]$_.Name })
+Assert-Check 'lock.zero-native-bootstrap' `
+    ($lock.artifactExpectation.machine -ceq 'Amd64' -and
+     $lock.artifactExpectation.peMagic -ceq 'PE32Plus' -and
+     $lock.artifactExpectation.managedEntryPointTokenOrRva -eq 0 -and
+     $lock.artifactExpectation.nativeAddressOfEntryPoint -eq 0 -and
+     $lock.artifactExpectation.nativeImportModuleCount -eq 0 -and
+     $lock.artifactExpectation.nativeImportSymbolCount -eq 0 -and
+     $artifactExpectationPropertyNames -cnotcontains 'nativeAddressOfEntryPointExpectedNonzero' -and
+     $artifactExpectationPropertyNames -cnotcontains 'allowedNativeBootstrapModule' -and
+     $artifactExpectationPropertyNames -cnotcontains 'allowedNativeBootstrapSymbol') `
+    'The Amd64 image has no native startup stub, import module, or import symbol.'
 Assert-Check 'lock.api-observation-counts' `
     ($lock.artifactExpectation.publicTypeCount -eq 9 -and
      $lock.artifactExpectation.publicLogicalEntryCount -eq 100) `
@@ -456,7 +463,13 @@ $programAnchorIndex = 0
 foreach ($literal in @(
     'new FileStream(', 'FileShare.Read', 'new PEReader(', 'GetMetadataReader()',
     'EntryPointTokenOrRelativeVirtualAddress', 'CorFlags.NativeEntryPoint',
-    'AddressOfEntryPoint != 0', 'allowedNativeBootstrapModule', 'allowedNativeBootstrapSymbol',
+    '"pe.nativeAddressOfEntryPoint"', 'GetProperty("nativeAddressOfEntryPoint").GetInt32()',
+    'IsEmpty(peHeader.ImportTableDirectory)',
+    'IsEmpty(peHeader.ImportAddressTableDirectory)',
+    'IsEmpty(peHeader.BaseRelocationTableDirectory)',
+    '"nativeImport.moduleCount"', '"nativeImport.symbolCount"',
+    'GetProperty("nativeImportModuleCount").GetInt32()',
+    'GetProperty("nativeImportSymbolCount").GetInt32()',
     'CodeManagerTableDirectory', 'VtableFixupsDirectory',
     'ExportAddressTableJumpsDirectory', 'DelayImportTableDirectory',
     'ThreadLocalStorageTableDirectory', 'ReadDebugDirectory()',
@@ -483,9 +496,12 @@ foreach ($literal in @(
         (-not (Has-Literal $program $literal)) 'Target loading, invocation, or native binding is absent.'
     $programForbidIndex++
 }
-Assert-Check 'program.no-native-entrypoint-zero-confusion' `
-    (-not (Has-Regex $program 'AddressOfEntryPoint\s*==\s*0')) `
-    'Native AddressOfEntryPoint is not required to be zero.'
+Assert-Check 'program.no-legacy-native-bootstrap' `
+    (-not (Has-Literal $program 'nativeAddressOfEntryPointExpectedNonzero') -and
+     -not (Has-Literal $program 'allowedNativeBootstrapModule') -and
+     -not (Has-Literal $program 'allowedNativeBootstrapSymbol') -and
+     -not (Has-Literal $program 'NativeBootstrap')) `
+    'The inspector has no x86-era native bootstrap expectation.'
 Assert-Check 'program.no-absolute-artifact-path-in-report' `
     (Has-Literal $program '"candidate-dll"') `
     'The receipt uses an artifact role rather than the absolute input path.'
@@ -934,8 +950,8 @@ foreach ($literal in @(
     'effective `@(Analyzer)` item set', 'logical command-line capture',
     'Editor/global-config discovery is disabled', 'MSBuild workload resolver is disabled',
     'instrument operating-system sockets',
-    'AddressOfEntryPoint', 'EntryPointTokenOrRelativeVirtualAddress == 0',
-    'does not interpret the entry-point machine-code trampoline',
+    'AddressOfEntryPoint == 0', 'EntryPointTokenOrRelativeVirtualAddress == 0',
+    'zero native import modules and symbols',
     'do not upload the DLL or PDB', '241 input files', 'quiescent, hash-bound'
 )) {
     Assert-Check ('readme.anchor.' + $readmeAnchorIndex) `

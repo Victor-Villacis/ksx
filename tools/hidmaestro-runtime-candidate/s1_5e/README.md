@@ -104,14 +104,13 @@ assembly/type/member/method-spec references, method bodies and every IL metadata
 token operand, resources, native imports, portable PDB documents, evaluated
 compiler inputs, reference packs, assets, and deps data.
 
-A normal x64 managed DLL may have a nonzero PE `AddressOfEntryPoint` for the
-native `mscoree.dll!_CorDllMain` bootstrap. The contractual managed-entry-point
-check is instead the CLR header's `EntryPointTokenOrRelativeVirtualAddress == 0`
-with `NativeEntryPoint` clear. The native bootstrap is reported and constrained;
-the import table must contain only `mscoree.dll!_CorDllMain`, the TLS directory
-must be empty, and the native entry-point address must be present. This first
-observer does not interpret the entry-point machine-code trampoline or prove its
-IAT target, so it is not confused with managed candidate execution.
+For this fixed Amd64 Roslyn/.NET 10 build, the managed PE writer emits no legacy
+native CLR startup stub. The observer therefore requires the PE
+`AddressOfEntryPoint == 0`; empty import, import-address, and base-relocation
+directories; and zero native import modules and symbols. It separately requires
+the CLR header's `EntryPointTokenOrRelativeVirtualAddress == 0` with
+`NativeEntryPoint` clear. The TLS, delay-import, and export directories must also
+be empty. These byte-only checks do not load or execute the candidate.
 
 This commit contains observation infrastructure only. No Actions observation is
 established until the job succeeds. Post-build DLL/PDB/deps hashes, MVID, exact

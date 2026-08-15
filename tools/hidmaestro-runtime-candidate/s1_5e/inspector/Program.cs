@@ -195,22 +195,32 @@ internal static class Program
         Require(checks, "pe.exportDirectoryEmpty", IsEmpty(peHeader.ExportTableDirectory), true);
         Require(
             checks,
-            "pe.nativeBootstrapAddressPresent",
-            peHeader.AddressOfEntryPoint != 0,
-            artifactExpectation.GetProperty("nativeAddressOfEntryPointExpectedNonzero").GetBoolean());
-
-        NativeImportInventory nativeImports = ReadNativeImports(pe);
-        string[] canonicalImports = nativeImports.Imports
-            .SelectMany(import => import.Symbols.Select(symbol => $"{import.Module}!{symbol}"))
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        Require(checks, "nativeImport.count", canonicalImports.Length, 1);
+            "pe.nativeAddressOfEntryPoint",
+            peHeader.AddressOfEntryPoint,
+            artifactExpectation.GetProperty("nativeAddressOfEntryPoint").GetInt32());
+        Require(checks, "pe.importTableDirectoryEmpty", IsEmpty(peHeader.ImportTableDirectory), true);
         Require(
             checks,
-            "nativeImport.bootstrap",
-            canonicalImports.SingleOrDefault(),
-            $"{artifactExpectation.GetProperty("allowedNativeBootstrapModule").GetString()}!{artifactExpectation.GetProperty("allowedNativeBootstrapSymbol").GetString()}",
-            StringComparer.OrdinalIgnoreCase);
+            "pe.importAddressTableDirectoryEmpty",
+            IsEmpty(peHeader.ImportAddressTableDirectory),
+            true);
+        Require(
+            checks,
+            "pe.baseRelocationTableDirectoryEmpty",
+            IsEmpty(peHeader.BaseRelocationTableDirectory),
+            true);
+
+        NativeImportInventory nativeImports = ReadNativeImports(pe);
+        Require(
+            checks,
+            "nativeImport.moduleCount",
+            nativeImports.Imports.Count,
+            artifactExpectation.GetProperty("nativeImportModuleCount").GetInt32());
+        Require(
+            checks,
+            "nativeImport.symbolCount",
+            nativeImports.Imports.Sum(import => import.Symbols.Count),
+            artifactExpectation.GetProperty("nativeImportSymbolCount").GetInt32());
 
         IReadOnlyDictionary<string, byte[]> resources =
             ManagedPeReader.ReadEmbeddedResources(pe, metadata, _ => true);
@@ -251,8 +261,8 @@ internal static class Program
             DriverTouched: false,
             DeviceTouched: false,
             NetworkUsedByCandidate: false,
-            NativeBootstrapAddressOfEntryPoint: peHeader.AddressOfEntryPoint,
-            NativeBootstrap: nativeImports,
+            NativeAddressOfEntryPoint: peHeader.AddressOfEntryPoint,
+            NativeImports: nativeImports,
             Artifact: new ArtifactIdentity(
                 "candidate-dll",
                 dllLength,
@@ -2353,8 +2363,8 @@ internal sealed record ArtifactObservation(
     bool DriverTouched,
     bool DeviceTouched,
     bool NetworkUsedByCandidate,
-    int NativeBootstrapAddressOfEntryPoint,
-    NativeImportInventory NativeBootstrap,
+    int NativeAddressOfEntryPoint,
+    NativeImportInventory NativeImports,
     ArtifactIdentity Artifact,
     string PdbSha256,
     string DepsJsonSha256,

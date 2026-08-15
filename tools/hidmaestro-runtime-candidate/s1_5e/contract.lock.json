@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 285,
+  "expectedSourceVerifierCheckCount": 291,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -182,9 +182,9 @@
     "machine": "Amd64",
     "peMagic": "PE32Plus",
     "managedEntryPointTokenOrRva": 0,
-    "nativeAddressOfEntryPointExpectedNonzero": true,
-    "allowedNativeBootstrapModule": "mscoree.dll",
-    "allowedNativeBootstrapSymbol": "_CorDllMain",
+    "nativeAddressOfEntryPoint": 0,
+    "nativeImportModuleCount": 0,
+    "nativeImportSymbolCount": 0,
     "publicTypeCount": 9,
     "publicLogicalEntryCount": 100,
     "manifestResourceCount": 228,
@@ -280,7 +280,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
-      "sha256": "6561C571584926328C045851D1B612EB86DC986DECE96C187D0AA41F56A3289C"
+      "sha256": "9C50F46477DC67E48B50C05BA28E34235959C009A1C2C5F7C97079B2DCC32A9A"
     },
     {
       "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
@@ -290,7 +290,7 @@
   "leafFiles": [
     {
       "path": "README.md",
-      "sha256": "CCAABFEA5B98A600DC8ECDB2FDE8F76B6E93C06277EAE993AF213A6911F98BC2"
+      "sha256": "3AB475BFA347CAE2FEB02361F61B7337AC876448A14C53FCB5985019927ABEAE"
     },
     {
       "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
@@ -298,7 +298,7 @@
     },
     {
       "path": "inspector/Program.cs",
-      "sha256": "6561C571584926328C045851D1B612EB86DC986DECE96C187D0AA41F56A3289C"
+      "sha256": "9C50F46477DC67E48B50C05BA28E34235959C009A1C2C5F7C97079B2DCC32A9A"
     },
     {
       "path": "run-actions-proof.ps1",
@@ -306,7 +306,7 @@
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "A889D17B92DF8C07A4D53136E191147CD032C3F3C586C05891114562794AE986"
+      "sha256": "E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D"
     }
   ],
   "gateState": {
@@ -321,7 +321,7 @@
     "This source lock authorizes and describes an Actions-only observation; it is not evidence that the observation has run.",
     "No post-build hash, MVID, portable-PDB identity, or metadata-reference allowlist is asserted before the first green receipt is reviewed.",
     "The profile manifest freezes canonical text bytes but not the Windows-checkout raw catalog digest; the observation reports that digest without promoting it to an expectation.",
-    "A successful observation proves deterministic byte equality and static structure only; it does not prove driver ABI, device behavior, candidate execution safety, or distribution readiness."
-    ,"The observer constrains the sole native import to mscoree.dll!_CorDllMain and requires an empty TLS directory, but does not interpret the native entry-point trampoline or prove its IAT target."
+    "A successful observation proves deterministic byte equality and static structure only; it does not prove driver ABI, device behavior, candidate execution safety, or distribution readiness.",
+    "The observer requires the Amd64 PE native AddressOfEntryPoint to be zero; requires empty import, import-address, base-relocation, TLS, delay-import, and export directories; and requires zero native import modules and symbols."
   ]
 }

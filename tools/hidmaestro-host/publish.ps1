@@ -46,7 +46,28 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'The pinned HIDMaestro profile catalog contract failed.' }
 
     $runtimeContract = Join-Path $PSScriptRoot 'runtime-contract.json'
-    $runtimeHash = (Get-FileHash -LiteralPath $runtimeContract -Algorithm SHA256).Hash
+    $runtimeBytes = [IO.File]::ReadAllBytes($runtimeContract)
+    if ($runtimeBytes.Length -ge 3 -and
+        $runtimeBytes[0] -eq 0xEF -and
+        $runtimeBytes[1] -eq 0xBB -and
+        $runtimeBytes[2] -eq 0xBF) {
+        throw 'The HIDMaestro runtime contract must be UTF-8 without a BOM.'
+    }
+    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+    $runtimeText = $strictUtf8.GetString($runtimeBytes)
+    $runtimeText = $runtimeText.Replace("`r`n", "`n")
+    if ($runtimeText.Contains("`r")) {
+        throw 'The HIDMaestro runtime contract contains a bare carriage return.'
+    }
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $runtimeHash = ([BitConverter]::ToString(
+            $sha256.ComputeHash($strictUtf8.GetBytes($runtimeText))
+        )).Replace('-', '')
+    }
+    finally {
+        $sha256.Dispose()
+    }
     if ($runtimeHash -cne '1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0') {
         throw 'The HIDMaestro runtime contract identity changed.'
     }

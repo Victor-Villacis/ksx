@@ -524,6 +524,25 @@ Assert-Check 'program.target-framework-attribute-shape' `
      (Has-Literal $program '"assembly.targetFrameworkDisplayName"') -and
      -not (Has-Literal $program 'ReadAssemblyStringAttribute(metadata, TargetFrameworkAttribute)')) `
     'The target-framework attribute decoder requires the exact one-property ECMA payload.'
+Assert-Check 'program.portable-pdb-content-binding' `
+    ($lock.artifactExpectation.portablePdbCodeViewPath -ceq '/_/object/HIDMaestro.Core.pdb' -and
+     (Has-Literal $program 'string expectedCodeViewPath,') -and
+     (Has-Literal $program '"pdb.codeView.pathRole",') -and
+     (Has-Literal $program 'normalizedCodeViewPath,') -and
+     (Has-Literal $program 'expectedCodeViewPath);') -and
+     (Has-Literal $program 'ComputePortablePdbContentSha256(') -and
+     (Has-Literal $program 'pdbHeader.IdStartOffset') -and
+     (Has-Literal $program 'pdbStreamOffset != expectedPdbIdOffset') -and
+     (Has-Literal $program 'BlobContentId checksumContentId = BlobContentId.FromHash(checksum.Checksum);') -and
+     (Has-Literal $program '"pdb.checksum.contentIdGuid"') -and
+     (Has-Literal $program '"pdb.checksum.contentIdStamp"') -and
+     (Has-Literal $program 'BinaryPrimitives.ReadUInt32LittleEndian(bytes) != 0x424A5342') -and
+     (Has-Literal $program 'if (name == "#Pdb")') -and
+     (Has-Literal $program 'Array.Clear(zeroed, pdbStreamOffset, expectedPdbId.Length);') -and
+     (Has-Literal $program 'SHA256.HashData(zeroed)') -and
+     -not (Has-Literal $program 'normalizedCodeViewPath == "HIDMaestro.Core.pdb"') -and
+     -not (Has-Literal $program 'normalizedCodeViewPath == "/_/output/HIDMaestro.Core.pdb"')) `
+    'CodeView uses the exact object role and checksum validation hashes the PDB with its ID zeroed.'
 
 $runner = Get-Content -LiteralPath (Join-Path $leafRoot 'run-actions-proof.ps1') -Raw
 $absoluteDrivePattern = '(?i)(?<![a-z])[a-z]:[\\/]'
@@ -862,6 +881,40 @@ Assert-Check 'runner.inspector-runtime-order' `
      (Has-Literal $runner "'^Microsoft\.NETCore\.App ([0-9]+\.[0-9]+\.[0-9]+) \[(.+)\]$'") -and
      (Has-Literal $runner "Join-Path `$DotnetRoot 'shared\Microsoft.NETCore.App'")) `
     'The exact path-redacted inspector runtime tree is bound before and after launch.'
+$inspectorFailureDiagnosticIndex = $runner.IndexOf(
+    'Write-Host ("INSPECTOR-CHECK-FAILED {0}" -f $name)', [StringComparison]::Ordinal)
+$inspectorExitValidationIndex = $runner.IndexOf(
+    'if ($inspectionProcess.ExitCode -notin @(0, 2)) {', [StringComparison]::Ordinal)
+$inspectorRuntimePostFailureIndex = $runner.IndexOf(
+    'if ($inspectionReportedFailure) {', $inspectorFailureDiagnosticIndex + 1,
+    [StringComparison]::Ordinal)
+$safeInspectorCheckNamePattern = '\A[A-Za-z0-9_./-]{1,256}\z'
+Assert-Check 'runner.inspector-failed-check-diagnostic' `
+    ((Has-Literal $runner '$inspectionProcess.ExitCode -notin @(0, 2)') -and
+     (Has-Literal $runner '$inspectionReportedFailure = $inspectionProcess.ExitCode -eq 2') -and
+     (Has-Literal $runner "`$name -cnotmatch '\A[A-Za-z0-9_./-]{1,256}\z'") -and
+     (Has-Literal $runner "`$name.IndexOf('//', [StringComparison]::Ordinal) -ge 0") -and
+     (Has-Literal $runner "`$name.IndexOf('../', [StringComparison]::Ordinal) -ge 0") -and
+     (Has-Literal $runner "`$name.StartsWith('/', [StringComparison]::Ordinal)") -and
+     [regex]::IsMatch(
+        'pdb.codeView.pathRole', $safeInspectorCheckNamePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     -not [regex]::IsMatch(
+        "pdb.codeView.pathRole`n", $safeInspectorCheckNamePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     -not [regex]::IsMatch(
+        'resource.C:/private', $safeInspectorCheckNamePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant) -and
+     'resource.//server/share'.IndexOf('//', [StringComparison]::Ordinal) -ge 0 -and
+     $inspectorFailureDiagnosticIndex -ge 0 -and
+     $inspectorExitValidationIndex -gt $runtimePostLaunchIndex -and
+     $inspectorRuntimePostFailureIndex -gt $runtimePostLaunchIndex -and
+     $inspectorRuntimePostFailureIndex -gt $inspectorFailureDiagnosticIndex -and
+     -not (Has-Literal $runner '$inspectionProcess.StandardOutput') -and
+     -not (Has-Literal $runner '$inspectionProcess.StandardError') -and
+     -not (Has-Literal $runner 'INSPECTOR-CHECK-FAILED $check.actual') -and
+     -not (Has-Literal $runner 'INSPECTOR-CHECK-FAILED $check.expected')) `
+    'Exit two reports only bounded failed-check names and still verifies the runtime post-launch.'
 Assert-Check 'runner.no-source-parameter' `
     (-not (Has-Regex $runner '(?m)^\s*\[string\]\s+\$(SourceRoot|Repository|Commit)\b')) `
     'Runner exposes no caller-selected source/repository/commit parameter.'

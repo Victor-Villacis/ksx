@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 283,
+  "expectedSourceVerifierCheckCount": 285,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -178,6 +178,7 @@
     "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
     "targetFramework": ".NETCoreApp,Version=v10.0",
     "targetFrameworkDisplayName": ".NET 10.0",
+    "portablePdbCodeViewPath": "/_/object/HIDMaestro.Core.pdb",
     "machine": "Amd64",
     "peMagic": "PE32Plus",
     "managedEntryPointTokenOrRva": 0,
@@ -279,7 +280,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
-      "sha256": "282A14982191D229FE9044C1DC71169128960B4D98EDF8DD7A7E03A60682A4EE"
+      "sha256": "6561C571584926328C045851D1B612EB86DC986DECE96C187D0AA41F56A3289C"
     },
     {
       "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
@@ -297,15 +298,15 @@
     },
     {
       "path": "inspector/Program.cs",
-      "sha256": "282A14982191D229FE9044C1DC71169128960B4D98EDF8DD7A7E03A60682A4EE"
+      "sha256": "6561C571584926328C045851D1B612EB86DC986DECE96C187D0AA41F56A3289C"
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "048F288C4A2D702257EBDFE3EC2F1951D41B71CAC112405FBBFA1C801DEFFCB0"
+      "sha256": "AE54C065066F238963B29A1C6EB6650E109FC175A85B6FDADEBD46444D79E384"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "D5610A321BA4BF1739F26DF48BAE898BB4C600A5E30D3E0B0E590177FBAA95BC"
+      "sha256": "A889D17B92DF8C07A4D53136E191147CD032C3F3C586C05891114562794AE986"
     }
   ],
   "gateState": {

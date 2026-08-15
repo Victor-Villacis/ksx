@@ -225,7 +225,12 @@ internal static class Program
             apiInput.Document.RootElement,
             checks);
         MetadataInventory metadataInventory = InspectMetadata(metadata, pe, rejectPolicy, checks);
-        PortablePdbInventory portablePdb = InspectPortablePdb(pe, options.PdbPath, checks);
+        PortablePdbInventory portablePdb = InspectPortablePdb(
+            pe,
+            options.PdbPath,
+            artifactExpectation.GetProperty("portablePdbCodeViewPath").GetString()
+                ?? throw new InvalidDataException("The expected portable-PDB CodeView path is null."),
+            checks);
         BuildInputInventory buildInputs = InspectBuildInputs(
             evaluationInput.Document.RootElement,
             assetsInput.Document.RootElement,
@@ -884,6 +889,7 @@ internal static class Program
     private static PortablePdbInventory InspectPortablePdb(
         PEReader pe,
         string pdbPath,
+        string expectedCodeViewPath,
         List<ObservationCheck> checks)
     {
         using var stream = new FileStream(
@@ -893,7 +899,12 @@ internal static class Program
             FileShare.Read,
             bufferSize: 64 * 1024,
             FileOptions.SequentialScan);
+        if (stream.Length > 64L * 1024 * 1024)
+            throw new BadImageFormatException("The portable PDB exceeds the inspection bound.");
         string sha256 = HashOpenStream(stream);
+        byte[] pdbBytes = new byte[checked((int)stream.Length)];
+        stream.Position = 0;
+        stream.ReadExactly(pdbBytes);
         stream.Position = 0;
         using MetadataReaderProvider provider = MetadataReaderProvider.FromPortablePdbStream(
             stream,
@@ -936,16 +947,24 @@ internal static class Program
         Require(checks, "pdb.codeView.guid", codeView.Guid, pdbGuid);
         Require(checks, "pdb.codeView.stamp", codeViewEntries[0].Stamp, pdbStamp);
         Require(checks, "pdb.codeView.age", codeView.Age, 1);
+        BlobContentId checksumContentId = BlobContentId.FromHash(checksum.Checksum);
+        Require(checks, "pdb.checksum.contentIdGuid", checksumContentId.Guid, pdbGuid);
+        Require(checks, "pdb.checksum.contentIdStamp", checksumContentId.Stamp, pdbStamp);
         string normalizedCodeViewPath = codeView.Path.Replace('\\', '/');
-        bool safeCodeViewPath = normalizedCodeViewPath == "HIDMaestro.Core.pdb"
-            || normalizedCodeViewPath == "/_/output/HIDMaestro.Core.pdb";
-        Require(checks, "pdb.codeView.pathRole", safeCodeViewPath, true);
+        Require(
+            checks,
+            "pdb.codeView.pathRole",
+            normalizedCodeViewPath,
+            expectedCodeViewPath);
         Require(checks, "pdb.checksum.algorithm", checksum.AlgorithmName, "SHA256");
         Require(
             checks,
             "pdb.checksum.value",
             Convert.ToHexString(checksum.Checksum.ToArray()),
-            sha256);
+            ComputePortablePdbContentSha256(
+                pdbBytes,
+                pdbIdBytes,
+                pdbHeader.IdStartOffset));
         var documents = new List<PortablePdbDocument>();
         foreach (DocumentHandle handle in pdb.Documents)
         {
@@ -1007,6 +1026,103 @@ internal static class Program
             unsafeDocuments,
             generatedDocuments,
             customDebugInformation);
+    }
+
+    private static string ComputePortablePdbContentSha256(
+        byte[] pdbBytes,
+        byte[] expectedPdbId,
+        int expectedPdbIdOffset)
+    {
+        ReadOnlySpan<byte> bytes = pdbBytes;
+        if (bytes.Length < 20
+            || BinaryPrimitives.ReadUInt32LittleEndian(bytes) != 0x424A5342)
+        {
+            throw new BadImageFormatException("The portable PDB metadata root is invalid.");
+        }
+
+        int cursor = sizeof(uint);
+        EnsureAvailable(bytes, cursor, 2 * sizeof(ushort) + 2 * sizeof(uint));
+        cursor += 2 * sizeof(ushort) + sizeof(uint);
+        uint versionByteLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes[cursor..]);
+        cursor += sizeof(uint);
+        if (versionByteLength == 0
+            || versionByteLength > int.MaxValue
+            || (versionByteLength & 3) != 0
+            || versionByteLength > bytes.Length - cursor)
+        {
+            throw new BadImageFormatException("The portable PDB version field is invalid.");
+        }
+        cursor += (int)versionByteLength;
+
+        EnsureAvailable(bytes, cursor, 2 * sizeof(ushort));
+        ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(bytes[cursor..]);
+        cursor += sizeof(ushort);
+        ushort streamCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[cursor..]);
+        cursor += sizeof(ushort);
+        if (flags != 0 || streamCount == 0)
+            throw new BadImageFormatException("The portable PDB stream header is invalid.");
+
+        int pdbStreamOffset = -1;
+        for (int index = 0; index < streamCount; index++)
+        {
+            EnsureAvailable(bytes, cursor, 2 * sizeof(uint));
+            uint rawOffset = BinaryPrimitives.ReadUInt32LittleEndian(bytes[cursor..]);
+            cursor += sizeof(uint);
+            uint rawSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes[cursor..]);
+            cursor += sizeof(uint);
+            if (rawOffset > int.MaxValue || rawSize > int.MaxValue)
+                throw new BadImageFormatException("A portable PDB stream is too large.");
+            int offset = (int)rawOffset;
+            int size = (int)rawSize;
+            if (offset > bytes.Length - size)
+                throw new BadImageFormatException("A portable PDB stream is out of bounds.");
+
+            int nameStart = cursor;
+            int nameLength = 0;
+            while (nameLength < 32
+                && cursor < bytes.Length
+                && bytes[cursor] != 0)
+            {
+                byte value = bytes[cursor++];
+                if (value is < 0x20 or > 0x7E)
+                    throw new BadImageFormatException("A portable PDB stream name is invalid.");
+                nameLength++;
+            }
+            if (cursor >= bytes.Length || bytes[cursor] != 0)
+                throw new BadImageFormatException("A portable PDB stream name is not terminated.");
+            cursor++;
+            int paddedNameByteLength = checked((cursor - nameStart + 3) & ~3);
+            EnsureAvailable(bytes, nameStart, paddedNameByteLength);
+            for (int padding = cursor; padding < nameStart + paddedNameByteLength; padding++)
+                if (bytes[padding] != 0)
+                    throw new BadImageFormatException("A portable PDB stream name has nonzero padding.");
+            string name = Encoding.ASCII.GetString(bytes.Slice(nameStart, nameLength));
+            cursor = nameStart + paddedNameByteLength;
+
+            if (name == "#Pdb")
+            {
+                if (pdbStreamOffset >= 0 || size < expectedPdbId.Length)
+                    throw new BadImageFormatException("The portable PDB ID stream is not exact.");
+                pdbStreamOffset = offset;
+            }
+        }
+
+        if (pdbStreamOffset < 0
+            || pdbStreamOffset != expectedPdbIdOffset
+            || !bytes.Slice(pdbStreamOffset, expectedPdbId.Length).SequenceEqual(expectedPdbId))
+        {
+            throw new BadImageFormatException("The portable PDB content ID is not bound to #Pdb.");
+        }
+
+        byte[] zeroed = (byte[])pdbBytes.Clone();
+        Array.Clear(zeroed, pdbStreamOffset, expectedPdbId.Length);
+        return Convert.ToHexString(SHA256.HashData(zeroed));
+    }
+
+    private static void EnsureAvailable(ReadOnlySpan<byte> bytes, int offset, int count)
+    {
+        if (offset < 0 || count < 0 || offset > bytes.Length - count)
+            throw new BadImageFormatException("The portable PDB metadata root is truncated.");
     }
 
     private static BuildInputInventory InspectBuildInputs(

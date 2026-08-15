@@ -2963,7 +2963,7 @@ try {
     }
     Assert-OutputClosure -OutputRoot $outA -ExpectedBasenames $expectedOutputs
     $inspectionPath = Join-Path $reportRoot 'artifact-observation.json'
-    Invoke-Logged -File $dotnet -Arguments @(
+    $inspectionProcess = Invoke-IsolatedProcess -File $dotnet -Arguments @(
         $inspectorDll, 'inspect',
         '--artifact', (Join-Path $outA 'HIDMaestro.Core.dll'),
         '--pdb', (Join-Path $outA 'HIDMaestro.Core.pdb'),
@@ -2981,7 +2981,33 @@ try {
         $runtimePostLaunchState.RawByteLength -ne $runtimeEvidence.RawByteLength) {
         throw 'The exact inspector runtime changed during byte-only inspection.'
     }
+    if ($inspectionProcess.ExitCode -notin @(0, 2)) {
+        throw "External proof step failed with exit code $($inspectionProcess.ExitCode)."
+    }
+    if (-not (Test-Path -LiteralPath $inspectionPath -PathType Leaf)) {
+        throw 'The byte inspector did not emit its exact JSON receipt.'
+    }
     $inspection = Get-Content -LiteralPath $inspectionPath -Raw | ConvertFrom-Json -Depth 100
+    $inspectionReportedFailure = $inspectionProcess.ExitCode -eq 2
+    if ($inspectionReportedFailure) {
+        $failedChecks = @($inspection.checks | Where-Object { $_.ok -ne $true })
+        if ($inspection.ok -ne $false -or $failedChecks.Count -eq 0) {
+            throw 'The byte inspector failure receipt is internally inconsistent.'
+        }
+        foreach ($check in $failedChecks) {
+            $name = [string]$check.name
+            if ($name -cnotmatch '\A[A-Za-z0-9_./-]{1,256}\z' -or
+                $name.IndexOf('//', [StringComparison]::Ordinal) -ge 0 -or
+                $name.IndexOf('../', [StringComparison]::Ordinal) -ge 0 -or
+                $name.StartsWith('/', [StringComparison]::Ordinal)) {
+                throw 'The byte inspector emitted an unsafe failed-check identity.'
+            }
+            Write-Host ("INSPECTOR-CHECK-FAILED {0}" -f $name)
+        }
+    }
+    if ($inspectionReportedFailure) {
+        throw 'The byte-only artifact observation reported failed checks.'
+    }
     if ($inspection.ok -ne $true -or $inspection.candidateLoaded -ne $false -or
         $inspection.candidateExecuted -ne $false) {
         throw 'The byte-only artifact observation did not pass.'

@@ -138,7 +138,7 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
         .collect::<Vec<_>>();
     let installed = package_directories.len() == 1 && exact.len() == 1 && service_present;
     let reported_dll = if exact.len() == 1 {
-        exact[0].clone()
+        Some(exact[0].clone())
     } else {
         candidates.first().map(|(dll, _)| dll).cloned()
     };

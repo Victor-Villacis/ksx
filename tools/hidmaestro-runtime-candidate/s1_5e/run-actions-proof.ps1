@@ -1263,13 +1263,77 @@ function ConvertFrom-MsbuildJson {
 
 function Get-XmlExpectedItems {
     param([Parameter(Mandatory)][string] $ProjectPath)
-    [xml]$xml = Get-Content -LiteralPath $ProjectPath -Raw
-    $compile = Get-OrdinalSorted -Values @($xml.Project.ItemGroup.Compile | ForEach-Object {
-        ([string]$_.Include).Replace('\', '/')
-    })
-    $resources = Get-OrdinalSorted -Values @($xml.Project.ItemGroup.EmbeddedResource | ForEach-Object {
-        ([string]$_.Include).Replace('\', '/') + '|logical=' + [string]$_.LogicalName
-    })
+    $settings = [Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $reader = [Xml.XmlReader]::Create($ProjectPath, $settings)
+    $xml = [Xml.XmlDocument]::new()
+    $xml.XmlResolver = $null
+    try { $xml.Load($reader) } finally { $reader.Dispose() }
+    if ($xml.DocumentElement.LocalName -cne 'Project' -or
+        $xml.DocumentElement.NamespaceURI.Length -ne 0) {
+        throw 'The candidate project XML root or namespace is not exact.'
+    }
+
+    $compileNodes = @($xml.SelectNodes('/Project/ItemGroup/Compile'))
+    $resourceNodes = @($xml.SelectNodes('/Project/ItemGroup/EmbeddedResource'))
+    if ($compileNodes.Count -ne 11 -or $resourceNodes.Count -ne 228) {
+        throw 'The candidate project XML item topology is not exact.'
+    }
+    $compileValues = [Collections.Generic.List[string]]::new()
+    $compilePaths = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($node in $compileNodes) {
+        $include = [string]$node.GetAttribute('Include')
+        $normalized = $include.Replace('\', '/')
+        $segments = @($normalized.Split('/'))
+        if ([string]::IsNullOrWhiteSpace($include) -or $include.Contains('*') -or
+            $include.Contains('?') -or $include.Contains(':') -or
+            [IO.Path]::IsPathRooted($include) -or
+            @($segments | Where-Object {
+                $_.Length -eq 0 -or $_ -ceq '.' -or $_ -ceq '..'
+            }).Count -ne 0 -or $node.HasAttribute('Condition') -or
+            $node.ParentNode.HasAttribute('Condition') -or
+            -not $compilePaths.Add($normalized)) {
+            throw 'A candidate Compile item is conditional, wildcarded, or lacks Include.'
+        }
+        $compileValues.Add($normalized)
+    }
+    $resourceValues = [Collections.Generic.List[string]]::new()
+    $resourcePaths = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $logicalNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $logicalNamesIgnoreCase = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($node in $resourceNodes) {
+        $include = [string]$node.GetAttribute('Include')
+        $normalized = $include.Replace('\', '/')
+        $segments = @($normalized.Split('/'))
+        $logicalName = [string]$node.GetAttribute('LogicalName')
+        $logicalSegments = @($logicalName.Split('/'))
+        if ([string]::IsNullOrWhiteSpace($include) -or $include.Contains('*') -or
+            $include.Contains('?') -or $include.Contains(':') -or
+            [IO.Path]::IsPathRooted($include) -or
+            @($segments | Where-Object {
+                $_.Length -eq 0 -or $_ -ceq '.' -or $_ -ceq '..'
+            }).Count -ne 0 -or $node.HasAttribute('Condition') -or
+            $node.ParentNode.HasAttribute('Condition') -or
+            -not $resourcePaths.Add($normalized) -or
+            -not $node.HasAttribute('LogicalName') -or
+            $node.SelectNodes('./LogicalName').Count -ne 0 -or
+            [string]::IsNullOrWhiteSpace($logicalName) -or
+            $logicalName.Contains('\') -or $logicalName.Contains(':') -or
+            [IO.Path]::IsPathRooted($logicalName) -or
+            @($logicalSegments | Where-Object {
+                $_.Length -eq 0 -or $_ -ceq '.' -or $_ -ceq '..'
+            }).Count -ne 0 -or -not $logicalNames.Add($logicalName) -or
+            -not $logicalNamesIgnoreCase.Add($logicalName)) {
+            throw 'An EmbeddedResource item is conditional, wildcarded, or lacks exact metadata.'
+        }
+        $resourceValues.Add($normalized + '|logical=' + $logicalName)
+    }
+    $compile = Get-OrdinalSorted -Values $compileValues.ToArray()
+    $resources = Get-OrdinalSorted -Values $resourceValues.ToArray()
     return [pscustomobject]@{ Compile = $compile; Resources = $resources }
 }
 

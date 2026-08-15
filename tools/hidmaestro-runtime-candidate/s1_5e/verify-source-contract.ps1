@@ -563,6 +563,23 @@ Assert-Check 'runner.conditional-array-assignments-preserve-empty' `
         $runner, [regex]::Escape('$libraryShape = @(if'),
         [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1) `
     'Conditional array assignments preserve a real empty array under StrictMode.'
+Assert-Check 'runner.project-item-xpath-enumeration' `
+    ((Has-Literal $runner "SelectNodes('/Project/ItemGroup/Compile')") -and
+     (Has-Literal $runner "SelectNodes('/Project/ItemGroup/EmbeddedResource')") -and
+     (Has-Literal $runner '$settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit') -and
+     (Has-Literal $runner '$xml.XmlResolver = $null') -and
+     (Has-Literal $runner "GetAttribute('LogicalName')") -and
+     (Has-Literal $runner "HasAttribute('LogicalName')") -and
+     (Has-Literal $runner "SelectNodes('./LogicalName').Count -ne 0") -and
+     (Has-Literal $runner '[IO.Path]::IsPathRooted($include)') -and
+     (Has-Literal $runner "`$include.Contains(':')") -and
+     (Has-Literal $runner '-not $compilePaths.Add($normalized)') -and
+     (Has-Literal $runner '-not $resourcePaths.Add($normalized)') -and
+     (Has-Literal $runner '-not $logicalNames.Add($logicalName)') -and
+     (Has-Literal $runner '-not $logicalNamesIgnoreCase.Add($logicalName)') -and
+     -not (Has-Literal $runner '$xml.Project.ItemGroup.Compile') -and
+     -not (Has-Literal $runner '$xml.Project.ItemGroup.EmbeddedResource')) `
+    'Expected project items use safe explicit XPath enumeration across ItemGroups.'
 Assert-Check 'runner.fixed-upstream' `
     ((Has-Literal $runner '[string]$contract.upstream.repository') -and
      (Has-Literal $runner '[string]$contract.upstream.commit')) `

@@ -533,6 +533,7 @@ foreach ($literal in @(
     'Analyzer', 'ReferencePath', 'AdditionalFiles', 'AnalyzerConfigFiles',
     'EditorConfigFiles', 'PotentialEditorConfigFiles', 'MSBuildAllProjects',
     'Get-NoPackageAssetsSemantic', 'project.assets.json dependency group is not empty',
+    '@($fallbackFolders).Count -ne 0',
     'inspectorGeneratedRoot', 'inspectorNoPackageAssetsSemanticSha256',
     'Assert-OutputClosure', 'Deterministic A/B mismatch',
     'same-handle inspector identities',
@@ -545,6 +546,23 @@ foreach ($literal in @(
         (Has-Literal $runner $literal) 'Required Actions proof anchor is present.'
     $runnerAnchorIndex++
 }
+Assert-Check 'runner.conditional-array-assignments-preserve-empty' `
+    ([regex]::Matches(
+        $runner, [regex]::Escape('$analyzers = @(if'),
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 2 -and
+     [regex]::Matches(
+        $runner, [regex]::Escape('$references = @(if'),
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1 -and
+     [regex]::Matches(
+        $runner, [regex]::Escape('$compilerArguments = @(if'),
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1 -and
+     [regex]::Matches(
+        $runner, [regex]::Escape('$fallbackFolders = @(if'),
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1 -and
+     [regex]::Matches(
+        $runner, [regex]::Escape('$libraryShape = @(if'),
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant).Count -eq 1) `
+    'Conditional array assignments preserve a real empty array under StrictMode.'
 Assert-Check 'runner.fixed-upstream' `
     ((Has-Literal $runner '[string]$contract.upstream.repository') -and
      (Has-Literal $runner '[string]$contract.upstream.commit')) `

@@ -1418,7 +1418,11 @@ function Get-EvaluatedManifest {
     }
 
     $analyzerProperty = $evaluation.Items.PSObject.Properties['Analyzer']
-    $analyzers = if ($null -eq $analyzerProperty) { @() } else { @($analyzerProperty.Value) }
+    $analyzers = @(if ($null -eq $analyzerProperty) {
+        @()
+    } else {
+        @($analyzerProperty.Value)
+    })
     if ($analyzers.Count -ne 0) {
         throw 'The effective compiler Analyzer item closure is not empty.'
     }
@@ -1566,12 +1570,20 @@ function Assert-EmptyEvaluatedAnalyzerClosure {
     $text = Invoke-Captured -File $Dotnet -Arguments $arguments -WorkingDirectory $BuildRoot
     $evaluation = ConvertFrom-MsbuildJson -Text $text
     $analyzerProperty = $evaluation.Items.PSObject.Properties['Analyzer']
-    $analyzers = if ($null -eq $analyzerProperty) { @() } else { @($analyzerProperty.Value) }
+    $analyzers = @(if ($null -eq $analyzerProperty) {
+        @()
+    } else {
+        @($analyzerProperty.Value)
+    })
     if ($analyzers.Count -ne 0) {
         throw 'The effective Analyzer closure must be empty before or after compilation.'
     }
     $referenceProperty = $evaluation.Items.PSObject.Properties['ReferencePath']
-    $references = if ($null -eq $referenceProperty) { @() } else { @($referenceProperty.Value) }
+    $references = @(if ($null -eq $referenceProperty) {
+        @()
+    } else {
+        @($referenceProperty.Value)
+    })
     if ($references.Count -eq 0) { throw 'The effective ReferencePath closure is empty.' }
     $referenceIdentities = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase)
@@ -1643,11 +1655,11 @@ function Invoke-CandidateBuild {
     $text = Invoke-Captured -File $Dotnet -Arguments $build -WorkingDirectory $BuildRoot
     $evaluation = ConvertFrom-MsbuildJson -Text $text
     $argumentsProperty = $evaluation.Items.PSObject.Properties['CscCommandLineArgs']
-    $compilerArguments = if ($null -eq $argumentsProperty) {
+    $compilerArguments = @(if ($null -eq $argumentsProperty) {
         @()
     } else {
         @($argumentsProperty.Value | ForEach-Object { [string]$_.Identity })
-    }
+    })
     if ($compilerArguments.Count -eq 0) {
         throw 'The captured logical Csc argument inventory is empty.'
     }
@@ -1730,10 +1742,13 @@ function Get-NoPackageAssetsSemantic {
         $restoreSources = @($assets.project.restore.sources.PSObject.Properties)
     }
     if ($restoreSources.Count -ne 0) { throw 'Restore source closure is not empty.' }
-    $fallbackFolders = if ($null -ne $assets.project.restore.PSObject.Properties['fallbackFolders']) {
+    $fallbackFolders = @(if (
+        $null -ne $assets.project.restore.PSObject.Properties['fallbackFolders']) {
         @($assets.project.restore.fallbackFolders)
-    } else { @() }
-    if ($fallbackFolders.Count -ne 0) { throw 'Restore fallback-folder closure is not empty.' }
+    } else { @() })
+    if (@($fallbackFolders).Count -ne 0) {
+        throw 'Restore fallback-folder closure is not empty.'
+    }
     $restore = $assets.project.restore
     if ([string]$restore.projectStyle -cne 'PackageReference') {
         throw 'Restore projectStyle is not PackageReference.'
@@ -1850,9 +1865,9 @@ function Assert-InspectorHostClosure {
         throw 'The inspector dependency runtime target is not exact.'
     }
     $libraries = @($deps.libraries.PSObject.Properties)
-    $libraryShape = if ($libraries.Count -eq 1) {
+    $libraryShape = @(if ($libraries.Count -eq 1) {
         Get-OrdinalSorted -Values @($libraries[0].Value.PSObject.Properties | ForEach-Object Name)
-    } else { @() }
+    } else { @() })
     if ($libraries.Count -ne 1 -or
         $libraries[0].Name -cne 'KSX.HIDMaestro.ArtifactInspector/1.0.0' -or
         [string]::Join("`n", $libraryShape) -cne

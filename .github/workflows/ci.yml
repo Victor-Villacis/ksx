@@ -174,7 +174,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           function Get-NormalizedTextSha256([string] $path) {
-            $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path))
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
             $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
             $sha = [Security.Cryptography.SHA256]::Create()
             try {
@@ -1000,7 +1009,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           function Get-NormalizedTextSha256([string] $path) {
-            $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path))
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "The pinned text '$path' has a UTF-8 BOM."
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $raw = $utf8.GetString($bytes)
+            if ($raw.Replace("`r`n", '').IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+              throw "The pinned text '$path' has a bare carriage return."
+            }
             $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
             $sha = [Security.Cryptography.SHA256]::Create()
             try {
@@ -1047,9 +1065,9 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                '0FF03B9215CC68B26E8F2A5B67D9EFDBB45BE048BD8666D105A05F780F5FBEAB' -or
+                '0DD9AF99DA1AA17AE8BE08EFA853007F624ADFECC9872E9DA372F96C1E936257' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
-                '3D43337292C54BFDE8669E407A5FDC5DC043C16A601389AA682B2FC71011925D') {
+                '957AE87051EB3142A09F2AC49B16172CA74BA845CCD7417DED7AB3B8096E014B') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'
           }
 
@@ -1058,10 +1076,10 @@ jobs:
           if ($report.schemaVersion -ne 1 -or
               $report.assurance -cne 'static-source-only-s1.5e-observation-infrastructure' -or
               $report.ok -ne $true -or
-              $report.checkCount -ne 205 -or
-              $report.passedCount -ne 205 -or
+              $report.checkCount -ne 273 -or
+              $report.passedCount -ne 273 -or
               $report.failedCount -ne 0 -or
-              @($report.checks).Count -ne 205 -or
+              @($report.checks).Count -ne 273 -or
               @($report.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
               $report.observationEstablished -ne $false -or
               $report.candidateBuilt -ne $false -or
@@ -1110,6 +1128,23 @@ jobs:
               }
             }
           }
+          function Assert-ExactRemovedAnalyzers(
+              [object[]] $actual,
+              [string[]] $expected,
+              [string] $label) {
+            $observed = @($actual | ForEach-Object {
+              if ([string]::IsNullOrWhiteSpace([string]$_.relativePath) -or
+                  [long]$_.byteLength -le 0 -or
+                  [string]$_.sha256 -cnotmatch '^[A-F0-9]{64}$') {
+                throw "$label contains an invalid analyzer identity."
+              }
+              "{0}|{1}" -f [string]$_.relativePath, [string]$_.sha256
+            })
+            if ($observed.Count -ne $expected.Count -or
+                [string]::Join("`n", $observed) -cne [string]::Join("`n", $expected)) {
+              throw "$label does not match the exact removed-analyzer sequence."
+            }
+          }
 
           $runner = 'tools/hidmaestro-runtime-candidate/s1_5e/run-actions-proof.ps1'
           $captured = ConvertFrom-SingleJsonObject `
@@ -1152,6 +1187,103 @@ jobs:
               $receipt.artifactsRetained -ne $false -or
               $receipt.cleanupCompleted -ne $true) {
             throw 'The top-level S1.5e Actions observation receipt is not exact.'
+          }
+          $packs = $receipt.targetingPacks
+          if ($packs.sdkVersionFileSha256 -cne
+                '89D0157FDF8D6ACD8A76EA6FC0E3A110BE7BCA5FF2001D0436ADE70DD0A7ADC7' -or
+              $packs.sdkToolsetVersionFileSha256 -cne
+                '45D078105738431B70271E857D5CE409B8E6F0F891FF9F864CB5FC92546CDDCC' -or
+              $packs.sdkBundledVersionsSha256 -cne
+                '2D6C1879967A87460C1C712B54B9FE378281DE4D4F7301ECBB8AF923B47C40DD' -or
+              $packs.netCoreAppRefVersion -cne '10.0.11' -or
+              $packs.netCoreAppRefOriginalFileCount -ne 348 -or
+              $packs.netCoreAppRefOriginalRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePreRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefSourcePostRawByteLength -ne 43511590 -or
+              $packs.netCoreAppRefSourcePostRawTreeSha256 -cne
+                '2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2' -or
+              $packs.netCoreAppRefOriginalFrameworkListByteLength -ne 36320 -or
+              $packs.netCoreAppRefOriginalFrameworkListSha256 -cne
+                '0527031269FF47FCEB1518ECCD9992E75F924881A362754957676C18988263B4' -or
+              $packs.netCoreAppRefSanitizedFileCount -ne 342 -or
+              $packs.netCoreAppRefSanitizedRawByteLength -ne 41745862 -or
+              $packs.netCoreAppRefSanitizedFrameworkListByteLength -ne 34752 -or
+              $packs.netCoreAppRefSanitizedFrameworkListSha256 -cne
+                'C23E017A615E74F8CD94DAA2FCA3B9F5EDDBDC4C6636A47D6CB4FC5A61EF9006' -or
+              $packs.netCoreAppRefSanitizedRawTreeSha256 -cne
+                'EF000B960364CC8C39255D3619BA7BF95DA97C0E07B4C029FC9B578E9C1C8276' -or
+              $packs.windowsSdkNetRefVersion -cne '10.0.26100.57' -or
+              $packs.windowsPackageSha256 -cne
+                'EAA0E3B938319F75BEAC5C046C84EF57212C2743E9263E0DB33B2019AB70B524' -or
+              $packs.windowsEvidenceFileCount -ne 97 -or
+              $packs.windowsEvidenceRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePreRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsEvidencePostRawByteLength -ne 67431788 -or
+              $packs.windowsEvidencePostRawTreeSha256 -cne
+                '29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F' -or
+              $packs.windowsOriginalFrameworkListByteLength -ne 942 -or
+              $packs.windowsOriginalFrameworkListSha256 -cne
+                '5F5DC88A217A01FAD154279EF8760C49C4FF9819E33AD0671D0F110D0B641D04' -or
+              $packs.windowsSanitizedFileCount -ne 96 -or
+              $packs.windowsSanitizedRawByteLength -ne 66953308 -or
+              $packs.windowsSanitizedFrameworkListByteLength -ne 702 -or
+              $packs.windowsSanitizedFrameworkListSha256 -cne
+                '78770AD71BD625A18FB1128CF0FF1030C4B1594060931246AB68F94A28921388' -or
+              $packs.windowsSanitizedRawTreeSha256 -cne
+                'E9F9791056DEABD9763FCA005F8604668FF23ACFA875BAB61285CA978BB1D6BA' -or
+              $packs.overlayFileCount -ne 438 -or
+              $packs.overlayRawByteLength -ne 108699170 -or
+              $packs.overlayPreRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.overlayPostFileCount -ne 438 -or
+              $packs.overlayPostRawByteLength -ne 108699170 -or
+              $packs.overlayPostRawTreeSha256 -cne
+                'F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775' -or
+              $packs.effectiveCompilerAnalyzerItemCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAnalyzerConfigArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscAdditionalFileArgumentCount -ne 0 -or
+              $packs.capturedLogicalCscResponseFileArgumentCount -ne 0 -or
+              $packs.effectiveCompilerAuxiliaryItemCount -ne 0 -or
+              $packs.sourceGeneratorExecutionAuthorized -ne $false -or
+              $packs.analyzerClosureCheckedPreAndPostForCandidateAndInspector -ne $true -or
+              $packs.candidatePackageDownloadFallbacksDisabled -ne $true -or
+              $packs.candidatePackageSourcesConfigured -ne 0 -or
+              $packs.workloadResolverEnabled -ne $false -or
+              $packs.candidateNetworkAuthorized -ne $false) {
+            throw 'The exact released-SDK targeting-pack observation is not exact.'
+          }
+          Assert-ExactRemovedAnalyzers `
+            @($packs.netCoreAppRefRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/Microsoft.Interop.ComInterfaceGenerator.dll|6AD171126DF1AE4DB0420EDFA9791C2CE2599AF758C506BEAB1F29CC9219FE2B',
+              'analyzers/dotnet/cs/Microsoft.Interop.JavaScript.JSImportGenerator.dll|6C06555039E10929673A5EA53CB5CFF7324D292C989D77F0D10DDD56198D6DE1',
+              'analyzers/dotnet/cs/Microsoft.Interop.LibraryImportGenerator.dll|AE1A7C7BEE96FCD69C66FF4FC1CD4D5E2C2474E1644EA9547A11048CF648871C',
+              'analyzers/dotnet/cs/Microsoft.Interop.SourceGeneration.dll|5EFC03100F5C544F64ACE8D240BB73661D1BDA8B01BD69BC4D1FB24D605F8BB5',
+              'analyzers/dotnet/cs/System.Text.Json.SourceGeneration.dll|82CA672F31AD099C9E823B646C27F3A1DA249E3C5574B1DBC4DC76DEE234BD12',
+              'analyzers/dotnet/cs/System.Text.RegularExpressions.Generator.dll|D5B18010ED85ABA3C8807BD3CFA01097BF99E1B6460E99B9A26EB74BFCE12B10'
+            ) `
+            'Core targeting-pack removal evidence'
+          Assert-ExactRemovedAnalyzers `
+            @($packs.windowsRemovedAnalyzers) `
+            @(
+              'analyzers/dotnet/cs/WinRT.SourceGenerator.dll|A23601B11FBB36A2DE48960AAD942FBAB26D2F0835F98086CC764F97EA81CBC8'
+            ) `
+            'Windows targeting-pack removal evidence'
+          if ($receipt.inspectorRuntime.version -cne '10.0.11' -or
+              $receipt.inspectorRuntime.fileCount -le 0 -or
+              $receipt.inspectorRuntime.rawByteLength -le 0 -or
+              $receipt.inspectorRuntime.versionFileSha256 -cne
+                '13B770DFE2DFC0294F8C5A9CD60198F365745A219878910A572FD85784D3B733' -or
+              $receipt.inspectorRuntime.preRawTreeSha256 -cnotmatch '^[A-F0-9]{64}$' -or
+              $receipt.inspectorRuntime.preLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.postLaunchRawTreeSha256 -cne
+                $receipt.inspectorRuntime.preRawTreeSha256 -or
+              $receipt.inspectorRuntime.pathRedacted -ne $true) {
+            throw 'The exact byte-inspector runtime observation is not exact.'
           }
           $outputs = @($receipt.determinism.outputs.PSObject.Properties)
           $expectedOutputs = @(

@@ -181,6 +181,606 @@ function Assert-ExactFileSet {
     }
 }
 
+function Get-ExactRawTreeState {
+    param([Parameter(Mandatory)][string] $Root)
+    if (-not [IO.Directory]::Exists($Root)) { throw 'A fixed tree root is absent.' }
+    Assert-NoReparsePoints -Root $Root
+    $files = @(Get-ChildItem -LiteralPath $Root -File -Force -Recurse)
+    $relativePaths = Get-OrdinalSorted -Values @($files | ForEach-Object {
+        Get-RelativeUnixPath -Root $Root -Path $_.FullName
+    })
+    if ($relativePaths.Count -eq 0) { throw 'A fixed tree is unexpectedly empty.' }
+    [long]$rawByteLength = 0
+    foreach ($file in $files) {
+        if ([long]$file.Length -gt ([long]::MaxValue - $rawByteLength)) {
+            throw 'A fixed tree byte-length sum overflowed.'
+        }
+        $rawByteLength += [long]$file.Length
+    }
+    return [pscustomobject]@{
+        RelativePaths = $relativePaths
+        FileCount = $relativePaths.Count
+        RawByteLength = $rawByteLength
+        RawTreeSha256 = Get-FramedTreeSha256 -Root $Root `
+            -RelativePaths $relativePaths -ByteMode Raw
+    }
+}
+
+function Copy-ExactRawTree {
+    param(
+        [Parameter(Mandatory)][string] $SourceRoot,
+        [Parameter(Mandatory)][string] $DestinationRoot
+    )
+    if (Test-Path -LiteralPath $DestinationRoot) {
+        throw 'An exact-tree destination already exists.'
+    }
+    $source = Get-ExactRawTreeState -Root $SourceRoot
+    [void][IO.Directory]::CreateDirectory($DestinationRoot)
+    foreach ($relative in $source.RelativePaths) {
+        $from = Join-Path $SourceRoot $relative.Replace('/', '\')
+        $to = Join-Path $DestinationRoot $relative.Replace('/', '\')
+        Copy-ExactFile -Source $from -Destination $to `
+            -ExpectedRawSha256 (Get-RawSha256 -Path $from)
+    }
+    Assert-ExactFileSet -Root $DestinationRoot -Expected $source.RelativePaths
+    $destination = Get-ExactRawTreeState -Root $DestinationRoot
+    if ($destination.RawTreeSha256 -cne $source.RawTreeSha256 -or
+        $destination.FileCount -ne $source.FileCount -or
+        $destination.RawByteLength -ne $source.RawByteLength) {
+        throw 'An exact targeting-pack tree copy changed bytes or topology.'
+    }
+    return [pscustomobject]@{
+        RelativePaths = $source.RelativePaths
+        FileCount = $source.FileCount
+        RawByteLength = $source.RawByteLength
+        SourceRawTreeSha256 = $source.RawTreeSha256
+        DestinationRawTreeSha256 = $destination.RawTreeSha256
+    }
+}
+
+function Receive-PinnedFrameworkPack {
+    param(
+        [Parameter(Mandatory)][string] $Uri,
+        [Parameter(Mandatory)][string] $Destination,
+        [Parameter(Mandatory)][long] $ExpectedLength,
+        [Parameter(Mandatory)][string] $ExpectedSha256
+    )
+    if ([IO.File]::Exists($Destination)) { throw 'Pinned framework-pack download already exists.' }
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Destination))
+    $handler = [Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $handler.AutomaticDecompression = [Net.DecompressionMethods]::None
+    $handler.UseCookies = $false
+    $handler.UseProxy = $false
+    $client = [Net.Http.HttpClient]::new($handler, $true)
+    $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+    $cancellation = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(60))
+    $response = $null
+    try {
+        $response = $client.GetAsync(
+            [Uri]$Uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+            $cancellation.Token).GetAwaiter().GetResult()
+        if ($response.StatusCode -ne [Net.HttpStatusCode]::OK -or
+            $response.RequestMessage.RequestUri.AbsoluteUri -cne $Uri -or
+            $null -ne $response.Headers.Location -or
+            @($response.Content.Headers.ContentEncoding).Count -ne 0) {
+            throw 'Pinned framework-pack download response is not exact.'
+        }
+        $contentLength = $response.Content.Headers.ContentLength
+        if ($null -eq $contentLength -or [long]$contentLength -ne $ExpectedLength) {
+            throw 'Pinned framework-pack response length is not exact.'
+        }
+        $source = $response.Content.ReadAsStreamAsync(
+            $cancellation.Token).GetAwaiter().GetResult()
+        $destinationStream = [IO.FileStream]::new(
+            $Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            [IO.FileShare]::None, 65536, [IO.FileOptions]::SequentialScan)
+        try {
+            $buffer = [byte[]]::new(65536)
+            [long]$written = 0
+            while (($read = $source.ReadAsync(
+                    $buffer, 0, $buffer.Length,
+                    $cancellation.Token).GetAwaiter().GetResult()) -gt 0) {
+                $written += $read
+                if ($written -gt $ExpectedLength) {
+                    throw 'Pinned framework-pack response exceeded its fixed length.'
+                }
+                $destinationStream.Write($buffer, 0, $read)
+            }
+            if ($written -ne $ExpectedLength) {
+                throw 'Pinned framework-pack response ended at the wrong length.'
+            }
+        } finally {
+            $destinationStream.Dispose()
+            $source.Dispose()
+        }
+    } finally {
+        if ($null -ne $response) { $response.Dispose() }
+        $cancellation.Dispose()
+        $client.Dispose()
+    }
+    if ((Get-Item -LiteralPath $Destination -Force).Attributes -band
+        [IO.FileAttributes]::ReparsePoint) {
+        throw 'Pinned framework-pack download is a reparse point.'
+    }
+    if ((Get-Item -LiteralPath $Destination).Length -ne $ExpectedLength -or
+        (Get-RawSha256 -Path $Destination) -cne $ExpectedSha256) {
+        throw 'Pinned framework-pack download bytes are not exact.'
+    }
+}
+
+function Expand-PinnedWindowsTargetingPack {
+    param(
+        [Parameter(Mandatory)][string] $PackagePath,
+        [Parameter(Mandatory)][string] $DestinationRoot,
+        [Parameter(Mandatory)][string] $ExpectedSha256,
+        [Parameter(Mandatory)][string] $ExpectedSha512Base64,
+        [Parameter(Mandatory)][int] $ExpectedEntryCount,
+        [Parameter(Mandatory)][long] $ExpectedUncompressedLength,
+        [Parameter(Mandatory)][string] $ExpectedRawTreeSha256
+    )
+    if (Test-Path -LiteralPath $DestinationRoot) {
+        throw 'Windows targeting-pack destination already exists.'
+    }
+    $package = [IO.FileStream]::new(
+        $PackagePath, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        [IO.FileShare]::Read, 65536, [IO.FileOptions]::SequentialScan)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    $sha512 = [Security.Cryptography.SHA512]::Create()
+    $archive = $null
+    try {
+        $actualSha256 = [Convert]::ToHexString($sha256.ComputeHash($package))
+        $package.Position = 0
+        $actualSha512 = [Convert]::ToBase64String($sha512.ComputeHash($package))
+        if ($actualSha256 -cne $ExpectedSha256 -or
+            $actualSha512 -cne $ExpectedSha512Base64) {
+            throw 'Windows targeting-pack package hashes are not exact.'
+        }
+        $package.Position = 0
+        $archive = [IO.Compression.ZipArchive]::new(
+            $package, [IO.Compression.ZipArchiveMode]::Read, $true)
+        $entries = @($archive.Entries)
+        if ($entries.Count -ne $ExpectedEntryCount) {
+            throw 'Windows targeting-pack archive entry count is not exact.'
+        }
+        $ordinalNames = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::Ordinal)
+        $caseInsensitiveNames = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        [long]$uncompressedLength = 0
+        foreach ($entry in $entries) {
+            $name = [string]$entry.FullName
+            $segments = @($name.Split('/'))
+            if ([string]::IsNullOrEmpty($name) -or $name.Contains('\') -or
+                $name.StartsWith('/', [StringComparison]::Ordinal) -or
+                $name.EndsWith('/', [StringComparison]::Ordinal) -or
+                $name.Contains(':') -or [IO.Path]::IsPathRooted($name) -or
+                @($segments | Where-Object {
+                    $_.Length -eq 0 -or $_ -ceq '.' -or $_ -ceq '..'
+                }).Count -ne 0 -or $entry.ExternalAttributes -ne 0 -or
+                -not $ordinalNames.Add($name) -or
+                -not $caseInsensitiveNames.Add($name)) {
+                throw 'Windows targeting-pack archive path or attributes are unsafe.'
+            }
+            $uncompressedLength += [long]$entry.Length
+            if ($uncompressedLength -gt $ExpectedUncompressedLength) {
+                throw 'Windows targeting-pack archive exceeded its fixed expanded length.'
+            }
+        }
+        if ($uncompressedLength -ne $ExpectedUncompressedLength) {
+            throw 'Windows targeting-pack archive expanded length is not exact.'
+        }
+
+        [void][IO.Directory]::CreateDirectory($DestinationRoot)
+        $orderedNames = Get-OrdinalSorted -Values @($entries | ForEach-Object FullName)
+        foreach ($name in $orderedNames) {
+            $entry = $archive.GetEntry($name)
+            if ($null -eq $entry) { throw 'Windows targeting-pack archive lookup failed.' }
+            $destination = Get-FullPath (Join-Path $DestinationRoot $name.Replace('/', '\'))
+            Assert-ChildPath -Parent $DestinationRoot -Child $destination
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
+            $input = $entry.Open()
+            $output = [IO.FileStream]::new(
+                $destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+                [IO.FileShare]::None, 65536, [IO.FileOptions]::SequentialScan)
+            try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+            if ((Get-Item -LiteralPath $destination).Length -ne [long]$entry.Length) {
+                throw 'Windows targeting-pack extracted file length changed.'
+            }
+        }
+        Assert-ExactFileSet -Root $DestinationRoot -Expected $orderedNames
+        $state = Get-ExactRawTreeState -Root $DestinationRoot
+        if ($state.RawTreeSha256 -cne $ExpectedRawTreeSha256) {
+            throw 'Windows targeting-pack extracted tree hash is not exact.'
+        }
+        return $state
+    } finally {
+        if ($null -ne $archive) { $archive.Dispose() }
+        $sha512.Dispose()
+        $sha256.Dispose()
+        $package.Dispose()
+    }
+}
+
+function ConvertTo-AnalyzerFreeTargetingPack {
+    param(
+        [Parameter(Mandatory)][string] $PackRoot,
+        [int] $ExpectedOriginalFileCount = -1,
+        [long] $ExpectedOriginalRawByteLength = -1,
+        [string] $ExpectedOriginalRawTreeSha256,
+        [long] $ExpectedOriginalFrameworkListByteLength = -1,
+        [string] $ExpectedOriginalFrameworkListSha256,
+        [Parameter(Mandatory)][object[]] $ExpectedAnalyzers,
+        [long] $ExpectedSanitizedFrameworkListByteLength = -1,
+        [string] $ExpectedSanitizedFrameworkListSha256,
+        [int] $ExpectedSanitizedFileCount = -1,
+        [long] $ExpectedSanitizedRawByteLength = -1,
+        [string] $ExpectedSanitizedRawTreeSha256
+    )
+    $before = Get-ExactRawTreeState -Root $PackRoot
+    if (($ExpectedOriginalFileCount -ge 0 -and
+            $before.FileCount -ne $ExpectedOriginalFileCount) -or
+        ($ExpectedOriginalRawByteLength -ge 0 -and
+            $before.RawByteLength -ne $ExpectedOriginalRawByteLength) -or
+        ($ExpectedOriginalRawTreeSha256 -and
+            $before.RawTreeSha256 -cne $ExpectedOriginalRawTreeSha256)) {
+        throw 'The original targeting-pack tree identity is not exact.'
+    }
+    $beforeFileHashes = [Collections.Generic.Dictionary[string,string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($relative in $before.RelativePaths) {
+        $beforeFileHashes.Add(
+            $relative,
+            (Get-RawSha256 -Path (Join-Path $PackRoot $relative.Replace('/', '\'))))
+    }
+    $frameworkListPath = Get-FullPath (Join-Path $PackRoot 'data\FrameworkList.xml')
+    Assert-ChildPath -Parent $PackRoot -Child $frameworkListPath
+    if (-not [IO.File]::Exists($frameworkListPath) -or
+        ((Get-Item -LiteralPath $frameworkListPath -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint)) {
+        throw 'A targeting-pack FrameworkList.xml is absent or indirect.'
+    }
+    $originalFrameworkListSha256 = Get-RawSha256 -Path $frameworkListPath
+    if ($ExpectedOriginalFrameworkListByteLength -ge 0 -and
+        (Get-Item -LiteralPath $frameworkListPath -Force).Length -ne
+            $ExpectedOriginalFrameworkListByteLength) {
+        throw 'The original targeting-pack FrameworkList.xml length is not exact.'
+    }
+    if ($ExpectedOriginalFrameworkListSha256 -and
+        $originalFrameworkListSha256 -cne $ExpectedOriginalFrameworkListSha256) {
+        throw 'The original targeting-pack FrameworkList.xml hash is not exact.'
+    }
+
+    $frameworkBytes = [IO.File]::ReadAllBytes($frameworkListPath)
+    if ($frameworkBytes.Length -ge 3 -and $frameworkBytes[0] -eq 0xEF -and
+        $frameworkBytes[1] -eq 0xBB -and $frameworkBytes[2] -eq 0xBF) {
+        throw 'A targeting-pack FrameworkList.xml unexpectedly has a UTF-8 BOM.'
+    }
+    $frameworkText = $script:Utf8NoBom.GetString($frameworkBytes)
+    $withoutCrLf = $frameworkText.Replace("`r`n", "`n")
+    if ($withoutCrLf.IndexOf("`r", [StringComparison]::Ordinal) -ge 0) {
+        throw 'A targeting-pack FrameworkList.xml contains a bare carriage return.'
+    }
+
+    $settings = [Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $stringReader = [IO.StringReader]::new($frameworkText)
+    $xmlReader = [Xml.XmlReader]::Create($stringReader, $settings)
+    $document = [Xml.XmlDocument]::new()
+    $document.XmlResolver = $null
+    try { $document.Load($xmlReader) } finally { $xmlReader.Dispose(); $stringReader.Dispose() }
+    if ($document.DocumentElement.LocalName -cne 'FileList') {
+        throw 'A targeting-pack FrameworkList.xml has an unexpected root.'
+    }
+
+    $analyzerNodes = @($document.SelectNodes("//*[local-name()='File']") | Where-Object {
+        $_.GetAttribute('Type').Equals('Analyzer', [StringComparison]::OrdinalIgnoreCase)
+    })
+    $analyzerPaths = [Collections.Generic.List[string]]::new()
+    $analyzerOuterXml = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $analyzerEvidence = [Collections.Generic.List[object]]::new()
+    foreach ($node in $analyzerNodes) {
+        if ($node.GetAttribute('Type') -cne 'Analyzer') {
+            throw 'A targeting-pack analyzer Type spelling is not canonical.'
+        }
+        $relative = [string]$node.GetAttribute('Path')
+        $segments = @($relative.Split('/'))
+        if ([string]::IsNullOrWhiteSpace($relative) -or $relative.Contains('\') -or
+            $relative.StartsWith('/', [StringComparison]::Ordinal) -or
+            $relative.Contains(':') -or [IO.Path]::IsPathRooted($relative) -or
+            @($segments | Where-Object {
+                $_.Length -eq 0 -or $_ -ceq '.' -or $_ -ceq '..'
+            }).Count -ne 0 -or -not $analyzerOuterXml.Add([string]$node.OuterXml)) {
+            throw 'A targeting-pack analyzer manifest entry is unsafe or duplicated.'
+        }
+        $analyzerPaths.Add($relative)
+    }
+    $actualAnalyzerPaths = Get-OrdinalSorted -Values $analyzerPaths.ToArray()
+    $expectedAnalyzerPaths = Get-OrdinalSorted -Values @($ExpectedAnalyzers | ForEach-Object {
+        [string]$_.path
+    })
+    if ($actualAnalyzerPaths.Count -ne $expectedAnalyzerPaths.Count -or
+         [string]::Join("`n", $actualAnalyzerPaths) -cne
+            [string]::Join("`n", $expectedAnalyzerPaths)) {
+        throw 'The targeting-pack analyzer manifest path set is not exact.'
+    }
+
+    $keptLines = [Collections.Generic.List[string]]::new()
+    $removedLines = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($match in [regex]::Matches(
+            $frameworkText, '[^\n]*(?:\n|\z)',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+        $line = [string]$match.Value
+        if ($line.Length -eq 0) { continue }
+        $body = $line.TrimEnd("`r", "`n").Trim()
+        if ($analyzerOuterXml.Contains($body)) {
+            if (-not $removedLines.Add($body)) {
+                throw 'A targeting-pack analyzer manifest line is duplicated.'
+            }
+        } else {
+            if ($body.Contains('Type="Analyzer"', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'A targeting-pack analyzer manifest line was not exactly understood.'
+            }
+            $keptLines.Add($line)
+        }
+    }
+    if ($removedLines.Count -ne $analyzerNodes.Count) {
+        throw 'The targeting-pack analyzer XML nodes and exact source lines disagree.'
+    }
+
+    $sanitizedText = [string]::Join('', $keptLines)
+    $sanitizedBytes = $script:Utf8NoBom.GetBytes($sanitizedText)
+    [IO.File]::WriteAllBytes($frameworkListPath, $sanitizedBytes)
+    $sanitizedFrameworkListSha256 = Get-RawSha256 -Path $frameworkListPath
+    if ($ExpectedSanitizedFrameworkListByteLength -ge 0 -and
+        (Get-Item -LiteralPath $frameworkListPath -Force).Length -ne
+            $ExpectedSanitizedFrameworkListByteLength) {
+        throw 'The sanitized targeting-pack FrameworkList.xml length is not exact.'
+    }
+    if ($ExpectedSanitizedFrameworkListSha256 -and
+        $sanitizedFrameworkListSha256 -cne $ExpectedSanitizedFrameworkListSha256) {
+        throw 'The sanitized targeting-pack FrameworkList.xml hash is not exact.'
+    }
+
+    foreach ($relative in $actualAnalyzerPaths) {
+        $payload = Get-FullPath (Join-Path $PackRoot $relative.Replace('/', '\'))
+        Assert-ChildPath -Parent $PackRoot -Child $payload
+        if (-not [IO.File]::Exists($payload) -or
+            ((Get-Item -LiteralPath $payload -Force).Attributes -band
+                [IO.FileAttributes]::ReparsePoint)) {
+            throw 'A targeting-pack analyzer payload is absent or indirect.'
+        }
+        $expected = @($ExpectedAnalyzers | Where-Object {
+            [string]$_.path -ceq $relative
+        })
+        if ($expected.Count -ne 1 -or
+            (Get-RawSha256 -Path $payload) -cne [string]$expected[0].sha256) {
+            throw 'A targeting-pack analyzer payload hash is not exact.'
+        }
+        $analyzerEvidence.Add([ordered]@{
+            relativePath = $relative
+            byteLength = (Get-Item -LiteralPath $payload -Force).Length
+            sha256 = Get-RawSha256 -Path $payload
+        })
+        [IO.File]::Delete($payload)
+        if ([IO.File]::Exists($payload)) {
+            throw 'A targeting-pack analyzer payload remained in the derived overlay.'
+        }
+    }
+
+    $expectedAfterPaths = @($before.RelativePaths | Where-Object {
+        $actualAnalyzerPaths -cnotcontains $_
+    })
+    Assert-ExactFileSet -Root $PackRoot -Expected $expectedAfterPaths
+    foreach ($relative in $expectedAfterPaths) {
+        if ($relative -cne 'data/FrameworkList.xml' -and
+            (Get-RawSha256 -Path (Join-Path $PackRoot $relative.Replace('/', '\'))) -cne
+                $beforeFileHashes[$relative]) {
+            throw 'A non-analyzer targeting-pack file changed in the derived overlay.'
+        }
+    }
+    $after = Get-ExactRawTreeState -Root $PackRoot
+    if ($after.FileCount -ne ($before.FileCount - $actualAnalyzerPaths.Count)) {
+        throw 'The derived targeting-pack topology changed beyond analyzer payload removal.'
+    }
+    if ($ExpectedSanitizedFileCount -ge 0 -and
+        $after.FileCount -ne $ExpectedSanitizedFileCount) {
+        throw 'The sanitized targeting-pack file count is not exact.'
+    }
+    if ($ExpectedSanitizedRawByteLength -ge 0 -and
+        $after.RawByteLength -ne $ExpectedSanitizedRawByteLength) {
+        throw 'The sanitized targeting-pack byte length is not exact.'
+    }
+    if ($ExpectedSanitizedRawTreeSha256 -and
+        $after.RawTreeSha256 -cne $ExpectedSanitizedRawTreeSha256) {
+        throw 'The sanitized targeting-pack raw tree hash is not exact.'
+    }
+
+    $sanitizedReader = [Xml.XmlReader]::Create($frameworkListPath, $settings)
+    $sanitizedDocument = [Xml.XmlDocument]::new()
+    $sanitizedDocument.XmlResolver = $null
+    try { $sanitizedDocument.Load($sanitizedReader) } finally { $sanitizedReader.Dispose() }
+    if (@($sanitizedDocument.SelectNodes("//*[local-name()='File']") | Where-Object {
+            $_.GetAttribute('Type').Equals('Analyzer', [StringComparison]::OrdinalIgnoreCase)
+        }).Count -ne 0) {
+        throw 'The derived targeting-pack FrameworkList.xml still exposes an analyzer.'
+    }
+    return [pscustomobject]@{
+        OriginalFileCount = $before.FileCount
+        OriginalRawByteLength = $before.RawByteLength
+        OriginalRawTreeSha256 = $before.RawTreeSha256
+        OriginalFrameworkListByteLength = [long]$frameworkBytes.Length
+        OriginalFrameworkListSha256 = $originalFrameworkListSha256
+        RemovedAnalyzers = $analyzerEvidence.ToArray()
+        SanitizedFileCount = $after.FileCount
+        SanitizedRawByteLength = $after.RawByteLength
+        SanitizedRawTreeSha256 = $after.RawTreeSha256
+        SanitizedFrameworkListByteLength = [long]$sanitizedBytes.Length
+        SanitizedFrameworkListSha256 = $sanitizedFrameworkListSha256
+        SanitizedRelativePaths = $after.RelativePaths
+    }
+}
+
+function Get-SdkTargetingPackEvidence {
+    param(
+        [Parameter(Mandatory)][string] $DotnetRoot,
+        [Parameter(Mandatory)][string] $SdkVersion,
+        [Parameter(Mandatory)][string] $ExpectedCorePackVersion,
+        [Parameter(Mandatory)][string] $ExpectedWindowsPackVersion,
+        [Parameter(Mandatory)][string] $ExpectedBundledVersionsSha256,
+        [Parameter(Mandatory)][long] $ExpectedSdkVersionFileByteLength,
+        [Parameter(Mandatory)][string] $ExpectedSdkVersionFileSha256,
+        [Parameter(Mandatory)][string[]] $ExpectedSdkVersionFileLines,
+        [Parameter(Mandatory)][long] $ExpectedSdkToolsetVersionFileByteLength,
+        [Parameter(Mandatory)][string] $ExpectedSdkToolsetVersionFileSha256,
+        [Parameter(Mandatory)][int] $ExpectedCorePackFileCount,
+        [Parameter(Mandatory)][long] $ExpectedCorePackRawByteLength,
+        [Parameter(Mandatory)][string] $ExpectedCorePackRawTreeSha256
+    )
+    $sdkRoot = Get-FullPath (Join-Path $DotnetRoot ('sdk\' + $SdkVersion))
+    $sdkVersionFile = Join-Path $sdkRoot '.version'
+    $sdkToolsetVersionFile = Join-Path $sdkRoot '.toolsetversion'
+    $bundledVersions = Join-Path $sdkRoot 'Microsoft.NETCoreSdk.BundledVersions.props'
+    foreach ($path in @($sdkVersionFile, $sdkToolsetVersionFile, $bundledVersions)) {
+        if (-not [IO.File]::Exists($path) -or
+            ((Get-Item -LiteralPath $path -Force).Attributes -band
+                [IO.FileAttributes]::ReparsePoint)) {
+            throw 'An exact SDK composition-evidence file is absent or indirect.'
+        }
+    }
+    if ((Get-Item -LiteralPath $sdkVersionFile -Force).Length -ne
+            $ExpectedSdkVersionFileByteLength -or
+        (Get-RawSha256 -Path $sdkVersionFile) -cne $ExpectedSdkVersionFileSha256) {
+        throw 'The exact SDK .version identity is not pinned.'
+    }
+    $expectedSdkVersionText = [string]::Join("`r`n", $ExpectedSdkVersionFileLines) + "`r`n"
+    if ($script:Utf8NoBom.GetString([IO.File]::ReadAllBytes($sdkVersionFile)) -cne
+        $expectedSdkVersionText) {
+        throw 'The exact SDK .version content is not pinned.'
+    }
+    if ((Get-Item -LiteralPath $sdkToolsetVersionFile -Force).Length -ne
+            $ExpectedSdkToolsetVersionFileByteLength -or
+        (Get-RawSha256 -Path $sdkToolsetVersionFile) -cne
+            $ExpectedSdkToolsetVersionFileSha256) {
+        throw 'The exact SDK .toolsetversion identity is not pinned.'
+    }
+    $bundledVersionsSha256 = Get-RawSha256 -Path $bundledVersions
+    if ($bundledVersionsSha256 -cne $ExpectedBundledVersionsSha256) {
+        throw 'The exact SDK bundled-version evidence hash is not pinned.'
+    }
+    $settings = [Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $reader = [Xml.XmlReader]::Create($bundledVersions, $settings)
+    $document = [Xml.XmlDocument]::new()
+    $document.XmlResolver = $null
+    try { $document.Load($reader) } finally { $reader.Dispose() }
+
+    $coreNodes = @($document.SelectNodes(
+        "//*[local-name()='KnownFrameworkReference']") | Where-Object {
+            $_.GetAttribute('Include') -ceq 'Microsoft.NETCore.App' -and
+            $_.GetAttribute('TargetFramework') -ceq 'net10.0' -and
+            $_.GetAttribute('TargetingPackName') -ceq 'Microsoft.NETCore.App.Ref'
+        })
+    if ($coreNodes.Count -ne 1 -or
+        $coreNodes[0].GetAttribute('TargetingPackVersion') -cne $ExpectedCorePackVersion) {
+        throw 'SDK bundled versions do not prove the exact core targeting-pack version.'
+    }
+    $windowsNodes = @($document.SelectNodes(
+        "//*[local-name()='WindowsSdkSupportedTargetPlatformVersion']") | Where-Object {
+            $_.GetAttribute('Include') -ceq '10.0.26100.0' -and
+            $_.GetAttribute('MinimumNETVersion') -ceq '8.0' -and
+            $_.GetAttribute('WindowsSdkPackageVersion') -ceq $ExpectedWindowsPackVersion
+        })
+    if ($windowsNodes.Count -ne 1) {
+        throw 'SDK bundled versions do not prove the exact Windows targeting-pack version.'
+    }
+    $coreSourceRoot = Get-FullPath (Join-Path $DotnetRoot (
+        'packs\Microsoft.NETCore.App.Ref\' + $ExpectedCorePackVersion))
+    $coreSource = Get-ExactRawTreeState -Root $coreSourceRoot
+    if ($coreSource.FileCount -ne $ExpectedCorePackFileCount -or
+        $coreSource.RawByteLength -ne $ExpectedCorePackRawByteLength -or
+        $coreSource.RawTreeSha256 -cne $ExpectedCorePackRawTreeSha256) {
+        throw 'The installed core targeting-pack tree identity is not exact.'
+    }
+    return [pscustomobject]@{
+        SdkVersionFilePath = $sdkVersionFile
+        SdkVersionFileSha256 = Get-RawSha256 -Path $sdkVersionFile
+        SdkToolsetVersionFilePath = $sdkToolsetVersionFile
+        SdkToolsetVersionFileSha256 = Get-RawSha256 -Path $sdkToolsetVersionFile
+        BundledVersionsPath = $bundledVersions
+        BundledVersionsSha256 = $bundledVersionsSha256
+        CoreSourceRoot = $coreSourceRoot
+        CoreSourceRelativePaths = $coreSource.RelativePaths
+        CoreSourceFileCount = $coreSource.FileCount
+        CoreSourceRawByteLength = $coreSource.RawByteLength
+        CoreSourceRawTreeSha256 = $coreSource.RawTreeSha256
+    }
+}
+
+function Get-PinnedRuntimeEvidence {
+    param(
+        [Parameter(Mandatory)][string] $Dotnet,
+        [Parameter(Mandatory)][string] $DotnetRoot,
+        [Parameter(Mandatory)][string] $WorkingDirectory,
+        [Parameter(Mandatory)][string] $ExpectedVersion,
+        [Parameter(Mandatory)][long] $ExpectedVersionFileByteLength,
+        [Parameter(Mandatory)][string] $ExpectedVersionFileSha256,
+        [Parameter(Mandatory)][string[]] $ExpectedVersionFileLines
+    )
+    $text = Invoke-Captured -File $Dotnet -Arguments @('--list-runtimes') `
+        -WorkingDirectory $WorkingDirectory
+    $matches = [Collections.Generic.List[object]]::new()
+    foreach ($line in @($text -split "`r?`n" | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        })) {
+        $parsed = [regex]::Match(
+            $line.Trim(),
+            '^Microsoft\.NETCore\.App ([0-9]+\.[0-9]+\.[0-9]+) \[(.+)\]$',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        if ($parsed.Success -and $parsed.Groups[1].Value -ceq $ExpectedVersion) {
+            $matches.Add([pscustomobject]@{
+                Version = $parsed.Groups[1].Value
+                BasePath = Get-FullPath $parsed.Groups[2].Value
+            })
+        }
+    }
+    if ($matches.Count -ne 1) {
+        throw 'The exact inspector runtime is not listed exactly once.'
+    }
+    $expectedBase = Get-FullPath (Join-Path $DotnetRoot 'shared\Microsoft.NETCore.App')
+    if (-not $matches[0].BasePath.Equals(
+            $expectedBase, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The exact inspector runtime is outside the resolved dotnet root.'
+    }
+    $runtimeRoot = Get-FullPath (Join-Path $expectedBase $ExpectedVersion)
+    $runtimeVersionFile = Join-Path $runtimeRoot '.version'
+    if (-not [IO.File]::Exists($runtimeVersionFile) -or
+        ((Get-Item -LiteralPath $runtimeVersionFile -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint) -or
+        (Get-Item -LiteralPath $runtimeVersionFile -Force).Length -ne
+            $ExpectedVersionFileByteLength -or
+        (Get-RawSha256 -Path $runtimeVersionFile) -cne $ExpectedVersionFileSha256) {
+        throw 'The exact inspector-runtime .version identity is not pinned.'
+    }
+    $expectedRuntimeVersionText = [string]::Join("`r`n", $ExpectedVersionFileLines) + "`r`n"
+    if ($script:Utf8NoBom.GetString([IO.File]::ReadAllBytes($runtimeVersionFile)) -cne
+        $expectedRuntimeVersionText) {
+        throw 'The exact inspector-runtime .version content is not pinned.'
+    }
+    $state = Get-ExactRawTreeState -Root $runtimeRoot
+    return [pscustomobject]@{
+        Version = $ExpectedVersion
+        Root = $runtimeRoot
+        RelativePaths = $state.RelativePaths
+        FileCount = $state.FileCount
+        RawByteLength = $state.RawByteLength
+        VersionFileSha256 = Get-RawSha256 -Path $runtimeVersionFile
+        PreRawTreeSha256 = $state.RawTreeSha256
+    }
+}
+
 function Copy-ExactFile {
     param(
         [Parameter(Mandatory)][string] $Source,
@@ -319,6 +919,7 @@ function Set-HardenedProcessEnvironment {
         DOTNET_NOLOGO = '1'
         DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
         DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
+        MSBuildEnableWorkloadResolver = 'false'
         DOTNET_MULTILEVEL_LOOKUP = '0'
         DOTNET_ROLL_FORWARD = 'Disable'
         NUGET_PACKAGES = $PackagesRoot
@@ -386,6 +987,7 @@ function Initialize-IsolatedChildEnvironment {
         DOTNET_CLI_HOME = [Environment]::GetEnvironmentVariable('DOTNET_CLI_HOME', 'Process')
         DOTNET_CLI_TELEMETRY_OPTOUT = '1'
         DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
+        MSBuildEnableWorkloadResolver = 'false'
         DOTNET_NOLOGO = '1'
         DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
         DOTNET_MULTILEVEL_LOOKUP = '0'
@@ -532,13 +1134,15 @@ function Get-RolePath {
         [Parameter(Mandatory)][string] $CandidateRoot,
         [Parameter(Mandatory)][string] $BuildRoot,
         [Parameter(Mandatory)][string] $ObjectRoot,
-        [Parameter(Mandatory)][string] $DotnetRoot
+        [Parameter(Mandatory)][string] $DotnetRoot,
+        [Parameter(Mandatory)][string] $TargetingPackRoot
     )
     $full = Get-FullPath $Path
     foreach ($role in @(
         [pscustomobject]@{ Name = 'candidate'; Root = $CandidateRoot },
         [pscustomobject]@{ Name = 'build'; Root = $BuildRoot },
         [pscustomobject]@{ Name = 'object'; Root = $ObjectRoot },
+        [pscustomobject]@{ Name = 'targeting-pack'; Root = $TargetingPackRoot },
         [pscustomobject]@{ Name = 'dotnet'; Root = $DotnetRoot }
     )) {
         $prefix = (Get-FullPath $role.Root).TrimEnd('\') + '\'
@@ -556,13 +1160,14 @@ function Get-MsbuildProperties {
         [Parameter(Mandatory)][string] $OutputRoot,
         [Parameter(Mandatory)][string] $TempRoot,
         [Parameter(Mandatory)][string] $PackagesRoot,
-        [Parameter(Mandatory)][string] $NugetConfig
+        [Parameter(Mandatory)][string] $NugetConfig,
+        [string] $TargetingPackRoot
     )
     $pathMap = $CandidateRoot + '=/_/candidate,' +
         $ObjectRoot + '=/_/object,' + $OutputRoot + '=/_/output,' +
         $TempRoot + '=/_/temp'
     $pathMapSwitchValue = $pathMap.Replace(',', '%2C')
-    return @(
+    $properties = @(
         '-p:Configuration=Release',
         '-p:RuntimeIdentifier=win-x64',
         '-p:PlatformTarget=x64',
@@ -582,12 +1187,16 @@ function Get-MsbuildProperties {
         '-p:RunAnalyzers=false',
         '-p:RunAnalyzersDuringBuild=false',
         '-p:RunAnalyzersDuringLiveAnalysis=false',
+        '-p:_SkipAnalyzers=true',
         '-p:GenerateMSBuildEditorConfigFile=false',
+        '-p:DiscoverEditorConfigFiles=false',
+        '-p:DiscoverGlobalAnalyzerConfigFiles=false',
         '-p:TreatWarningsAsErrors=true',
         '-p:GenerateDependencyFile=true',
         '-p:AppendTargetFrameworkToOutputPath=false',
         '-p:AppendRuntimeIdentifierToOutputPath=false',
         '-p:EmitCompilerGeneratedFiles=true',
+        '-p:ProvideCommandLineArgs=true',
         "-p:CompilerGeneratedFilesOutputPath=$($ObjectRoot.TrimEnd('\'))\generated\",
         '-p:ImportDirectoryBuildProps=false',
         '-p:ImportDirectoryBuildTargets=false',
@@ -617,10 +1226,26 @@ function Get-MsbuildProperties {
         "-p:RestorePackagesPath=$PackagesRoot",
         "-p:RestoreConfigFile=$NugetConfig",
         '-p:RestoreSources=',
+        '-p:RestoreAdditionalProjectSources=',
+        '-p:RestoreFallbackFolders=',
+        '-p:RestoreAdditionalProjectFallbackFolders=',
         '-p:RestoreIgnoreFailedSources=false',
-        '-p:RestoreNoCache=true'
+        '-p:RestoreNoCache=true',
         '-p:NuGetAudit=false'
     )
+    if (-not [string]::IsNullOrWhiteSpace($TargetingPackRoot)) {
+        $properties += @(
+            "-p:NetCoreTargetingPackRoot=$($TargetingPackRoot.TrimEnd('\'))\",
+            '-p:EnableTargetingPackDownload=false',
+            '-p:EnableRuntimePackDownload=false',
+            '-p:EnableAppHostPackDownload=false',
+            '-p:DisableTransitiveFrameworkReferenceDownloads=true',
+            '-p:DisableImplicitLibraryPacksFolder=true',
+            '-p:DisableImplicitNuGetFallbackFolder=true',
+            '-p:MSBuildEnableWorkloadResolver=false'
+        )
+    }
+    return $properties
 }
 
 function ConvertFrom-MsbuildJson {
@@ -679,6 +1304,10 @@ function Get-EvaluatedManifest {
         [Parameter(Mandatory)][string] $ObjectRoot,
         [Parameter(Mandatory)][string] $OutputRoot,
         [Parameter(Mandatory)][string] $TempRoot,
+        [Parameter(Mandatory)][string] $TargetingPackRoot,
+        [Parameter(Mandatory)][string] $CorePackVersion,
+        [Parameter(Mandatory)][string] $WindowsPackVersion,
+        [Parameter(Mandatory)][string] $WindowsSdkReferenceSha256,
         [Parameter(Mandatory)][string] $PackagesRoot,
         [Parameter(Mandatory)][string[]] $Properties,
         [Parameter(Mandatory)][string] $ManifestPath
@@ -687,8 +1316,8 @@ function Get-EvaluatedManifest {
         'msbuild', $ProjectPath,
         '-noAutoResponse', '-nologo', '-verbosity:quiet', '-nodeReuse:false', '-maxcpucount:1',
         '-target:ResolveReferences',
-        '-getItem:Compile,EmbeddedResource,ReferencePath,Analyzer,AdditionalFiles,AnalyzerConfigFiles,GlobalAnalyzerConfigFiles,CompilerResponseFile',
-        '-getProperty:MSBuildAllProjects,TargetFramework,RuntimeIdentifier,PlatformTarget,SelfContained,UseAppHost,NoConfig,Deterministic,ContinuousIntegrationBuild,PathMap,UseSharedCompilation,EnableNETAnalyzers,RunAnalyzers,RunAnalyzersDuringBuild,RunAnalyzersDuringLiveAnalysis,GenerateAssemblyInfo,GenerateTargetFrameworkAttribute,AllowUnsafeBlocks,AppendTargetFrameworkToOutputPath,AppendRuntimeIdentifierToOutputPath,EmitCompilerGeneratedFiles,CompilerGeneratedFilesOutputPath,ImportDirectoryBuildProps,ImportDirectoryBuildTargets,CustomBeforeMicrosoftCommonProps,CustomBeforeMicrosoftCommonTargets,CustomAfterMicrosoftCommonTargets,CustomBeforeMicrosoftCSharpTargets,CustomAfterMicrosoftCSharpTargets,PreBuildEvent,PostBuildEvent,RunPostBuildEvent,CscToolPath,CscToolExe,RoslynTargetsPath,CSharpCoreTargetsPath,OutDir,TargetDir,TargetPath,TargetName,TargetExt'
+        '-getItem:Compile,EmbeddedResource,ReferencePath,Analyzer,AdditionalFiles,AnalyzerConfigFiles,EditorConfigFiles,PotentialEditorConfigFiles,GlobalAnalyzerConfigFiles,CompilerResponseFile',
+        '-getProperty:MSBuildAllProjects,TargetFramework,RuntimeIdentifier,PlatformTarget,SelfContained,UseAppHost,NoConfig,Deterministic,ContinuousIntegrationBuild,PathMap,UseSharedCompilation,EnableNETAnalyzers,RunAnalyzers,RunAnalyzersDuringBuild,RunAnalyzersDuringLiveAnalysis,_SkipAnalyzers,GenerateMSBuildEditorConfigFile,DiscoverEditorConfigFiles,DiscoverGlobalAnalyzerConfigFiles,GenerateAssemblyInfo,GenerateTargetFrameworkAttribute,AllowUnsafeBlocks,AppendTargetFrameworkToOutputPath,AppendRuntimeIdentifierToOutputPath,EmitCompilerGeneratedFiles,ProvideCommandLineArgs,CompilerGeneratedFilesOutputPath,ImportDirectoryBuildProps,ImportDirectoryBuildTargets,CustomBeforeMicrosoftCommonProps,CustomBeforeMicrosoftCommonTargets,CustomAfterMicrosoftCommonTargets,CustomBeforeMicrosoftCSharpTargets,CustomAfterMicrosoftCSharpTargets,PreBuildEvent,PostBuildEvent,RunPostBuildEvent,CscToolPath,CscToolExe,RoslynTargetsPath,CSharpCoreTargetsPath,NetCoreTargetingPackRoot,EnableTargetingPackDownload,EnableRuntimePackDownload,EnableAppHostPackDownload,DisableTransitiveFrameworkReferenceDownloads,DisableImplicitLibraryPacksFolder,DisableImplicitNuGetFallbackFolder,MSBuildEnableWorkloadResolver,OutDir,TargetDir,TargetPath,TargetName,TargetExt'
     ) + $Properties
     $evaluationText = Invoke-Captured -File $Dotnet -Arguments $arguments `
         -WorkingDirectory $BuildRoot
@@ -711,12 +1340,17 @@ function Get-EvaluatedManifest {
         RunAnalyzers = 'false'
         RunAnalyzersDuringBuild = 'false'
         RunAnalyzersDuringLiveAnalysis = 'false'
+        _SkipAnalyzers = 'true'
+        GenerateMSBuildEditorConfigFile = 'false'
+        DiscoverEditorConfigFiles = 'false'
+        DiscoverGlobalAnalyzerConfigFiles = 'false'
         GenerateAssemblyInfo = 'false'
         GenerateTargetFrameworkAttribute = 'false'
         AllowUnsafeBlocks = 'false'
         AppendTargetFrameworkToOutputPath = 'false'
         AppendRuntimeIdentifierToOutputPath = 'false'
         EmitCompilerGeneratedFiles = 'true'
+        ProvideCommandLineArgs = 'true'
         ImportDirectoryBuildProps = 'false'
         ImportDirectoryBuildTargets = 'false'
         CustomBeforeMicrosoftCommonTargets = ''
@@ -729,6 +1363,14 @@ function Get-EvaluatedManifest {
         RunPostBuildEvent = 'Never'
         CscToolPath = ''
         CscToolExe = ''
+        NetCoreTargetingPackRoot = (Get-FullPath $TargetingPackRoot).TrimEnd('\') + '\'
+        EnableTargetingPackDownload = 'false'
+        EnableRuntimePackDownload = 'false'
+        EnableAppHostPackDownload = 'false'
+        DisableTransitiveFrameworkReferenceDownloads = 'true'
+        DisableImplicitLibraryPacksFolder = 'true'
+        DisableImplicitNuGetFallbackFolder = 'true'
+        MSBuildEnableWorkloadResolver = 'false'
     }
     foreach ($property in $expectedProperties.GetEnumerator()) {
         $actual = [string]$evaluation.Properties.($property.Key)
@@ -739,7 +1381,8 @@ function Get-EvaluatedManifest {
     foreach ($propertyName in @('RoslynTargetsPath', 'CSharpCoreTargetsPath')) {
         $trustedPath = Get-FullPath ([string]$evaluation.Properties.($propertyName))
         $trustedRole = Get-RolePath -Path $trustedPath -CandidateRoot $CandidateRoot `
-            -BuildRoot $BuildRoot -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot
+            -BuildRoot $BuildRoot -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
+            -TargetingPackRoot $TargetingPackRoot
         if (-not $trustedRole.StartsWith('dotnet/', [StringComparison]::Ordinal)) {
             throw "Compiler target property is outside the pinned dotnet root: $propertyName"
         }
@@ -774,23 +1417,18 @@ function Get-EvaluatedManifest {
         throw 'Evaluated EmbeddedResource identities/logical names are not exact.'
     }
 
-    $analyzers = Get-OrdinalSorted -Values @($evaluation.Items.Analyzer | ForEach-Object {
-        $full = Get-FullPath ([string]$_.FullPath)
-        $rolePath = Get-RolePath -Path $full -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
-            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot
-        if (-not $rolePath.StartsWith('dotnet/', [StringComparison]::Ordinal)) {
-            throw 'An Analyzer item is outside the pinned dotnet SDK/reference-pack root.'
-        }
-        $rolePath + '|sha256=' + (Get-RawSha256 -Path $full)
-    })
-    if (@($analyzers | Select-Object -Unique).Count -ne $analyzers.Count) {
-        throw 'Duplicate Analyzer identities are forbidden.'
+    $analyzerProperty = $evaluation.Items.PSObject.Properties['Analyzer']
+    $analyzers = if ($null -eq $analyzerProperty) { @() } else { @($analyzerProperty.Value) }
+    if ($analyzers.Count -ne 0) {
+        throw 'The effective compiler Analyzer item closure is not empty.'
     }
+    $analyzers = [string[]]@()
     foreach ($itemName in @(
-        'AdditionalFiles', 'AnalyzerConfigFiles', 'GlobalAnalyzerConfigFiles',
-        'CompilerResponseFile'
+        'AdditionalFiles', 'AnalyzerConfigFiles', 'EditorConfigFiles',
+        'PotentialEditorConfigFiles', 'GlobalAnalyzerConfigFiles', 'CompilerResponseFile'
     )) {
-        if (@($evaluation.Items.($itemName)).Count -ne 0) {
+        $itemProperty = $evaluation.Items.PSObject.Properties[$itemName]
+        if ($null -ne $itemProperty -and @($itemProperty.Value).Count -ne 0) {
             throw "Unexpected Csc auxiliary input item: $itemName"
         }
     }
@@ -798,9 +1436,15 @@ function Get-EvaluatedManifest {
     $references = Get-OrdinalSorted -Values @($evaluation.Items.ReferencePath | ForEach-Object {
         $full = Get-FullPath ([string]$_.FullPath)
         $rolePath = Get-RolePath -Path $full -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
-            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot
-        if (-not $rolePath.StartsWith('dotnet/', [StringComparison]::Ordinal)) {
-            throw 'ReferencePath contains a non-reference-pack input.'
+            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
+            -TargetingPackRoot $TargetingPackRoot
+        $coreReferencePrefix = 'targeting-pack/Microsoft.NETCore.App.Ref/' +
+            $CorePackVersion + '/'
+        $windowsReferencePrefix = 'targeting-pack/Microsoft.Windows.SDK.NET.Ref/' +
+            $WindowsPackVersion + '/'
+        if (-not $rolePath.StartsWith($coreReferencePrefix, [StringComparison]::Ordinal) -and
+            -not $rolePath.StartsWith($windowsReferencePrefix, [StringComparison]::Ordinal)) {
+            throw 'ReferencePath contains an input outside the derived targeting-pack root.'
         }
         $rolePath + '|sha256=' + (Get-RawSha256 -Path $full)
     })
@@ -808,6 +1452,12 @@ function Get-EvaluatedManifest {
         throw 'Duplicate ReferencePath identities are forbidden.'
     }
     if ($references.Count -eq 0) { throw 'The evaluated reference-pack closure is empty.' }
+    $expectedWindowsReference = 'targeting-pack/Microsoft.Windows.SDK.NET.Ref/' +
+        $WindowsPackVersion + '/lib/net8.0/Microsoft.Windows.SDK.NET.dll|sha256=' +
+        $WindowsSdkReferenceSha256
+    if (@($references | Where-Object { $_ -ceq $expectedWindowsReference }).Count -ne 1) {
+        throw 'The exact Windows SDK reference assembly was not resolved once.'
+    }
 
     $importsList = [Collections.Generic.List[string]]::new()
     $rawImportsList = [Collections.Generic.List[string]]::new()
@@ -815,7 +1465,8 @@ function Get-EvaluatedManifest {
         ';', [StringSplitOptions]::RemoveEmptyEntries)) {
         $full = Get-FullPath $importPath
         $rolePath = Get-RolePath -Path $full -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
-            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot
+            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
+            -TargetingPackRoot $TargetingPackRoot
         $rawImportsList.Add($rolePath + '|rawSha256=' + (Get-RawSha256 -Path $full))
         if ($rolePath.StartsWith('object/', [StringComparison]::Ordinal)) {
             $basename = [IO.Path]::GetFileName($full)
@@ -836,8 +1487,9 @@ function Get-EvaluatedManifest {
                 object = $ObjectRoot
                 packages = $PackagesRoot
             })
-        } elseif ($rolePath.StartsWith('build/', [StringComparison]::Ordinal)) {
-            throw 'An unexpected build-role MSBuild import was evaluated.'
+        } elseif ($rolePath.StartsWith('build/', [StringComparison]::Ordinal) -or
+            $rolePath.StartsWith('targeting-pack/', [StringComparison]::Ordinal)) {
+            throw 'An unexpected build/targeting-pack MSBuild import was evaluated.'
         } else {
             $hash = Get-RawSha256 -Path $full
         }
@@ -857,7 +1509,8 @@ function Get-EvaluatedManifest {
     }
     $generated = Get-OrdinalSorted -Values @($generatorFiles | ForEach-Object {
         Get-RolePath -Path $_.FullName -CandidateRoot $CandidateRoot -BuildRoot $BuildRoot `
-            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot
+            -ObjectRoot $ObjectRoot -DotnetRoot $DotnetRoot `
+            -TargetingPackRoot $TargetingPackRoot
     })
 
     $compileInventory = @($compileItems | ForEach-Object {
@@ -873,6 +1526,8 @@ function Get-EvaluatedManifest {
     $compilerArguments = Get-OrdinalSorted -Values @($expectedProperties.GetEnumerator() | ForEach-Object {
         $value = if ($_.Key -eq 'PathMap') {
             'candidate=>/_/candidate,object=>/_/object,output=>/_/output,temp=>/_/temp'
+        } elseif ($_.Key -eq 'NetCoreTargetingPackRoot') {
+            'targeting-pack/'
         } else { [string]$_.Value }
         ([string]$_.Key) + '=' + $value
     })
@@ -895,7 +1550,54 @@ function Get-EvaluatedManifest {
     }
 }
 
-function Invoke-CandidateBuild {
+function Assert-EmptyEvaluatedAnalyzerClosure {
+    param(
+        [Parameter(Mandatory)][string] $Dotnet,
+        [Parameter(Mandatory)][string] $Project,
+        [Parameter(Mandatory)][string] $BuildRoot,
+        [Parameter(Mandatory)][string] $TargetingPackRoot,
+        [Parameter(Mandatory)][string[]] $Properties
+    )
+    $arguments = @(
+        'msbuild', $Project, '-noAutoResponse', '-nologo', '-verbosity:quiet',
+        '-nodeReuse:false', '-maxcpucount:1', '-target:ResolveReferences',
+        '-getItem:ReferencePath,Analyzer,AdditionalFiles,AnalyzerConfigFiles,EditorConfigFiles,PotentialEditorConfigFiles,GlobalAnalyzerConfigFiles,CompilerResponseFile'
+    ) + $Properties
+    $text = Invoke-Captured -File $Dotnet -Arguments $arguments -WorkingDirectory $BuildRoot
+    $evaluation = ConvertFrom-MsbuildJson -Text $text
+    $analyzerProperty = $evaluation.Items.PSObject.Properties['Analyzer']
+    $analyzers = if ($null -eq $analyzerProperty) { @() } else { @($analyzerProperty.Value) }
+    if ($analyzers.Count -ne 0) {
+        throw 'The effective Analyzer closure must be empty before or after compilation.'
+    }
+    $referenceProperty = $evaluation.Items.PSObject.Properties['ReferencePath']
+    $references = if ($null -eq $referenceProperty) { @() } else { @($referenceProperty.Value) }
+    if ($references.Count -eq 0) { throw 'The effective ReferencePath closure is empty.' }
+    $referenceIdentities = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($reference in $references) {
+        $full = Get-FullPath ([string]$reference.FullPath)
+        $rootPrefix = (Get-FullPath $TargetingPackRoot).TrimEnd('\') + '\'
+        if (-not $full.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+            -not [IO.File]::Exists($full) -or
+            ((Get-Item -LiteralPath $full -Force).Attributes -band
+                [IO.FileAttributes]::ReparsePoint) -or
+            -not $referenceIdentities.Add($full)) {
+            throw 'The effective ReferencePath closure escaped or duplicated the derived pack.'
+        }
+    }
+    foreach ($itemName in @(
+        'AdditionalFiles', 'AnalyzerConfigFiles', 'EditorConfigFiles',
+        'PotentialEditorConfigFiles', 'GlobalAnalyzerConfigFiles', 'CompilerResponseFile'
+    )) {
+        $itemProperty = $evaluation.Items.PSObject.Properties[$itemName]
+        if ($null -ne $itemProperty -and @($itemProperty.Value).Count -ne 0) {
+            throw "The effective compiler auxiliary item closure is not empty: $itemName"
+        }
+    }
+}
+
+function Invoke-CandidateRestore {
     param(
         [Parameter(Mandatory)][string] $Dotnet,
         [Parameter(Mandatory)][string] $BuildRoot,
@@ -903,6 +1605,7 @@ function Invoke-CandidateBuild {
         [Parameter(Mandatory)][string] $ObjectRoot,
         [Parameter(Mandatory)][string] $OutputRoot,
         [Parameter(Mandatory)][string] $TempRoot,
+        [Parameter(Mandatory)][string] $TargetingPackRoot,
         [Parameter(Mandatory)][string] $PackagesRoot,
         [Parameter(Mandatory)][string] $NugetConfig
     )
@@ -910,7 +1613,7 @@ function Invoke-CandidateBuild {
     $properties = Get-MsbuildProperties -CandidateRoot $CandidateRoot `
         -ObjectRoot $ObjectRoot -OutputRoot $OutputRoot -TempRoot $TempRoot `
         -PackagesRoot $PackagesRoot `
-        -NugetConfig $NugetConfig
+        -NugetConfig $NugetConfig -TargetingPackRoot $TargetingPackRoot
     $restore = @(
         'msbuild', $project, '-noAutoResponse', '-nologo', '-verbosity:minimal',
         '-nodeReuse:false', '-maxcpucount:1', '-target:Restore'
@@ -918,16 +1621,58 @@ function Invoke-CandidateBuild {
     Invoke-Logged -File $Dotnet -Arguments $restore -WorkingDirectory $BuildRoot
     $assets = Join-Path $ObjectRoot 'project.assets.json'
     if (-not [IO.File]::Exists($assets)) { throw 'No project.assets.json was produced.' }
-
-    $build = @(
-        'msbuild', $project, '-noAutoResponse', '-nologo', '-verbosity:minimal',
-        '-nodeReuse:false', '-maxcpucount:1', '-target:Build', '-p:Restore=false'
-    ) + $properties
-    Invoke-Logged -File $Dotnet -Arguments $build -WorkingDirectory $BuildRoot
     return [pscustomobject]@{
         Project = $project
         Properties = $properties
         Assets = $assets
+    }
+}
+
+function Invoke-CandidateBuild {
+    param(
+        [Parameter(Mandatory)][string] $Dotnet,
+        [Parameter(Mandatory)][string] $BuildRoot,
+        [Parameter(Mandatory)][string] $Project,
+        [Parameter(Mandatory)][string[]] $Properties
+    )
+    $build = @(
+        'msbuild', $Project, '-noAutoResponse', '-nologo', '-verbosity:quiet',
+        '-nodeReuse:false', '-maxcpucount:1', '-target:Build', '-p:Restore=false',
+        '-getItem:CscCommandLineArgs'
+    ) + $Properties
+    $text = Invoke-Captured -File $Dotnet -Arguments $build -WorkingDirectory $BuildRoot
+    $evaluation = ConvertFrom-MsbuildJson -Text $text
+    $argumentsProperty = $evaluation.Items.PSObject.Properties['CscCommandLineArgs']
+    $compilerArguments = if ($null -eq $argumentsProperty) {
+        @()
+    } else {
+        @($argumentsProperty.Value | ForEach-Object { [string]$_.Identity })
+    }
+    if ($compilerArguments.Count -eq 0) {
+        throw 'The captured logical Csc argument inventory is empty.'
+    }
+    $analyzerArguments = @($compilerArguments | Where-Object {
+        $_ -match '^\s*"?(?i:[/-](?:a|analyzer):)'
+    })
+    $responseFileArguments = @($compilerArguments | Where-Object {
+        $_ -match '^\s*"?@'
+    })
+    $analyzerConfigArguments = @($compilerArguments | Where-Object {
+        $_ -match '^\s*"?(?i:[/-]analyzerconfig:)'
+    })
+    $additionalFileArguments = @($compilerArguments | Where-Object {
+        $_ -match '^\s*"?(?i:[/-]additionalfile:)'
+    })
+    if ($analyzerArguments.Count -ne 0 -or $responseFileArguments.Count -ne 0 -or
+        $analyzerConfigArguments.Count -ne 0 -or $additionalFileArguments.Count -ne 0) {
+        throw 'The captured logical Csc arguments contain an analyzer/config/additional-file or explicit response file.'
+    }
+    return [pscustomobject]@{
+        ArgumentCount = $compilerArguments.Count
+        CapturedLogicalAnalyzerArgumentCount = 0
+        CapturedLogicalAnalyzerConfigArgumentCount = 0
+        CapturedLogicalAdditionalFileArgumentCount = 0
+        CapturedLogicalResponseFileArgumentCount = 0
     }
 }
 
@@ -1265,6 +2010,12 @@ try {
     $tempA = New-FixedDirectory -RunnerTemp $runnerTemp -Name 'ksx-hm-s15e-temp-a'
     $tempB = New-FixedDirectory -RunnerTemp $runnerTemp -Name 'ksx-hm-s15e-temp-b'
     $inspectorTemp = New-FixedDirectory -RunnerTemp $runnerTemp -Name 'ksx-hm-s15e-temp-inspector'
+    $frameworkDownloadRoot = New-FixedDirectory -RunnerTemp $runnerTemp `
+        -Name 'ksx-hm-s15e-framework-download'
+    $windowsPackEvidenceRoot = New-FixedDirectory -RunnerTemp $runnerTemp `
+        -Name 'ksx-hm-s15e-windows-pack-evidence'
+    $targetingPackRoot = New-FixedDirectory -RunnerTemp $runnerTemp `
+        -Name 'ksx-hm-s15e-targeting-packs'
 
     $gitGlobal = Join-Path $environmentRoot 'git-global.config'
     Write-Utf8NoBom -Path $gitGlobal -Text ''
@@ -1289,6 +2040,141 @@ try {
         -WorkingDirectory $environmentRoot).Trim()
     if ($sdkVersion -cne [string]$contract.toolchain.dotnetSdk) {
         throw 'The installed .NET SDK is not the exact pinned version.'
+    }
+    $runtimeEvidence = Get-PinnedRuntimeEvidence -Dotnet $dotnet -DotnetRoot $dotnetRoot `
+        -WorkingDirectory $environmentRoot `
+        -ExpectedVersion ([string]$contract.toolchain.inspectorRuntimeFrameworkVersion) `
+        -ExpectedVersionFileByteLength `
+            ([long]$contract.toolchain.inspectorRuntimeVersionFileByteLength) `
+        -ExpectedVersionFileSha256 `
+            ([string]$contract.toolchain.inspectorRuntimeVersionFileSha256) `
+        -ExpectedVersionFileLines @($contract.toolchain.inspectorRuntimeVersionFileLines)
+
+    $script:Phase = 'pinned-targeting-pack-overlay'
+    $packContract = $contract.targetingPacks
+    $corePackContract = $packContract.netCoreAppRef
+    $windowsPackContract = $packContract.windowsSdkNetRef
+    $sdkPackEvidence = Get-SdkTargetingPackEvidence -DotnetRoot $dotnetRoot `
+        -SdkVersion $sdkVersion `
+        -ExpectedCorePackVersion ([string]$corePackContract.version) `
+        -ExpectedWindowsPackVersion ([string]$windowsPackContract.version) `
+        -ExpectedBundledVersionsSha256 `
+            ([string]$packContract.installedBundledVersionsSha256) `
+        -ExpectedSdkVersionFileByteLength `
+            ([long]$packContract.installedSdkVersionByteLength) `
+        -ExpectedSdkVersionFileSha256 ([string]$packContract.installedSdkVersionSha256) `
+        -ExpectedSdkVersionFileLines @($packContract.installedSdkVersionLines) `
+        -ExpectedSdkToolsetVersionFileByteLength `
+            ([long]$packContract.installedSdkToolsetVersionByteLength) `
+        -ExpectedSdkToolsetVersionFileSha256 `
+            ([string]$packContract.installedSdkToolsetVersionSha256) `
+        -ExpectedCorePackFileCount ([int]$corePackContract.originalFileCount) `
+        -ExpectedCorePackRawByteLength `
+            ([long]$corePackContract.originalUncompressedByteLength) `
+        -ExpectedCorePackRawTreeSha256 ([string]$corePackContract.originalRawTreeSha256)
+    $corePackDestination = Join-Path $targetingPackRoot (
+        [string]$corePackContract.packageId + '\' + [string]$corePackContract.version)
+    $corePackCopy = Copy-ExactRawTree -SourceRoot $sdkPackEvidence.CoreSourceRoot `
+        -DestinationRoot $corePackDestination
+    if ($corePackCopy.SourceRawTreeSha256 -cne
+            $sdkPackEvidence.CoreSourceRawTreeSha256 -or
+        $corePackCopy.FileCount -ne $sdkPackEvidence.CoreSourceFileCount -or
+        $corePackCopy.RawByteLength -ne $sdkPackEvidence.CoreSourceRawByteLength) {
+        throw 'The isolated core targeting-pack copy is not bound to SDK evidence.'
+    }
+    $corePackSanitized = ConvertTo-AnalyzerFreeTargetingPack `
+        -PackRoot $corePackDestination `
+        -ExpectedOriginalFileCount ([int]$corePackContract.originalFileCount) `
+        -ExpectedOriginalRawByteLength `
+            ([long]$corePackContract.originalUncompressedByteLength) `
+        -ExpectedOriginalRawTreeSha256 ([string]$corePackContract.originalRawTreeSha256) `
+        -ExpectedOriginalFrameworkListByteLength `
+            ([long]$corePackContract.originalFrameworkListByteLength) `
+        -ExpectedOriginalFrameworkListSha256 `
+            ([string]$corePackContract.originalFrameworkListSha256) `
+        -ExpectedAnalyzers @($corePackContract.analyzers) `
+        -ExpectedSanitizedFrameworkListByteLength `
+            ([long]$corePackContract.sanitizedFrameworkListByteLength) `
+        -ExpectedSanitizedFrameworkListSha256 `
+            ([string]$corePackContract.sanitizedFrameworkListSha256) `
+        -ExpectedSanitizedFileCount ([int]$corePackContract.sanitizedFileCount) `
+        -ExpectedSanitizedRawByteLength `
+            ([long]$corePackContract.sanitizedRawByteLength) `
+        -ExpectedSanitizedRawTreeSha256 `
+            ([string]$corePackContract.sanitizedRawTreeSha256)
+
+    $windowsPackagePath = Join-Path $frameworkDownloadRoot `
+        'microsoft.windows.sdk.net.ref.10.0.26100.57.nupkg'
+    Receive-PinnedFrameworkPack -Uri ([string]$windowsPackContract.downloadUri) `
+        -Destination $windowsPackagePath `
+        -ExpectedLength ([long]$windowsPackContract.packageByteLength) `
+        -ExpectedSha256 ([string]$windowsPackContract.packageSha256)
+    $windowsPackagePreSha256 = Get-RawSha256 -Path $windowsPackagePath
+    $windowsPackEvidenceDestination = Join-Path $windowsPackEvidenceRoot (
+        [string]$windowsPackContract.packageId + '\' + [string]$windowsPackContract.version)
+    $windowsPackEvidencePreState = Expand-PinnedWindowsTargetingPack `
+        -PackagePath $windowsPackagePath -DestinationRoot $windowsPackEvidenceDestination `
+        -ExpectedSha256 ([string]$windowsPackContract.packageSha256) `
+        -ExpectedSha512Base64 ([string]$windowsPackContract.packageSha512Base64) `
+        -ExpectedEntryCount ([int]$windowsPackContract.archiveEntryCount) `
+        -ExpectedUncompressedLength ([long]$windowsPackContract.archiveUncompressedByteLength) `
+        -ExpectedRawTreeSha256 ([string]$windowsPackContract.expandedRawTreeSha256)
+    $windowsAnalyzerEvidencePath = Join-Path $windowsPackEvidenceDestination (
+        ([string]$windowsPackContract.analyzerRelativePath).Replace('/', '\'))
+    $windowsReferenceEvidencePath = Join-Path $windowsPackEvidenceDestination (
+        ([string]$windowsPackContract.sdkReferenceRelativePath).Replace('/', '\'))
+    if ((Get-Item -LiteralPath $windowsAnalyzerEvidencePath -Force).Length -ne
+            [long]$windowsPackContract.analyzerByteLength -or
+        (Get-RawSha256 -Path $windowsAnalyzerEvidencePath) -cne
+            [string]$windowsPackContract.analyzerSha256 -or
+        (Get-RawSha256 -Path $windowsReferenceEvidencePath) -cne
+            [string]$windowsPackContract.sdkReferenceSha256) {
+        throw 'Pinned Windows targeting-pack evidence inputs are not exact.'
+    }
+    $windowsPackDestination = Join-Path $targetingPackRoot (
+        [string]$windowsPackContract.packageId + '\' + [string]$windowsPackContract.version)
+    $windowsPackCopy = Copy-ExactRawTree -SourceRoot $windowsPackEvidenceDestination `
+        -DestinationRoot $windowsPackDestination
+    $windowsExpectedAnalyzers = @([pscustomobject]@{
+        path = [string]$windowsPackContract.analyzerRelativePath
+        sha256 = [string]$windowsPackContract.analyzerSha256
+    })
+    $windowsPackSanitized = ConvertTo-AnalyzerFreeTargetingPack `
+        -PackRoot $windowsPackDestination `
+        -ExpectedOriginalFileCount ([int]$windowsPackContract.archiveEntryCount) `
+        -ExpectedOriginalRawByteLength `
+            ([long]$windowsPackContract.archiveUncompressedByteLength) `
+        -ExpectedOriginalRawTreeSha256 `
+            ([string]$windowsPackContract.expandedRawTreeSha256) `
+        -ExpectedOriginalFrameworkListByteLength `
+            ([long]$windowsPackContract.originalFrameworkListByteLength) `
+        -ExpectedOriginalFrameworkListSha256 `
+            ([string]$windowsPackContract.originalFrameworkListSha256) `
+        -ExpectedAnalyzers $windowsExpectedAnalyzers `
+        -ExpectedSanitizedFrameworkListByteLength `
+            ([long]$windowsPackContract.sanitizedFrameworkListByteLength) `
+        -ExpectedSanitizedFrameworkListSha256 `
+            ([string]$windowsPackContract.sanitizedFrameworkListSha256) `
+        -ExpectedSanitizedFileCount ([int]$windowsPackContract.sanitizedFileCount) `
+        -ExpectedSanitizedRawByteLength `
+            ([long]$windowsPackContract.sanitizedRawByteLength) `
+        -ExpectedSanitizedRawTreeSha256 `
+            ([string]$windowsPackContract.sanitizedRawTreeSha256)
+    $windowsReferencePath = Join-Path $windowsPackDestination (
+        ([string]$windowsPackContract.sdkReferenceRelativePath).Replace('/', '\'))
+    if ((Get-RawSha256 -Path $windowsReferencePath) -cne
+        [string]$windowsPackContract.sdkReferenceSha256) {
+        throw 'The derived Windows targeting pack changed its reference assembly.'
+    }
+    $targetingPackPreState = Get-ExactRawTreeState -Root $targetingPackRoot
+    if ($targetingPackPreState.FileCount -ne [int]$packContract.overlayFileCount -or
+        $targetingPackPreState.RawByteLength -ne [long]$packContract.overlayRawByteLength -or
+        $targetingPackPreState.RawTreeSha256 -cne
+            [string]$packContract.overlayRawTreeSha256 -or
+        $targetingPackPreState.FileCount -ne
+            ($corePackSanitized.SanitizedFileCount +
+             $windowsPackSanitized.SanitizedFileCount)) {
+        throw 'The isolated targeting-pack overlay identity is not exact.'
     }
 
     $nugetA = Join-Path $environmentRoot 'NuGet.A.Config'
@@ -1411,21 +2297,18 @@ try {
         throw 'The two isolated staged trees are not byte-identical.'
     }
 
-    $script:Phase = 'isolated-build-a'
+    $script:Phase = 'isolated-restore-a'
     Set-IsolatedChildTempRoot -Path $tempA
-    $builtA = Invoke-CandidateBuild -Dotnet $dotnet -BuildRoot $buildA `
+    $builtA = Invoke-CandidateRestore -Dotnet $dotnet -BuildRoot $buildA `
         -CandidateRoot $stageA.Root -ObjectRoot $objA -OutputRoot $outA `
-        -TempRoot $tempA -PackagesRoot $packagesA -NugetConfig $nugetA
-    $candidateBuilt = $true
-    $script:Phase = 'isolated-build-b'
+        -TempRoot $tempA -TargetingPackRoot $targetingPackRoot `
+        -PackagesRoot $packagesA -NugetConfig $nugetA
+    $script:Phase = 'isolated-restore-b'
     Set-IsolatedChildTempRoot -Path $tempB
-    $builtB = Invoke-CandidateBuild -Dotnet $dotnet -BuildRoot $buildB `
+    $builtB = Invoke-CandidateRestore -Dotnet $dotnet -BuildRoot $buildB `
         -CandidateRoot $stageB.Root -ObjectRoot $objB -OutputRoot $outB `
-        -TempRoot $tempB -PackagesRoot $packagesB -NugetConfig $nugetB
-
-    $expectedOutputs = @($contract.expectedOutputBasenames | ForEach-Object { [string]$_ })
-    Assert-OutputClosure -OutputRoot $outA -ExpectedBasenames $expectedOutputs
-    Assert-OutputClosure -OutputRoot $outB -ExpectedBasenames $expectedOutputs
+        -TempRoot $tempB -TargetingPackRoot $targetingPackRoot `
+        -PackagesRoot $packagesB -NugetConfig $nugetB
 
     $assetsSemanticA = Get-NoPackageAssetsSemantic -AssetsPath $builtA.Assets `
         -PackagesRoot $packagesA -ObjectRoot $objA -NugetConfig $nugetA `
@@ -1437,21 +2320,85 @@ try {
         throw 'The sanitized no-package assets semantics differ between builds.'
     }
 
-    $evalAPath = Join-Path $reportRoot 'evaluation-a.json'
-    $evalBPath = Join-Path $reportRoot 'evaluation-b.json'
+    $evalAPath = Join-Path $reportRoot 'evaluation-pre-a.json'
+    $evalBPath = Join-Path $reportRoot 'evaluation-pre-b.json'
+    $script:Phase = 'precompile-input-check-a'
     Set-IsolatedChildTempRoot -Path $tempA
     $evaluationA = Get-EvaluatedManifest -Dotnet $dotnet -ProjectPath $builtA.Project `
         -CandidateRoot $stageA.Root -BuildRoot $buildA -DotnetRoot $dotnetRoot `
-        -ObjectRoot $objA -OutputRoot $outA -TempRoot $tempA -PackagesRoot $packagesA `
+        -ObjectRoot $objA -OutputRoot $outA -TempRoot $tempA `
+        -TargetingPackRoot $targetingPackRoot `
+        -CorePackVersion ([string]$corePackContract.version) `
+        -WindowsPackVersion ([string]$windowsPackContract.version) `
+        -WindowsSdkReferenceSha256 ([string]$windowsPackContract.sdkReferenceSha256) `
+        -PackagesRoot $packagesA `
         -Properties $builtA.Properties -ManifestPath $evalAPath
+    $script:Phase = 'precompile-input-check-b'
     Set-IsolatedChildTempRoot -Path $tempB
     $evaluationB = Get-EvaluatedManifest -Dotnet $dotnet -ProjectPath $builtB.Project `
         -CandidateRoot $stageB.Root -BuildRoot $buildB -DotnetRoot $dotnetRoot `
-        -ObjectRoot $objB -OutputRoot $outB -TempRoot $tempB -PackagesRoot $packagesB `
+        -ObjectRoot $objB -OutputRoot $outB -TempRoot $tempB `
+        -TargetingPackRoot $targetingPackRoot `
+        -CorePackVersion ([string]$corePackContract.version) `
+        -WindowsPackVersion ([string]$windowsPackContract.version) `
+        -WindowsSdkReferenceSha256 ([string]$windowsPackContract.sdkReferenceSha256) `
+        -PackagesRoot $packagesB `
         -Properties $builtB.Properties -ManifestPath $evalBPath
     if ($evaluationA.Sha256 -cne $evaluationB.Sha256) {
         throw 'The normalized evaluated compiler-input inventories differ.'
     }
+
+    $script:Phase = 'isolated-build-a'
+    Set-IsolatedChildTempRoot -Path $tempA
+    $compilerA = Invoke-CandidateBuild -Dotnet $dotnet -BuildRoot $buildA `
+        -Project $builtA.Project -Properties $builtA.Properties
+    $candidateBuilt = $true
+    $script:Phase = 'isolated-build-b'
+    Set-IsolatedChildTempRoot -Path $tempB
+    $compilerB = Invoke-CandidateBuild -Dotnet $dotnet -BuildRoot $buildB `
+        -Project $builtB.Project -Properties $builtB.Properties
+    if ($compilerA.CapturedLogicalAnalyzerArgumentCount -ne 0 -or
+        $compilerB.CapturedLogicalAnalyzerArgumentCount -ne 0 -or
+        $compilerA.CapturedLogicalAnalyzerConfigArgumentCount -ne 0 -or
+        $compilerB.CapturedLogicalAnalyzerConfigArgumentCount -ne 0 -or
+        $compilerA.CapturedLogicalAdditionalFileArgumentCount -ne 0 -or
+        $compilerB.CapturedLogicalAdditionalFileArgumentCount -ne 0 -or
+        $compilerA.CapturedLogicalResponseFileArgumentCount -ne 0 -or
+        $compilerB.CapturedLogicalResponseFileArgumentCount -ne 0) {
+        throw 'A compiler invocation escaped the analyzer/response-file closure.'
+    }
+
+    $script:Phase = 'postcompile-input-check-a'
+    Set-IsolatedChildTempRoot -Path $tempA
+    $evaluationPostA = Get-EvaluatedManifest -Dotnet $dotnet -ProjectPath $builtA.Project `
+        -CandidateRoot $stageA.Root -BuildRoot $buildA -DotnetRoot $dotnetRoot `
+        -ObjectRoot $objA -OutputRoot $outA -TempRoot $tempA `
+        -TargetingPackRoot $targetingPackRoot `
+        -CorePackVersion ([string]$corePackContract.version) `
+        -WindowsPackVersion ([string]$windowsPackContract.version) `
+        -WindowsSdkReferenceSha256 ([string]$windowsPackContract.sdkReferenceSha256) `
+        -PackagesRoot $packagesA -Properties $builtA.Properties `
+        -ManifestPath (Join-Path $reportRoot 'evaluation-post-a.json')
+    $script:Phase = 'postcompile-input-check-b'
+    Set-IsolatedChildTempRoot -Path $tempB
+    $evaluationPostB = Get-EvaluatedManifest -Dotnet $dotnet -ProjectPath $builtB.Project `
+        -CandidateRoot $stageB.Root -BuildRoot $buildB -DotnetRoot $dotnetRoot `
+        -ObjectRoot $objB -OutputRoot $outB -TempRoot $tempB `
+        -TargetingPackRoot $targetingPackRoot `
+        -CorePackVersion ([string]$corePackContract.version) `
+        -WindowsPackVersion ([string]$windowsPackContract.version) `
+        -WindowsSdkReferenceSha256 ([string]$windowsPackContract.sdkReferenceSha256) `
+        -PackagesRoot $packagesB -Properties $builtB.Properties `
+        -ManifestPath (Join-Path $reportRoot 'evaluation-post-b.json')
+    if ($evaluationPostA.Sha256 -cne $evaluationA.Sha256 -or
+        $evaluationPostB.Sha256 -cne $evaluationB.Sha256 -or
+        $evaluationPostA.Sha256 -cne $evaluationPostB.Sha256) {
+        throw 'The analyzer-free compiler-input closure changed across compilation.'
+    }
+
+    $expectedOutputs = @($contract.expectedOutputBasenames | ForEach-Object { [string]$_ })
+    Assert-OutputClosure -OutputRoot $outA -ExpectedBasenames $expectedOutputs
+    Assert-OutputClosure -OutputRoot $outB -ExpectedBasenames $expectedOutputs
 
     $postRawA = Get-FramedTreeSha256 -Root $stageA.Root `
         -RelativePaths $stageA.RelativePaths -ByteMode Raw
@@ -1467,6 +2414,39 @@ try {
         $postNormalizedA -cne $stageA.NormalizedTreeSha256 -or
         $postNormalizedB -cne $stageB.NormalizedTreeSha256) {
         throw 'A quiescent staged input tree changed during build/evaluation.'
+    }
+    Assert-ExactFileSet -Root $sdkPackEvidence.CoreSourceRoot `
+        -Expected $sdkPackEvidence.CoreSourceRelativePaths
+    $coreSourcePostState = Get-ExactRawTreeState -Root $sdkPackEvidence.CoreSourceRoot
+    Assert-ExactFileSet -Root $windowsPackEvidenceDestination `
+        -Expected $windowsPackEvidencePreState.RelativePaths
+    $windowsPackEvidencePostState = Get-ExactRawTreeState -Root $windowsPackEvidenceDestination
+    Assert-ExactFileSet -Root $targetingPackRoot `
+        -Expected $targetingPackPreState.RelativePaths
+    $targetingPackPostState = Get-ExactRawTreeState -Root $targetingPackRoot
+    if ($coreSourcePostState.FileCount -ne [int]$corePackContract.originalFileCount -or
+        $coreSourcePostState.RawByteLength -ne
+            [long]$corePackContract.originalUncompressedByteLength -or
+        $coreSourcePostState.RawTreeSha256 -cne
+            [string]$corePackContract.originalRawTreeSha256 -or
+        $windowsPackEvidencePostState.FileCount -ne
+            [int]$windowsPackContract.archiveEntryCount -or
+        $windowsPackEvidencePostState.RawByteLength -ne
+            [long]$windowsPackContract.archiveUncompressedByteLength -or
+        $windowsPackEvidencePostState.RawTreeSha256 -cne
+            [string]$windowsPackContract.expandedRawTreeSha256 -or
+        $targetingPackPostState.FileCount -ne [int]$packContract.overlayFileCount -or
+        $targetingPackPostState.RawByteLength -ne [long]$packContract.overlayRawByteLength -or
+        $targetingPackPostState.RawTreeSha256 -cne
+            [string]$packContract.overlayRawTreeSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.SdkVersionFilePath) -cne
+            $sdkPackEvidence.SdkVersionFileSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.SdkToolsetVersionFilePath) -cne
+            $sdkPackEvidence.SdkToolsetVersionFileSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.BundledVersionsPath) -cne
+            $sdkPackEvidence.BundledVersionsSha256 -or
+        (Get-RawSha256 -Path $windowsPackagePath) -cne $windowsPackagePreSha256) {
+        throw 'A source/evidence/derived targeting-pack tree changed during candidate builds.'
     }
 
     $artifactHashes = [ordered]@{}
@@ -1526,15 +2506,25 @@ try {
     $inspectorProps = Get-MsbuildProperties -CandidateRoot $inspectorProjectRoot `
         -ObjectRoot $inspectorObj -OutputRoot $inspectorOut -TempRoot $inspectorTemp `
         -PackagesRoot $inspectorPackages `
-        -NugetConfig $nugetInspector
+        -NugetConfig $nugetInspector -TargetingPackRoot $targetingPackRoot
     Invoke-Logged -File $dotnet -Arguments (@(
         'msbuild', $inspectorProject, '-noAutoResponse', '-nologo', '-verbosity:minimal',
         '-nodeReuse:false', '-maxcpucount:1', '-target:Restore'
     ) + $inspectorProps) -WorkingDirectory $inspectorRoot
-    Invoke-Logged -File $dotnet -Arguments (@(
-        'msbuild', $inspectorProject, '-noAutoResponse', '-nologo', '-verbosity:minimal',
-        '-nodeReuse:false', '-maxcpucount:1', '-target:Build', '-p:Restore=false'
-    ) + $inspectorProps) -WorkingDirectory $inspectorRoot
+    Assert-EmptyEvaluatedAnalyzerClosure -Dotnet $dotnet -Project $inspectorProject `
+        -BuildRoot $inspectorRoot -TargetingPackRoot $targetingPackRoot `
+        -Properties $inspectorProps
+    $inspectorCompiler = Invoke-CandidateBuild -Dotnet $dotnet -BuildRoot $inspectorRoot `
+        -Project $inspectorProject -Properties $inspectorProps
+    if ($inspectorCompiler.CapturedLogicalAnalyzerArgumentCount -ne 0 -or
+        $inspectorCompiler.CapturedLogicalAnalyzerConfigArgumentCount -ne 0 -or
+        $inspectorCompiler.CapturedLogicalAdditionalFileArgumentCount -ne 0 -or
+        $inspectorCompiler.CapturedLogicalResponseFileArgumentCount -ne 0) {
+        throw 'The inspector compiler escaped the analyzer/response-file closure.'
+    }
+    Assert-EmptyEvaluatedAnalyzerClosure -Dotnet $dotnet -Project $inspectorProject `
+        -BuildRoot $inspectorRoot -TargetingPackRoot $targetingPackRoot `
+        -Properties $inspectorProps
     $inspectorGeneratedRoot = Join-Path $inspectorObj 'generated'
     if (Test-Path -LiteralPath $inspectorGeneratedRoot) {
         Assert-NoReparsePoints -Root $inspectorGeneratedRoot
@@ -1551,6 +2541,51 @@ try {
         -ExpectedFrameworkVersion ([string]$contract.toolchain.inspectorRuntimeFrameworkVersion)
     $inspectorDll = Join-Path $inspectorOut 'KSX.HIDMaestro.ArtifactInspector.dll'
     if (-not [IO.File]::Exists($inspectorDll)) { throw 'The dedicated inspector DLL is absent.' }
+    Assert-ExactFileSet -Root $runtimeEvidence.Root -Expected $runtimeEvidence.RelativePaths
+    $runtimePreLaunchState = Get-ExactRawTreeState -Root $runtimeEvidence.Root
+    if ($runtimePreLaunchState.RawTreeSha256 -cne $runtimeEvidence.PreRawTreeSha256 -or
+        $runtimePreLaunchState.RawByteLength -ne $runtimeEvidence.RawByteLength) {
+        throw 'The exact inspector runtime changed before launch.'
+    }
+
+    Assert-ExactFileSet -Root $sdkPackEvidence.CoreSourceRoot `
+        -Expected $sdkPackEvidence.CoreSourceRelativePaths
+    $coreSourcePostState = Get-ExactRawTreeState -Root $sdkPackEvidence.CoreSourceRoot
+    Assert-ExactFileSet -Root $windowsPackEvidenceDestination `
+        -Expected $windowsPackEvidencePreState.RelativePaths
+    $windowsPackEvidencePostState = Get-ExactRawTreeState -Root $windowsPackEvidenceDestination
+    Assert-ExactFileSet -Root $targetingPackRoot `
+        -Expected $targetingPackPreState.RelativePaths
+    $targetingPackPostState = Get-ExactRawTreeState -Root $targetingPackRoot
+    if ($coreSourcePostState.FileCount -ne [int]$corePackContract.originalFileCount -or
+        $coreSourcePostState.RawByteLength -ne
+            [long]$corePackContract.originalUncompressedByteLength -or
+        $coreSourcePostState.RawTreeSha256 -cne
+            [string]$corePackContract.originalRawTreeSha256 -or
+        $windowsPackEvidencePostState.FileCount -ne
+            [int]$windowsPackContract.archiveEntryCount -or
+        $windowsPackEvidencePostState.RawByteLength -ne
+            [long]$windowsPackContract.archiveUncompressedByteLength -or
+        $windowsPackEvidencePostState.RawTreeSha256 -cne
+            [string]$windowsPackContract.expandedRawTreeSha256 -or
+        $targetingPackPostState.FileCount -ne [int]$packContract.overlayFileCount -or
+        $targetingPackPostState.RawByteLength -ne [long]$packContract.overlayRawByteLength -or
+        $targetingPackPostState.RawTreeSha256 -cne
+            [string]$packContract.overlayRawTreeSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.SdkVersionFilePath) -cne
+            $sdkPackEvidence.SdkVersionFileSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.SdkToolsetVersionFilePath) -cne
+            $sdkPackEvidence.SdkToolsetVersionFileSha256 -or
+        (Get-RawSha256 -Path $sdkPackEvidence.BundledVersionsPath) -cne
+            $sdkPackEvidence.BundledVersionsSha256 -or
+        (Get-RawSha256 -Path $windowsPackagePath) -cne $windowsPackagePreSha256) {
+        throw 'A source/evidence/derived targeting-pack tree changed during observation.'
+    }
+    foreach ($path in @(
+        $frameworkDownloadRoot, $windowsPackEvidenceRoot, $targetingPackRoot
+    )) {
+        Remove-FixedTree -RunnerTemp $runnerTemp -Path $path
+    }
 
     $script:Phase = 'byte-only-artifact-inspection'
     foreach ($name in @('DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_SHARED_STORE')) {
@@ -1572,6 +2607,12 @@ try {
         '--profiles', $profilePath,
         '--output', $inspectionPath
     ) -WorkingDirectory $reportRoot
+    Assert-ExactFileSet -Root $runtimeEvidence.Root -Expected $runtimeEvidence.RelativePaths
+    $runtimePostLaunchState = Get-ExactRawTreeState -Root $runtimeEvidence.Root
+    if ($runtimePostLaunchState.RawTreeSha256 -cne $runtimeEvidence.PreRawTreeSha256 -or
+        $runtimePostLaunchState.RawByteLength -ne $runtimeEvidence.RawByteLength) {
+        throw 'The exact inspector runtime changed during byte-only inspection.'
+    }
     $inspection = Get-Content -LiteralPath $inspectionPath -Raw | ConvertFrom-Json -Depth 100
     if ($inspection.ok -ne $true -or $inspection.candidateLoaded -ne $false -or
         $inspection.candidateExecuted -ne $false) {
@@ -1604,6 +2645,66 @@ try {
             upstreamCommit = $checkoutCommit
             infrastructureNetworkUsedForPinnedFetch = $true
         }
+        targetingPacks = [ordered]@{
+            sdkVersionFileSha256 = $sdkPackEvidence.SdkVersionFileSha256
+            sdkToolsetVersionFileSha256 = $sdkPackEvidence.SdkToolsetVersionFileSha256
+            sdkBundledVersionsSha256 = $sdkPackEvidence.BundledVersionsSha256
+            netCoreAppRefVersion = [string]$corePackContract.version
+            netCoreAppRefOriginalFileCount = $corePackCopy.FileCount
+            netCoreAppRefOriginalRawByteLength = $corePackCopy.RawByteLength
+            netCoreAppRefSourcePreRawTreeSha256 = $sdkPackEvidence.CoreSourceRawTreeSha256
+            netCoreAppRefSourcePostRawByteLength = $coreSourcePostState.RawByteLength
+            netCoreAppRefSourcePostRawTreeSha256 = $coreSourcePostState.RawTreeSha256
+            netCoreAppRefOriginalFrameworkListByteLength =
+                $corePackSanitized.OriginalFrameworkListByteLength
+            netCoreAppRefOriginalFrameworkListSha256 =
+                $corePackSanitized.OriginalFrameworkListSha256
+            netCoreAppRefSanitizedFileCount = $corePackSanitized.SanitizedFileCount
+            netCoreAppRefSanitizedRawByteLength = $corePackSanitized.SanitizedRawByteLength
+            netCoreAppRefSanitizedFrameworkListByteLength =
+                $corePackSanitized.SanitizedFrameworkListByteLength
+            netCoreAppRefSanitizedFrameworkListSha256 =
+                $corePackSanitized.SanitizedFrameworkListSha256
+            netCoreAppRefSanitizedRawTreeSha256 = $corePackSanitized.SanitizedRawTreeSha256
+            netCoreAppRefRemovedAnalyzers = $corePackSanitized.RemovedAnalyzers
+            windowsSdkNetRefVersion = [string]$windowsPackContract.version
+            windowsPackageSha256 = $windowsPackagePreSha256
+            windowsEvidenceFileCount = $windowsPackEvidencePreState.FileCount
+            windowsEvidenceRawByteLength = $windowsPackEvidencePreState.RawByteLength
+            windowsEvidencePreRawTreeSha256 = $windowsPackEvidencePreState.RawTreeSha256
+            windowsEvidencePostRawByteLength = $windowsPackEvidencePostState.RawByteLength
+            windowsEvidencePostRawTreeSha256 = $windowsPackEvidencePostState.RawTreeSha256
+            windowsOriginalFrameworkListByteLength =
+                $windowsPackSanitized.OriginalFrameworkListByteLength
+            windowsOriginalFrameworkListSha256 =
+                $windowsPackSanitized.OriginalFrameworkListSha256
+            windowsSanitizedFileCount = $windowsPackSanitized.SanitizedFileCount
+            windowsSanitizedRawByteLength = $windowsPackSanitized.SanitizedRawByteLength
+            windowsSanitizedFrameworkListByteLength =
+                $windowsPackSanitized.SanitizedFrameworkListByteLength
+            windowsSanitizedFrameworkListSha256 =
+                $windowsPackSanitized.SanitizedFrameworkListSha256
+            windowsSanitizedRawTreeSha256 = $windowsPackSanitized.SanitizedRawTreeSha256
+            windowsRemovedAnalyzers = $windowsPackSanitized.RemovedAnalyzers
+            overlayFileCount = $targetingPackPreState.FileCount
+            overlayRawByteLength = $targetingPackPreState.RawByteLength
+            overlayPreRawTreeSha256 = $targetingPackPreState.RawTreeSha256
+            overlayPostFileCount = $targetingPackPostState.FileCount
+            overlayPostRawByteLength = $targetingPackPostState.RawByteLength
+            overlayPostRawTreeSha256 = $targetingPackPostState.RawTreeSha256
+            effectiveCompilerAnalyzerItemCount = 0
+            capturedLogicalCscAnalyzerArgumentCount = 0
+            capturedLogicalCscAnalyzerConfigArgumentCount = 0
+            capturedLogicalCscAdditionalFileArgumentCount = 0
+            capturedLogicalCscResponseFileArgumentCount = 0
+            effectiveCompilerAuxiliaryItemCount = 0
+            sourceGeneratorExecutionAuthorized = $false
+            analyzerClosureCheckedPreAndPostForCandidateAndInspector = $true
+            candidatePackageDownloadFallbacksDisabled = $true
+            candidatePackageSourcesConfigured = 0
+            workloadResolverEnabled = $false
+            candidateNetworkAuthorized = $false
+        }
         stage = [ordered]@{
             fileCountPerBuild = 241
             preRawTreeSha256 = $stageA.RawTreeSha256
@@ -1621,6 +2722,11 @@ try {
         determinism = [ordered]@{
             buildCount = 2
             evaluatedCompilerInputsSha256 = $evaluationA.Sha256
+            evaluatedCompilerInputsStableAfterBuild =
+                ($evaluationPostA.Sha256 -ceq $evaluationA.Sha256 -and
+                 $evaluationPostB.Sha256 -ceq $evaluationB.Sha256)
+            candidateCscArgumentCounts = @($compilerA.ArgumentCount, $compilerB.ArgumentCount)
+            inspectorCscArgumentCount = $inspectorCompiler.ArgumentCount
             noPackageAssetsSemanticSha256 = $assetsSemanticA.Sha256
             exactArtifactByteEquality = $true
             rawImportObservations = [ordered]@{
@@ -1631,6 +2737,16 @@ try {
         }
         observation = $inspection
         inspectorHost = $inspectorHost
+        inspectorRuntime = [ordered]@{
+            version = $runtimeEvidence.Version
+            fileCount = $runtimeEvidence.FileCount
+            rawByteLength = $runtimeEvidence.RawByteLength
+            versionFileSha256 = $runtimeEvidence.VersionFileSha256
+            preRawTreeSha256 = $runtimeEvidence.PreRawTreeSha256
+            preLaunchRawTreeSha256 = $runtimePreLaunchState.RawTreeSha256
+            postLaunchRawTreeSha256 = $runtimePostLaunchState.RawTreeSha256
+            pathRedacted = $true
+        }
         inspectorNoPackageAssetsSemanticSha256 = $inspectorAssetsSemantic.Sha256
         candidateBuilt = $true
         candidateLoaded = $false

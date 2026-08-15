@@ -5,7 +5,7 @@
   "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
   "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
   "observationEstablished": false,
-  "expectedSourceVerifierCheckCount": 205,
+  "expectedSourceVerifierCheckCount": 273,
   "toolchain": {
     "dotnetSdk": "10.0.400",
     "runnerOs": "Windows",
@@ -13,12 +13,137 @@
     "runtimeIdentifier": "win-x64",
     "platformTarget": "x64",
     "inspectorRuntimeFrameworkVersion": "10.0.11",
+    "inspectorRuntimeVersionFileRelativePath": "shared/Microsoft.NETCore.App/10.0.11/.version",
+    "inspectorRuntimeVersionFileByteLength": 51,
+    "inspectorRuntimeVersionFileSha256": "13B770DFE2DFC0294F8C5A9CD60198F365745A219878910A572FD85784D3B733",
+    "inspectorRuntimeVersionFileLines": [
+      "e2f47b0110ed922f21a1522da67279133ce28f32",
+      "10.0.11"
+    ],
+    "inspectorRuntimeMustBeListedUnderResolvedDotnetRoot": true,
+    "inspectorRuntimeTreeBoundBeforeAndAfterLaunch": true,
+    "inspectorRuntimePathRedactedFromReceipt": true,
     "buildCount": 2,
     "localBuildAuthorized": false,
     "actionsObservationBuildAuthorized": true,
     "candidateLoadAuthorized": false,
     "candidateExecutionAuthorized": false,
     "artifactRetentionAuthorized": false
+  },
+  "targetingPacks": {
+    "compositionAuthority": "official .NET 10 releases.json SDK 10.0.400 win-x64 entry, its exact released archive, and the exact installed SDK evidence files and pack tree",
+    "releaseMetadataUri": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+    "releasedSdkArchiveUri": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/dotnet-sdk-10.0.400-win-x64.zip",
+    "releasedSdkArchiveHashAlgorithm": "SHA512",
+    "releasedSdkArchiveByteLength": 300546129,
+    "releasedSdkArchiveSha512Hex": "9B8B88590E4DA131BFD0DA7AA089D0FC04D5418D5F8607EC13D55DC5A17B4399AFD54D496C12657FA05C6C6546DC5EAB930F26AC6C50F2D3A7712C0FB378C366",
+    "releasedSdkReleaseDate": "2026-08-11",
+    "releasedSdkRuntimeVersion": "10.0.11",
+    "installedSdkVersionRelativePath": "sdk/10.0.400/.version",
+    "installedSdkVersionByteLength": 101,
+    "installedSdkVersionSha256": "89D0157FDF8D6ACD8A76EA6FC0E3A110BE7BCA5FF2001D0436ADE70DD0A7ADC7",
+    "installedSdkVersionLines": [
+      "14fbf8d5271c98133561eb55185fdb05b286f578",
+      "10.0.400",
+      "win-x64",
+      "10.0.400-servicing.26379.115",
+      "10.0.400"
+    ],
+    "installedSdkToolsetVersionRelativePath": "sdk/10.0.400/.toolsetversion",
+    "installedSdkToolsetVersionByteLength": 61,
+    "installedSdkToolsetVersionSha256": "45D078105738431B70271E857D5CE409B8E6F0F891FF9F864CB5FC92546CDDCC",
+    "sdkSourceRepository": "https://github.com/dotnet/dotnet",
+    "sdkSourceCommit": "14fbf8d5271c98133561eb55185fdb05b286f578",
+    "sdkCoreRefVersionSourcePath": "src/sdk/eng/Version.Details.xml",
+    "sdkCoreRefVersionSourceSha256": "9EF22725C12631E5277DE822B49AA5E6BCED3D447054F1F4BADD73DD22FCFABA",
+    "sdkWindowsRefVersionSourcePath": "src/sdk/eng/ManualVersions.props",
+    "sdkWindowsRefVersionSourceSha256": "0B52C1AE66EE364980C94A7866C8A3055B54A01D0FE778CC00FC1BEB7745CD32",
+    "resolverSemanticsAuthority": "the exact shipped VMR commit above; released archive and installed evidence remain binding for binary composition",
+    "installedBundledVersionsRelativePath": "sdk/10.0.400/Microsoft.NETCoreSdk.BundledVersions.props",
+    "installedBundledVersionsSha256": "2D6C1879967A87460C1C712B54B9FE378281DE4D4F7301ECBB8AF923B47C40DD",
+    "netCoreAppRef": {
+      "packageId": "Microsoft.NETCore.App.Ref",
+      "version": "10.0.11",
+      "originalFileCount": 348,
+      "originalUncompressedByteLength": 43511590,
+      "originalRawTreeSha256": "2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2",
+      "originalFrameworkListByteLength": 36320,
+      "originalFrameworkListSha256": "0527031269FF47FCEB1518ECCD9992E75F924881A362754957676C18988263B4",
+      "analyzers": [
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.ComInterfaceGenerator.dll",
+          "sha256": "6AD171126DF1AE4DB0420EDFA9791C2CE2599AF758C506BEAB1F29CC9219FE2B"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.JavaScript.JSImportGenerator.dll",
+          "sha256": "6C06555039E10929673A5EA53CB5CFF7324D292C989D77F0D10DDD56198D6DE1"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.LibraryImportGenerator.dll",
+          "sha256": "AE1A7C7BEE96FCD69C66FF4FC1CD4D5E2C2474E1644EA9547A11048CF648871C"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.SourceGeneration.dll",
+          "sha256": "5EFC03100F5C544F64ACE8D240BB73661D1BDA8B01BD69BC4D1FB24D605F8BB5"
+        },
+        {
+          "path": "analyzers/dotnet/cs/System.Text.Json.SourceGeneration.dll",
+          "sha256": "82CA672F31AD099C9E823B646C27F3A1DA249E3C5574B1DBC4DC76DEE234BD12"
+        },
+        {
+          "path": "analyzers/dotnet/cs/System.Text.RegularExpressions.Generator.dll",
+          "sha256": "D5B18010ED85ABA3C8807BD3CFA01097BF99E1B6460E99B9A26EB74BFCE12B10"
+        }
+      ],
+      "sanitizedFrameworkListByteLength": 34752,
+      "sanitizedFrameworkListSha256": "C23E017A615E74F8CD94DAA2FCA3B9F5EDDBDC4C6636A47D6CB4FC5A61EF9006",
+      "sanitizedFileCount": 342,
+      "sanitizedRawByteLength": 41745862,
+      "sanitizedRawTreeSha256": "EF000B960364CC8C39255D3619BA7BF95DA97C0E07B4C029FC9B578E9C1C8276",
+      "sourceDisposition": "preserve and pre/post hash the exact 10.0.11 pack shipped with the released SDK; copy it into isolated RUNNER_TEMP; remove only the six exact FrameworkList Type=Analyzer entries and their exact payloads from the derived observation overlay"
+    },
+    "windowsSdkNetRef": {
+      "packageId": "Microsoft.Windows.SDK.NET.Ref",
+      "version": "10.0.26100.57",
+      "targetPlatformVersion": "10.0.26100.0",
+      "downloadUri": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.net.ref/10.0.26100.57/microsoft.windows.sdk.net.ref.10.0.26100.57.nupkg",
+      "packageByteLength": 13193759,
+      "packageSha256": "EAA0E3B938319F75BEAC5C046C84EF57212C2743E9263E0DB33B2019AB70B524",
+      "packageSha512Base64": "BG2X8tqoPJu7Lde8hlg/3bF9QwOW3VsxI7MGPEQM5+i4YG0WgNeesIeia2VTRkVEnoC9SdxpFGJtdGQHHIBwcA==",
+      "archiveEntryCount": 97,
+      "archiveUncompressedByteLength": 67431788,
+      "expandedRawTreeSha256": "29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F",
+      "originalFrameworkListByteLength": 942,
+      "originalFrameworkListSha256": "5F5DC88A217A01FAD154279EF8760C49C4FF9819E33AD0671D0F110D0B641D04",
+      "analyzerRelativePath": "analyzers/dotnet/cs/WinRT.SourceGenerator.dll",
+      "analyzerByteLength": 478240,
+      "analyzerSha256": "A23601B11FBB36A2DE48960AAD942FBAB26D2F0835F98086CC764F97EA81CBC8",
+      "sanitizedFrameworkListByteLength": 702,
+      "sanitizedFrameworkListSha256": "78770AD71BD625A18FB1128CF0FF1030C4B1594060931246AB68F94A28921388",
+      "sanitizedFileCount": 96,
+      "sanitizedRawByteLength": 66953308,
+      "sanitizedRawTreeSha256": "E9F9791056DEABD9763FCA005F8604668FF23ACFA875BAB61285CA978BB1D6BA",
+      "sdkReferenceRelativePath": "lib/net8.0/Microsoft.Windows.SDK.NET.dll",
+      "sdkReferenceSha256": "C633AB241CD09846C2AA409F0BEE2026962610404A7BF132C75CBD66B0E5A9F4",
+      "sourceDisposition": "one exact bounded infrastructure HTTPS fetch; preserve the exact safely expanded 97-file evidence tree; copy it into a derived observation overlay; remove only the one exact FrameworkList analyzer entry and payload; candidate restore/build has zero configured package sources and all package-download fallbacks disabled"
+    },
+    "overlayTreeFraming": "ordinal overlay-relative path, NUL, raw bytes, NUL",
+    "overlayFileCount": 438,
+    "overlayRawByteLength": 108699170,
+    "overlayRawTreeSha256": "F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775",
+    "derivedPackSanitization": "remove every securely parsed FrameworkList File with Type=Analyzer and only its exact pack-relative payload; preserve original source/evidence trees; bind derived overlay pre/post",
+    "effectiveCompilerAnalyzerItemCount": 0,
+    "capturedLogicalCscAnalyzerArgumentCount": 0,
+    "capturedLogicalCscAnalyzerConfigArgumentCount": 0,
+    "capturedLogicalCscAdditionalFileArgumentCount": 0,
+    "capturedLogicalCscResponseFileArgumentCount": 0,
+    "effectiveCompilerAuxiliaryItemCount": 0,
+    "analyzerClosureCheckedBeforeAndAfterAllThreeBuilds": true,
+    "sourceGeneratorExecutionAuthorized": false,
+    "workloadResolverEnabled": false,
+    "allPackDownloadFallbacksDisabled": true,
+    "candidatePackageSourcesConfigured": 0,
+    "candidateNetworkAuthorized": false
   },
   "upstream": {
     "repository": "https://github.com/hifihedgehog/HIDMaestro",
@@ -81,6 +206,14 @@
     "moduleInitializerCount": 0,
     "generatedCompilerSourceCount": 0,
     "packageReferenceCount": 0,
+    "effectiveCompilerAnalyzerItemCount": 0,
+    "capturedLogicalCscAnalyzerArgumentCount": 0,
+    "capturedLogicalCscAnalyzerConfigArgumentCount": 0,
+    "capturedLogicalCscAdditionalFileArgumentCount": 0,
+    "capturedLogicalCscResponseFileArgumentCount": 0,
+    "effectiveCompilerAuxiliaryItemCount": 0,
+    "sourceGeneratorExecutionAuthorized": false,
+    "workloadResolverEnabled": false,
     "analyzerAllowlistFrozen": false,
     "strongNameSigned": false,
     "authenticodePresent": false,
@@ -155,7 +288,7 @@
   "leafFiles": [
     {
       "path": "README.md",
-      "sha256": "61EFBE8E8E9460A0FB3F6F832676AD62AC9EC59C962D79C4866D13732A786C80"
+      "sha256": "CCAABFEA5B98A600DC8ECDB2FDE8F76B6E93C06277EAE993AF213A6911F98BC2"
     },
     {
       "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
@@ -167,11 +300,11 @@
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "25F9018564191145D44E584F817DF5B515E583E823748BB03F67C05F88472A50"
+      "sha256": "93319EE2D91959E65204A6228DEF7DA763CCA1BB279DE42F228B210A7C5B75C3"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "3D43337292C54BFDE8669E407A5FDC5DC043C16A601389AA682B2FC71011925D"
+      "sha256": "957AE87051EB3142A09F2AC49B16172CA74BA845CCD7417DED7AB3B8096E014B"
     }
   ],
   "gateState": {

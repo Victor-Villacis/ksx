@@ -404,7 +404,7 @@ function Set-IsolatedChildTempRoot {
 function Write-Utf8NoBom {
     param(
         [Parameter(Mandatory)][string] $Path,
-        [Parameter(Mandatory)][string] $Text
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Text
     )
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
     [IO.File]::WriteAllText($Path, $Text, $script:Utf8NoBom)

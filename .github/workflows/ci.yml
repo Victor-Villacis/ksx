@@ -1047,9 +1047,9 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'E5B560259F98A26697169697422F933EDC84374203112DF8E618C18CA9C3ED6C' -or
+                '96B642CC4AD402E85D830430703D07569DA44E013F5A792036F65A4F17143330' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
-                '9DE236B3E2DC21D024868AC65E190EFE6456F6637D387DCA5252928265EDAD49') {
+                'C190169C484F64644A761924E2AAAFE70DC9DC0800E668C06954F0539EBB7871') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'
           }
 
@@ -1058,10 +1058,10 @@ jobs:
           if ($report.schemaVersion -ne 1 -or
               $report.assurance -cne 'static-source-only-s1.5e-observation-infrastructure' -or
               $report.ok -ne $true -or
-              $report.checkCount -ne 196 -or
-              $report.passedCount -ne 196 -or
+              $report.checkCount -ne 197 -or
+              $report.passedCount -ne 197 -or
               $report.failedCount -ne 0 -or
-              @($report.checks).Count -ne 196 -or
+              @($report.checks).Count -ne 197 -or
               @($report.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
               $report.observationEstablished -ne $false -or
               $report.candidateBuilt -ne $false -or
@@ -1116,6 +1116,8 @@ jobs:
             @(& $runner -WorkspaceRoot $env:GITHUB_WORKSPACE) `
             'S1.5e Actions observation'
           $receipt = $captured.Value
+          # Preserve the path-redacted receipt for both success and failure.
+          Write-Host $captured.Json
           if ($receipt.schemaVersion -ne 1 -or
               $receipt.ok -ne $true -or
               $receipt.phase -cne 's1.5e-actions-static-artifact-observation' -or
@@ -1187,9 +1189,6 @@ jobs:
           }
           Assert-SixClosedGates $receipt.gateState 'S1.5e Actions observation'
           Assert-SixClosedGates $receipt.observation.gateState 'S1.5e byte inspector'
-
-          # Preserve the path-redacted pass-1 inventory in the log for review.
-          Write-Host $captured.Json
 
   # The shippable binary and the installer. The steps live in
   # `build-installer.yml` because `release.yml` needs the SAME build — the file

@@ -315,6 +315,7 @@ $runner = Get-Content -LiteralPath (Join-Path $leafRoot 'run-actions-proof.ps1')
 $runnerAnchorIndex = 0
 foreach ($literal in @(
     '$env:GITHUB_ACTIONS', '$env:RUNNER_OS', '$env:RUNNER_TEMP', '$env:GITHUB_WORKSPACE',
+    '[AllowEmptyString()][string] $Text',
     'Set-HardenedProcessEnvironment', 'CORECLR_', 'DOTNET_', 'MSBUILD', 'NUGET_',
     "DOTNET_ROLL_FORWARD = 'Disable'",
     'Set-IsolatedChildTempRoot', 'PSModulePath', 'POWERSHELL_UPDATECHECK',

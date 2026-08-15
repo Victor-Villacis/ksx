@@ -9,6 +9,9 @@ corresponding full license texts.
   mark and its generated images/icons.
 - `vigem-client-MIT.txt` covers the vendored Rust ViGEm client.
 - `ViGEmBus-BSD-3-Clause.txt` covers the bundled ViGEmBus 1.22.0 installer.
+- `HIDMaestro.txt` covers the pinned HIDMaestro v1.6.1 material used by the
+  runtime host and the optional exact-hash upstream download invoked by setup.
+  KSX ships the license and pin-aware bootstrap, not the upstream SDK binaries.
 - `Forma-MIT.txt` covers the Forma runtime embedded in Studio and the Forma
   Rust crates linked into `ksx.exe`.
 - `alien-signals-MIT.txt` covers the signal engine bundled through

@@ -13,6 +13,10 @@ mod vigem_pads;
 
 use std::path::{Path, PathBuf};
 
+use std::os::windows::fs::MetadataExt as _;
+
+use crate::sha256;
+
 use crate::parse::{ci_mode_from_name, filetime_to_rfc3339, parse_cip_meta, resolve_image_path};
 use crate::report::{
     BusDriverReport, CiPolicyReport, ClassFilterReport, CodeIntegrityReport, DriverFileReport,
@@ -35,25 +39,27 @@ const CROSS_CERT_POLICY_GUID: &str = "784C4414-79F4-4C32-A6A5-F0FB42A51D0D";
 /// ghost-pad devnode lookup go through.
 const VIGEMBUS_SERVICE: &str = "ViGEmBus";
 
-/// HIDMaestro's service name and UMDF driver binary.
+/// HIDMaestro's service name and Driver Store package.
 ///
-/// HIDMaestro is UMDF2, so its driver is a DLL under `System32\drivers\UMDF`
-/// and **not** a `.sys` in `System32\drivers` — [`bus_driver`] would look in
-/// the wrong place, which is why this has its own collector.
-///
-/// Kept in sync with `ksx_hidmaestro::driver::PROBE_TARGETS`, which ksx-output
-/// consults at plug time. This crate deliberately depends on nothing, so the
-/// two lists are duplicated rather than shared.
+/// Kept in sync with the fixed production host, which applies the same two
+/// hashes and exact-one rule at plug time. This crate deliberately has no
+/// dependency on the host executable, so the pins are duplicated here.
 const HIDMAESTRO_SERVICE: &str = "HIDMaestro";
-const HIDMAESTRO_UMDF_DLL: &str = r"System32\drivers\UMDF\HIDMaestro.dll";
+const HIDMAESTRO_REPOSITORY: &str = r"System32\DriverStore\FileRepository";
+const HIDMAESTRO_PACKAGE_PREFIX: &str = "hidmaestro.inf_amd64_";
+const HIDMAESTRO_INF_SHA256: &str =
+    "187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704";
+const HIDMAESTRO_DLL_SHA256: &str =
+    "D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C";
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// Just the ViGEm bus's children, without the rest of the driver stack.
 ///
 /// [`collect`] builds SIX reports — registry reads for two bus services, an
-/// Interception class-filter walk, `dll.is_file()` probes, a CI-policy read
-/// and a process snapshot — and a caller that wants the pad list pays for all
-/// of it. Studio's /pads polls every 2 s and discards five sixths of that
-/// report, which is what this exists to stop.
+/// Interception class-filter walk, a hash-pinned HIDMaestro package probe, a
+/// CI-policy read and a process snapshot — and a caller that wants the pad
+/// list pays for all of it. Studio's /pads polls every 2 s and discards five
+/// sixths of that report, which is what this exists to stop.
 pub fn collect_virtual_pads() -> VirtualPadReport {
     virtual_pads()
 }
@@ -88,18 +94,75 @@ pub fn collect() -> DriverReport {
 }
 
 /// HIDMaestro install state. Never elevates, never errors: a machine without it
-/// is a normal machine that simply cannot mount three of the five personas.
+/// is a normal machine that cannot mount the production DualSense persona.
 fn hidmaestro(windir: &str) -> HidMaestroReport {
     let service_key = format!("{SERVICES}\\{HIDMAESTRO_SERVICE}");
-    let dll = PathBuf::from(format!("{windir}\\{HIDMAESTRO_UMDF_DLL}"));
-    let looked_for = vec![format!("HKLM\\{service_key}"), dll.display().to_string()];
+    let service_present = registry::key_exists(&service_key);
+    let repository = PathBuf::from(format!("{windir}\\{HIDMAESTRO_REPOSITORY}"));
+    let mut package_directories = std::fs::read_dir(&repository)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            name.starts_with(HIDMAESTRO_PACKAGE_PREFIX)
+                .then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    package_directories.sort();
+    let mut candidates = package_directories
+        .iter()
+        .filter_map(|directory| {
+            let metadata = std::fs::symlink_metadata(directory).ok()?;
+            if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            {
+                return None;
+            }
+            let inf = directory.join("hidmaestro.inf");
+            let dll = directory.join("HIDMaestro.dll");
+            if !inf.is_file() || !dll.is_file() {
+                return None;
+            }
+            let exact = sha256::hash_file(&inf)
+                .is_ok_and(|digest| sha256::digest_matches(&digest, HIDMAESTRO_INF_SHA256))
+                && sha256::hash_file(&dll)
+                    .is_ok_and(|digest| sha256::digest_matches(&digest, HIDMAESTRO_DLL_SHA256));
+            Some((dll, exact))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    let exact = candidates
+        .iter()
+        .filter(|(_, exact)| *exact)
+        .map(|(dll, _)| dll)
+        .collect::<Vec<_>>();
+    let installed = package_directories.len() == 1 && exact.len() == 1 && service_present;
+    let reported_dll = if exact.len() == 1 {
+        Some(exact[0].clone())
+    } else {
+        candidates.first().map(|(dll, _)| dll).cloned()
+    };
+    let looked_for = vec![
+        format!("HKLM\\{service_key}"),
+        repository
+            .join(format!(
+                "hidmaestro.inf_amd64_*\\hidmaestro.inf (SHA256 {HIDMAESTRO_INF_SHA256})"
+            ))
+            .display()
+            .to_string(),
+        repository
+            .join(format!(
+                "hidmaestro.inf_amd64_*\\HIDMaestro.dll (SHA256 {HIDMAESTRO_DLL_SHA256})"
+            ))
+            .display()
+            .to_string(),
+    ];
     HidMaestroReport {
-        // The DLL, not the service key: an uninstall can leave the key behind,
-        // and reporting that as "installed" would promise personas that fail
-        // later at plug time instead of now at doctor time.
-        installed: dll.is_file(),
-        service_key: registry::key_exists(&service_key),
-        driver_file: driver_file(dll),
+        // The exact package, not just the service key or a similarly named
+        // DLL: the live host applies the same two hashes and exact-one rule.
+        installed,
+        service_key: service_present,
+        driver_file: reported_dll.and_then(driver_file),
         looked_for,
     }
 }

@@ -49,13 +49,20 @@ explicit recovery model and a virtual-controller stack that games actually see:
 |---|---|---|
 | Keyboard capture | [`kanata-interception`](https://crates.io/crates/kanata-interception) for broad keyboard support, plus a **WinUSB/`nusb` direct-claim backend** | Per-device routing, scoped blocking, explicit recovery, and a path that uses an in-box Windows driver. |
 | Virtual controller output | **ViGEmBus 1.22.0** through a vendored pure-Rust [`vigem-client`](https://github.com/CasualX/vigem-client) | Real XInput slots through Microsoft's `xusb22.sys`, with PlayStation-style targets available beyond the four-controller XInput ceiling. |
+| Rich controller output | **HIDMaestro v1.6.1** through KSX's fixed elevated host | One exact plain-USB DualSense, full-state keepalive and bounded rumble feedback without elevating the daemon. |
 
 That table is shipped reality. The output roadmap deliberately keeps three
 complementary lanes: ViGEmBus for proven X360/DS4 compatibility, HIDMaestro for
 rich byte-exact Windows controller profiles, and VIIPER for virtual USB,
-network endpoints and Linux reach. HIDMaestro and VIIPER are not yet customer
-features, and KSX never silently changes a requested controller identity because
-one backend is unavailable. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md#e1--a-capability-routed-output-stack).
+network endpoints and Linux reach. The first HIDMaestro persona—DualSense—is a
+shipping installed-only feature; Switch Pro, Xbox Series and VIIPER remain
+independently gated. KSX never silently changes a requested controller identity
+because one backend is unavailable. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md#e1--a-capability-routed-output-stack).
+
+The checked HIDMaestro setup task clearly requires internet: setup downloads
+the exact official v1.6.1 archive, verifies pinned hashes before executing it,
+installs the package, and removes the temporary SDK. Normal Play has no driver
+download or package-install authority.
 
 The driver analysis and dated prior-art survey live in [`docs/research/`](docs/research/).
 
@@ -453,13 +460,15 @@ crates/ksx-core           pure mapping engine (CI-tested, proptest)
 crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
-crates/ksx-output         VirtualPadBackend: shipped ViGEmBus + gated HIDMaestro zero-state seam
+crates/ksx-output         VirtualPadBackend: ViGEmBus + production DualSense HIDMaestro routing
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else
 crates/ksx-backend        every verb's body — the daemon, the run supervisor, the writers
 crates/ksx-launcher       GUI-subsystem customer hand-off; no console window
 crates/ksx-winusb-helper  installed-only elevated exact-device transaction boundary
+tools/hidmaestro-host     installed-only elevated one-DualSense runtime host
+tools/hidmaestro-driver-installer explicit pinned driver install/repair boundary
 crates/ksx-studio         ksx Studio, the optional localhost UI (feature `studio`)
 crates/ksx-cabinet        the operate-only 10-foot egui surface
 crates/vigem-client       vendored CasualX/vigem-client (MIT)
@@ -515,7 +524,7 @@ portable release both include that material.
 - **[Hifihedgehog](https://github.com/hifihedgehog)** —
   [HIDMaestro](https://github.com/hifihedgehog/HIDMaestro),
   [PadForge](https://github.com/hifihedgehog/PadForge), and direct protocol
-  guidance for the planned rich-profile backend
+  guidance for the live one-DualSense rich-profile backend
 - **Alia5** — VIIPER and SISR, informing the planned virtual-USB/network lane
 - **jtroo** — kanata-interception
 - **Lucide contributors** — the `gamepad-2` silhouette in the ksx mark (ISC)

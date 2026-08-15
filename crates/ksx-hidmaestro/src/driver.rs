@@ -1,17 +1,15 @@
-//! Availability probe, and the only [`crate::HmDriverApi`] this build ships:
-//! one that cannot create a device.
+//! Legacy in-process availability model and deliberately unavailable
+//! [`crate::HmDriverApi`].
 //!
-//! **The refusal is about ksx, not about the machine.** This build has no safe
-//! production SDK-host adapter or approved runtime artifact, so
-//! [`UnavailableDriver`] refuses on every machine — including one where
-//! HIDMaestro is installed and every probe below says so. That is why the
-//! refusal is [`HmError::NotImplemented`] and not [`HmError::NotInstalled`]:
-//! the second reads as an instruction to install a driver, and following it
-//! changes nothing.
+//! The production DualSense route does **not** use this trait or probe. It uses
+//! the fixed authenticated out-of-process host in `windows_transport`, while
+//! this older model remains available to its pure lifecycle/concurrency tests.
+//! [`UnavailableDriver`] therefore still refuses every in-process operation;
+//! wiring it to the machine would bypass the product privilege boundary.
 //!
-//! The availability probe reports service/driver presence to `ksx doctor`, but
-//! it gates nothing: this build refuses because the safe host/runtime boundary
-//! is not implemented, not because of any particular machine's install state.
+//! The probe below is legacy model evidence only. `ksx doctor` owns the live
+//! exact-package hash probe in `ksx-platform`, and product routing owns the
+//! fixed host client.
 //!
 //! So this module contains no fake driver. It answers the sweep honestly
 //! (nothing to sweep, because ksx created nothing) and refuses everything else.
@@ -19,27 +17,24 @@
 //! private conformance model; production integration must bind or replace it
 //! against the supported runtime rather than assume it can run unchanged.
 //!
-//! ## What production integration still needs
+//! ## Why this model remains unavailable
 //!
 //! HIDMaestro's author has supplied the exact object names and the authoritative
 //! MIT sources: `driver/driver.h` for packed structures/bounds and
 //! `sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs` for creator/writer behavior.
 //! They prove that the real protocol is not this crate's small open-existing
-//! latch. The adopted first production route is a narrowed, source-built
-//! `HIDMaestro.Core` runtime behind a fixed native bootstrap and managed host,
-//! calling `HMContext` / `HMController` without provisioning or global cleanup
-//! authority. A complete native protocol client remains a later option only if
-//! measured product value justifies carrying that ABI. The main daemon and
-//! games stay unelevated either way.
+//! latch. The production route is instead a narrowed, source-built runtime
+//! behind a fixed NativeAOT host, with no provisioning or global-cleanup
+//! protocol authority. A direct in-process/native protocol client remains
+//! intentionally absent. The main daemon and games stay unelevated.
 
 use crate::error::{HmError, ProbeSummary};
 
 /// Where a real install puts things. Checked in order; any hit is reported so a
 /// partial install is distinguishable from no install.
 ///
-/// `ksx-platform`'s doctor collector probes the same targets through its own
-/// registry helpers (it deliberately depends on nothing); if this list changes,
-/// change `ksx-platform/src/win/mod.rs::hidmaestro` with it.
+/// This list belongs only to the legacy model. The live Doctor collector uses
+/// a stronger exact Driver Store INF/DLL hash proof.
 pub const PROBE_TARGETS: &[&str] = &[
     r"HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro",
     r"%SystemRoot%\System32\drivers\UMDF\HIDMaestro.dll",
@@ -292,7 +287,11 @@ mod tests {
             );
             assert!(!err.is_not_installed(), "{err}");
             let msg = err.to_string();
-            assert!(msg.contains("on any machine, installed or not"), "{msg}");
+            assert!(
+                msg.contains("experimental latch is not wire-compatible"),
+                "{msg}"
+            );
+            assert!(msg.contains("DualSense remains available"), "{msg}");
         }
     }
 

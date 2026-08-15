@@ -12,14 +12,14 @@ pub enum HmError {
     /// other variant means "installed but misbehaving", which is a bug report;
     /// this one means "install it", which is an action.
     #[error(
-        "HIDMaestro is not installed: {probe}. \
-         The DualSense / Switch Pro / Xbox Series personas require it \
+        "the exact pinned HIDMaestro package is unavailable: {probe}. \
+         The production DualSense persona requires it \
          (https://github.com/hifihedgehog/HIDMaestro, MIT). \
          Xbox 360 and PlayStation personas do not — they run on ViGEmBus."
     )]
     NotInstalled { probe: ProbeSummary },
 
-    /// ksx itself cannot create a HIDMaestro device — on any machine.
+    /// One named HIDMaestro profile is not implemented by this KSX build.
     ///
     /// The variant that exists so [`HmError::NotInstalled`] stops being said
     /// when it is not the reason. Everything above HIDMaestro's shared section
@@ -30,9 +30,8 @@ pub enum HmError {
     /// "not installed" costs the user a driver install and leaves them exactly
     /// where they started.
     #[error(
-        "creating a HIDMaestro device is not implemented in this build of ksx: {detail}. \
-         The DualSense / Switch Pro / Xbox Series personas cannot plug on any machine, \
-         installed or not. Xbox 360 and PlayStation are unaffected: they run on ViGEmBus."
+        "this HIDMaestro profile is not implemented in this build of ksx: {detail}. \
+         DualSense remains available; Xbox 360 and PlayStation run on ViGEmBus."
     )]
     NotImplemented { detail: &'static str },
 
@@ -136,11 +135,8 @@ mod tests {
     #[test]
     fn not_installed_says_what_it_costs_and_what_it_does_not() {
         let msg = HmError::NotInstalled { probe: summary() }.to_string();
-        assert!(msg.contains("not installed"), "{msg}");
-        // It must name the personas that need it...
-        for persona in ["DualSense", "Switch Pro", "Xbox Series"] {
-            assert!(msg.contains(persona), "{msg} should mention {persona}");
-        }
+        assert!(msg.contains("package is unavailable"), "{msg}");
+        assert!(msg.contains("DualSense"), "{msg}");
         // ...and reassure that the cabinet's own personas are unaffected, so
         // nobody installs a second driver out of fear.
         assert!(msg.contains("ViGEmBus"), "{msg}");
@@ -186,9 +182,7 @@ mod tests {
         .to_string();
         assert!(msg.contains("not implemented in this build"), "{msg}");
         assert!(msg.contains("no section mapper"), "{msg}");
-        // The load-bearing clause: without it the message still reads as an
-        // install problem, which is the whole failure mode.
-        assert!(msg.contains("on any machine, installed or not"), "{msg}");
+        assert!(msg.contains("DualSense remains available"), "{msg}");
         // ...and it must still say what keeps working, so nobody panics.
         assert!(msg.contains("ViGEmBus"), "{msg}");
     }

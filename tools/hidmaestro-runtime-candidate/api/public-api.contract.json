@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "hidmaestro-s1.5c-dualsense-host-public-api",
-  "status": "exact-candidate-allowlist-source-derived-replacements-absent",
+  "status": "exact-candidate-source-allowlist-s1.5e-source-frozen-observation-not-established",
   "upstream": {
     "repository": "https://github.com/hifihedgehog/HIDMaestro",
     "tag": "v1.6.1",
@@ -15,7 +15,22 @@
     "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
     "targetFramework": "net10.0-windows10.0.26100.0",
     "runtimeIdentifier": "win-x64",
-    "buildAuthorized": false,
+    "buildAuthorization": {
+      "sourceVerifier": false,
+      "s1_5eActionsObservation": true,
+      "local": false,
+      "product": false
+    },
+    "observation": {
+      "contractPath": "../s1_5e/contract.lock.json",
+      "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+      "contractReferenceState": "source-frozen-observation-not-established",
+      "observationEstablished": false,
+      "actionsObservationArtifactBuilt": false,
+      "metadataMatched": false,
+      "artifactAllowlistAdopted": false
+    },
+    "loadAuthorized": false,
     "executionAuthorized": false
   },
   "surfaceRules": {
@@ -458,9 +473,9 @@
     "HIDMaestro.Internal.PidReportIdExtractor"
   ],
   "limitations": [
-    "This contract is an exact target allowlist, not a claim that replacement sources or a conforming assembly exist.",
+    "The S1.5d replacement sources and exact S1.5e observation infrastructure are source-frozen by separate static verifiers. The bounded GitHub Actions observation build is authorized, but no observation artifact or metadata result has yet been established.",
     "It covers only the one-DualSense raw-feedback host boundary and deliberately omits touch, IMU, battery, decoded-output, PID, USB/IP, VR, builder and provisioning surfaces.",
-    "A future metadata gate must reject every public type or member not listed here, including public types under HIDMaestro.Internal.",
-    "Passing the source-only verifier proves provenance and closure of this contract, not compilation, behavior, binary identity, driver ABI, signing, installation or hardware operation."
+    "The source-frozen, not-yet-established S1.5e metadata observation must reject every public type or member not listed here, including public types under HIDMaestro.Internal.",
+    "Passing the source-only verifier proves provenance and closure of this contract, not compilation, behavior, binary identity, driver ABI, signing, installation or hardware operation. The planned Actions observation authorizes only building and parsing inert bytes, never loading or executing the candidate."
   ]
 }

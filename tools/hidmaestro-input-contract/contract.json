@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-v1.6.1-dualsense-usb-submit-state-input",
+  "scope": {
+    "profileId": "dualsense",
+    "connection": "usb",
+    "vendorIdHex": "054C",
+    "productIdHex": "0CE6",
+    "stateSurface": [
+      "HMGamepadState.Axes",
+      "HMGamepadState.Buttons",
+      "HMGamepadState.Hat"
+    ],
+    "excludedState": [
+      "HatDegrees",
+      "HatHundredths",
+      "HatRaw",
+      "touchpad",
+      "IMU",
+      "battery",
+      "audio",
+      "output reports"
+    ],
+    "assurance": "static-source-only"
+  },
+  "source": {
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "profilePath": "profiles/sony/dualsense.json",
+    "descriptorByteLength": 273,
+    "descriptorSha256": "7587a72ee49550f24da50cbbad203742a0eb9aefbb753c2aaa5bedf8466c0d33"
+  },
+  "activePath": {
+    "name": "usb-legacy-descriptor-builder",
+    "builder": "HIDMaestro.Internal.HidReportBuilder.BuildReportInto",
+    "selectedBy": "HMController.SubmitState",
+    "profileExtendedReportPresent": true,
+    "profileExtendedReportActive": false,
+    "extendedReportInactiveBecause": [
+      "dualsense.json has no extendedReport.armOn entries",
+      "dualsense.json does not set extendedReport.alwaysArmed true",
+      "HMController therefore does not allocate _extendedReportBuffer or _extEncoderState",
+      "useExtended remains false and SubmitState calls HidReportBuilder.BuildReportInto"
+    ],
+    "forbiddenSubstitution": "Do not use the inactive extendedReport uint8-rolling byte 7 or its VendorBlobCodec rounding rules for USB SubmitState."
+  },
+  "report": {
+    "wireByteLength": 64,
+    "descriptorDataBitLength": 504,
+    "wireBitLength": 512,
+    "reportId": 1,
+    "reportIdWireByte": 0,
+    "reportIdIncludedInWireReport": true,
+    "clearedBeforeEveryEncode": true,
+    "statefulFields": false,
+    "rollingSequence": false,
+    "inputDefaultsOverlay": false
+  },
+  "descriptorInputGroups": [
+    {
+      "reportId": 1,
+      "usagePageHex": "0001",
+      "usagesHex": ["0030", "0031", "0032", "0035", "0033", "0034"],
+      "usageMinimum": 0,
+      "usageMaximum": 0,
+      "logicalMinimum": 0,
+      "logicalMaximum": 255,
+      "reportSizeBits": 8,
+      "reportCount": 6,
+      "descriptorDataBitOffset": 0,
+      "descriptorDataBitLength": 48,
+      "inputFlagsHex": "02"
+    },
+    {
+      "reportId": 1,
+      "usagePageHex": "FF00",
+      "usagesHex": ["0020"],
+      "usageMinimum": 0,
+      "usageMaximum": 0,
+      "logicalMinimum": 0,
+      "logicalMaximum": 255,
+      "reportSizeBits": 8,
+      "reportCount": 1,
+      "descriptorDataBitOffset": 48,
+      "descriptorDataBitLength": 8,
+      "inputFlagsHex": "02"
+    },
+    {
+      "reportId": 1,
+      "usagePageHex": "0001",
+      "usagesHex": ["0039"],
+      "usageMinimum": 0,
+      "usageMaximum": 0,
+      "logicalMinimum": 0,
+      "logicalMaximum": 7,
+      "reportSizeBits": 4,
+      "reportCount": 1,
+      "descriptorDataBitOffset": 56,
+      "descriptorDataBitLength": 4,
+      "inputFlagsHex": "42"
+    },
+    {
+      "reportId": 1,
+      "usagePageHex": "0009",
+      "usagesHex": [],
+      "usageMinimum": 1,
+      "usageMaximum": 15,
+      "logicalMinimum": 0,
+      "logicalMaximum": 1,
+      "reportSizeBits": 1,
+      "reportCount": 15,
+      "descriptorDataBitOffset": 60,
+      "descriptorDataBitLength": 15,
+      "inputFlagsHex": "02"
+    },
+    {
+      "reportId": 1,
+      "usagePageHex": "FF00",
+      "usagesHex": ["0021"],
+      "usageMinimum": 0,
+      "usageMaximum": 0,
+      "logicalMinimum": 0,
+      "logicalMaximum": 1,
+      "reportSizeBits": 1,
+      "reportCount": 13,
+      "descriptorDataBitOffset": 75,
+      "descriptorDataBitLength": 13,
+      "inputFlagsHex": "02"
+    },
+    {
+      "reportId": 1,
+      "usagePageHex": "FF00",
+      "usagesHex": ["0022"],
+      "usageMinimum": 0,
+      "usageMaximum": 0,
+      "logicalMinimum": 0,
+      "logicalMaximum": 255,
+      "reportSizeBits": 8,
+      "reportCount": 52,
+      "descriptorDataBitOffset": 88,
+      "descriptorDataBitLength": 416,
+      "inputFlagsHex": "02"
+    }
+  ],
+  "axes": {
+    "sourceValueType": "System.Single",
+    "validInputDomain": "finite",
+    "normalization": "clamp to [0.0, 1.0]",
+    "wireFormula": "truncate_toward_zero((double)(float)clamp(value, 0, 1) * 255)",
+    "wireSignedness": "unsigned",
+    "logicalMinimum": 0,
+    "logicalMaximum": 255,
+    "missingAxisValue": 0.0,
+    "missingAxisReason": "All six descriptor fields have LogicalMin >= 0, so HidReportBuilder's unsigned-axis default is 0.0.",
+    "entries": [
+      {
+        "stateKey": "X",
+        "enumValueHex": "0130",
+        "semantic": "leftStickX",
+        "wireByte": 1,
+        "sharedDataByte": 0,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 127
+      },
+      {
+        "stateKey": "Y",
+        "enumValueHex": "0131",
+        "semantic": "leftStickY",
+        "wireByte": 2,
+        "sharedDataByte": 1,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 127
+      },
+      {
+        "stateKey": "Z",
+        "enumValueHex": "0132",
+        "semantic": "rightStickX",
+        "wireByte": 3,
+        "sharedDataByte": 2,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 127
+      },
+      {
+        "stateKey": "Rz",
+        "enumValueHex": "0135",
+        "semantic": "rightStickY",
+        "wireByte": 4,
+        "sharedDataByte": 3,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 127
+      },
+      {
+        "stateKey": "Rx",
+        "enumValueHex": "0133",
+        "semantic": "leftTrigger",
+        "wireByte": 5,
+        "sharedDataByte": 4,
+        "normalizedNeutral": 0.0,
+        "wireNeutral": 0
+      },
+      {
+        "stateKey": "Ry",
+        "enumValueHex": "0134",
+        "semantic": "rightTrigger",
+        "wireByte": 6,
+        "sharedDataByte": 5,
+        "normalizedNeutral": 0.0,
+        "wireNeutral": 0
+      }
+    ],
+    "neutralRoundingNote": "The active legacy builder truncates 0.5 * 255 to 127. The inactive extendedReport codec rounds it to 128; 128 is not the pinned USB SubmitState result."
+  },
+  "hat": {
+    "wireByte": 8,
+    "sharedDataByte": 7,
+    "wireBits": "0-3",
+    "descriptorUsageHex": "0039",
+    "logicalMinimum": 0,
+    "logicalMaximum": 7,
+    "hasNullState": true,
+    "values": [
+      {"name": "None", "enumValue": 0, "wireValue": 8},
+      {"name": "North", "enumValue": 1, "wireValue": 0},
+      {"name": "NorthEast", "enumValue": 2, "wireValue": 1},
+      {"name": "East", "enumValue": 3, "wireValue": 2},
+      {"name": "SouthEast", "enumValue": 4, "wireValue": 3},
+      {"name": "South", "enumValue": 5, "wireValue": 4},
+      {"name": "SouthWest", "enumValue": 6, "wireValue": 5},
+      {"name": "West", "enumValue": 7, "wireValue": 6},
+      {"name": "NorthWest", "enumValue": 8, "wireValue": 7}
+    ]
+  },
+  "buttons": {
+    "sourceMaskType": "System.UInt32",
+    "profileButtonMap": [1, 2, 0, 3, 4, 5, 8, 9, 10, 11, 12, 13, -1, -1, -1, 14],
+    "entries": [
+      {"name": "A", "maskHex": "00000001", "descriptorButtonIndex": 1, "wireByte": 8, "wireBit": 5},
+      {"name": "B", "maskHex": "00000002", "descriptorButtonIndex": 2, "wireByte": 8, "wireBit": 6},
+      {"name": "X", "maskHex": "00000004", "descriptorButtonIndex": 0, "wireByte": 8, "wireBit": 4},
+      {"name": "Y", "maskHex": "00000008", "descriptorButtonIndex": 3, "wireByte": 8, "wireBit": 7},
+      {"name": "LeftBumper", "maskHex": "00000010", "descriptorButtonIndex": 4, "wireByte": 9, "wireBit": 0},
+      {"name": "RightBumper", "maskHex": "00000020", "descriptorButtonIndex": 5, "wireByte": 9, "wireBit": 1},
+      {"name": "Back", "maskHex": "00000040", "descriptorButtonIndex": 8, "wireByte": 9, "wireBit": 4},
+      {"name": "Start", "maskHex": "00000080", "descriptorButtonIndex": 9, "wireByte": 9, "wireBit": 5},
+      {"name": "LeftStick", "maskHex": "00000100", "descriptorButtonIndex": 10, "wireByte": 9, "wireBit": 6},
+      {"name": "RightStick", "maskHex": "00000200", "descriptorButtonIndex": 11, "wireByte": 9, "wireBit": 7},
+      {"name": "Guide", "maskHex": "00000400", "descriptorButtonIndex": 12, "wireByte": 10, "wireBit": 0},
+      {"name": "Touchpad", "maskHex": "00000800", "descriptorButtonIndex": 13, "wireByte": 10, "wireBit": 1},
+      {"name": "Misc1", "maskHex": "00008000", "descriptorButtonIndex": 14, "wireByte": 10, "wireBit": 2}
+    ],
+    "aliases": [
+      {"name": "Cross", "sameAs": "A"},
+      {"name": "Circle", "sameAs": "B"},
+      {"name": "Square", "sameAs": "X"},
+      {"name": "Triangle", "sameAs": "Y"}
+    ],
+    "dropped": [
+      {"name": "Share", "maskHex": "00001000", "reason": "profile ButtonMap entry is -1"},
+      {"name": "RightPaddle", "maskHex": "00002000", "reason": "profile ButtonMap entry is -1"},
+      {"name": "LeftPaddle", "maskHex": "00004000", "reason": "profile ButtonMap entry is -1"},
+      {"name": "RightPaddle2", "maskHex": "00010000", "reason": "outside ButtonMap and descriptor button count"},
+      {"name": "LeftPaddle2", "maskHex": "00020000", "reason": "outside ButtonMap and descriptor button count"}
+    ]
+  },
+  "derivedTriggerButtons": [
+    {
+      "axisStateKey": "Rx",
+      "semantic": "leftTrigger",
+      "condition": "clamped normalized value > 0.0",
+      "descriptorButtonIndex": 6,
+      "wireByte": 9,
+      "wireBit": 2
+    },
+    {
+      "axisStateKey": "Ry",
+      "semantic": "rightTrigger",
+      "condition": "clamped normalized value > 0.0",
+      "descriptorButtonIndex": 7,
+      "wireByte": 9,
+      "wireBit": 3
+    }
+  ],
+  "fixedZeroRegions": [
+    {
+      "wireByte": 7,
+      "wireBits": "0-7",
+      "descriptor": "UsagePage FF00 Usage 0020",
+      "reason": "The active generic builder has no semantic writer for this field; it is not the inactive extendedReport rolling counter."
+    },
+    {
+      "wireByte": 10,
+      "wireBits": "3-7",
+      "descriptor": "first five bits of UsagePage FF00 Usage 0021",
+      "reason": "The non-Edge ButtonMap has no explicit mapping into vendor button bits."
+    },
+    {
+      "wireByte": 11,
+      "wireBits": "0-7",
+      "descriptor": "remaining eight bits of UsagePage FF00 Usage 0021",
+      "reason": "The non-Edge ButtonMap has no explicit mapping into vendor button bits."
+    },
+    {
+      "wireByteRange": "12-63",
+      "wireBits": "all",
+      "descriptor": "52 bytes of UsagePage FF00 Usage 0022",
+      "reason": "The active generic builder clears the buffer and has no semantic writer for these fields."
+    }
+  ],
+  "fullStateBehavior": {
+    "kind": "complete-report-not-delta",
+    "destinationRequirement": "exactly 64 bytes for the candidate full-wire encoder",
+    "clearBeforeWrite": "all 64 bytes",
+    "priorFrameCarry": false,
+    "missingAxes": "encode 0, including missing stick axes",
+    "missingButtons": "release every button",
+    "missingHat": "encode HMHat.None as null value 8",
+    "sequenceState": "none",
+    "unsupportedButtons": "drop without aliasing into vendor bits"
+  },
+  "coordinates": {
+    "candidateFullWireEncoder": {
+      "byteLength": 64,
+      "includesReportId": true,
+      "firstByte": 1
+    },
+    "upstreamLegacySharedInput": {
+      "byteLength": 63,
+      "sourceSlice": "wireReport[1..64]",
+      "includesReportId": false,
+      "dataOffset": 1,
+      "dataLen": 63
+    },
+    "driverDelivery": {
+      "byteLength": 64,
+      "operation": "zero 64 bytes, set byte 0 to FirstInputReportId 1, copy 63 shared data bytes at byte 1"
+    },
+    "integrationRule": "A backend receiving the candidate's 64-byte full-wire report must strip byte 0 before writing the legacy shared Data payload. It must not write all 64 bytes into Data."
+  },
+  "resolution": {
+    "sourceFieldsSettled": true,
+    "unresolvedFields": [],
+    "sourceContractVerdict": "GO",
+    "runtimeVerdict": "NO-GO",
+    "runtimeNoGoReasons": [
+      "the candidate encoder has not yet been bound to this contract",
+      "the shared-memory endpoint has not yet been bound to the 64-byte versus 63-byte coordinate rule",
+      "no artifact has been built",
+      "no driver or device has been exercised"
+    ],
+    "aggregateGatesChanged": false
+  }
+}

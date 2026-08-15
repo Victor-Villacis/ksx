@@ -229,8 +229,9 @@ try {
     Add-Check 'aggregate.apiSummaryAgrees' `
         ($candidate.sourceContracts.publicApi.publicTypeCount -eq $api.surfaceRules.declaredTypeCount -and
          $candidate.sourceContracts.publicApi.logicalMemberCount -eq $api.surfaceRules.logicalMemberCount -and
-         $candidate.sourceContracts.publicApi.artifactMetadataVerified -eq $false) `
-        'aggregate API counts derive from the source-frozen API target and do not claim artifact metadata'
+         $candidate.sourceContracts.publicApi.actionsObservationMetadataMatched -eq $false -and
+         $candidate.sourceContracts.publicApi.artifactMetadataAllowlistAdopted -eq $false) `
+        'aggregate API counts derive from the source-frozen target while observation and adoption remain false'
 
     $manifestCanonicalSha256 = Get-CanonicalTextSha256 $profileManifestPath
     $manifestEntries = @($profileManifest.entries)
@@ -303,23 +304,56 @@ try {
             'api/source-compilation.contract.json') `
         'legacy safety and hazard lists explicitly defer to the exhaustive source-disposition contract'
     Add-Check 'aggregate.gatesRemainInert' `
-        ($candidate.status -ceq 'design-contract-only' -and
+        ($candidate.status -ceq 's1.5e-source-frozen-observation-not-established-not-built-or-loaded' -and
+         $api.status -ceq 'exact-candidate-source-allowlist-s1.5e-source-frozen-observation-not-established' -and
          $candidate.gateState.sourcePublicApiContractFrozen -eq $true -and
          $candidate.gateState.sourceCompilationDispositionFrozen -eq $true -and
          $candidate.gateState.profileSourceManifestFrozen -eq $true -and
          $candidate.gateState.rawFeedbackContractFrozen -eq $true -and
+         $candidate.gateState.rawInputContractFrozen -eq $true -and
          $candidate.sourceContracts.rawDualSenseFeedback.goldenVectorCount -eq 16 -and
-         $candidate.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -eq $false -and
+         $candidate.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -eq $true -and
          $candidate.sourceContracts.rawDualSenseFeedback.hardwareVerified -eq $false -and
+         $candidate.sourceContracts.rawDualSenseInput.sourceFileCount -eq 12 -and
+         $candidate.sourceContracts.rawDualSenseInput.descriptorGroupCount -eq 6 -and
+         $candidate.sourceContracts.rawDualSenseInput.goldenScenarioCount -eq 9 -and
+         $candidate.sourceContracts.rawDualSenseInput.goldenFrameCount -eq 37 -and
+         $candidate.sourceContracts.rawDualSenseInput.managedRuntimeEncoderPresent -eq $true -and
+         $candidate.sourceContracts.rawDualSenseInput.artifactBehaviorVerified -eq $false -and
          $candidate.gateState.artifactPublicApiAllowlistFrozen -eq $false -and
          $candidate.gateState.artifactCompileAllowlistFrozen -eq $false -and
          $candidate.gateState.profileSourceCatalogBound -eq $false -and
          $candidate.gateState.rawFeedbackDecoderFrozen -eq $false -and
          $candidate.gateState.driverRuntimeAbiBound -eq $false -and
          $candidate.gateState.distributionReady -eq $false -and
-         $api.artifact.buildAuthorized -eq $false -and
+         $candidate.artifact.observation.contractPath -ceq 's1_5e/contract.lock.json' -and
+         $candidate.artifact.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $candidate.artifact.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $candidate.artifact.observation.actionsObservationBuildAuthorized -eq $true -and
+         $candidate.artifact.observation.sourceVerifierBuildAuthorized -eq $false -and
+         $candidate.artifact.observation.localBuildAuthorized -eq $false -and
+         $candidate.artifact.observation.productBuildAuthorized -eq $false -and
+         $candidate.artifact.observation.loadAuthorized -eq $false -and
+         $candidate.artifact.observation.executionAuthorized -eq $false -and
+         $candidate.artifact.observation.observationEstablished -eq $false -and
+         $candidate.artifact.observation.actionsObservationArtifactBuilt -eq $false -and
+         $candidate.artifact.observation.metadataMatched -eq $false -and
+         $candidate.artifact.observation.compileClosureMatched -eq $false -and
+         $candidate.artifact.observation.resourceCatalogMatched -eq $false -and
+         $api.artifact.buildAuthorization.sourceVerifier -eq $false -and
+         $api.artifact.buildAuthorization.s1_5eActionsObservation -eq $true -and
+         $api.artifact.buildAuthorization.local -eq $false -and
+         $api.artifact.buildAuthorization.product -eq $false -and
+         $api.artifact.observation.contractPath -ceq '../s1_5e/contract.lock.json' -and
+         $api.artifact.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $api.artifact.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $api.artifact.observation.observationEstablished -eq $false -and
+         $api.artifact.observation.actionsObservationArtifactBuilt -eq $false -and
+         $api.artifact.observation.metadataMatched -eq $false -and
+         $api.artifact.observation.artifactAllowlistAdopted -eq $false -and
+         $api.artifact.loadAuthorized -eq $false -and
          $api.artifact.executionAuthorized -eq $false) `
-        'source freezes do not authorize an artifact, driver, distribution, or execution'
+        'the S1.5e source leaf is frozen and only its exact Actions observation build is authorized; observation evidence, adoption, load, execution, driver, and distribution remain false'
 
     $commitOutput = @(& git -C $root rev-parse HEAD 2>$null)
     $commitExitCode = $LASTEXITCODE
@@ -388,23 +422,44 @@ try {
          $candidate.sourceContracts.compilationDisposition.retainedUnchangedCount -eq $retained.Count -and
          $candidate.sourceContracts.compilationDisposition.replacementRequiredCount -eq $replacement.Count -and
          $candidate.sourceContracts.compilationDisposition.excludedCount -eq $excluded.Count -and
-         $candidate.sourceContracts.compilationDisposition.replacementSourcesPresent -eq $false) `
+         $candidate.sourceContracts.compilationDisposition.replacementSourcesPresent -eq $true) `
         'aggregate 51/1/13/37 source-disposition counts derive from the exhaustive manifest'
     Add-Check 'source.onlyPacketRetained' `
         ($retained.Count -eq 1 -and $retained[0] -ceq 'sdk/HIDMaestro.Core/HMOutputPacket.cs') `
         'only HMOutputPacket.cs is copied byte-for-byte into the planned candidate'
 
     $replacementFlags = @($source.classification.replacementRequired | ForEach-Object { [bool]$_.replacementPresent })
-    $allReplacementFlagsFalse = @($replacementFlags | Where-Object { $_ -ne $false }).Count -eq 0
-    Add-Check 'source.replacementsTruthfullyAbsent' `
-        ($allReplacementFlagsFalse -and $source.futureCompileManifest.allReplacementUnitsPresent -eq $false) `
-        'every planned replacement is explicitly absent'
-    Add-Check 'source.buildRemainsBlocked' `
-        ($source.futureCompileManifest.state -ceq 'blocked-missing-reviewed-replacements' -and
+    $allReplacementFlagsTrue = @($replacementFlags | Where-Object { $_ -ne $true }).Count -eq 0
+    $newUnitFlags = @($source.requiredNewUnits | ForEach-Object { [bool]$_.present })
+    $allNewUnitFlagsTrue = @($newUnitFlags | Where-Object { $_ -ne $true }).Count -eq 0
+    Add-Check 'source.replacementsTruthfullyPresent' `
+        ($allReplacementFlagsTrue -and $allNewUnitFlagsTrue -and
+         $source.futureCompileManifest.allReplacementUnitsPresent -eq $true) `
+        'every planned replacement and required new source unit is explicitly present'
+    Add-Check 'source.observationAuthority' `
+        ($source.status -ceq 'exhaustive-upstream-classification-s1.5e-source-frozen-observation-not-established' -and
+         $source.futureCompileManifest.state -ceq 'source-candidate-present-hash-frozen-s1.5e-source-frozen-observation-not-established' -and
          $source.futureCompileManifest.artifactCompileAllowlistFrozen -eq $false -and
-         $api.artifact.buildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.contractPath -ceq '../s1_5e/contract.lock.json' -and
+         $source.futureCompileManifest.observation.contractId -ceq 'hidmaestro-s1.5e-actions-static-artifact-observation' -and
+         $source.futureCompileManifest.observation.contractReferenceState -ceq 'source-frozen-observation-not-established' -and
+         $source.futureCompileManifest.observation.actionsObservationBuildAuthorized -eq $true -and
+         $source.futureCompileManifest.observation.sourceVerifierBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.localBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.productBuildAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.loadAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.executionAuthorized -eq $false -and
+         $source.futureCompileManifest.observation.observationEstablished -eq $false -and
+         $source.futureCompileManifest.observation.actionsObservationArtifactBuilt -eq $false -and
+         $source.futureCompileManifest.observation.metadataMatched -eq $false -and
+         $source.futureCompileManifest.observation.compileClosureMatched -eq $false -and
+         $api.artifact.buildAuthorization.sourceVerifier -eq $false -and
+         $api.artifact.buildAuthorization.s1_5eActionsObservation -eq $true -and
+         $api.artifact.buildAuthorization.local -eq $false -and
+         $api.artifact.buildAuthorization.product -eq $false -and
+         $api.artifact.loadAuthorized -eq $false -and
          $api.artifact.executionAuthorized -eq $false) `
-        'source-only contracts authorize neither build nor execution'
+        'the S1.5e source leaf is frozen and only its exact Actions observation build is authorized; all other build, load, and execution scopes remain false'
 
     Add-Check 'api.artifactIdentity' `
         ($api.artifact.assemblyName -ceq 'HIDMaestro.Core' -and
@@ -570,7 +625,7 @@ try {
         logicalMemberCount = $logicalMemberCount
         upstreamUnitCount = $treeUnits.Count
         checks = $checks
-        note = 'Passing proves source provenance, exact API closure, exhaustive source disposition, and Rust enum-value agreement only. Replacement code and a conforming assembly do not exist and no SDK code was built, loaded or executed.'
+        note = 'Passing proves pinned upstream provenance, exact API contract closure, exhaustive source disposition, and Rust enum-value agreement only. This verifier builds, loads, and executes no candidate or SDK assembly. It records the source-frozen S1.5e Actions observation as authorized but not established, with no artifact evidence or product authority established.'
     } | ConvertTo-Json -Depth 10
     if (!$ok) { exit 1 }
 }

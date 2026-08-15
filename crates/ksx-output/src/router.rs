@@ -20,9 +20,9 @@
 //! # Laziness is part of the rule
 //!
 //! [`RoutedBackend`] only builds the HIDMaestro backend when a slot actually
-//! asks for it. A cabinet running four X360 pads and four DS4 pads — every
-//! configuration ksx ships today — never constructs it, never probes for the
-//! driver, and cannot be broken by its absence.
+//! asks for it. A cabinet running only X360/DS4 pads never constructs it,
+//! never probes for the driver, and cannot be broken by its absence. A
+//! DualSense-only session likewise does not open ViGEmBus.
 
 use ksx_core::{PadBackend, PadState, Persona};
 
@@ -64,11 +64,10 @@ pub struct RoutedBackend {
     /// Whether [`Persona::can_plug`] is enforced before anything is dispatched.
     ///
     /// True for the routers ksx builds for itself, where the answer is a fact
-    /// about this binary and there is nothing to gain by handing a persona to a
-    /// stack that cannot create it. False for [`RoutedBackend::with_hidmaestro`]:
-    /// a caller who supplies a backend has supplied the very thing the build
-    /// fact says is missing, and that is how the two-stack dispatch below stays
-    /// under test while the second stack has no production driver.
+    /// about this binary and there is nothing to gain by handing an unfinished
+    /// persona to a stack that cannot create it. False for
+    /// [`RoutedBackend::with_hidmaestro`], which lets contract tests exercise
+    /// the complete dispatch table with a caller-supplied backend.
     enforce_build_capability: bool,
     pads: std::collections::BTreeMap<u32, Entry>,
     next_id: u32,
@@ -97,10 +96,9 @@ impl RoutedBackend {
     /// is never called, so the driver is never probed for and its absence
     /// cannot fail a run.
     ///
-    /// The factory is wired even though today's build gate refuses every
-    /// persona that would reach it. That is deliberate and it is the point:
-    /// enabling one exact [`Persona`] in the commit that lands a proven host
-    /// lights only that route up with nothing else to change.
+    /// The factory is wired for the one live DualSense path; the per-persona
+    /// build gate still refuses Switch Pro and Xbox Series before this factory
+    /// can touch the machine.
     pub fn standard(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
             vigem: Some(vigem),
@@ -118,11 +116,9 @@ impl RoutedBackend {
 
     /// Production factories without opening either driver stack yet.
     ///
-    /// This is the future HIDMaestro-only session seam: callers may preflight
-    /// the exact personas they need before constructing capture, and a session
-    /// that needs no ViGEm persona never opens ViGEmBus. The existing entry
-    /// points intentionally keep using [`RoutedBackend::standard`] until their
-    /// preflight/error-ordering contract is migrated in the same change.
+    /// A session that needs no ViGEm persona never opens ViGEmBus. Production
+    /// entry points use this so a DualSense-only session does not acquire the
+    /// compatibility backend as a hidden prerequisite.
     pub fn standard_lazy(vigem: BackendFactory) -> Self {
         Self {
             vigem: None,
@@ -247,6 +243,16 @@ impl RoutedBackend {
 }
 
 impl VirtualPadBackend for RoutedBackend {
+    fn service(&mut self) -> Result<(), OutputError> {
+        if let Some(backend) = self.vigem.as_mut() {
+            backend.service()?;
+        }
+        if let Some(backend) = self.hidmaestro.as_mut() {
+            backend.service()?;
+        }
+        Ok(())
+    }
+
     fn plug(&mut self) -> Result<PadHandle, OutputError> {
         self.plug_persona(Persona::default())
     }
@@ -301,7 +307,9 @@ impl VirtualPadBackend for RoutedBackend {
         let _ = self.entry(handle)?;
         let (stack, inner) = self.resolve(handle)?;
         let result = stack.unplug(inner);
-        self.pads.remove(&handle.0);
+        if result.is_ok() {
+            self.pads.remove(&handle.0);
+        }
         result
     }
 }
@@ -415,10 +423,10 @@ mod tests {
             Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
         }));
 
-        let err = r.plug_persona(Persona::DualSense).unwrap_err();
+        let err = r.plug_persona(Persona::SwitchPro).unwrap_err();
         assert!(matches!(
             err,
-            OutputError::PersonaNotImplemented(Persona::DualSense)
+            OutputError::PersonaNotImplemented(Persona::SwitchPro)
         ));
         assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
         assert!(!r.vigem_started());
@@ -467,11 +475,8 @@ mod tests {
     fn without_a_factory_a_hidmaestro_persona_is_refused_not_downgraded() {
         let mut r = RoutedBackend::vigem_only(Box::new(MockBackend::new()));
         let err = r.plug_persona(Persona::DualSense).unwrap_err();
-        // The build gate answers first, and it is the more fundamental fact:
-        // "no factory is wired up" invites someone to wire one, and there is
-        // nothing to wire.
         assert!(
-            matches!(err, OutputError::PersonaNotImplemented(Persona::DualSense)),
+            matches!(err, OutputError::BackendUnavailable(PadBackend::HidMaestro)),
             "{err}"
         );
         // A ViGEm persona still works on the same router.
@@ -480,7 +485,7 @@ mod tests {
 
     /// The regression this whole change exists for.
     ///
-    /// A production router must refuse the three HIDMaestro personas **without
+    /// A production router must refuse the unfinished HIDMaestro personas **without
     /// consulting the machine**, because the machine's answer is the wrong one:
     /// on a box where HIDMaestro is installed the probe says yes, and the pad
     /// still cannot be created. A gate that flips with an install would offer a
@@ -488,7 +493,7 @@ mod tests {
     #[test]
     fn the_production_router_refuses_unbuildable_personas_without_probing() {
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        for persona in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
             let err = r.plug_persona(persona).unwrap_err();
             assert!(
                 matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),

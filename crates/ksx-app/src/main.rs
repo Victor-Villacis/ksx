@@ -1609,9 +1609,10 @@ enum SlotCommand {
         ///
         /// Windows exposes 4 XInput slots: xbox360 and xboxseries each take
         /// one, so a fifth of those is refused. playstation is plain HID and
-        /// takes none, which is how players 5+ exist at all. dualsense,
-        /// switchpro and xboxseries need HIDMaestro (M8) and are refused by
-        /// this build with the reason attached.
+        /// takes none, which is how players 5+ exist at all. One dualsense is
+        /// live through HIDMaestro; a second is refused by the production host
+        /// capacity. switchpro and xboxseries remain build-gated with the
+        /// reason attached.
         #[arg(long, value_name = "NAME", value_parser = parse_persona)]
         persona: Option<ksx_core::Persona>,
         /// What opposite directions on this slot's stick do: off, neutral,

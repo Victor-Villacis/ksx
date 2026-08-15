@@ -1,0 +1,327 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-s1.5e-actions-static-artifact-observation",
+  "status": "observation-infrastructure-source-present-actions-not-run",
+  "assurance": "actions-only-two-build-determinism-and-byte-only-pe-metadata-observation",
+  "canonicalization": "workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL",
+  "observationEstablished": false,
+  "expectedSourceVerifierCheckCount": 291,
+  "toolchain": {
+    "dotnetSdk": "10.0.400",
+    "runnerOs": "Windows",
+    "configuration": "Release",
+    "runtimeIdentifier": "win-x64",
+    "platformTarget": "x64",
+    "inspectorRuntimeFrameworkVersion": "10.0.11",
+    "inspectorRuntimeVersionFileRelativePath": "shared/Microsoft.NETCore.App/10.0.11/.version",
+    "inspectorRuntimeVersionFileByteLength": 51,
+    "inspectorRuntimeVersionFileSha256": "13B770DFE2DFC0294F8C5A9CD60198F365745A219878910A572FD85784D3B733",
+    "inspectorRuntimeVersionFileLines": [
+      "e2f47b0110ed922f21a1522da67279133ce28f32",
+      "10.0.11"
+    ],
+    "inspectorRuntimeMustBeListedUnderResolvedDotnetRoot": true,
+    "inspectorRuntimeTreeBoundBeforeAndAfterLaunch": true,
+    "inspectorRuntimePathRedactedFromReceipt": true,
+    "buildCount": 2,
+    "localBuildAuthorized": false,
+    "actionsObservationBuildAuthorized": true,
+    "candidateLoadAuthorized": false,
+    "candidateExecutionAuthorized": false,
+    "artifactRetentionAuthorized": false
+  },
+  "targetingPacks": {
+    "compositionAuthority": "official .NET 10 releases.json SDK 10.0.400 win-x64 entry, its exact released archive, and the exact installed SDK evidence files and pack tree",
+    "releaseMetadataUri": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+    "releasedSdkArchiveUri": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/dotnet-sdk-10.0.400-win-x64.zip",
+    "releasedSdkArchiveHashAlgorithm": "SHA512",
+    "releasedSdkArchiveByteLength": 300546129,
+    "releasedSdkArchiveSha512Hex": "9B8B88590E4DA131BFD0DA7AA089D0FC04D5418D5F8607EC13D55DC5A17B4399AFD54D496C12657FA05C6C6546DC5EAB930F26AC6C50F2D3A7712C0FB378C366",
+    "releasedSdkReleaseDate": "2026-08-11",
+    "releasedSdkRuntimeVersion": "10.0.11",
+    "installedSdkVersionRelativePath": "sdk/10.0.400/.version",
+    "installedSdkVersionByteLength": 101,
+    "installedSdkVersionSha256": "89D0157FDF8D6ACD8A76EA6FC0E3A110BE7BCA5FF2001D0436ADE70DD0A7ADC7",
+    "installedSdkVersionLines": [
+      "14fbf8d5271c98133561eb55185fdb05b286f578",
+      "10.0.400",
+      "win-x64",
+      "10.0.400-servicing.26379.115",
+      "10.0.400"
+    ],
+    "installedSdkToolsetVersionRelativePath": "sdk/10.0.400/.toolsetversion",
+    "installedSdkToolsetVersionByteLength": 61,
+    "installedSdkToolsetVersionSha256": "45D078105738431B70271E857D5CE409B8E6F0F891FF9F864CB5FC92546CDDCC",
+    "sdkSourceRepository": "https://github.com/dotnet/dotnet",
+    "sdkSourceCommit": "14fbf8d5271c98133561eb55185fdb05b286f578",
+    "sdkCoreRefVersionSourcePath": "src/sdk/eng/Version.Details.xml",
+    "sdkCoreRefVersionSourceSha256": "9EF22725C12631E5277DE822B49AA5E6BCED3D447054F1F4BADD73DD22FCFABA",
+    "sdkWindowsRefVersionSourcePath": "src/sdk/eng/ManualVersions.props",
+    "sdkWindowsRefVersionSourceSha256": "0B52C1AE66EE364980C94A7866C8A3055B54A01D0FE778CC00FC1BEB7745CD32",
+    "resolverSemanticsAuthority": "the exact shipped VMR commit above; released archive and installed evidence remain binding for binary composition",
+    "installedBundledVersionsRelativePath": "sdk/10.0.400/Microsoft.NETCoreSdk.BundledVersions.props",
+    "installedBundledVersionsSha256": "2D6C1879967A87460C1C712B54B9FE378281DE4D4F7301ECBB8AF923B47C40DD",
+    "netCoreAppRef": {
+      "packageId": "Microsoft.NETCore.App.Ref",
+      "version": "10.0.11",
+      "originalFileCount": 348,
+      "originalUncompressedByteLength": 43511590,
+      "originalRawTreeSha256": "2347D43291D0F7F10F528B5588A1AC0C4F1287FEB0E9F2D4FA5635CE01A48BF2",
+      "originalFrameworkListByteLength": 36320,
+      "originalFrameworkListSha256": "0527031269FF47FCEB1518ECCD9992E75F924881A362754957676C18988263B4",
+      "analyzers": [
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.ComInterfaceGenerator.dll",
+          "sha256": "6AD171126DF1AE4DB0420EDFA9791C2CE2599AF758C506BEAB1F29CC9219FE2B"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.JavaScript.JSImportGenerator.dll",
+          "sha256": "6C06555039E10929673A5EA53CB5CFF7324D292C989D77F0D10DDD56198D6DE1"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.LibraryImportGenerator.dll",
+          "sha256": "AE1A7C7BEE96FCD69C66FF4FC1CD4D5E2C2474E1644EA9547A11048CF648871C"
+        },
+        {
+          "path": "analyzers/dotnet/cs/Microsoft.Interop.SourceGeneration.dll",
+          "sha256": "5EFC03100F5C544F64ACE8D240BB73661D1BDA8B01BD69BC4D1FB24D605F8BB5"
+        },
+        {
+          "path": "analyzers/dotnet/cs/System.Text.Json.SourceGeneration.dll",
+          "sha256": "82CA672F31AD099C9E823B646C27F3A1DA249E3C5574B1DBC4DC76DEE234BD12"
+        },
+        {
+          "path": "analyzers/dotnet/cs/System.Text.RegularExpressions.Generator.dll",
+          "sha256": "D5B18010ED85ABA3C8807BD3CFA01097BF99E1B6460E99B9A26EB74BFCE12B10"
+        }
+      ],
+      "sanitizedFrameworkListByteLength": 34752,
+      "sanitizedFrameworkListSha256": "C23E017A615E74F8CD94DAA2FCA3B9F5EDDBDC4C6636A47D6CB4FC5A61EF9006",
+      "sanitizedFileCount": 342,
+      "sanitizedRawByteLength": 41745862,
+      "sanitizedRawTreeSha256": "EF000B960364CC8C39255D3619BA7BF95DA97C0E07B4C029FC9B578E9C1C8276",
+      "sourceDisposition": "preserve and pre/post hash the exact 10.0.11 pack shipped with the released SDK; copy it into isolated RUNNER_TEMP; remove only the six exact FrameworkList Type=Analyzer entries and their exact payloads from the derived observation overlay"
+    },
+    "windowsSdkNetRef": {
+      "packageId": "Microsoft.Windows.SDK.NET.Ref",
+      "version": "10.0.26100.57",
+      "targetPlatformVersion": "10.0.26100.0",
+      "downloadUri": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.net.ref/10.0.26100.57/microsoft.windows.sdk.net.ref.10.0.26100.57.nupkg",
+      "packageByteLength": 13193759,
+      "packageSha256": "EAA0E3B938319F75BEAC5C046C84EF57212C2743E9263E0DB33B2019AB70B524",
+      "packageSha512Base64": "BG2X8tqoPJu7Lde8hlg/3bF9QwOW3VsxI7MGPEQM5+i4YG0WgNeesIeia2VTRkVEnoC9SdxpFGJtdGQHHIBwcA==",
+      "archiveEntryCount": 97,
+      "archiveUncompressedByteLength": 67431788,
+      "expandedRawTreeSha256": "29E5F21F61E66A3E4A850454C575181FA21A42F4A9749B2BEC55869FF4E3787F",
+      "originalFrameworkListByteLength": 942,
+      "originalFrameworkListSha256": "5F5DC88A217A01FAD154279EF8760C49C4FF9819E33AD0671D0F110D0B641D04",
+      "analyzerRelativePath": "analyzers/dotnet/cs/WinRT.SourceGenerator.dll",
+      "analyzerByteLength": 478240,
+      "analyzerSha256": "A23601B11FBB36A2DE48960AAD942FBAB26D2F0835F98086CC764F97EA81CBC8",
+      "sanitizedFrameworkListByteLength": 702,
+      "sanitizedFrameworkListSha256": "78770AD71BD625A18FB1128CF0FF1030C4B1594060931246AB68F94A28921388",
+      "sanitizedFileCount": 96,
+      "sanitizedRawByteLength": 66953308,
+      "sanitizedRawTreeSha256": "E9F9791056DEABD9763FCA005F8604668FF23ACFA875BAB61285CA978BB1D6BA",
+      "sdkReferenceRelativePath": "lib/net8.0/Microsoft.Windows.SDK.NET.dll",
+      "sdkReferenceSha256": "C633AB241CD09846C2AA409F0BEE2026962610404A7BF132C75CBD66B0E5A9F4",
+      "sourceDisposition": "one exact bounded infrastructure HTTPS fetch; preserve the exact safely expanded 97-file evidence tree; copy it into a derived observation overlay; remove only the one exact FrameworkList analyzer entry and payload; candidate restore/build has zero configured package sources and all package-download fallbacks disabled"
+    },
+    "overlayTreeFraming": "ordinal overlay-relative path, NUL, raw bytes, NUL",
+    "overlayFileCount": 438,
+    "overlayRawByteLength": 108699170,
+    "overlayRawTreeSha256": "F9125E4730CF4FCB9AB2566F4AEC2928042ADA7A172B6CD242063A831B5CF775",
+    "derivedPackSanitization": "remove every securely parsed FrameworkList File with Type=Analyzer and only its exact pack-relative payload; preserve original source/evidence trees; bind derived overlay pre/post",
+    "effectiveCompilerAnalyzerItemCount": 0,
+    "capturedLogicalCscAnalyzerArgumentCount": 0,
+    "capturedLogicalCscAnalyzerConfigArgumentCount": 0,
+    "capturedLogicalCscAdditionalFileArgumentCount": 0,
+    "capturedLogicalCscResponseFileArgumentCount": 0,
+    "effectiveCompilerAuxiliaryItemCount": 0,
+    "analyzerClosureCheckedBeforeAndAfterAllThreeBuilds": true,
+    "sourceGeneratorExecutionAuthorized": false,
+    "workloadResolverEnabled": false,
+    "allPackDownloadFallbacksDisabled": true,
+    "candidatePackageSourcesConfigured": 0,
+    "candidateNetworkAuthorized": false
+  },
+  "upstream": {
+    "repository": "https://github.com/hifihedgehog/HIDMaestro",
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "windowsCheckoutCoreAutocrlf": true
+  },
+  "sourceCandidate": {
+    "relativeProject": "candidate/HIDMaestro.Core.csproj",
+    "treeFraming": "ordinal candidate-relative path, NUL, normalized UTF-8 bytes, NUL",
+    "normalizedTreeSha256": "4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393",
+    "candidateFileCount": 12,
+    "compileItemCount": 11,
+    "embeddedResourceCount": 228,
+    "deployableProfileCount": 130,
+    "stagedInputFileCount": 241,
+    "fixedStagingPrefix": ".pinned-upstream-v1.6.1/",
+    "workspaceCandidateStagingBytes": "canonical-utf8-lf-after-normalized-hash-verification",
+    "upstreamStagingBytes": "exact-observed-windows-checkout-raw-bytes-after-raw-or-canonical-verification",
+    "retainedSourcePath": "sdk/HIDMaestro.Core/HMOutputPacket.cs",
+    "retainedSourceRawSha256": "D45FC52A9D5D1A800B11A00953BC940B2E0A7370EEE4825B9AB8791B99FB6E14",
+    "upstreamSelectedUtf8BomPaths": [
+      "profiles/nintendo/switch-pro.json"
+    ],
+    "profileRawCatalogSha256": null,
+    "profileCanonicalCatalogSha256": null
+  },
+  "artifactExpectation": {
+    "assemblyName": "HIDMaestro.Core",
+    "assemblyVersion": "1.6.1.0",
+    "fileVersion": "1.6.1.0",
+    "informationalVersion": "1.6.1-ksx-s1.5c+upstream.2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "targetFramework": ".NETCoreApp,Version=v10.0",
+    "targetFrameworkDisplayName": ".NET 10.0",
+    "portablePdbCodeViewPath": "/_/object/HIDMaestro.Core.pdb",
+    "machine": "Amd64",
+    "peMagic": "PE32Plus",
+    "managedEntryPointTokenOrRva": 0,
+    "nativeAddressOfEntryPoint": 0,
+    "nativeImportModuleCount": 0,
+    "nativeImportSymbolCount": 0,
+    "publicTypeCount": 9,
+    "publicLogicalEntryCount": 100,
+    "manifestResourceCount": 228,
+    "deployableProfileCount": 130,
+    "dllSha256": null,
+    "pdbSha256": null,
+    "depsJsonSha256": null,
+    "mvid": null,
+    "portablePdbId": null,
+    "assemblyReferenceAllowlist": null,
+    "typeReferenceAllowlist": null,
+    "memberReferenceAllowlist": null,
+    "methodSpecificationAllowlist": null,
+    "ilTokenClosureAllowlist": null,
+    "analyzerAllowlist": null
+  },
+  "staticRejectPolicy": {
+    "pinvokeRows": 0,
+    "moduleReferenceRows": 0,
+    "declarativeSecurityRows": 0,
+    "moduleInitializerCount": 0,
+    "generatedCompilerSourceCount": 0,
+    "packageReferenceCount": 0,
+    "effectiveCompilerAnalyzerItemCount": 0,
+    "capturedLogicalCscAnalyzerArgumentCount": 0,
+    "capturedLogicalCscAnalyzerConfigArgumentCount": 0,
+    "capturedLogicalCscAdditionalFileArgumentCount": 0,
+    "capturedLogicalCscResponseFileArgumentCount": 0,
+    "effectiveCompilerAuxiliaryItemCount": 0,
+    "sourceGeneratorExecutionAuthorized": false,
+    "workloadResolverEnabled": false,
+    "analyzerAllowlistFrozen": false,
+    "strongNameSigned": false,
+    "authenticodePresent": false,
+    "readyToRunPresent": false,
+    "forbiddenIlOpcodes": [
+      "calli",
+      "jmp",
+      "localloc"
+    ],
+    "forbiddenReferenceFragments": [
+      "System.Diagnostics.Process",
+      "Microsoft.Win32.Registry",
+      "System.ServiceProcess",
+      "System.Net.",
+      "System.Reflection.Assembly::Load",
+      "System.Runtime.Loader.AssemblyLoadContext",
+      "System.Activator",
+      "System.Runtime.InteropServices.NativeLibrary",
+      "System.Security.Cryptography.X509Certificates",
+      "PnPUtil",
+      "DriverBuilder",
+      "UsbipDriverInstaller"
+    ]
+  },
+  "expectedOutputBasenames": [
+    "HIDMaestro.Core.deps.json",
+    "HIDMaestro.Core.dll",
+    "HIDMaestro.Core.pdb"
+  ],
+  "sourceInputs": [
+    {
+      "path": "tools/hidmaestro-runtime-candidate/candidate-contract.json",
+      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/api/public-api.contract.json",
+      "sha256": "FC9DF9A192831385A7BE56C2B8B9E9B4DD52D4DF854D798F4F1A63FC9B333D2E"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/api/source-compilation.contract.json",
+      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/profiles/catalog.lock.json",
+      "sha256": "CBCEC6094D314ED4637BFA1C295E27236C39F784D9FF1D016791CC375FF25B80"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/source.lock.json",
+      "sha256": "F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json",
+      "sha256": "01DD327F4C280FC996484141A8E664B1E415A12BE748587A9670287FBD0401EA"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
+      "sha256": "9B7FBEF83B420F1143EEEF9EF31FEF923EE8F36CC15F9DE0B94198EB7BBF3861"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/HIDMaestro.ArtifactInspector.csproj",
+      "sha256": "A9C4C759DE81E08E1A8126AB60CCAE9D4593251B7191F7379C3E82D92A16DA66"
+    },
+    {
+      "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/Program.cs",
+      "sha256": "9C50F46477DC67E48B50C05BA28E34235959C009A1C2C5F7C97079B2DCC32A9A"
+    },
+    {
+      "path": "tools/hidmaestro-probe/ManagedPeReader.cs",
+      "sha256": "3760A60B38FBE5AA3BDB90E6FC4BD44F31F310016D371D30C66AF5D6FE897025"
+    }
+  ],
+  "leafFiles": [
+    {
+      "path": "README.md",
+      "sha256": "3AB475BFA347CAE2FEB02361F61B7337AC876448A14C53FCB5985019927ABEAE"
+    },
+    {
+      "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
+      "sha256": "A9C4C759DE81E08E1A8126AB60CCAE9D4593251B7191F7379C3E82D92A16DA66"
+    },
+    {
+      "path": "inspector/Program.cs",
+      "sha256": "9C50F46477DC67E48B50C05BA28E34235959C009A1C2C5F7C97079B2DCC32A9A"
+    },
+    {
+      "path": "run-actions-proof.ps1",
+      "sha256": "AE54C065066F238963B29A1C6EB6650E109FC175A85B6FDADEBD46444D79E384"
+    },
+    {
+      "path": "verify-source-contract.ps1",
+      "sha256": "E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D"
+    }
+  ],
+  "gateState": {
+    "artifactPublicApiAllowlistFrozen": false,
+    "artifactCompileAllowlistFrozen": false,
+    "profileSourceCatalogBound": false,
+    "rawFeedbackDecoderFrozen": false,
+    "driverRuntimeAbiBound": false,
+    "distributionReady": false
+  },
+  "limitations": [
+    "This source lock authorizes and describes an Actions-only observation; it is not evidence that the observation has run.",
+    "No post-build hash, MVID, portable-PDB identity, or metadata-reference allowlist is asserted before the first green receipt is reviewed.",
+    "The profile manifest freezes canonical text bytes but not the Windows-checkout raw catalog digest; the observation reports that digest without promoting it to an expectation.",
+    "A successful observation proves deterministic byte equality and static structure only; it does not prove driver ABI, device behavior, candidate execution safety, or distribution readiness.",
+    "The observer requires the Amd64 PE native AddressOfEntryPoint to be zero; requires empty import, import-address, base-relocation, TLS, delay-import, and export directories; and requires zero native import modules and symbols."
+  ]
+}

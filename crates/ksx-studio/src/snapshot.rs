@@ -57,6 +57,32 @@ pub struct MapPayload {
     /// older fixtures and clients retain the saved-layout behavior.
     #[serde(default)]
     pub target: String,
+    /// The keyboard shelf for EVERY slot (key → the controls it drives, plus
+    /// the summary sentence), keyed by slot number as a string because it
+    /// crosses JSON. Composed once, in Rust (`render_map::shelf_views`), and
+    /// rendered verbatim by the island's list — the parity suite caught the
+    /// previous shape, where the SSR paint said "No bound keys yet" and the
+    /// client rebuilt the shelf imperatively on adoption.
+    #[serde(default)]
+    pub shelf: std::collections::BTreeMap<String, ShelfView>,
+}
+
+/// One slot's keyboard shelf: the summary line + one row per bound key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShelfView {
+    pub summary: String,
+    pub keys: Vec<ShelfKeyRow>,
+}
+
+/// One bound physical key on the shelf, display-ready. The island binds these
+/// fields as direct member reads; nothing is derived client-side.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShelfKeyRow {
+    pub key: String,
+    /// The controls it drives, joined "|" — the button's `data-controls`.
+    pub controls: String,
+    pub title: String,
+    pub use_label: String,
 }
 
 /// What `GET /api/check` serves AND what the button-check island's props carry
@@ -3090,6 +3116,99 @@ fn hidden_when_empty(text: &str, class: &str) -> String {
         format!("{class} dv-hide")
     } else {
         class.to_owned()
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// /workspace — the Nocturne workspace shell (M0 skeleton)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// What `GET /api/workspace` serves AND what the workspace island's props
+/// carry — the same one-struct-one-serializer rule as [`StatusPayload`],
+/// parity pinned in `render_workspace.rs`.
+///
+/// M0 is the frame of the screen that will absorb `/start`, `/map` and `/`:
+/// the payload carries the daemon-held draft and the session, and every
+/// sentence the page shows lives in [`WorkspaceDerived`] — composed once, in
+/// Rust, exactly as [`ProfilesDerived`] and [`SetupLines`] are. The island
+/// copies fields and derives nothing, so the SSR paint and the 2 s poll can
+/// never disagree.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePayload {
+    /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
+    /// not a file. Its own `reachable`/`error` fields say when there is none.
+    pub staged: ksx_api::StagedSetupView,
+    pub session: crate::control::SessionView,
+    /// Every displayed string and every `show:` branch, computed once —
+    /// recomputed from the fields above by [`Self::derived`]; never assembled
+    /// by hand.
+    #[serde(default)]
+    pub view: WorkspaceDerived,
+}
+
+impl WorkspacePayload {
+    /// Fill [`Self::view`] from the raw provider data. Every producer of a
+    /// payload calls this — the page render and `GET /api/workspace` share one
+    /// collector — so the server paint and the poll are the same bytes by
+    /// construction rather than by two implementations agreeing.
+    #[must_use]
+    pub fn derived(mut self) -> Self {
+        self.view = WorkspaceDerived::of(&self);
+        self
+    }
+}
+
+/// Everything the workspace SHOWS that is not verbatim provider data. The
+/// island reads these fields and renders them; it derives nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDerived {
+    /// The stage card's one customer sentence for the session state.
+    pub state_detail: String,
+    /// The Keyboard section's one line: the staged board's LABEL
+    /// (`FIRST-RUN.md` §5 — the label is the identifier on screen), or the
+    /// honest empty/unreadable sentence.
+    pub device_line: String,
+    /// The Virtual-controllers section's one line.
+    pub rack_line: String,
+    pub pill_running: bool,
+    pub pill_idle: bool,
+    pub pill_down: bool,
+}
+
+impl WorkspaceDerived {
+    fn of(p: &WorkspacePayload) -> Self {
+        Self {
+            state_detail: session_play_status(&p.session),
+            device_line: workspace_device_line(&p.staged),
+            rack_line: workspace_rack_line(&p.staged),
+            pill_running: p.session.reachable && p.session.running,
+            pill_idle: p.session.reachable && !p.session.running,
+            pill_down: !p.session.reachable,
+        }
+    }
+}
+
+/// A failed READ is not an absence (`docs/SURFACES.md` §1b): an unreachable
+/// draft says so, and never renders as "No keyboard chosen yet" — which is
+/// advice, and would be the wrong advice.
+fn workspace_device_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return "The draft could not be read. Reopen ksx and try again.".to_owned();
+    }
+    match &staged.device {
+        Some(device) => device.label.clone(),
+        None => "No keyboard chosen yet.".to_owned(),
+    }
+}
+
+fn workspace_rack_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return "Not readable right now.".to_owned();
+    }
+    match staged.slots.len() {
+        0 => "No controllers staged yet.".to_owned(),
+        1 => "1 controller staged.".to_owned(),
+        n => format!("{n} controllers staged."),
     }
 }
 

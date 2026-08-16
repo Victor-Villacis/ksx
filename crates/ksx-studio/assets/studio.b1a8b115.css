@@ -85,6 +85,14 @@
   --ctl-h: 2.25rem; /* 36 — the default */
   --ctl-h-lg: 2.75rem; /* 44 — the primary action of a screen */
 
+  /* ── Workspace geometry (§8): the Nocturne shell's frame. Dimensions, not
+     colours, so no contrast entry — but they are tokens for the same reason
+     every size is: the three-pane grid, the collapse rails and the coarse
+     re-ladder all read ONE declaration. ─────────────────────────────────── */
+  --tbar-h: 52px; /* title bar */
+  --pane-l: 272px; /* left pane — keyboard + player rack */
+  --pane-r: clamp(300px, 24%, 368px); /* right pane — binding list */
+
   /* ── Motion: fast, few, purposeful. ──────────────────────────────────── */
   --dur-1: 90ms; /* state change on an element under the cursor */
   --dur-2: 150ms; /* something appearing */
@@ -571,6 +579,13 @@ header.top {
 }
 
 .workflow-link {
+  /* The containing block for the visually-hidden .workflow-detail below.
+     Without it the absolute 1px span anchors to the PAGE at its static x —
+     which, on the phone rail (a horizontal scroll container), is past the
+     viewport edge, so the whole document grew sideways by exactly one
+     invisible pixel's position (563px at 390). Measured by the visual-smoke
+     overflow gate. */
+  position: relative;
   gap: var(--sp-2);
 }
 
@@ -5801,5 +5816,146 @@ a.strow:hover {
 @media (max-width: 45rem) {
   .capture-form .btn {
     width: 100%;
+  }
+}
+
+/* ═══ §8 SCREEN — WORKSPACE (M0 skeleton) ═════════════════════════════════
+   The Nocturne three-pane shell the v0.5 redesign grows into: title bar,
+   left pane (keyboard + player rack), center stage, right pane (bindings).
+   M0 renders the frame with honest placeholder content; the panes fill in
+   over M2–M4 and the route becomes "/" at the cutover. Geometry tokens
+   (--tbar-h, --pane-l, --pane-r) live in §1. */
+
+.wstbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: var(--tbar-h);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wstag {
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.wstbar-spring {
+  flex: 1;
+}
+
+.wsmain {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--pane-l) minmax(0, 1fr) var(--pane-r);
+  align-items: start;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+}
+
+.wspane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+
+.wskicker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* The kicker's trailing hairline — a Nocturne signature carried by the
+   heading itself, so every section gets it without a second element. */
+.wskicker::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.wsline {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.wsstage-col {
+  min-width: 0;
+}
+
+.wsstage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 40vh;
+  padding: var(--sp-8) var(--sp-4);
+  text-align: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+
+.wsstate {
+  font-size: var(--fs-xl);
+  color: var(--text-primary);
+}
+
+.wsnote {
+  max-width: 52ch;
+  font-size: var(--fs-sm);
+  color: var(--text-tertiary);
+  text-wrap: pretty;
+}
+
+/* The dashed empty state IS the pane's action (an empty state names what
+   could go there and is itself the affordance). Selection tint on hover —
+   identity, not accent, because the link leads to the draft's own editor. */
+.wsempty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--ctl-h-lg);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--r-md);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: center;
+  text-decoration: none;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+
+.wsempty:hover {
+  background: var(--sel-tint);
+  border-color: var(--cool-line);
+  color: var(--text-primary);
+}
+
+.wsempty:active {
+  background: var(--surface-hover);
+}
+
+@media (max-width: 68rem) {
+  .wsmain {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

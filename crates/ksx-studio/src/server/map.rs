@@ -37,6 +37,7 @@ pub(super) async fn collect_map(
                 selected: number,
                 macros: crate::snapshot::MacroSnapshot::unavailable(&reason),
                 macro_selected: macro_selected.unwrap_or_default(),
+                shelf: Default::default(),
             };
         }
         let selected = selected
@@ -74,9 +75,18 @@ pub(super) async fn collect_map(
             selected,
             macros,
             macro_selected: macro_selected.unwrap_or_default(),
+            shelf: Default::default(),
         }
     })
     .await
+    .map(|mut payload| {
+        // The shelf is composed from whatever mapper this collect produced —
+        // saved, staged, or the unavailable sentinel (whose empty slot list
+        // yields an empty shelf). One composition site, so the page render and
+        // `/api/map` cannot disagree.
+        payload.shelf = crate::render_map::shelf_views(&payload.mapper);
+        payload
+    })
     .unwrap_or_else(|_| MapPayload {
         target: target.to_owned(),
         mapper: crate::snapshot::MapperSnapshot::unavailable("mapper collection panicked"),
@@ -85,6 +95,7 @@ pub(super) async fn collect_map(
         selected: 0,
         macros: crate::snapshot::MacroSnapshot::unavailable("mapper collection panicked"),
         macro_selected: String::new(),
+        shelf: Default::default(),
     })
 }
 

@@ -171,9 +171,16 @@ const [feedLine, setFeedLine] = createSignal("");
 const [lossLine, setLossLine] = createSignal("");
 const [offPanelLine, setOffPanelLine] = createSignal("");
 
-const [chips, setChips] = createList<ControlChip>([]);
-const [emptyPlayers, setEmptyPlayers] = createList<EmptyPlayerRow>([]);
-const [keyRows, setKeyRows] = createList<KeyRow>([]);
+// List STATE is a `createSignal` holding an array — `createList` is the DOM
+// helper that RENDERS one (function source + key + row body) and lives only
+// in the tree below. Declaring state with `createList([])` type-checks (the
+// generics are loose) and then throws "e is not a function" inside the first
+// list effect at activation, which left this whole page stuck at
+// data-forma-status="pending" — no live echo, ever, with SSR looking fine.
+// The visual-smoke suite is the gate that catches this class.
+const [chips, setChips] = createSignal<ControlChip[]>([]);
+const [emptyPlayers, setEmptyPlayers] = createSignal<EmptyPlayerRow[]>([]);
+const [keyRows, setKeyRows] = createSignal<KeyRow[]>([]);
 
 const [live, setLive] = createSignal(false);
 const [feedDown, setFeedDown] = createSignal(false);
@@ -424,7 +431,11 @@ export function CheckIsland() {
       "section",
       { class: "card feedcard" },
       h("h2", null, "Live input"),
-      h("p", { class: "dvalue" }, () => feedLine()),
+      // CONNECTION CHATTER (`data-live-chatter`): the stream is opened by
+      // the browser, so this line's value is client-owned by nature — the
+      // parity suite exempts exactly these marked nodes. See MapIsland's
+      // map-live-status note.
+      h("p", { class: "dvalue", "data-live-chatter": "" }, () => feedLine()),
       h("p", { class: "sub" }, () => sessionLine()),
       h("p", { class: "sub" }, () => feedHint()),
     ),

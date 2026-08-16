@@ -1306,7 +1306,7 @@ mod tests {
         );
         assert!(
             out.html.contains(r#"href="/map?target=stage&amp;slot=1""#)
-                && out.html.contains("Choose controls"),
+                && out.html.contains("Map controls"),
             "the link must target the staged mapper: {}",
             out.html
         );
@@ -1455,11 +1455,10 @@ mod tests {
     /// pre-selected answer — which is the version this test exists to fail.
     fn blocking_card(html: &str) -> &str {
         let start = html
-            .find("Freeze this keyboard, or split it?")
+            .find("Should this keyboard keep typing?")
             .expect("the question's heading");
         let end = html[start..]
-            .find("4 &middot; Play")
-            .or_else(|| html[start..].find("4 · Play"))
+            .find("Save it for later or start playing now")
             .map(|at| start + at)
             .unwrap_or(html.len());
         &html[start..end]

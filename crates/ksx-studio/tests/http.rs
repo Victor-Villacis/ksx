@@ -2252,7 +2252,7 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
         ),
         (
             "/map",
-            "Controls need the background helper",
+            "Mapping needs the background helper",
             "Close and reopen ksx",
         ),
     ] {
@@ -3532,7 +3532,7 @@ fn every_page_links_to_the_device_picker() {
         let page = get(addr, route);
         let body = body_of(&page);
         assert!(
-            body.contains(r#"href="/start""#),
+            body.contains(r#"href="/start#keyboard""#),
             "{route} has no link to the device picker: {body}"
         );
     }
@@ -4198,20 +4198,22 @@ fn every_page_links_to_every_other_page() {
     ] {
         let response = get(addr, route);
         let body = body_of(&response);
-        assert!(body.contains(r#"href="/start""#), "{route}: {body}");
-        assert!(body.contains(r#">Setup<"#), "{route}: {body}");
-        assert!(body.contains(r#">Controls<"#), "{route}: {body}");
+        assert!(body.contains(r#"href="/start#keyboard""#), "{route}: {body}");
+        assert!(body.contains(r#">Keyboard<"#), "{route}: {body}");
+        assert!(body.contains(r#">Mapping<"#), "{route}: {body}");
         assert!(body.contains(r#"href="/check""#), "{route}: {body}");
-        assert!(body.contains(r#">Test<"#), "{route}: {body}");
+        assert!(body.contains(r#">Test inputs<"#), "{route}: {body}");
         if route == "/map" {
             assert!(
-                body.contains(r#"<span class="navlink on" aria-current="page">Controls</span>"#),
-                "the active Controls stage must preserve mapper context: {body}"
+                body.contains(
+                    r#"<span class="navlink workflow-link on" aria-current="page"><span class="workflow-num">3</span>Mapping</span>"#
+                ),
+                "the active Mapping stage must preserve mapper context: {body}"
             );
         } else {
             assert!(
-                body.contains(r#"href="/map">Controls"#),
-                "{route} cannot reach Controls: {body}"
+                body.contains(r#"href="/map""#),
+                "{route} cannot reach Mapping: {body}"
             );
         }
     }
@@ -4696,7 +4698,7 @@ fn the_existing_pages_link_to_setup() {
     for path in ["/", "/map"] {
         let body = body_of(&get(addr, path)).to_owned();
         assert!(
-            body.contains(r#"href="/start">Setup"#),
+            body.contains(r#"href="/start#keyboard""#),
             "{path} must reach the product Setup flow from its nav: {body}"
         );
     }
@@ -5134,10 +5136,10 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let unavailable = rendered_body(&get(unavailable, "/check"));
     assert!(
-        unavailable.contains("Controls could not be checked"),
+        unavailable.contains("Mappings could not be checked"),
         "{unavailable}"
     );
-    assert!(unavailable.contains("Open Setup"), "{unavailable}");
+    assert!(unavailable.contains("Open setup"), "{unavailable}");
     assert!(!unavailable.contains("ksx preset list"), "{unavailable}");
 
     let empty = start_server_with_status(
@@ -5152,7 +5154,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let empty = rendered_body(&get(empty, "/check"));
     assert!(empty.contains("No controller is ready to test"), "{empty}");
-    assert!(empty.contains("Add a controller in Setup"), "{empty}");
+    assert!(empty.contains("Add a controller in setup"), "{empty}");
 
     let zero = start_server_with_status(
         Arc::new(ScriptedControl::new(false)),

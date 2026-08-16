@@ -86,6 +86,7 @@ import {
   showLearnMode,
   showLearnTurbo,
   showListening,
+  syncShelf,
   toggleSelected,
   turboHzOf,
   updateCountdown,
@@ -221,59 +222,18 @@ async function poll(): Promise<void> {
   paintMapLiveState();
 }
 
-/** Render the compact, real keyboard inventory from the selected slot's
- * authoritative binding table. This is a projection only: writes still go
- * through the existing mapping verbs, and no second model is introduced. */
+/** Re-point the keyboard shelf at the selected slot. The rows and the summary
+ * are SERVED (`MapPayload.shelf`, composed in render_map.rs) and rendered by
+ * the island's own list — no derivation is left here, which is what keeps the
+ * SSR shelf and the hydrated shelf identical (the parity suite caught the
+ * previous shape). What remains client-owned is the transient trace, which
+ * resets on every re-sync exactly as it did when the rows were rebuilt here. */
 let tracedInventoryKey: string | null = null;
 
 function renderKeyboardInventory(): void {
-  const inventory = document.getElementById("keyboard-inventory");
-  const summary = document.getElementById("keyboard-shelf-summary");
-  if (!inventory || !summary) return;
-
-  const slot = currentSlot();
-  const byKey = new Map<string, string[]>();
-  if (slot) {
-    for (const [control, keys] of Object.entries(slot.bindings)) {
-      for (const key of keys) {
-        const controls = byKey.get(key) ?? [];
-        if (!controls.includes(control)) controls.push(control);
-        byKey.set(key, controls);
-      }
-    }
-  }
-
+  syncShelf();
   tracedInventoryKey = null;
   clearInventoryTrace();
-  inventory.replaceChildren();
-  const keys = Array.from(byKey.keys()).sort((a, b) => a.localeCompare(b, "en"));
-  summary.textContent =
-    keys.length === 0
-      ? "No bound keys yet"
-      : `${keys.length} physical ${keys.length === 1 ? "key" : "keys"} bound`;
-
-  for (const key of keys) {
-    const controls = byKey.get(key) ?? [];
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "inventory-key";
-    button.dataset.inventoryKey = key;
-    button.dataset.controls = controls.join("|");
-    button.setAttribute("aria-pressed", "false");
-    button.title = `${key} drives ${controls.map(identityLabel).join(", ")}`;
-
-    const keyName = document.createElement("span");
-    keyName.className = "inventory-key-name";
-    keyName.textContent = key;
-    const use = document.createElement("span");
-    use.className = "inventory-key-use";
-    use.textContent =
-      controls.length === 1
-        ? identityLabel(controls[0])
-        : `${controls.length} controls`;
-    button.append(keyName, use);
-    inventory.append(button);
-  }
 }
 
 function clearInventoryTrace(): void {

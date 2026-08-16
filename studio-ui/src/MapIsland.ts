@@ -154,6 +154,25 @@ export interface MacroSnapshot {
 
 /** What GET /api/map serves and what the island props carry — `MapPayload`
  *  in snapshot.rs; parity pinned there. */
+/** One bound physical key on the keyboard shelf — composed in Rust
+ *  (`render_map.rs::shelf_views`), rendered verbatim by the island's list.
+ *  Nothing here is derived client-side, which is what keeps the SSR shelf and
+ *  the hydrated shelf identical (the parity suite caught the previous shape:
+ *  a static "No bound keys yet" the client rebuilt imperatively on adoption). */
+export interface ShelfKeyRow {
+  key: string;
+  /** The controls it drives, joined "|" — the button's `data-controls`. */
+  controls: string;
+  title: string;
+  use_label: string;
+}
+
+/** One slot's keyboard shelf: the summary line + one row per bound key. */
+export interface ShelfView {
+  summary: string;
+  keys: ShelfKeyRow[];
+}
+
 export interface MapPayload {
   mapper: MapperSnapshot;
   session: SessionView;
@@ -165,6 +184,10 @@ export interface MapPayload {
   /** `stage` edits the in-memory first-run setup; `saved` edits a stored
    * controller layout. Older payloads omit this and therefore mean saved. */
   target?: string;
+  /** The keyboard shelf for EVERY slot, keyed by slot number as a string
+   *  (it crosses JSON). Older payloads omit it; the shelf then renders its
+   *  authored empty state. */
+  shelf?: Record<string, ShelfView>;
 }
 
 /** v11's grid rows. One list item per STEP: its number, its duration in the
@@ -556,6 +579,10 @@ const [selBar, setSelBar] = createSignal(false);
 const [slotTabs, setSlotTabs] = createSignal<SlotTab[]>([]);
 const [zones, setZones] = createSignal<ZoneRow[]>([]);
 const [legendRows, setLegendRows] = createSignal<LegendRow[]>([]);
+/** The keyboard shelf — SERVED rows and summary (payload.shelf), never
+ *  derived here. `syncShelf` picks the selected slot's view. */
+const [shelfSummary, setShelfSummary] = createSignal("No bound keys yet");
+const [inventoryKeys, setInventoryKeys] = createSignal<ShelfKeyRow[]>([]);
 /** The toast stack, newest FIRST. Client-only: SSR paints an empty list (the
  *  `<!--f:lN-->` markers are still emitted, which is what lets the adoption
  *  path insert into it later), so no-JS users keep the server-rendered flash
@@ -774,6 +801,16 @@ export function currentSlot(): MapperSlot | null {
     lastPayload.mapper.slots[0] ??
     null
   );
+}
+
+/** Point the shelf signals at the SELECTED slot's served view. Copying, not
+ *  deriving: the rows and the summary sentence are composed once, in Rust
+ *  (`shelf_views`), so the first paint and every poll agree by construction. */
+export function syncShelf(): void {
+  const slot = currentSlot();
+  const view = slot ? lastPayload?.shelf?.[String(slot.number)] : undefined;
+  setShelfSummary(view?.summary ?? "No bound keys yet");
+  setInventoryKeys(view?.keys ?? []);
 }
 
 /** Whether the outbound live feed describes the setup this mapper is showing.
@@ -1188,6 +1225,7 @@ export function applyMap(p: MapPayload): void {
   if (p.session.reachable && p.session.running) {
     paused = false;
   }
+  syncShelf();
 
   setSlotTabs(
     p.mapper.slots.map((s) => ({
@@ -4145,9 +4183,30 @@ export function MapIsland() {
             h("p", { class: "step-kicker" }, "Physical keyboard"),
             h("h2", { id: "keyboard-shelf-title" }, "Keys in this controller layout"),
           ),
-          h("p", { class: "keyboard-shelf-summary", id: "keyboard-shelf-summary", "aria-live": "polite" }, "No bound keys yet"),
+          h("p", { class: "keyboard-shelf-summary", id: "keyboard-shelf-summary", "aria-live": "polite" }, () => shelfSummary()),
         ),
-        h("div", { class: "keyboard-inventory", id: "keyboard-inventory", role: "group", "aria-label": "Bound keyboard keys" }),
+        h(
+          "div",
+          { class: "keyboard-inventory", id: "keyboard-inventory", role: "group", "aria-label": "Bound keyboard keys" },
+          createList(
+            () => inventoryKeys(),
+            (r) => r.key + "|" + r.controls + "|" + r.use_label,
+            (r) =>
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "inventory-key",
+                  "data-inventory-key": r.key,
+                  "data-controls": r.controls,
+                  title: r.title,
+                  "aria-pressed": "false",
+                },
+                h("span", { class: "inventory-key-name" }, r.key),
+                h("span", { class: "inventory-key-use" }, r.use_label),
+              ),
+          ),
+        ),
         h("p", { class: "keyboard-shelf-note" }, "Select a keycap to trace every controller input it drives. Bindings shown together are alternatives—not a chord."),
       ),
       // ── THE CONTROLLER (huge). Art + zone layer per persona. ──────────
@@ -4171,6 +4230,13 @@ export function MapIsland() {
                 class: "map-live-status",
                 id: "map-live-status",
                 "aria-hidden": "true",
+                // CONNECTION CHATTER: this text is client-owned by nature —
+                // the stream is opened by the browser, so the server can
+                // never truthfully say "live" or "reconnecting". The marker
+                // is the contract the SSR/hydration parity suite keys off to
+                // exempt exactly these nodes (and nothing else); durable
+                // announcements go through the separate polite announcer.
+                "data-live-chatter": "",
               },
               "Live echo starts after Play",
             ),
@@ -4180,6 +4246,12 @@ export function MapIsland() {
               role: "status",
               "aria-live": "polite",
               "aria-atomic": "true",
+              // Feed-state too (see map-live-status above): the announcer is
+              // deliberately EMPTY server-side — a live region announces
+              // CHANGES, and the first change is the browser's own connection
+              // resolving, which no SSR paint can know. Same parity exemption,
+              // same contract.
+              "data-live-chatter": "",
             }),
           ),
           h(

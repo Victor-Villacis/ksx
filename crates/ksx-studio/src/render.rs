@@ -1352,16 +1352,30 @@ mod tests {
             "{}",
             out.html
         );
-        // The customer rail is the three-stage Setup → Controls → Test flow.
-        // Pad maintenance remains discoverable from the relevant status card,
-        // without becoming a fourth primary-workflow stage.
-        assert!(out.html.contains(r#"href="/start">Setup"#), "{}", out.html);
-        assert!(out.html.contains(r#"href="/map">Controls"#), "{}", out.html);
-        assert!(out.html.contains(r#"href="/check">Test"#), "{}", out.html);
+        // The customer rail is the four-stage guided workflow (Keyboard →
+        // Controller → Mapping → Play, this page current). Pad maintenance
+        // remains discoverable from the Tools menu and the pad card, without
+        // becoming a fifth primary-workflow stage.
+        assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
         assert_eq!(
             out.html.matches(r#"href="/pads""#).count(),
-            1,
-            "the pad-card maintenance link must remain discoverable: {}",
+            2,
+            "the Tools menu and the pad card each keep pad maintenance \
+             discoverable: {}",
             out.html
         );
     }

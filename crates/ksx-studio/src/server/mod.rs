@@ -46,6 +46,7 @@ mod session;
 mod setup;
 mod start;
 mod status;
+mod workspace;
 
 use check::*;
 use devices::*;
@@ -56,6 +57,7 @@ use session::*;
 use setup::*;
 use start::*;
 use status::*;
+use workspace::*;
 
 use std::net::SocketAddr;
 
@@ -89,13 +91,16 @@ use crate::render_setup::render_setup;
 
 use crate::render_start::render_start;
 
+use crate::render_workspace::render_workspace;
+
 use crate::snapshot::{
     CheckPayload, DevicesPayload, MapPayload, PadsPayload, ProfilesPayload, SetupPayload,
-    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource,
+    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource, WorkspacePayload,
 };
 
 struct AppState {
     page: EmbeddedPage,
+    workspace_page: EmbeddedPage,
     map_page: EmbeddedPage,
     check_page: EmbeddedPage,
     pads_page: EmbeddedPage,
@@ -153,6 +158,7 @@ pub fn serve(
         return Err(StudioError::NonLoopbackBind { bind });
     }
     let page = EmbeddedPage::load("/")?;
+    let workspace = EmbeddedPage::load("/workspace")?;
     let mapper = EmbeddedPage::load("/map")?;
     let check = EmbeddedPage::load("/check")?;
     let pads = EmbeddedPage::load("/pads")?;
@@ -162,6 +168,7 @@ pub fn serve(
     let start = EmbeddedPage::load("/start")?;
     let state = Arc::new(AppState {
         page,
+        workspace_page: workspace,
         map_page: mapper,
         check_page: check,
         pads_page: pads,
@@ -190,6 +197,12 @@ pub fn serve(
         let app = Router::new()
             .route("/", get(status_page))
             .route("/api/status", get(api_status))
+            // ── /workspace — the Nocturne workspace shell (M0) ────────────
+            // Two read routes. The editing verbs arrive with M2–M4 as
+            // `/workspace/*` form twins beside `/api/*` JSON routes, the
+            // same two-lane shape `/map` carries below.
+            .route("/workspace", get(workspace_page))
+            .route("/api/workspace", get(api_workspace))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))
             .route("/config/reload", post(config_reload))

@@ -61,7 +61,7 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage};
-use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot};
+use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot, ShelfKeyRow, ShelfView};
 
 /// List slot names (binding-derived, compiler 0.2.0). The zones list appears
 /// TWICE — once inside each stage show (xbox / ds4) — so the second
@@ -95,6 +95,7 @@ const LIST_SLOT_MACRO_GROUPS: &str = "list:macroGroups:array";
 const LIST_SLOT_MACRO_COLS: &str = "list:macroCols:array";
 const LIST_SLOT_MACRO_ROWS: &str = "list:macroRows:array";
 const LIST_SLOT_MACRO_CELLS: &str = "list:macroCells:array";
+const LIST_SLOT_INVENTORY: &str = "list:inventoryKeys:array";
 
 #[cfg(test)]
 const ISLAND_COMPONENT: &str = "MapIsland";
@@ -494,6 +495,103 @@ fn legend_group(z: &Zone) -> &'static str {
 /// shared-key badge calls a co-bound control.
 fn legend_label(z: &Zone) -> String {
     format!("{}{}", legend_group(z), z.label)
+}
+
+/// Mirrors MapIsland.ts `identityLabel`: the control in the words the
+/// selected persona wears, with macro triggers and unknown extension
+/// functions humanized the same way.
+fn identity_label(persona: &str, fn_name: &str) -> String {
+    if let Some(name) = fn_name.strip_prefix("macro.") {
+        return format!("the “{name}” macro trigger");
+    }
+    zones_for(persona)
+        .iter()
+        .find(|z| z.fn_name == fn_name)
+        .map_or_else(|| fn_name.to_owned(), legend_label)
+}
+
+/// **The keyboard shelf, for every slot** (`MapPayload::shelf`): the selected
+/// slot's binding table inverted to key → controls, with the summary sentence
+/// and each row's display strings composed HERE and nowhere else. The island
+/// renders these rows verbatim and `map.ts` merely points the shelf at the
+/// client's selected slot, so the SSR paint, the poll and a client-side slot
+/// switch all show the same bytes (docs/SURFACES.md §1; the parity suite is
+/// the gate, and it caught the imperative predecessor of this function).
+///
+/// Every slot rather than only `payload.selected`, because slot switching is
+/// client-side between polls and a shelf that could only follow the server's
+/// selection would go stale for exactly the click it exists to serve.
+pub(crate) fn shelf_views(
+    mapper: &crate::snapshot::MapperSnapshot,
+) -> std::collections::BTreeMap<String, ShelfView> {
+    let mut shelf = std::collections::BTreeMap::new();
+    for slot in &mapper.slots {
+        // `bindings` is a BTreeMap, so controls arrive alphabetically and the
+        // per-key control list inherits that stable order.
+        let mut by_key: Vec<(String, Vec<String>)> = Vec::new();
+        for (control, keys) in &slot.bindings {
+            for key in keys {
+                match by_key.iter_mut().find(|(k, _)| k == key) {
+                    Some((_, controls)) => {
+                        if !controls.iter().any(|c| c == control) {
+                            controls.push(control.clone());
+                        }
+                    }
+                    None => by_key.push((key.clone(), vec![control.clone()])),
+                }
+            }
+        }
+        by_key.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let summary = match by_key.len() {
+            0 => "No bound keys yet".to_owned(),
+            1 => "1 physical key bound".to_owned(),
+            n => format!("{n} physical keys bound"),
+        };
+        let keys = by_key
+            .into_iter()
+            .map(|(key, controls)| {
+                let named: Vec<String> = controls
+                    .iter()
+                    .map(|c| identity_label(&slot.persona, c))
+                    .collect();
+                ShelfKeyRow {
+                    title: format!("{key} drives {}", named.join(", ")),
+                    use_label: if controls.len() == 1 {
+                        named[0].clone()
+                    } else {
+                        format!("{} controls", controls.len())
+                    },
+                    controls: controls.join("|"),
+                    key,
+                }
+            })
+            .collect();
+        shelf.insert(slot.number.to_string(), ShelfView { summary, keys });
+    }
+    shelf
+}
+
+/// The selected slot's shelf rows as the list slot's array value.
+fn inventory_rows(payload: &MapPayload, selected: Option<&MapperSlot>) -> SlotValue {
+    let rows = selected
+        .and_then(|slot| payload.shelf.get(&slot.number.to_string()))
+        .map(|view| view.keys.as_slice())
+        .unwrap_or(&[]);
+    SlotValue::array(
+        rows.iter()
+            .map(|row| {
+                SlotValue::object(vec![
+                    ("key".to_owned(), SlotValue::Text(row.key.clone())),
+                    ("controls".to_owned(), SlotValue::Text(row.controls.clone())),
+                    ("title".to_owned(), SlotValue::Text(row.title.clone())),
+                    (
+                        "use_label".to_owned(),
+                        SlotValue::Text(row.use_label.clone()),
+                    ),
+                ])
+            })
+            .collect(),
+    )
 }
 
 /// Mirrors MapIsland.ts `legendRowsFor`: the bindings legend below the
@@ -916,7 +1014,7 @@ fn reason_line(payload: &MapPayload) -> String {
              changed."
                 .to_owned()
         } else {
-            "Controls are temporarily read-only. Close and reopen ksx, then try again.".to_owned()
+            "Mapping is temporarily read-only. Close and reopen ksx, then try again.".to_owned()
         };
     }
     if payload.session.running {
@@ -2862,6 +2960,9 @@ fn scalar_slots(
     serde_json::json!({
         "rootCls": if selected.is_some() { "studio mapper" } else { "studio mapper mapper-empty" },
         "slotLine": slot_line,
+        "shelfSummary": selected
+            .and_then(|s| payload.shelf.get(&s.number.to_string()))
+            .map_or("No bound keys yet", |view| view.summary.as_str()),
         "sourceLine": if selected.is_none() {
             if payload.mapper.generated_at == "(unavailable)" {
                 "This controller layout needs attention in Setup".to_owned()
@@ -3146,6 +3247,7 @@ fn build_slots(module: &IrModule, payload: &MapPayload, flash: Option<&str>) -> 
         (LIST_SLOT_MACRO_COLS, macro_cols(selected)),
         (LIST_SLOT_MACRO_ROWS, macro_rows(mac, selected, None)),
         (LIST_SLOT_MACRO_CELLS, macro_cells(mac, selected, None)),
+        (LIST_SLOT_INVENTORY, inventory_rows(payload, selected)),
     ] {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
             slots.set(id, value);
@@ -3271,7 +3373,7 @@ mod tests {
     }
 
     pub(super) fn sample() -> MapPayload {
-        MapPayload {
+        let mut payload = MapPayload {
             mapper: MapperSnapshot {
                 generated_at: "2026-08-05 12:00:00 UTC".into(),
                 source: "slots of profile \"Example Launcher\" (games.toml)".into(),
@@ -3300,7 +3402,13 @@ mod tests {
             macros: MacroSnapshot::read("Panel P1", vec![hadouken()]),
             macro_selected: String::new(),
             target: "saved".to_owned(),
-        }
+            shelf: Default::default(),
+        };
+        // The same single composition site production uses (server/map.rs's
+        // collect) — a sample without it would pin an emptier page than the
+        // server ever serves.
+        payload.shelf = shelf_views(&payload.mapper);
+        payload
     }
 
     fn page() -> EmbeddedPage {
@@ -3464,6 +3572,7 @@ mod tests {
             array_slots,
             [
                 LIST_SLOT_TABS,
+                LIST_SLOT_INVENTORY,
                 LIST_SLOT_ZONES,
                 LIST_SLOT_ZONES_2,
                 LIST_SLOT_LEGEND,
@@ -3955,7 +4064,7 @@ mod tests {
         payload.learn = LearnView::unavailable("no daemon control channel");
         let out = render_map(&page(), &payload, None);
         assert!(
-            out.html.contains("Controls are temporarily read-only"),
+            out.html.contains("Mapping is temporarily read-only"),
             "{}",
             out.html
         );
@@ -4144,7 +4253,7 @@ mod tests {
         let out = render_map(&page(), &payload, None);
 
         assert!(
-            out.html.contains("Controls need the background helper"),
+            out.html.contains("Mapping needs the background helper"),
             "the recovery headline is missing: {}",
             out.html
         );
@@ -4159,7 +4268,7 @@ mod tests {
         // Unmissable means BEFORE the content it is about.
         let banner = out
             .html
-            .find("Controls need the background helper")
+            .find("Mapping needs the background helper")
             .expect("banner present");
         let stage = out.html.find("stagecard").expect("stage present");
         assert!(

@@ -73,6 +73,7 @@ const exe = path.join(
  *  exact-target values must survive adoption without a first-paint swap. */
 const ROUTES = [
   "/start",
+  "/workspace",
   "/",
   "/map",
   "/map?slot=1",
@@ -109,6 +110,15 @@ const SNAPSHOT = `(() => {
   //    which is to differ.
   clone.classList.remove("js");
   clone.querySelectorAll(".js").forEach((el) => el.classList.remove("js"));
+  // 3b. CONNECTION CHATTER, by contract. A node marked data-live-chatter
+  //    carries the live feed's own connection state ("connecting…",
+  //    "reconnecting…", "live") — a value the server can never know, because
+  //    the stream is opened by the browser after adoption. The MARKER is the
+  //    decision: only nodes that declare themselves chatter are exempt, their
+  //    presence still compares, and any un-marked sentence that flashes still
+  //    fails. Durable state goes through separate announcers and show pairs,
+  //    which stay fully asserted.
+  clone.querySelectorAll("[data-live-chatter]").forEach((el) => { el.textContent = ""; });
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.
@@ -118,6 +128,15 @@ const SNAPSHOT = `(() => {
   // 6. An EMPTY value attribute the client writes into the form controls it
   //    owns. Empty only — a value the two sides disagree ABOUT still fails.
   html = html.replace(/ value=""/g, "");
+  // 7. <noscript> SUBTREES. With scripting enabled the parser stores noscript
+  //    content as raw TEXT, so the SSR serialization shows escaped markup —
+  //    but adoption rebuilds the island through the DOM API, which bypasses
+  //    the parser and gives noscript real ELEMENT children. Both serialize
+  //    differently while neither can ever paint (scripting is on in both
+  //    captures by definition), so the difference is unobservable and
+  //    by-design. Emptying the wrapper keeps its PRESENCE asserted — a page
+  //    that dropped its noscript block entirely still fails.
+  html = html.replace(/<noscript[^>]*>[\\s\\S]*?<\\/noscript>/g, "<noscript></noscript>");
   return html;
 })()`;
 

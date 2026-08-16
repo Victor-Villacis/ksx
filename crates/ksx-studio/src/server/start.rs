@@ -254,6 +254,13 @@ pub(super) const START_SAVE_ERROR: &str =
 pub(super) const START_PLAY_NOT_READY: &str =
     "error: This setup is not ready to play. Complete the highlighted steps, then try again.";
 
+/// Play blocked by a controller-output problem while Save still works — the
+/// one refusal that must SAY the half that succeeded, or a user with a missing
+/// driver concludes their whole setup is lost.
+pub(super) const START_PLAY_OUTPUT_BLOCKED: &str =
+    "error: This setup is ready to save, and Save still works. Play is blocked until the \
+     highlighted controller-output problem is fixed.";
+
 pub(super) const START_PLAY_ACTIVE: &str =
     "error: The active game could not be replaced. Open Home, stop Play, then try again.";
 
@@ -320,7 +327,7 @@ pub(super) const START_AUTOSTART_STILL_STALE: &str =
 pub(super) const START_AUTOSTART_ERROR: &str =
     "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
 
-pub(super) const START_FLASH_ALLOWLIST: [&str; 34] = [
+pub(super) const START_FLASH_ALLOWLIST: [&str; 35] = [
     START_EDIT_OK,
     START_IDENTIFY_OK,
     START_IDENTIFY_TIMEOUT,
@@ -339,6 +346,7 @@ pub(super) const START_FLASH_ALLOWLIST: [&str; 34] = [
     START_SAVE_NOT_READY,
     START_SAVE_ERROR,
     START_PLAY_NOT_READY,
+    START_PLAY_OUTPUT_BLOCKED,
     START_PLAY_ACTIVE,
     START_PLAY_ERROR,
     START_UNKNOWN_FLASH_ERROR,
@@ -390,7 +398,13 @@ pub(super) fn start_action_flash(
         },
         Err(error) => {
             let lower = error.to_ascii_lowercase();
+            // The prerequisite family: every `setup_prerequisite` sentence
+            // (snapshot.rs) ends "…before saving or playing", which is the
+            // stable half this classifier keys off — matched, never
+            // reflected. The other keywords cover the domain's own commit
+            // refusals when a hand-made POST reaches the daemon anyway.
             let not_ready = lower.contains("not ready")
+                || lower.contains("before saving or playing")
                 || lower.contains("split-or-freeze")
                 || lower.contains("no controls")
                 || lower.contains("no device")
@@ -409,6 +423,10 @@ pub(super) fn start_action_flash(
                 {
                     START_PLAY_ACTIVE
                 }
+                // "ready to save, but…" is `play_status`'s own wording for a
+                // controller-output problem: Save works, Play does not, and
+                // the flash must keep saying both halves.
+                StartAction::Play if lower.contains("ready to save") => START_PLAY_OUTPUT_BLOCKED,
                 StartAction::Play if not_ready => START_PLAY_NOT_READY,
                 StartAction::Play => START_PLAY_ERROR,
             }

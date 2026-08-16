@@ -1673,31 +1673,34 @@ mod tests {
         assert!(out.html.contains(r#"id="__ksx-payload""#), "{}", out.html);
     }
 
-    /// Specialist screens keep the customer rail intact: Setup → Controls →
-    /// Test. Devices remains reachable from the relevant setup affordance, not
-    /// as another primary-workflow stage.
+    /// Specialist screens keep the customer rail intact — the four-stage
+    /// guided workflow — and the Tools menu marks this page as current.
+    /// Devices remains reachable from the relevant setup affordance, not as
+    /// another primary-workflow stage.
     #[test]
     fn the_nav_reaches_every_sibling_page() {
         let page = EmbeddedPage::load("/devices").unwrap();
         let out = render_devices(&page, &cabinet(), None);
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/check">Test</a>"#),
+            out.html.contains(r#"<a href="/devices" aria-current="page">"#),
             "{}",
             out.html
         );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// A running session keeps the devices it already opened. Writing config

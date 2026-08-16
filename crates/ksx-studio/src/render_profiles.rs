@@ -1012,16 +1012,17 @@ mod tests {
     }
 
     /// The nav is static markup per island, so a sibling page is invisible
-    /// until every island lists it. Pin this page's own links.
+    /// until every island lists it. Pin this page's own links: the workflow
+    /// rail plus the Tools menu, which marks this page as current.
     #[test]
     fn the_nav_reaches_the_product_workflow() {
         let out = render_profiles(&page(), &sample(), None);
         let body = ssr_body(&out.html);
-        for route in ["/start", "/map", "/check"] {
+        for route in ["/start#keyboard", "/map", "/check"] {
             assert!(body.contains(&format!(r#"href="{route}""#)), "{body}");
         }
         assert!(body.contains(r#"aria-current="page""#), "{body}");
-        assert!(body.contains(">Games</span>"), "{body}");
+        assert!(body.contains(">Game library</span>"), "{body}");
     }
 
     #[test]

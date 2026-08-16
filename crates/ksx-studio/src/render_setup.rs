@@ -1127,23 +1127,20 @@ mod tests {
         assert!(out.html.contains(r#"href="/devices""#), "{}", out.html);
         assert!(out.html.contains("ksx device pick"), "{}", out.html);
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{}",
             out.html
         );
-        assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/check">Test</a>"#),
-            "{}",
-            out.html
-        );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// Ledger #5's contract: the payload block IS the /api/setup payload.

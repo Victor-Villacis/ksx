@@ -98,28 +98,28 @@ struct CheckEmptyState {
 fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
     if mapper.generated_at == "(unavailable)" || mapper.config_root == "(unavailable)" {
         return Some(CheckEmptyState {
-            heading: "Controls could not be checked",
-            line: "Reopen ksx, then use Setup to confirm a controller and Controls to check its \
+            heading: "Mappings could not be checked",
+            line: "Reopen ksx, then use setup to confirm a controller and Mapping to check its \
                    buttons. Nothing was changed.",
             href: "/start",
-            action: "Open Setup",
+            action: "Open setup",
         });
     }
     if mapper.slots.is_empty() {
         return Some(CheckEmptyState {
             heading: "No controller is ready to test",
-            line: "Add a controller in Setup, then come back to test its buttons.",
+            line: "Add a controller in setup, then come back to test its buttons.",
             href: "/start",
-            action: "Open Setup",
+            action: "Open setup",
         });
     }
     if mapper.slots.iter().all(|slot| slot.bindings.is_empty()) {
         return Some(CheckEmptyState {
             heading: "No controls are ready to test",
-            line: "Open Controls and choose a ready-made layout or add button keys, then come \
+            line: "Open Mapping and choose a ready-made layout or add button keys, then come \
                    back here.",
             href: "/map",
-            action: "Open Controls",
+            action: "Open Mapping",
         });
     }
     None
@@ -202,7 +202,7 @@ fn scalar_slots(payload: &CheckPayload) -> serde_json::Value {
         "emptyHeading": empty.map_or("", |state| state.heading),
         "emptyLine": empty.map_or("", |state| state.line),
         "emptyHref": empty.map_or("/start", |state| state.href),
-        "emptyAction": empty.map_or("Open Setup", |state| state.action),
+        "emptyAction": empty.map_or("Open setup", |state| state.action),
         "feedHint": payload.feed_hint,
         "sessionLine": if payload.session.running {
             "Play is active."
@@ -280,7 +280,7 @@ fn empty_player_values(payload: &CheckPayload) -> SlotValue {
                     (
                         "line".to_owned(),
                         SlotValue::Text(
-                            "Open Controls and choose a ready-made layout or add button keys for \
+                            "Open Mapping and choose a ready-made layout or add button keys for \
                              this player."
                                 .to_owned(),
                         ),
@@ -291,7 +291,7 @@ fn empty_player_values(payload: &CheckPayload) -> SlotValue {
                     ),
                     (
                         "action".to_owned(),
-                        SlotValue::Text("Open Controls".to_owned()),
+                        SlotValue::Text("Open Mapping".to_owned()),
                     ),
                 ])
             })
@@ -561,12 +561,12 @@ mod tests {
         );
         let unavailable_html = rendered(&render_check(&page, &unavailable).html);
         assert!(
-            unavailable_html.contains("Controls could not be checked"),
+            unavailable_html.contains("Mappings could not be checked"),
             "{unavailable_html}"
         );
         assert!(
             unavailable_html.contains(r#"href="/start""#)
-                && unavailable_html.contains("Open Setup"),
+                && unavailable_html.contains("Open setup"),
             "{unavailable_html}"
         );
         assert!(
@@ -582,7 +582,7 @@ mod tests {
             "{empty_html}"
         );
         assert!(
-            empty_html.contains("Add a controller in Setup"),
+            empty_html.contains("Add a controller in setup"),
             "{empty_html}"
         );
 
@@ -594,7 +594,7 @@ mod tests {
             "{zero_html}"
         );
         assert!(
-            zero_html.contains(r#"href="/map""#) && zero_html.contains("Open Controls"),
+            zero_html.contains(r#"href="/map""#) && zero_html.contains("Open Mapping"),
             "{zero_html}"
         );
 
@@ -643,7 +643,7 @@ mod tests {
         assert!(html.contains(r#"data-slot="1""#), "{html}");
         assert!(html.contains("Player 2 has no controls yet"), "{html}");
         assert!(
-            html.contains(r#"href="/map?slot=2""#) && html.contains("Open Controls"),
+            html.contains(r#"href="/map?slot=2""#) && html.contains("Open Mapping"),
             "{html}"
         );
         assert!(
@@ -699,7 +699,7 @@ mod tests {
         for mixed_literal in [
             "has no controls yet",
             "add button keys for this player",
-            "Open Controls",
+            "Open Mapping",
         ] {
             assert!(
                 CHECK_ISLAND_TS.contains(mixed_literal),
@@ -737,22 +737,27 @@ mod tests {
         );
     }
 
-    /// The customer rail is the three-stage Setup → Controls → Test flow, and
-    /// marks this final stage as current.
+    /// The customer rail is the four-stage guided workflow (Keyboard →
+    /// Controller → Mapping → Play), and the Tools menu marks this page as
+    /// current.
     #[test]
     fn the_nav_reaches_every_sibling_page() {
         let page = EmbeddedPage::load("/check").unwrap();
         let html = render_check(&page, &cabinet()).html;
         assert!(
-            html.contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
             "{html}"
         );
         assert!(
-            html.contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{html}"
         );
         assert!(
-            html.contains(r#"<a class="navlink on" href="/check" aria-current="page">Test</a>"#),
+            html.contains(r#"<a href="/check" aria-current="page">"#),
             "{html}"
         );
     }

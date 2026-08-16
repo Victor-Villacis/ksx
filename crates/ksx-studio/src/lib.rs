@@ -104,6 +104,7 @@ mod render_pads;
 mod render_profiles;
 mod render_setup;
 mod render_start;
+mod render_workspace;
 mod server;
 mod snapshot;
 
@@ -116,5 +117,6 @@ pub use server::serve;
 pub use snapshot::{
     CheckPayload, DevicesPayload, MacroSnapshot, MacroStepView, MacroView, MapPayload, MapperSlot,
     MapperSnapshot, PadRow, PadsPayload, ProfileRow, ProfilesPayload, SetupFlags, SetupLines,
-    SetupPayload, SetupRows, SetupSnapshot, StatusSnapshot, StatusSource,
+    SetupPayload, SetupRows, SetupSnapshot, StatusSnapshot, StatusSource, WorkspaceDerived,
+    WorkspacePayload,
 };

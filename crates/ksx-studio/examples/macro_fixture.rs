@@ -197,6 +197,92 @@ impl ControlSource for Store {
         fixture_session()
     }
 
+    /// The staged draft the workspace panes render — a board, two controllers
+    /// (one carrying an order-aware SOCD), the served rosters, and unsaved
+    /// edits — so the visual gate screenshots the pane DOING ITS JOB rather
+    /// than the failed-read fallback, and a reviewer sees the rack, the add
+    /// form, the capture rows and the dirty note in every context.
+    ///
+    /// `KSX_FIXTURE_FIRST=ps` puts the PlayStation controller first, which is
+    /// how a reviewer screenshots the stage's DualShock schematic (the show
+    /// pair follows the first slot's family).
+    fn staged(&self) -> ksx_api::StagedSetupView {
+        let ps_first = std::env::var("KSX_FIXTURE_FIRST").as_deref() == Ok("ps");
+        let persona = |name: &str, label: &str, is_xinput: bool| ksx_api::PersonaOption {
+            name: name.into(),
+            label: label.into(),
+            is_xinput,
+            backend: "vigem".into(),
+            backend_label: "ViGEmBus".into(),
+            instance_limit: None,
+            can_plug: true,
+            gap: None,
+            instead: label.into(),
+            available: true,
+            unavailable_reason: None,
+        };
+        let mut slots = vec![
+            ksx_api::StagedSlotView {
+                number: 1,
+                persona: "xbox360".into(),
+                persona_label: "Xbox 360".into(),
+                is_xinput: true,
+                preset: "Player 1".into(),
+                authoring: None,
+                socd: "last-input".into(),
+                socd_label: "Last press wins".into(),
+                bindings: 14,
+            },
+            ksx_api::StagedSlotView {
+                number: 2,
+                persona: "playstation".into(),
+                persona_label: "PlayStation".into(),
+                is_xinput: false,
+                preset: "Player 2".into(),
+                authoring: None,
+                socd: String::new(),
+                socd_label: String::new(),
+                bindings: 12,
+            },
+        ];
+        if ps_first {
+            slots.reverse();
+            slots[0].number = 1;
+            slots[1].number = 2;
+        }
+        ksx_api::StagedSetupView {
+            reachable: true,
+            error: None,
+            empty: false,
+            device: Some(ksx_api::StagedDeviceView {
+                label: "Ultimarc I-PAC 4".into(),
+                alias: "panel".into(),
+                selector: "usb:d209:0430:00".into(),
+                rung: "model".into(),
+                survives_replug: true,
+                backend: "interception".into(),
+            }),
+            slots,
+            blocking: Some("bound-keys".into()),
+            next_slot: Some(3),
+            next_preset: Some("Player 3".into()),
+            xinput_used: 1,
+            max_slots: 16,
+            max_xinput_slots: 4,
+            personas: vec![
+                persona("xbox360", "Xbox 360", true),
+                persona("playstation", "PlayStation", false),
+            ],
+            layouts: ksx_api::TemplateRow::roster(),
+            default_layout: "arcade-6button".into(),
+            blocking_options: ksx_api::BlockingOption::roster(),
+            socd_options: ksx_api::SocdOption::roster(),
+            dirty: true,
+            origin: "config".into(),
+            ..ksx_api::StagedSetupView::default()
+        }
+    }
+
     fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {
         Ok("running (1 slot(s))".into())
     }

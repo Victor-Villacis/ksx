@@ -5848,13 +5848,29 @@ a.strow:hover {
   flex: 1;
 }
 
-.wsmain {
+/* `.studio.wsroot > .wsmain` (0,3,0) deliberately outranks BOTH base-sheet
+   main rules — the page column `.studio > main` (0,1,1) and the wide-screen
+   twelve-column split `.studio:not(.mapper) > main` (0,2,1): the workspace
+   is a full-bleed three-pane APP FRAME, not a reading column — Nocturne's
+   one structural departure from every other Studio screen. The resets below
+   unwind exactly what those two set (flex column / 74rem / centred, and the
+   12-col grid whose children are forced full-row). */
+.studio.wsroot > .wsmain {
   flex: 1;
   display: grid;
   grid-template-columns: var(--pane-l) minmax(0, 1fr) var(--pane-r);
   align-items: start;
   gap: var(--sp-4);
   padding: var(--sp-4);
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+/* Undo the base sheet's `main > * { grid-column: 1 / -1 }` full-row force —
+   the three panes ARE the columns here. */
+.studio.wsroot > .wsmain > * {
+  grid-column: auto;
 }
 
 .wspane {
@@ -6056,48 +6072,74 @@ a.strow:hover {
   gap: var(--sp-2);
 }
 
-/* ── The pad schematic (Nocturne's 640×400 outline, on the token ladder) ──
+/* ── The stage controllers (vendored silhouettes + our control layer) ─────
    Decorative in M2 (aria-hidden; the caption is the accessible summary).
    Every fill and stroke is a token, so both themes come from the one art —
-   the same rule the vendored realistic art gets from its injected sheet. */
+   the same rule the vendored tile art gets from its injected sheet. The
+   coordinate space is the silhouettes' own (~112 units wide), so stroke
+   widths and font sizes here are in that space, scaled by the box. */
 .wspad {
   width: 100%;
-  max-width: 640px;
+  max-width: 560px;
   height: auto;
-  max-height: 330px;
+  max-height: 340px;
 }
 
 .wspad-shell {
   fill: var(--surface-raised);
-  stroke: var(--border-subtle);
-  stroke-width: 1.5;
+  stroke: var(--border-default);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
 }
 
 .wspad-well {
-  fill: var(--surface-inset);
+  fill: var(--surface-sunken);
   stroke: var(--border-subtle);
-  stroke-width: 1.5;
+  stroke-width: 0.35;
 }
 
 .wspad-zone {
   fill: var(--surface-inset);
   stroke: var(--border-default);
-  stroke-width: 1.5;
+  stroke-width: 0.35;
+  stroke-linejoin: round;
 }
 
 .wspad-stick {
   fill: var(--surface-hover);
   stroke: var(--border-strong);
-  stroke-width: 1.5;
+  stroke-width: 0.4;
+}
+
+.wspad-touch {
+  fill: var(--surface-sunken);
+  stroke: var(--border-subtle);
+  stroke-width: 0.35;
+}
+
+.wspad-petals path {
+  fill: var(--surface-inset);
+  stroke: var(--border-default);
+  stroke-width: 0.35;
+  stroke-linejoin: round;
 }
 
 .wspad-guide {
-  fill: var(--text-tertiary);
+  fill: var(--accent-dim);
+}
+
+/* The PlayStation face shapes: drawn as SHAPES, stroke-only. */
+.wspad-glyph {
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 0.55;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 .wspad-face {
   fill: var(--text-primary);
-  font-size: 14px;
+  font-size: 4.6px;
   font-weight: 600;
   font-family: inherit;
   pointer-events: none;
@@ -6105,13 +6147,14 @@ a.strow:hover {
 
 .wspad-sys {
   fill: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 3.4px;
   font-family: inherit;
+  letter-spacing: 0.02em;
   pointer-events: none;
 }
 
 @media (max-width: 68rem) {
-  .wsmain {
+  .studio.wsroot > .wsmain {
     grid-template-columns: minmax(0, 1fr);
   }
 }

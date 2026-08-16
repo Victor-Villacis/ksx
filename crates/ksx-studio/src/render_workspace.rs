@@ -42,7 +42,7 @@ const ISLAND_COMPONENT: &str = "WorkspaceIsland";
 
 /// How many `createShow` pairs this page has; the layout test pins both the
 /// count and every name.
-const SHOW_COUNT: usize = 11;
+const SHOW_COUNT: usize = 13;
 
 /// `() => wsRackRows()` compiles to `list:wsRackRows:array`. Rename a list
 /// signal in WorkspaceIsland.ts and the layout test fails by name here.
@@ -103,6 +103,8 @@ fn show_values(
         ("show:wsShowDirty", payload.view.show_dirty),
         ("show:wsCanAdd", payload.view.can_add),
         ("show:wsAddFull", payload.view.add_full),
+        ("show:wsPadXbox", payload.view.pad_xbox),
+        ("show:wsPadPs", payload.view.pad_ps),
         ("show:wsFlashOk", flash.is_some() && !flash_err),
         ("show:wsFlashError", flash_err),
     ]
@@ -576,16 +578,27 @@ mod tests {
         assert!(html.contains(r#"href="/map""#), "{html}");
     }
 
-    /// The schematic's caption is the pad's accessible summary — and it says
-    /// so out loud when the art's vocabulary is not the pad's own.
+    /// The stage shows each family's OWN controller: the first slot decides,
+    /// exactly one of the pair renders, and the words on the art follow the
+    /// family (LB/RB vs L1/L2, letters vs shapes). The caption stays the
+    /// accessible summary; it needs no vocabulary caveat any more because the
+    /// art and the words already agree.
     #[test]
-    fn the_pad_caption_summarizes_the_first_controller_honestly() {
+    fn the_stage_shows_the_first_controllers_own_family() {
         let cabinet = cabinet();
         assert_eq!(
             cabinet.view.pad_caption,
             "P1 · Xbox 360 — \"Player 1\", 12 controls bound."
         );
-        // A PlayStation pad first: Sony names, generic outline, said plainly.
+        assert!(cabinet.view.pad_xbox && !cabinet.view.pad_ps);
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let html = rendered(&render_workspace(&page, &cabinet, None).html);
+        assert!(html.contains(r#"class="wspad""#), "{html}");
+        assert!(html.contains(r#"aria-hidden="true""#), "{html}");
+        assert!(html.contains(">LB<") && html.contains(">RT<"), "{html}");
+
+        // A PlayStation pad first: the DualShock renders — touchpad, petals,
+        // shape glyphs, L1/L2 — and the Xbox outline does not.
         let mut flipped = cabinet.clone();
         flipped.staged.slots.reverse();
         flipped.staged.slots[0].number = 1;
@@ -594,19 +607,35 @@ mod tests {
             ..flipped
         }
         .derived();
+        assert!(flipped.view.pad_ps && !flipped.view.pad_xbox);
         assert!(
-            flipped
-                .view
-                .pad_caption
-                .contains("Sony names apply; shown on a generic gamepad outline"),
-            "{}",
+            !flipped.view.pad_caption.contains("generic gamepad outline"),
+            "the caveat retired with the generic outline: {}",
             flipped.view.pad_caption
         );
-        // The schematic itself is decorative and says so.
-        let page = EmbeddedPage::load("/workspace").unwrap();
-        let html = rendered(&render_workspace(&page, &cabinet, None).html);
-        assert!(html.contains(r#"class="wspad""#), "{html}");
-        assert!(html.contains(r#"aria-hidden="true""#), "{html}");
+        let ps_html = rendered(&render_workspace(&page, &flipped, None).html);
+        assert!(
+            ps_html.contains(">L1<") && ps_html.contains(">R2<"),
+            "{ps_html}"
+        );
+        assert!(ps_html.contains("wspad-touch"), "{ps_html}");
+        assert!(ps_html.contains("wspad-glyph"), "{ps_html}");
+        assert!(!ps_html.contains(">LB<"), "{ps_html}");
+
+        // An EMPTY draft still stages a controller outline — the generic
+        // default is the Xbox one, and the caption honestly says nothing.
+        let empty = WorkspacePayload {
+            staged: ksx_api::StagedSetupView {
+                reachable: true,
+                empty: true,
+                ..ksx_api::StagedSetupView::default()
+            },
+            session: idle_session(),
+            view: Default::default(),
+        }
+        .derived();
+        assert!(empty.view.pad_xbox && !empty.view.pad_ps);
+        assert!(empty.view.pad_caption.is_empty());
     }
 
     /// The entry seeds signals from the payload block BEFORE building the

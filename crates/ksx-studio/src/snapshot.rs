@@ -3241,6 +3241,11 @@ pub struct WorkspaceDerived {
     pub show_dirty: bool,
     pub can_add: bool,
     pub add_full: bool,
+    /// Which stage schematic renders: the first controller's FAMILY decides,
+    /// and an empty or unreadable draft shows the Xbox outline as the
+    /// generic default. Exactly one of the pair is ever true.
+    pub pad_xbox: bool,
+    pub pad_ps: bool,
 }
 
 impl WorkspaceDerived {
@@ -3314,6 +3319,14 @@ impl WorkspaceDerived {
                 && staged.next_slot.is_some()
                 && staged.personas.iter().any(|p| p.can_plug && p.available),
             add_full: ready && staged.next_slot.is_none(),
+            pad_ps: staged
+                .slots
+                .first()
+                .is_some_and(|slot| staged.reachable && !slot.is_xinput),
+            pad_xbox: !staged
+                .slots
+                .first()
+                .is_some_and(|slot| staged.reachable && !slot.is_xinput),
         }
     }
 }
@@ -3430,8 +3443,9 @@ fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
 }
 
 /// The schematic's one accessible sentence: which pad it stands for and how
-/// bound it is — and the honesty caption when the vocabulary on the art is
-/// not the pad's own (a PlayStation-family pad on the generic outline).
+/// bound it is. No vocabulary caveat any more — the stage shows each
+/// family's OWN outline (`WorkspaceDerived::pad_ps`), so the art and the
+/// words already agree.
 fn workspace_pad_caption(staged: &ksx_api::StagedSetupView) -> String {
     if !staged.reachable {
         return String::new();
@@ -3439,18 +3453,14 @@ fn workspace_pad_caption(staged: &ksx_api::StagedSetupView) -> String {
     let Some(slot) = staged.slots.first() else {
         return String::new();
     };
-    let mut caption = format!(
+    format!(
         "P{} · {} — \"{}\", {} control{} bound.",
         slot.number,
         slot.persona_label,
         slot.preset,
         slot.bindings,
         if slot.bindings == 1 { "" } else { "s" }
-    );
-    if !slot.is_xinput {
-        caption.push_str(" Sony names apply; shown on a generic gamepad outline.");
-    }
-    caption
+    )
 }
 
 fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {

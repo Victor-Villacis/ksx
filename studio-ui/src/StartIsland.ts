@@ -1668,8 +1668,13 @@ export function StartIsland() {
         createShow(
           () => canDiscard(),
           () =>
+            // A DIV, not a <p>: the HTML parser closes a <p> at a <form>
+            // (forms are flow content), so a form-in-p SSR paint and the
+            // DOM-built hydrated tree disagree about nesting — the exact
+            // flash the parity gate caught the first time a populated stage
+            // reached this show.
             h(
-              "p",
+              "div",
               { class: "pactrow" },
               h(
                 "form",

@@ -33,6 +33,7 @@ pub fn preset(name: &str, entries: Vec<(Key, Binding)>) -> Preset {
         chords: Vec::new(),
         macros: Default::default(),
         turbo: Vec::new(),
+        toggle: Vec::new(),
         protected: false,
     }
 }
@@ -48,6 +49,7 @@ pub fn preset_with_chords(
         chords,
         macros: Default::default(),
         turbo: Vec::new(),
+        toggle: Vec::new(),
         protected: false,
     }
 }
@@ -63,6 +65,7 @@ pub fn preset_with_macros(
         chords: Vec::new(),
         macros,
         turbo: Vec::new(),
+        toggle: Vec::new(),
         protected: false,
     }
 }
@@ -79,6 +82,25 @@ pub fn preset_with_turbo(
         chords,
         macros: Default::default(),
         turbo,
+        toggle: Vec::new(),
+        protected: false,
+    }
+}
+
+pub fn preset_with_toggle(
+    name: &str,
+    entries: Vec<(Key, Binding)>,
+    chords: Vec<ksx_core::Chord>,
+    turbo: Vec<ksx_core::TurboBinding>,
+    toggle: Vec<Binding>,
+) -> Preset {
+    Preset {
+        name: name.to_owned(),
+        entries,
+        chords,
+        macros: Default::default(),
+        turbo,
+        toggle,
         protected: false,
     }
 }

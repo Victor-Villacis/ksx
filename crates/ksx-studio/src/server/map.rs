@@ -286,6 +286,9 @@ pub(super) fn bind_for_target(control: &dyn ControlSource, bind: TargetBind<'_>)
         keys: bind.keys.to_vec(),
         force: bind.force,
         turbo_hz: bind.turbo_hz,
+        // The Studio bind form has no toggle control yet; absent means
+        // "leave any latch as it is", never "clear it".
+        toggle: None,
     })
 }
 

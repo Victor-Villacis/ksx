@@ -824,6 +824,10 @@ pub struct BindOutcome {
     pub turbo_hz: Option<u32>,
     #[serde(default)]
     pub turbo_effective_hz: Option<u32>,
+    /// TOGGLE-HOLD (docs/INPUT-TRANSFORMS.md §2 item 8): the control is now
+    /// latched — press once to hold, press again to release.
+    #[serde(default)]
+    pub toggle: bool,
     pub reloaded: bool,
 }
 
@@ -867,6 +871,7 @@ impl From<MapResponse> for BindOutcome {
             also_drives: response.also_drives,
             turbo_hz: response.turbo_hz,
             turbo_effective_hz: response.turbo_effective_hz,
+            toggle: response.toggle,
             reloaded: response.reloaded,
         }
     }

@@ -442,6 +442,7 @@ mod tests {
             backup: None,
             session_backup: false,
             turbo: BTreeMap::new(),
+            toggle: Default::default(),
             macros_off: false,
         }
     }

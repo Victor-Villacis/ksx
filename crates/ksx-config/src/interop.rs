@@ -531,6 +531,7 @@ mod tests {
                 when: vec!["B".into(), "C".into()],
                 unless: vec!["LeftShift".into()],
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         bindings.insert(
@@ -543,6 +544,7 @@ mod tests {
                     when: vec!["C".into()],
                     unless: Vec::new(),
                     turbo_hz: None,
+                    toggle: None,
                 }),
             ]),
         );
@@ -557,6 +559,7 @@ mod tests {
                 when: vec!["Right".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         // Built by MUTATING a real instance rather than with a struct literal:

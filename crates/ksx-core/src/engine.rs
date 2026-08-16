@@ -268,6 +268,36 @@ struct TurboRt {
     on: bool,
 }
 
+/// One latched endpoint (docs/INPUT-TRANSFORMS.md §2 catalog item 8:
+/// toggle-hold / sticky hold).
+///
+/// A latch is a HOLDER like any other — it presses and releases through
+/// `apply_scan`, joins the all-keys-up and opposite-axis tables, and batches
+/// its deltas with everything else. What makes it a latch is only that its
+/// held bit is `latched` instead of "a key is down": the sources FLIP it on
+/// their rising edge and are otherwise out of the picture, which is what lets
+/// the player let go while the endpoint stays held.
+///
+/// Deliberately timer-free: unlike turbo there is no phase to schedule, so
+/// `Timers`/`TimerKind` are untouched and a latch costs the tick path nothing.
+#[derive(Clone, Debug)]
+struct ToggleRt {
+    /// The endpoint this latches. Its only driver among binding rows — the
+    /// keys and chords that used to press it directly were rewired into
+    /// `sources` at build time (or, when the endpoint also has a rate, this
+    /// latch itself became the turbo's source: §3a's toggle-turbo).
+    binding: Binding,
+    /// Holders whose RISING edge flips the latch: dense keys and chords.
+    /// Macro steps are never sources — a macro owns its own timeline.
+    sources: SmallVec<[u32; 4]>,
+    /// Was any source driving at the last sync? The edge detector: Windows
+    /// autorepeat re-sends key-down without moving the key SET, so `driving`
+    /// stays true across repeats and the latch flips exactly once per press —
+    /// the same reason macros read `edge` (see `handle_at`).
+    source_was: bool,
+    latched: bool,
+}
+
 struct SlotRuntime {
     number: u8,
     /// Index into `Engine::devices`.
@@ -335,8 +365,17 @@ struct SlotRuntime {
     /// that dense keys.
     turbo_base: u32,
 
-    /// `false` ⇒ no chords, macros or turbo: this slot takes the pre-chord code
-    /// path end to end, exactly as it did before any of them existed.
+    // ---- toggle runtime ----------------------------------------------------
+    /// Latched endpoints; EMPTY for a slot with none.
+    toggle: Vec<ToggleRt>,
+    /// First toggle holder id (`turbo_base` + turbo count). Holders at or
+    /// above it are latches; the full ordering is dense keys < chords <
+    /// macro steps < turbo < toggle, written down once in [`Self::holder_now`].
+    toggle_base: u32,
+
+    /// `false` ⇒ no chords, macros, turbo or toggles: this slot takes the
+    /// pre-chord code path end to end, exactly as it did before any of them
+    /// existed.
     stateful: bool,
 }
 
@@ -454,6 +493,12 @@ impl SlotRuntime {
         timers: &mut Timers,
     ) {
         self.recompute_chords(down);
+        // After consumption, before turbo: a latch's sources are dense keys
+        // and chords, both settled by now — and a latch can itself be a turbo
+        // SOURCE (§3a's toggle-turbo), so it must have its final answer before
+        // `sync_turbo` asks. Whatever flips is `mark`ed and joins the same
+        // delta batch as the key press that caused it.
+        self.sync_toggle(down);
         // After consumption, before the scan is built: a turbo endpoint's
         // sources are dense keys and chords, and both have their final answer
         // by now. Whatever this starts or stops is `mark`ed and therefore joins
@@ -575,7 +620,9 @@ impl SlotRuntime {
     /// lets `sync_turbo` ask about a source BEFORE `apply_scan` has written its
     /// bit and still get the same answer.
     fn holder_now(&self, h: u32, down: &[u64]) -> bool {
-        if h >= self.turbo_base {
+        if h >= self.toggle_base {
+            self.toggle[(h - self.toggle_base) as usize].latched
+        } else if h >= self.turbo_base {
             let t = &self.turbo[(h - self.turbo_base) as usize];
             t.running && t.on
         } else if h >= self.macro_base {
@@ -620,7 +667,7 @@ impl SlotRuntime {
         }
     }
 
-    /// Back to "nothing held": chord and macro state included.
+    /// Back to "nothing held": chord, macro, turbo and latch state included.
     fn clear_chord_state(&mut self) {
         for chord in &mut self.chords {
             chord.active = false;
@@ -632,6 +679,10 @@ impl SlotRuntime {
         for t in &mut self.turbo {
             t.running = false;
             t.on = false;
+        }
+        for t in &mut self.toggle {
+            t.latched = false;
+            t.source_was = false;
         }
         self.macro_dirty.clear();
         self.held.iter_mut().for_each(|w| *w = 0);
@@ -960,6 +1011,57 @@ impl SlotRuntime {
         }
         moved
     }
+
+    // ---- toggle --------------------------------------------------------
+    //
+    // docs/INPUT-TRANSFORMS.md §2 item 8. Like the macro and turbo
+    // transitions, nothing here touches `current`: a flip moves the `latched`
+    // bit and `mark`s the holder, and `apply_scan` does the pressing — so a
+    // latch cannot invent a release path of its own.
+
+    /// Flip every latch whose sources ROSE since the last sync.
+    ///
+    /// Called after chord consumption is settled and before `sync_turbo`, so
+    /// a latch that gates a turbo (§3a toggle-turbo) has its final answer
+    /// before the clock asks — and a press that satisfies a guard and the
+    /// flip it causes land in one delta batch.
+    ///
+    /// A latch deliberately survives all-keys-up — press once, WALK AWAY,
+    /// the endpoint stays held; that is the accessibility case the catalog
+    /// item names. The exits still clear it: [`Self::cancel_all_toggle`] runs
+    /// on session stop, device yank and the escape gesture, and a hot swap
+    /// starts fresh tables (latches off) with the neutral deltas released.
+    fn sync_toggle(&mut self, down: &[u64]) {
+        for t in 0..self.toggle.len() {
+            let driving = (0..self.toggle[t].sources.len())
+                .any(|i| self.holder_now(self.toggle[t].sources[i], down));
+            if driving && !self.toggle[t].source_was {
+                self.toggle[t].latched = !self.toggle[t].latched;
+                self.mark(self.toggle_base + t as u32);
+            }
+            self.toggle[t].source_was = driving;
+        }
+    }
+
+    /// Release every latch of this slot — the exits' primitive, exactly as
+    /// [`Self::cancel_all_turbo`] is: a latched button on a pad the player
+    /// has just been disconnected from is the stuck-input failure this
+    /// project refuses to ship.
+    fn cancel_all_toggle(&mut self) -> bool {
+        let mut moved = false;
+        for t in 0..self.toggle.len() {
+            if !self.toggle[t].latched && !self.toggle[t].source_was {
+                continue;
+            }
+            if self.toggle[t].latched {
+                self.mark(self.toggle_base + t as u32);
+                moved = true;
+            }
+            self.toggle[t].latched = false;
+            self.toggle[t].source_was = false;
+        }
+        moved
+    }
 }
 
 fn bit(words: &[u64], k: u32) -> bool {
@@ -1194,6 +1296,33 @@ impl EngineTables {
                     })
                     .collect(),
                 turbo_base: 0,
+                // Latch rows whose endpoint nothing drives are kept (indices
+                // must line up with holder ids) and never run, exactly like a
+                // turbo row on an unbound function. A duplicate endpoint
+                // behaves as one row; validation names both cases.
+                toggle: {
+                    let mut seen: Vec<Binding> = Vec::new();
+                    rs.preset
+                        .toggle
+                        .iter()
+                        .filter(|b| **b != Binding::Consume)
+                        .filter(|b| {
+                            if seen.contains(b) {
+                                false
+                            } else {
+                                seen.push(**b);
+                                true
+                            }
+                        })
+                        .map(|&binding| ToggleRt {
+                            binding,
+                            sources: SmallVec::new(),
+                            source_was: false,
+                            latched: false,
+                        })
+                        .collect()
+                },
+                toggle_base: 0,
                 stateful: false,
             });
         }
@@ -1201,8 +1330,10 @@ impl EngineTables {
         let words = targets.len().div_ceil(64).max(1);
         let down = vec![0u64; words * devices.len()];
         for slot in &mut runtimes {
-            slot.stateful =
-                !slot.chords.is_empty() || !slot.macros.is_empty() || !slot.turbo.is_empty();
+            slot.stateful = !slot.chords.is_empty()
+                || !slot.macros.is_empty()
+                || !slot.turbo.is_empty()
+                || !slot.toggle.is_empty();
         }
         let has_state = runtimes.iter().any(|s| s.stateful);
         let macro_count: usize = runtimes.iter().map(|s| s.macros.len()).sum();
@@ -1227,9 +1358,11 @@ impl EngineTables {
                     runtimes[si].macros[m].first_holder = macro_base + steps;
                     steps += runtimes[si].macros[m].ends.len() as u32;
                 }
-                // Turbo endpoints are holders too, one each, laid out last.
+                // Turbo endpoints are holders too, one each; latches follow
+                // them, laid out last.
                 let turbo_base = macro_base + steps;
-                let holders = (turbo_base + runtimes[si].turbo.len() as u32) as usize;
+                let toggle_base = turbo_base + runtimes[si].turbo.len() as u32;
+                let holders = (toggle_base + runtimes[si].toggle.len() as u32) as usize;
                 let mut holder_bindings: Vec<SmallVec<[Binding; 2]>> =
                     vec![SmallVec::new(); holders];
                 for &(key, binding) in &rs.preset.entries {
@@ -1300,6 +1433,48 @@ impl EngineTables {
                     }
                 }
 
+                // Toggle (docs/INPUT-TRANSFORMS.md §2 item 8) — rewired FIRST,
+                // and the order is the design: the endpoint stops being driven
+                // directly by its keys and chords and starts being driven by
+                // one holder whose bit is a LATCH, with those keys and chords
+                // becoming the sources that flip it. When the same endpoint
+                // also has a turbo rate, the turbo pass below then finds the
+                // LATCH holding the endpoint and takes it as its source — which
+                // is exactly §3a's toggle-turbo ("press once, it auto-fires
+                // until pressed again") falling out of the wiring instead of
+                // being a second turbo mode.
+                //
+                // Only holders below `macro_base` are rewired, for turbo's
+                // reason: a macro step drives its endpoints flat.
+                for t in 0..runtimes[si].toggle.len() {
+                    let id = toggle_base + t as u32;
+                    let binding = runtimes[si].toggle[t].binding;
+                    let mut sources: SmallVec<[u32; 4]> = SmallVec::new();
+                    for h in 0..macro_base {
+                        let holds = &mut holder_bindings[h as usize];
+                        if let Some(p) = holds.iter().position(|b| *b == binding) {
+                            holds.remove(p);
+                            sources.push(h);
+                        }
+                    }
+                    // A latch on a function nothing binds latches nothing: the
+                    // row stays (indices must line up with the holder ids) and
+                    // never runs. Validation names it.
+                    if !sources.is_empty() {
+                        holder_bindings[id as usize].push(binding);
+                        let keys = runtimes[si].endpoint_keys.entry(binding).or_default();
+                        keys.retain(|k| !sources.contains(k));
+                        keys.push(id);
+                        if let Binding::Axis { axis, value } = binding {
+                            runtimes[si].axis_entries.retain(|&(a, v, k)| {
+                                !(a == axis && v == value && sources.contains(&k))
+                            });
+                            runtimes[si].axis_entries.push((axis, value, id));
+                        }
+                    }
+                    runtimes[si].toggle[t].sources = sources;
+                }
+
                 // Turbo (docs/INPUT-TRANSFORMS.md §3). The rewiring is the whole
                 // feature: the endpoint stops being driven DIRECTLY by its keys
                 // and chords and starts being driven by one holder whose bit is
@@ -1307,16 +1482,18 @@ impl EngineTables {
                 // merely gate that phase's clock. Doing it here, once, is why
                 // the hot path never asks "is this binding turbo".
                 //
-                // Only holders below `macro_base` are rewired: a macro step
-                // that holds the same endpoint keeps driving it flat for the
-                // step's duration, because a sequence already owns a timeline
-                // and running it through a second clock would make it
-                // unreproducible.
+                // Only holders below `macro_base` are rewired — plus the
+                // latches above, which is the toggle-turbo composition: a
+                // latched endpoint with a rate is driven by the turbo, whose
+                // clock the LATCH gates. A macro step that holds the same
+                // endpoint keeps driving it flat for the step's duration,
+                // because a sequence already owns a timeline and running it
+                // through a second clock would make it unreproducible.
                 for t in 0..runtimes[si].turbo.len() {
                     let id = turbo_base + t as u32;
                     let binding = runtimes[si].turbo[t].binding;
                     let mut sources: SmallVec<[u32; 4]> = SmallVec::new();
-                    for h in 0..macro_base {
+                    for h in (0..macro_base).chain(toggle_base..holders as u32) {
                         let holds = &mut holder_bindings[h as usize];
                         if let Some(p) = holds.iter().position(|b| *b == binding) {
                             holds.remove(p);
@@ -1370,6 +1547,13 @@ impl EngineTables {
                 for t in &runtimes[si].turbo {
                     touches.extend(t.sources.iter().copied().filter(|h| *h < chord_base));
                 }
+                // The same rule for a key rewired into a LATCH. (A turbo whose
+                // source is the latch itself is covered here too: its holder
+                // id is ≥ chord_base and filtered out above, while the keys
+                // that flip the latch land through this loop.)
+                for t in &runtimes[si].toggle {
+                    touches.extend(t.sources.iter().copied().filter(|h| *h < chord_base));
+                }
                 touches.sort_unstable();
                 touches.dedup();
                 for key in touches {
@@ -1381,10 +1565,12 @@ impl EngineTables {
                 slot.chord_base = chord_base;
                 slot.macro_base = macro_base;
                 slot.turbo_base = turbo_base;
-                // One entry per step plus one per turbo endpoint is the worst
-                // case (`mark` dedupes), so the hot path can never reallocate
-                // this either.
-                slot.macro_dirty = Vec::with_capacity(steps as usize + slot.turbo.len());
+                slot.toggle_base = toggle_base;
+                // One entry per step plus one per turbo endpoint plus one per
+                // latch is the worst case (`mark` dedupes), so the hot path
+                // can never reallocate this either.
+                slot.macro_dirty =
+                    Vec::with_capacity(steps as usize + slot.turbo.len() + slot.toggle.len());
                 // Big enough for BOTH scan shapes, so `scan.push` in the hot
                 // path can never reallocate.
                 let scan_cap = all_holders
@@ -1394,7 +1580,8 @@ impl EngineTables {
                             + 1
                             + slot.chords.len()
                             + steps as usize
-                            + slot.turbo.len(),
+                            + slot.turbo.len()
+                            + slot.toggle.len(),
                     )
                     .max(1);
                 slot.scan = Vec::with_capacity(scan_cap);
@@ -1770,6 +1957,7 @@ impl Engine {
                 }
                 slot.cancel_all_macros(si as u8, &mut self.timers);
                 slot.cancel_all_turbo(si as u8, &mut self.timers);
+                slot.cancel_all_toggle();
                 slot.sync(down, None, true, si as u8, now, &mut self.timers);
             }
         }
@@ -1853,7 +2041,7 @@ impl Engine {
     /// through [`Engine::release_device`] and [`Engine::swap_tables`].
     pub fn cancel_macros(&mut self) -> Deltas {
         let mut deltas = Deltas::new();
-        if !self.has_macros && !self.has_turbo {
+        if !self.has_macros && !self.has_turbo && !self.has_state {
             return deltas;
         }
         for si in 0..self.slots.len() {
@@ -1862,6 +2050,9 @@ impl Engine {
             // auto-fire that keeps firing into a game the player just escaped
             // from is the stuck-input failure this project refuses to ship.
             self.slots[si].cancel_all_turbo(si as u8, &mut self.timers);
+            // Latches too: press-once-walk-away is the feature, and this door
+            // is where the walk-away ends.
+            self.slots[si].cancel_all_toggle();
         }
         self.apply_macro_moves(&mut deltas);
         deltas

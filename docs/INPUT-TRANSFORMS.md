@@ -694,8 +694,9 @@ Ordered by value on *this* machine, not by novelty.
 7. ~~**NOT / exclusion conditions.**~~ **SHIPPED with chords** (§1b): the
    `when` guard made `unless` fall out free, exactly as predicted. MAME's
    `NOT`, in the same row as the binding it qualifies.
-8. **Toggle-hold (sticky hold).** Press once → held until pressed again.
-   Accessibility, and useful for triggers/auto-run.
+8. ~~**Toggle-hold (sticky hold).**~~ **SHIPPED** — see §3b. Press once →
+   held until pressed again. Accessibility, and useful for
+   triggers/auto-run. Toggle-turbo fell out of the wiring for free.
 9. **Double-tap / multi-tap activators** (Steam's model). Cheap once the
    clock exists for tap-hold.
 10. **Negative edge / release-triggered bindings.** Fighting-game charge
@@ -930,11 +931,78 @@ no JavaScript).
 
 #### What did not ship
 
-- **Toggle-turbo** (press once, it auto-fires until pressed again). It needs
-  the sticky/latch vocabulary from catalog item 8, not a second turbo mode.
+- ~~**Toggle-turbo**~~ — **SHIPPED with §3b**, and exactly as predicted: it
+  needed the latch vocabulary from catalog item 8, not a second turbo mode.
+  The latch drives the turbo's source, and auto-fire-while-latched falls out
+  of the wiring order.
 - **Turbo on a macro STEP.** Deliberate, see above.
 - **Per-key rates on one function.** The file format cannot express two, and
   the model matching the format exactly is what makes multi-bind one clock.
+
+### 3b. Toggle-hold — SHIPPED (2026-08-16)
+
+Catalog item 8, answered, and the transform stage's first CONTEXT tenant —
+turbo added time, toggle adds state that a release does not clear. Press once
+→ the endpoint is held; press again → it lets go. The key's RELEASE changes
+nothing, which is the whole feature.
+
+#### The file
+
+```toml
+[bindings]
+lb = { key = "L", toggle = true }                # press L once: LB stays held
+A  = { key = "G", toggle = true, turbo_hz = 12 } # toggle-turbo, one row
+rt = { key = "T", when = ["B"], toggle = true }  # the CHORD is the flipper
+```
+
+Like a rate, the latch is a property of the OUTPUT carried on the function's
+first row (`ksx_core::Preset::toggle` is the membership list), so several keys
+on one latched endpoint are ONE flipper: the latch flips when the group goes
+from silent to driving, and a second key pressed while the first is held is
+not a second flip. `toggle = false` is the explicit spelling of the default.
+
+#### The engine: a latch holder, flipped on rising edges only
+
+A latched endpoint is one more holder class (after turbo in the id space),
+rewired at build time exactly as turbo is: the keys and chords that used to
+drive the endpoint become the latch's SOURCES, and the holder's held bit is
+simply the latch state. The latch flips on the RISING EDGE of the aggregate
+source — keyboard autorepeat is not a new press (§1c's edge rule, again), a
+falling source never flips, and a chord handing a still-held key back to its
+owner is a rising edge and does flip (the same resume-on-release rule chords
+apply to ordinary bindings).
+
+**Toggle-turbo needs no code of its own.** Toggle is rewired before turbo, so
+a latched endpoint with a rate reads: keys → latch → turbo clock → endpoint.
+Press once and it auto-fires hands-free; press again and the clock stops and
+the endpoint releases in the same batch. A latch on an axis is auto-run: the
+direction stays deflected with every key up.
+
+#### Everything releases on the way out — deliberately MORE important here
+
+The latch survives all-keys-up *by design* (press once, walk away), which
+makes the exits load-bearing rather than tidy: a latched button on a pad the
+player has left is exactly the stuck-input failure the exits exist to
+prevent. All four release it, each pinned in `engine_toggle.rs`: session stop
+/ emergency escape, device yank, binding hot-swap (fresh tables start
+unlatched and the neutral deltas release), and reset.
+
+#### Surfaces
+
+```
+ksx map --preset "Panel P1" --function LB --key L --toggle true
+ksx map --preset "Panel P1" --function LB --key L --toggle false   # off
+```
+
+Three states, same as the rate: absent leaves an existing latch alone
+(rebinding a latched button must not silently make it momentary again),
+`false` clears it, clearing the control clears it with the keys. The
+confirmation says what a press now means — "(toggle: a press holds until the
+next press)" — and the staged mapper carries the same three states through
+`stage-bind`. A `toggle` on a `macro.<name>` trigger is refused everywhere
+(file, CLI, staged bind): what a release or repeat does is the macro body's
+own business (`on_release`, `repeat`), and a latch on its trigger would be a
+second spelling for the same thing.
 
 ## 4. Sequencing (proposed)
 

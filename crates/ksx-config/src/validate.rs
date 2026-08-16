@@ -289,6 +289,13 @@ pub enum Issue {
     /// Advisory: `turbo_hz` on a `consume` row. A consume-only chord drives no
     /// endpoint at all, so there is nothing for a rate to auto-fire.
     TurboOnConsume { preset: String, function: String },
+    /// Advisory: `toggle` on a `consume` row — nothing there for a latch to
+    /// hold, for the same reason as [`Issue::TurboOnConsume`].
+    ToggleOnConsume { preset: String, function: String },
+    /// `macro.<name> = { key = …, toggle = true }`. What a release or repeat
+    /// does is the macro body's own business (`on_release`, `repeat`); a latch
+    /// on its trigger would be a second spelling for the same thing.
+    GuardedMacroToggle { preset: String, name: String },
     /// `macro.<name> = { key = …, turbo_hz = … }`. A macro repeats by saying so
     /// in its own table; a second spelling for the same thing would make "which
     /// one runs" something a reader has to remember.
@@ -351,6 +358,7 @@ impl Issue {
                 | Issue::TurboRateWithoutTurbo { .. }
                 | Issue::BindingTurboClamped { .. }
                 | Issue::TurboOnConsume { .. }
+                | Issue::ToggleOnConsume { .. }
                 // Advisory because several macros on one key is a real thing to
                 // want; what it is not is something to discover from a cabinet.
                 // Kept advisory rather than promoted to a fault even though the
@@ -629,6 +637,19 @@ impl fmt::Display for Issue {
                 "preset '{preset}': '{function}' sets turbo_hz, but `consume` drives no endpoint \
                  at all — its whole effect is suppressing its constituents, and there is nothing \
                  there to auto-fire"
+            ),
+            Issue::ToggleOnConsume { preset, function } => write!(
+                f,
+                "preset '{preset}': '{function}' sets toggle, but `consume` drives no endpoint \
+                 at all — its whole effect is suppressing its constituents, and there is nothing \
+                 there for a latch to hold"
+            ),
+            Issue::GuardedMacroToggle { preset, name } => write!(
+                f,
+                "preset '{preset}': '{MACRO_PREFIX}{name}' sets toggle, but what a release or \
+                 repeat does is the macro body's own business (`on_release`, `repeat` in \
+                 [macros.{name}]) — a latch on its trigger would be a second spelling for the \
+                 same thing (§3b)"
             ),
             Issue::UnknownMacroRef {
                 preset,
@@ -1103,14 +1124,14 @@ fn validate_preset(preset: &PresetFile, issues: &mut Vec<Issue>) {
     validate_binding_turbo(preset, &pairs, issues);
 }
 
-/// Per-binding auto-fire (docs/INPUT-TRANSFORMS.md §3).
+/// Per-binding auto-fire (docs/INPUT-TRANSFORMS.md §3) and toggle-hold (§3b).
 ///
-/// Three things can go wrong and exactly one of them is fatal. The rate being
-/// undeliverable is not: the engine runs the closest thing a 60 Hz sampler can
-/// see, and saying BOTH numbers is the whole point of resolving the clamp in
-/// one place. Two rows on one function disagreeing IS fatal, because turbo
-/// belongs to the output and picking a winner by file order is the kind of
-/// silent decision this project refuses to make.
+/// Three things can go wrong with a rate and exactly one of them is fatal.
+/// The rate being undeliverable is not: the engine runs the closest thing a
+/// 60 Hz sampler can see, and saying BOTH numbers is the whole point of
+/// resolving the clamp in one place. Two rows on one function disagreeing IS
+/// fatal, because turbo belongs to the output and picking a winner by file
+/// order is the kind of silent decision this project refuses to make.
 fn validate_binding_turbo(
     preset: &PresetFile,
     pairs: &[(String, Flat<'_>)],
@@ -1159,6 +1180,37 @@ fn validate_binding_turbo(
                     });
                 }
             }
+        }
+    }
+
+    // TOGGLE (§3b), the same two shapes without the rate arithmetic: a latch
+    // is a bool, so two rows agreeing is redundancy and `false` is just the
+    // default spelled out — nothing to conflict over. `seen` keeps a
+    // multi-row function from being reported once per row.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for (function, flat) in pairs {
+        let Flat::Guard(guard) = flat else { continue };
+        if guard.toggle != Some(true) || !seen.insert(function.as_str()) {
+            continue;
+        }
+        // Refused at load time (`ConfigError::ToggleOnMacroTrigger`); named
+        // here too so `ksx check` reports it rather than only failing to
+        // parse.
+        if let Some(name) = macro_name(function) {
+            issues.push(Issue::GuardedMacroToggle {
+                preset: preset.name.clone(),
+                name: name.to_owned(),
+            });
+            continue;
+        }
+        let Ok(binding) = parse_function(function) else {
+            continue; // an unknown function is already reported above
+        };
+        if binding == Binding::Consume {
+            issues.push(Issue::ToggleOnConsume {
+                preset: preset.name.clone(),
+                function: function.clone(),
+            });
         }
     }
 }
@@ -2412,6 +2464,7 @@ preset = "default"
                 when: vec!["Left".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         // (The flash advisory fires too — a direction key is by definition
@@ -2445,6 +2498,7 @@ preset = "default"
                 when: vec!["Left".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         assert_eq!(
@@ -2464,6 +2518,7 @@ preset = "default"
                 when: vec!["Up".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         let games: GamesFile = toml::from_str(
@@ -2843,5 +2898,61 @@ preset = "empty"
             }),
             "{issues:?}"
         );
+    }
+
+    /// A latch on `consume` holds nothing: the row's whole effect is
+    /// suppressing its constituents. Advisory, like the rate's version —
+    /// harmless, but worth a sentence.
+    #[test]
+    fn a_latch_on_consume_is_reported() {
+        let presets = vec![preset(
+            "t",
+            "\"lx.min\" = \"Left\"\n\"lx.max\" = \"Right\"\n\
+             consume = { key = \"Left\", when = [\"Right\"], toggle = true }\n",
+        )];
+        let issues = validate(&ConfigFile::default(), &presets);
+        assert!(
+            issues.contains(&Issue::ToggleOnConsume {
+                preset: "t".into(),
+                function: "consume".into(),
+            }),
+            "{issues:?}"
+        );
+        assert!(issues
+            .iter()
+            .find(|issue| matches!(issue, Issue::ToggleOnConsume { .. }))
+            .unwrap()
+            .is_advisory());
+    }
+
+    /// A latch on a macro trigger is named here as well as refused at load
+    /// time, so `ksx check` explains it rather than the file merely failing
+    /// to parse — the same double reporting as the rate.
+    #[test]
+    fn a_latch_on_a_macro_trigger_is_named() {
+        let presets = vec![macro_preset(
+            "[bindings]\nA = \"S\"\nmacro.fire = { key = \"P\", toggle = true }\n\
+             [macros.fire]\nsteps = [{ hold = [\"A\"], ms = 50 }]\n",
+        )];
+        let issues = validate(&ConfigFile::default(), &presets);
+        assert!(
+            issues.contains(&Issue::GuardedMacroToggle {
+                preset: "m".into(),
+                name: "fire".into(),
+            }),
+            "{issues:?}"
+        );
+    }
+
+    /// A plain latch, and even a redundant second flag or an explicit
+    /// `toggle = false`, report nothing: a bool cannot disagree with itself.
+    #[test]
+    fn a_deliverable_latch_reports_nothing() {
+        let presets = vec![preset(
+            "t",
+            "A = [{ key = \"G\", toggle = true }, { key = \"H\", toggle = true }]\n\
+             B = { key = \"J\", toggle = false }\n",
+        )];
+        assert_eq!(validate(&ConfigFile::default(), &presets), Vec::new());
     }
 }

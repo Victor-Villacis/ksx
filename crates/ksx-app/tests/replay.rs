@@ -58,6 +58,7 @@ fn native_slots() -> Vec<ResolvedSlot> {
                 chords: Vec::new(),
                 macros: Default::default(),
                 turbo: Vec::new(),
+                toggle: Vec::new(),
                 protected: false,
             };
             ResolvedSlot {

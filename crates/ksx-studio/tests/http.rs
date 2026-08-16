@@ -88,6 +88,7 @@ impl StatusSource for FixedStatus {
                 // One AUTO-FIRING control, so the legend badge is covered by
                 // the ordinary page assertions.
                 turbo: std::collections::BTreeMap::from([("B".to_owned(), 12)]),
+                toggle: Default::default(),
                 macros_off: false,
             }],
         }
@@ -556,6 +557,7 @@ impl ControlSource for ScriptedControl {
                 also_drives: Vec::new(),
                 turbo_hz: None,
                 turbo_effective_hz: None,
+                toggle: false,
                 reloaded: false,
             }
         } else {
@@ -578,6 +580,7 @@ impl ControlSource for ScriptedControl {
                 },
                 turbo_hz: None,
                 turbo_effective_hz: None,
+                toggle: false,
                 reloaded: request.reload,
             }
         }
@@ -5171,6 +5174,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             }],
             profile: None,
@@ -5207,6 +5211,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             },
             MapperSlot {
@@ -5219,6 +5224,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             },
         ],

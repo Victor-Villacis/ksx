@@ -249,6 +249,7 @@ fn collect_mapper() -> MapperSnapshot {
             backup,
             session_backup,
             turbo: layout.turbo,
+            toggle: layout.toggle,
             // The tournament switch, straight off the slot entry: "my
             // macros do nothing" has two causes, and this is the one you
             // cannot see by reading the preset.
@@ -269,6 +270,7 @@ fn collect_mapper() -> MapperSnapshot {
 struct LayoutView {
     bindings: std::collections::BTreeMap<String, Vec<String>>,
     turbo: std::collections::BTreeMap<String, u32>,
+    toggle: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,9 +305,11 @@ fn preset_layout(
     for t in &core.turbo {
         rates.insert(ksx_config::function_name(&t.binding), t.hz);
     }
+    let toggle = core.toggle.iter().map(ksx_config::function_name).collect();
     Ok(LayoutView {
         bindings,
         turbo: rates,
+        toggle,
     })
 }
 

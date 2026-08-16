@@ -183,6 +183,11 @@ pub struct MapperSlot {
     /// one rate per row of the legend.
     #[serde(default)]
     pub turbo: std::collections::BTreeMap<String, u32>,
+    /// Functions that LATCH (toggle-hold, docs/INPUT-TRANSFORMS.md §2 item 8),
+    /// keyed by FUNCTION for turbo's reason. Absent on older daemons; empty
+    /// for every preset written before toggle existed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub toggle: std::collections::BTreeSet<String>,
     /// This slot says `macros = "off"` (config.toml or the games.toml profile)
     /// — the TOURNAMENT SWITCH. Every macro of its preset is silenced whatever
     /// each one's own `enabled` says; nothing is deleted.

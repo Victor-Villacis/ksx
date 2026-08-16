@@ -704,6 +704,7 @@ impl StageEdit {
                         chords: Vec::new(),
                         macros: Default::default(),
                         turbo: Vec::new(),
+                        toggle: Vec::new(),
                         protected: false,
                     },
                 };
@@ -792,6 +793,10 @@ pub struct StagedBindRequest {
     pub force: bool,
     #[serde(default)]
     pub turbo_hz: Option<u32>,
+    /// TOGGLE-HOLD, three-state like `turbo_hz`: absent leaves the latch
+    /// alone, `false` clears it, `true` sets it.
+    #[serde(default)]
+    pub toggle: Option<bool>,
 }
 
 /// One whole macro edit aimed at an exact in-memory staged controller.
@@ -1068,7 +1073,7 @@ pub fn staged_slot_bind_edit(
         }
     }
 
-    let (canonical, also_drives, turbo_hz, turbo_effective_hz) = match target {
+    let (canonical, also_drives, turbo_hz, turbo_effective_hz, latched) = match target {
         Target::Pad { binding, canonical } => {
             core.entries
                 .retain(|(_, bound)| ksx_config::function_name(bound) != canonical);
@@ -1094,6 +1099,16 @@ pub fn staged_slot_bind_edit(
                     core.turbo.push(TurboBinding::new(binding, hz));
                 }
             }
+            // TOGGLE-HOLD, same absent-means-untouched rule (§3b).
+            match request.toggle {
+                Some(false) | None if keys.is_empty() => core.toggle.retain(|row| *row != binding),
+                None => {}
+                Some(false) => core.toggle.retain(|row| *row != binding),
+                Some(true) => {
+                    core.toggle.retain(|row| *row != binding);
+                    core.toggle.push(binding);
+                }
+            }
             let also = other_functions_for_keys(&core, &keys, &canonical);
             let turbo = core
                 .turbo
@@ -1105,6 +1120,7 @@ pub fn staged_slot_bind_edit(
                 also,
                 turbo.map(|row| row.hz),
                 turbo.map(TurboBinding::effective_hz),
+                core.toggle.contains(&binding),
             )
         }
         Target::Macro { index, canonical } => {
@@ -1113,6 +1129,16 @@ pub fn staged_slot_bind_edit(
                     codes::BAD_REQUEST,
                     format!(
                         "{canonical} is a macro trigger; its repeat rate belongs in the macro body, not on its trigger key"
+                    ),
+                    Vec::new(),
+                ));
+            }
+            if request.toggle == Some(true) {
+                return Err(bind_refusal(
+                    codes::BAD_REQUEST,
+                    format!(
+                        "{canonical} is a macro trigger; what a release or repeat does belongs in \
+                         the macro body (`on_release`, `repeat`), not in a latch on its key"
                     ),
                     Vec::new(),
                 ));
@@ -1126,7 +1152,7 @@ pub fn staged_slot_bind_edit(
                     .map(|key| ksx_core::MacroTrigger::new(key, index)),
             );
             let also = other_functions_for_keys(&core, &keys, &canonical);
-            (canonical, also, None, None)
+            (canonical, also, None, None, false)
         }
     };
 
@@ -1168,6 +1194,7 @@ pub fn staged_slot_bind_edit(
             also_drives,
             turbo_hz,
             turbo_effective_hz,
+            toggle: latched,
             // Staging is neither a disk write nor a live hot reload.
             reloaded: false,
             ..BindOutcome::default()
@@ -1408,6 +1435,7 @@ pub fn staged_mapper_slot(slot: &StagedSlotView, keyboard: &str) -> Result<Mappe
         .iter()
         .map(|row| (ksx_config::function_name(&row.binding), row.hz))
         .collect();
+    let toggle = core.toggle.iter().map(ksx_config::function_name).collect();
     Ok(MapperSlot {
         number: slot.number,
         persona: slot.persona.clone(),
@@ -1419,6 +1447,7 @@ pub fn staged_mapper_slot(slot: &StagedSlotView, keyboard: &str) -> Result<Mappe
         backup: None,
         session_backup: false,
         turbo,
+        toggle,
         macros_off: false,
     })
 }
@@ -2648,6 +2677,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 keys: vec!["g".into(), "enter".into(), "G".into()],
                 force: false,
                 turbo_hz: Some(12),
+                toggle: None,
             },
         )
         .expect("a free multi-key binding stages");
@@ -2695,6 +2725,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 keys: vec!["none".into()],
                 force: false,
                 turbo_hz: None,
+                toggle: None,
             },
         )
         .expect("None is the canonical clear placeholder");
@@ -2713,6 +2744,74 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .turbo
             .iter()
             .any(|row| ksx_config::function_name(&row.binding) == "A"));
+    }
+
+    /// TOGGLE-HOLD at the staging layer: the same three-state rule as the
+    /// rate (absent = untouched, `false` = cleared, `true` = latched), the
+    /// same clear-drops-it rule, and the same macro-trigger refusal.
+    #[test]
+    fn staged_bindings_carry_the_latch_through_the_same_three_states() {
+        let setup = staged_with_preset(&authored_preset());
+        let view = StagedSetupView::of(&setup);
+        let latch = |keys: Vec<String>, toggle: Option<bool>| StagedBindRequest {
+            number: 1,
+            preset: "Player 1".into(),
+            function: "a".into(),
+            keys,
+            force: false,
+            turbo_hz: None,
+            toggle,
+        };
+
+        // Latch it.
+        let prepared = staged_bind_edit(&view, &latch(vec!["g".into()], Some(true)))
+            .expect("a latch on a pad function stages");
+        assert!(prepared.outcome.toggle, "the ack says it is latched");
+        let setup = prepared.edit.apply(&setup).unwrap();
+        let view = StagedSetupView::of(&setup);
+        let core = view.slots[0].authoring.as_ref().unwrap().to_core().unwrap();
+        assert!(core.toggled(ksx_core::Binding::Button(ksx_core::XButton::A)));
+
+        // Rebinding the KEY with the flag absent keeps the latch.
+        let prepared = staged_bind_edit(&view, &latch(vec!["h".into()], None))
+            .expect("a rebind without the flag stages");
+        assert!(prepared.outcome.toggle, "absent means untouched");
+
+        // `false` is the explicit off.
+        let prepared = staged_bind_edit(&view, &latch(vec!["g".into()], Some(false)))
+            .expect("clearing the latch stages");
+        assert!(!prepared.outcome.toggle);
+        let StageEdit::SetBindings { preset, .. } = &prepared.edit else {
+            unreachable!()
+        };
+        assert!(preset.to_core().unwrap().toggle.is_empty());
+
+        // Clearing the control clears its latch with it.
+        let prepared = staged_bind_edit(&view, &latch(vec!["none".into()], None))
+            .expect("None is the canonical clear placeholder");
+        assert!(!prepared.outcome.toggle);
+        let StageEdit::SetBindings { preset, .. } = &prepared.edit else {
+            unreachable!()
+        };
+        assert!(preset.to_core().unwrap().toggle.is_empty());
+
+        // A macro trigger refuses the latch in the macro's own vocabulary.
+        let refused = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                preset: "Player 1".into(),
+                function: "macro.hadouken".into(),
+                keys: vec!["p".into()],
+                force: false,
+                turbo_hz: None,
+                toggle: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_REQUEST));
+        let error = refused.error.as_deref().unwrap();
+        assert!(error.contains("macro body"), "{error}");
     }
 
     #[test]
@@ -2796,6 +2895,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             keys: vec![occupied],
             force: false,
             turbo_hz: None,
+            toggle: None,
         };
         let refused = staged_bind_edit(&view, &request).unwrap_err();
         assert_eq!(refused.code.as_deref(), Some(codes::CONFLICT));
@@ -2864,6 +2964,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 keys: vec!["p".into(), "leftcontrol".into()],
                 force: false,
                 turbo_hz: None,
+                toggle: None,
             },
         )
         .expect("macro trigger rows use the same binding helper");

@@ -3368,6 +3368,7 @@ mod tests {
             backup: Some("2026-08-05 14:32:07 UTC".to_owned()),
             session_backup: true,
             turbo,
+            toggle: Default::default(),
             macros_off: false,
         }
     }

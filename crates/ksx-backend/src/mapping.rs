@@ -140,6 +140,17 @@ pub struct MapSpec {
     /// A `--clear` of the function clears its rate too: a blank control is
     /// blank.
     pub turbo_hz: Option<u32>,
+    /// TOGGLE-HOLD (docs/INPUT-TRANSFORMS.md §2 item 8): press once, held
+    /// until pressed again. The same three-state vocabulary as
+    /// [`MapSpec::turbo_hz`], with a bool where the rate was:
+    ///
+    /// - `None` — not asked about; the function keeps its latch.
+    /// - `Some(false)` — clear it.
+    /// - `Some(true)` — set it. Toggle belongs to the OUTPUT, one flag per
+    ///   function however many keys drive it.
+    ///
+    /// A `--clear` of the function clears its latch too, same as the rate.
+    pub toggle: Option<bool>,
 }
 
 /// WHICH slot list a conflict was found in — the two a machine has.
@@ -285,6 +296,9 @@ pub struct AppliedMap {
     /// ~15 Hz cannot be met however it is spelled. `None` when there is no
     /// turbo; equal to `turbo_hz` when the request was deliverable as written.
     pub turbo_effective_hz: Option<u32>,
+    /// Whether this function is now latched — press once to hold, press again
+    /// to release (docs/INPUT-TRANSFORMS.md §2 item 8).
+    pub toggle: bool,
 }
 
 impl AppliedMap {
@@ -344,6 +358,12 @@ impl AppliedMap {
                      must each survive a 60 Hz poll)"
                 )
             });
+        }
+        // TOGGLE: a latch changes what a press MEANS, so the confirmation says
+        // so — a rebind that silently kept the latch would surprise the player
+        // at the first key-up that releases nothing.
+        if self.toggle {
+            line.push_str(" (toggle: a press holds until the next press)");
         }
         if self.key.is_some() {
             // Multi-bind: say what else the key drives, in the same words the
@@ -791,6 +811,21 @@ pub fn apply(store: &Store, spec: &MapSpec) -> Result<AppliedMap, MapError> {
     }
     let turbo_row = turbo.iter().copied().find(|t| t.binding == binding);
 
+    // TOGGLE (docs/INPUT-TRANSFORMS.md §3b): the same not-asked ⇒
+    // not-touched rule as the rate above, for the same reason — rebinding the
+    // key of a latched button must not silently unlatch it.
+    let mut toggle = core.toggle;
+    match spec.toggle {
+        Some(false) | None if keys.is_empty() => toggle.retain(|b| *b != binding),
+        None => {}
+        Some(false) => toggle.retain(|b| *b != binding),
+        Some(true) => {
+            toggle.retain(|b| *b != binding);
+            toggle.push(binding);
+        }
+    }
+    let latched = toggle.contains(&binding);
+
     let rewritten = PresetFile::from_core(&ksx_core::Preset {
         name: file.name.clone(),
         entries,
@@ -798,6 +833,7 @@ pub fn apply(store: &Store, spec: &MapSpec) -> Result<AppliedMap, MapError> {
         // Untouched: editing a binding never disturbs the preset's macros.
         macros: core.macros,
         turbo,
+        toggle,
         protected: false,
     });
     let path = store.save_preset(&rewritten)?;
@@ -817,6 +853,7 @@ pub fn apply(store: &Store, spec: &MapSpec) -> Result<AppliedMap, MapError> {
         shared_macros: Vec::new(),
         turbo_hz: turbo_row.map(|t| t.hz),
         turbo_effective_hz: turbo_row.map(|t| t.effective_hz()),
+        toggle: latched,
     })
 }
 
@@ -840,6 +877,15 @@ fn apply_macro_trigger(store: &Store, spec: &MapSpec, name: &str) -> Result<Appl
             "--move-from takes a key from another pad function; a macro trigger is not one"
                 .to_owned(),
         ));
+    }
+    // The per-binding flags are refused with the FILE layer's own sentences —
+    // the file would refuse these rows anyway (docs/INPUT-TRANSFORMS.md §3,
+    // §2 item 8), and a flag that is accepted but never written is a lie.
+    if spec.turbo_hz.is_some_and(|hz| hz != 0) {
+        return Err(ConfigError::TurboOnMacroTrigger(name.to_owned()).into());
+    }
+    if spec.toggle == Some(true) {
+        return Err(ConfigError::ToggleOnMacroTrigger(name.to_owned()).into());
     }
     // A macro takes a key LIST exactly like a button does: several triggers
     // for one sequence are ordinary `macro.<name>` rows in the file.
@@ -951,9 +997,10 @@ fn apply_macro_trigger(store: &Store, spec: &MapSpec, name: &str) -> Result<Appl
         moved_from: None,
         shared_macros,
         // A macro repeats by saying so in its own table; a trigger row has no
-        // rate of its own to report.
+        // rate of its own to report — and no latch either.
         turbo_hz: None,
         turbo_effective_hz: None,
+        toggle: false,
         overridden,
         flash: Vec::new(),
     })
@@ -1412,6 +1459,7 @@ pub fn restore(
         chords: Vec::new(),
         macros: Default::default(),
         turbo: Vec::new(),
+        toggle: Vec::new(),
         protected: false,
     });
     let path = store.save_preset(&rewritten)?;
@@ -1441,6 +1489,7 @@ pub fn clear_all(store: &Store, preset_name: &str) -> Result<AppliedRestore, Map
         chords: Vec::new(),
         macros: Default::default(),
         turbo: Vec::new(),
+        toggle: Vec::new(),
         protected: false,
     });
     let path = store.save_preset(&rewritten)?;
@@ -3241,6 +3290,7 @@ preset = "Other"
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         });
         assert_eq!(
@@ -4317,5 +4367,173 @@ steps = [{ hold = ["A"], ms = 50 }]
         assert_eq!(applied.turbo_hz, None, "B has no rate of its own");
         let on_disk = std::fs::read_to_string(&applied.path).unwrap();
         assert!(on_disk.contains("turbo_hz = 10"), "{on_disk}");
+    }
+
+    // ---- --toggle (docs/INPUT-TRANSFORMS.md §2 item 8) --------------------
+
+    fn toggle_spec(preset: &str, function: &str, keys: &[&str], latch: Option<bool>) -> MapSpec {
+        MapSpec {
+            preset: preset.into(),
+            function: function.into(),
+            keys: keys.iter().map(|k| (*k).to_owned()).collect(),
+            toggle: latch,
+            ..MapSpec::default()
+        }
+    }
+
+    #[test]
+    fn a_latch_is_written_and_reported() {
+        let root = TempRoot::new("toggle-write");
+        let store = root.store();
+        preset(&store, "P1", "A = \"S\"\n");
+
+        let applied = apply(&store, &toggle_spec("P1", "a", &["g"], Some(true))).unwrap();
+        assert!(applied.toggle);
+        assert_eq!(
+            applied.message(),
+            "\"P1\": A = G (toggle: a press holds until the next press)"
+        );
+
+        let on_disk = std::fs::read_to_string(&applied.path).unwrap();
+        assert!(on_disk.contains("toggle = true"), "{on_disk}");
+        let core = store
+            .load_preset("P1")
+            .unwrap()
+            .unwrap()
+            .value
+            .to_core()
+            .unwrap();
+        assert!(core.toggled(ksx_core::Binding::Button(ksx_core::XButton::A)));
+    }
+
+    /// Not asking about the latch leaves it alone: rebinding the KEY of a
+    /// latched button must not silently make it momentary again.
+    #[test]
+    fn a_rebind_without_the_flag_keeps_the_latch() {
+        let root = TempRoot::new("toggle-keep");
+        let store = root.store();
+        preset(&store, "P1", "A = { key = \"S\", toggle = true }\n");
+
+        let applied = apply(&store, &keys_spec("P1", "a", &["G", "H"])).unwrap();
+        assert!(applied.toggle);
+        assert_eq!(applied.keys, vec!["G".to_owned(), "H".to_owned()]);
+
+        // ...and the flag is written once — both keys drive the ONE latch.
+        let on_disk = std::fs::read_to_string(&applied.path).unwrap();
+        assert_eq!(on_disk.matches("toggle").count(), 1, "{on_disk}");
+    }
+
+    /// `--toggle false` is the explicit off, in words rather than a magic zero.
+    #[test]
+    fn false_clears_the_latch() {
+        let root = TempRoot::new("toggle-false");
+        let store = root.store();
+        preset(&store, "P1", "A = { key = \"S\", toggle = true }\n");
+
+        let applied = apply(&store, &toggle_spec("P1", "a", &["S"], Some(false))).unwrap();
+        assert!(!applied.toggle);
+        let on_disk = std::fs::read_to_string(&applied.path).unwrap();
+        assert!(!on_disk.contains("toggle"), "{on_disk}");
+    }
+
+    /// Clearing the control clears its latch: a blank control is blank.
+    #[test]
+    fn clearing_the_control_clears_the_latch() {
+        let root = TempRoot::new("toggle-clear");
+        let store = root.store();
+        preset(&store, "P1", "A = { key = \"S\", toggle = true }\n");
+
+        let applied = apply(&store, &keys_spec("P1", "a", &[])).unwrap();
+        assert!(applied.key.is_none());
+        assert!(!applied.toggle);
+        let on_disk = std::fs::read_to_string(&applied.path).unwrap();
+        assert!(!on_disk.contains("toggle"), "{on_disk}");
+    }
+
+    /// Setting the rate and the latch in one write is the §3a toggle-turbo,
+    /// and the confirmation says both.
+    #[test]
+    fn a_latch_and_a_rate_compose_in_one_write() {
+        let root = TempRoot::new("toggle-turbo");
+        let store = root.store();
+        preset(&store, "P1", "A = \"S\"\n");
+
+        let applied = apply(
+            &store,
+            &MapSpec {
+                preset: "P1".into(),
+                function: "a".into(),
+                keys: vec!["G".into()],
+                turbo_hz: Some(12),
+                toggle: Some(true),
+                ..MapSpec::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(applied.turbo_hz, Some(12));
+        assert!(applied.toggle);
+        let message = applied.message();
+        assert!(message.contains("turbo 12 Hz"), "{message}");
+        assert!(message.contains("toggle"), "{message}");
+    }
+
+    /// A latch on a macro trigger is refused with the file layer's own
+    /// sentence — and so is a rate, which used to be silently dropped here
+    /// (accepted by the CLI, never written, reported as no rate). A flag that
+    /// vanishes without a word is the one behavior this module promises never
+    /// to have.
+    #[test]
+    fn a_flag_on_a_macro_trigger_is_refused_not_dropped() {
+        let root = TempRoot::new("toggle-macro");
+        let store = root.store();
+        preset(
+            &store,
+            "P1",
+            "\"macro.jab\" = \"P\"\n[macros.jab]\nsteps = [{ hold = [\"A\"], ms = 50 }]\n",
+        );
+
+        let err = apply(&store, &toggle_spec("P1", "macro.jab", &["P"], Some(true))).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                MapError::Config(ksx_config::ConfigError::ToggleOnMacroTrigger(name))
+                    if name == "jab"
+            ),
+            "{err}"
+        );
+
+        let err = apply(&store, &turbo_spec("P1", "macro.jab", &["P"], Some(10))).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                MapError::Config(ksx_config::ConfigError::TurboOnMacroTrigger(name))
+                    if name == "jab"
+            ),
+            "{err}"
+        );
+
+        // `--turbo-hz 0` and `--toggle false` ask for what is already true —
+        // "no flag on this trigger" — and clearing nothing is not an error.
+        let applied = apply(&store, &toggle_spec("P1", "macro.jab", &["P"], Some(false))).unwrap();
+        assert!(!applied.toggle);
+        let applied = apply(&store, &turbo_spec("P1", "macro.jab", &["P"], Some(0))).unwrap();
+        assert_eq!(applied.turbo_hz, None);
+    }
+
+    /// Editing a DIFFERENT control never disturbs another control's latch.
+    #[test]
+    fn another_controls_latch_survives_an_unrelated_write() {
+        let root = TempRoot::new("toggle-sibling");
+        let store = root.store();
+        preset(
+            &store,
+            "P1",
+            "A = { key = \"S\", toggle = true }\nB = \"D\"\n",
+        );
+
+        let applied = apply(&store, &spec("P1", "b", Some("F"), false)).unwrap();
+        assert!(!applied.toggle, "B has no latch of its own");
+        let on_disk = std::fs::read_to_string(&applied.path).unwrap();
+        assert!(on_disk.contains("toggle = true"), "{on_disk}");
     }
 }

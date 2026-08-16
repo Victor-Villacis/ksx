@@ -771,6 +771,8 @@ fn handle_map(request: &serde_json::Value, deps: &PipeDeps, settle: Duration) ->
             // AUTO-FIRE: absent means "not asked about" and leaves the rate alone;
             // 0 clears it (docs/INPUT-TRANSFORMS.md §3).
             turbo_hz: map.turbo_hz,
+            // TOGGLE-HOLD: the same absent-means-untouched rule (§2 item 8).
+            toggle: map.toggle,
         },
         Err(refusal) => return err_msg(refusal.message),
     };
@@ -796,6 +798,8 @@ fn handle_map(request: &serde_json::Value, deps: &PipeDeps, settle: Duration) ->
                 // legend row, because it is the one the game will see.
                 "turbo_hz": applied.turbo_hz,
                 "turbo_effective_hz": applied.turbo_effective_hz,
+                // TOGGLE-HOLD (§2 item 8): the control is now latched.
+                "toggle": applied.toggle,
                 // MULTI-BIND: the other controls of this preset this key also
                 // drives. Studio renders it as the legend's "also A · B"
                 // badges (ksx-studio/src/render_map.rs `shared_labels`), which
@@ -3072,6 +3076,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                     chords: Vec::new(),
                     macros: Default::default(),
                     turbo: Vec::new(),
+                    toggle: Vec::new(),
                     protected: false,
                 }
             })
@@ -4352,6 +4357,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ksx_core::TurboBinding::new(ksx_core::Binding::Button(ksx_core::XButton::A), hz)
                     .effective_hz()
             }),
+            toggle: spec.toggle == Some(true),
         })
     }
 

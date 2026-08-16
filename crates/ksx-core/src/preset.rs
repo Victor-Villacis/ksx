@@ -302,6 +302,16 @@ pub struct Preset {
     /// format can produce. Empty in every preset that predates turbo, which is
     /// the same regression guarantee `chords.is_empty()` gives.
     pub turbo: Vec<TurboBinding>,
+    /// Endpoints that LATCH (docs/INPUT-TRANSFORMS.md §2 catalog item 8,
+    /// "toggle-hold / sticky hold"): press a driving key once and the endpoint
+    /// stays held until it is pressed again. Keyed by the OUTPUT for the same
+    /// reason turbo is — one row per endpoint is the only spelling the file
+    /// format can produce — and composing with turbo the way §3a asks
+    /// ("toggle-turbo… needs the sticky/latch vocabulary, not a second turbo
+    /// mode"): a latched endpoint that also has a rate auto-fires while
+    /// latched. Empty in every preset that predates toggle — the same
+    /// regression guarantee again.
+    pub toggle: Vec<Binding>,
     /// Built-ins ship in code, are never saved, and cannot be edited/deleted.
     pub protected: bool,
 }
@@ -398,6 +408,15 @@ impl Preset {
         self.turbo_for(binding).map(|t| t.hz)
     }
 
+    /// Does `binding` latch (press once = held until pressed again)?
+    ///
+    /// One row per endpoint by construction, exactly like [`Self::turbo_for`];
+    /// a file that somehow says it twice behaves as once and validation names
+    /// the duplicate.
+    pub fn toggled(&self, binding: Binding) -> bool {
+        self.toggle.contains(&binding)
+    }
+
     /// The protected KSX `default` preset: a modern one-keyboard layout.
     ///
     /// WASD moves, arrows aim, the numpad carries the D-pad, and the face/
@@ -486,6 +505,7 @@ impl Preset {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: true,
         }
     }
@@ -527,6 +547,7 @@ impl Preset {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: true,
         }
     }
@@ -591,6 +612,7 @@ mod tests {
             }],
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         assert_eq!(chorded.live_bindings(), 1);

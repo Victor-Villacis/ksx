@@ -86,6 +86,7 @@ impl StatusSource for DemoStatus {
                     backup: None,
                     session_backup: false,
                     turbo: Default::default(),
+                    toggle: Default::default(),
                     macros_off: false,
                 })
                 .collect(),

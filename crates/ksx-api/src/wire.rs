@@ -187,6 +187,11 @@ pub struct MapRequest {
     /// about", which leaves an existing rate alone; `0` clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbo_hz: Option<u32>,
+    /// TOGGLE-HOLD (docs/INPUT-TRANSFORMS.md §2 item 8). ABSENT means "not
+    /// asked about", which leaves an existing latch alone; `false` clears it,
+    /// `true` sets it — the same three-state rule the rate follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<bool>,
     /// Apply it to a running session (a binding change hot-swaps).
     #[serde(default, skip_serializing_if = "is_false")]
     pub reload: bool,
@@ -236,6 +241,7 @@ impl MapRequest {
                 .get("turbo_hz")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|hz| u32::try_from(hz).ok()),
+            toggle: request.get("toggle").and_then(serde_json::Value::as_bool),
             reload: flag(request, "reload"),
         })
     }
@@ -893,6 +899,9 @@ pub struct MapResponse {
     /// The rate the game will actually SEE (~15 Hz ceiling).
     #[serde(default)]
     pub turbo_effective_hz: Option<u32>,
+    /// TOGGLE-HOLD (§2 item 8): press once holds, press again releases.
+    #[serde(default)]
+    pub toggle: bool,
     #[serde(default)]
     pub reloaded: bool,
     /// The live session took it with the pads left plugged.

@@ -151,6 +151,7 @@ impl StatusSource for Store {
                 backup: None,
                 session_backup: false,
                 turbo: BTreeMap::new(),
+                toggle: Default::default(),
                 macros_off: false,
             }],
         }

@@ -705,6 +705,16 @@ enum Command {
             conflicts_with_all = ["restore", "list_backups", "clear_all"]
         )]
         turbo_hz: Option<u32>,
+        /// Toggle-hold for this control: press once = held until pressed
+        /// again (`--toggle true`), `--toggle false` clears it, absent leaves
+        /// it alone. Composes with --turbo-hz: a latched control with a rate
+        /// auto-fires while latched
+        #[arg(
+            long,
+            value_name = "true|false",
+            conflicts_with_all = ["restore", "list_backups", "clear_all"]
+        )]
+        toggle: Option<bool>,
         /// Bind anyway when the key is already used by ANOTHER SLOT's preset
         /// (cross-slot fan-out). Removes nothing, edits no other preset — a
         /// same-preset duplicate is a multi-bind and never needs this
@@ -1955,6 +1965,7 @@ fn main() -> anyhow::Result<()> {
             key,
             clear: _,
             turbo_hz,
+            toggle,
             force,
             move_from,
             when,
@@ -1984,6 +1995,7 @@ fn main() -> anyhow::Result<()> {
                     when,
                     unless,
                     turbo_hz,
+                    toggle,
                 },
             },
             json,
@@ -3119,6 +3131,7 @@ mod tests {
                 key,
                 clear,
                 turbo_hz: _,
+                toggle: _,
                 force,
                 move_from,
                 when,

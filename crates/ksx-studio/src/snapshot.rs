@@ -3211,6 +3211,17 @@ pub struct WorkspaceDerived {
     pub blocking_line: String,
     /// The three capture answers as radio-rows.
     pub blocking: Vec<WorkspaceChoiceRow>,
+    /// The personas "Add a controller" may offer — this build's pluggable,
+    /// this stage's still-addable, with the backend and per-session ceiling
+    /// in the label (the same filter and label `/start` offers).
+    pub add_personas: Vec<WorkspaceOptionRow>,
+    /// The in-box layouts, best-fit-first for the next slot.
+    pub add_layouts: Vec<WorkspaceOptionRow>,
+    /// The preset name the add would create — SERVED, because it becomes a
+    /// file name (`StagedSetupView::next_preset`'s own rule).
+    pub add_preset: String,
+    /// The ceiling sentence when every slot is staged, else empty.
+    pub add_full_line: String,
     /// "Unsaved changes — …" when the draft is dirty, else empty.
     pub dirty_line: String,
     pub pill_running: bool,
@@ -3224,6 +3235,8 @@ pub struct WorkspaceDerived {
     pub stage_empty: bool,
     pub has_device: bool,
     pub show_dirty: bool,
+    pub can_add: bool,
+    pub add_full: bool,
 }
 
 impl WorkspaceDerived {
@@ -3255,6 +3268,31 @@ impl WorkspaceDerived {
                 .collect(),
             blocking_line: workspace_blocking_line(staged),
             blocking: workspace_blocking_rows(staged),
+            add_personas: staged
+                .personas
+                .iter()
+                .filter(|p| p.can_plug && p.available)
+                .map(|p| WorkspaceOptionRow {
+                    value: p.name.clone(),
+                    label: persona_picker_label(p),
+                })
+                .collect(),
+            add_layouts: layout_options(staged)
+                .into_iter()
+                .map(|option| WorkspaceOptionRow {
+                    value: option.value,
+                    label: option.label,
+                })
+                .collect(),
+            add_preset: staged.next_preset.clone().unwrap_or_default(),
+            add_full_line: if ready && staged.next_slot.is_none() {
+                format!(
+                    "All {} controller slots are staged — remove one to add a different one.",
+                    staged.max_slots
+                )
+            } else {
+                String::new()
+            },
             dirty_line: if ready && staged.dirty {
                 "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
             } else {
@@ -3267,6 +3305,10 @@ impl WorkspaceDerived {
             stage_empty: staged.reachable && staged.empty,
             has_device: staged.reachable && staged.device.is_some(),
             show_dirty: ready && staged.dirty,
+            can_add: ready
+                && staged.next_slot.is_some()
+                && staged.personas.iter().any(|p| p.can_plug && p.available),
+            add_full: ready && staged.next_slot.is_none(),
         }
     }
 }

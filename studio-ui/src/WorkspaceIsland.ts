@@ -69,6 +69,10 @@ export interface WorkspaceDerived {
   socd_policies: WorkspaceOptionRow[];
   blocking_line: string;
   blocking: WorkspaceChoiceRow[];
+  add_personas: WorkspaceOptionRow[];
+  add_layouts: WorkspaceOptionRow[];
+  add_preset: string;
+  add_full_line: string;
   dirty_line: string;
   pill_running: boolean;
   pill_idle: boolean;
@@ -77,6 +81,8 @@ export interface WorkspaceDerived {
   stage_empty: boolean;
   has_device: boolean;
   show_dirty: boolean;
+  can_add: boolean;
+  add_full: boolean;
 }
 
 /** What `GET /api/workspace` serves and what this island's payload block
@@ -99,11 +105,15 @@ const [wsRackLine, setWsRackLine] = createSignal("");
 const [wsRackCaption, setWsRackCaption] = createSignal("");
 const [wsBlockingLine, setWsBlockingLine] = createSignal("");
 const [wsDirtyLine, setWsDirtyLine] = createSignal("");
+const [wsAddPreset, setWsAddPreset] = createSignal("");
+const [wsAddFullLine, setWsAddFullLine] = createSignal("");
 
 const [wsRackRows, setWsRackRows] = createSignal<WorkspaceSlotRow[]>([]);
 const [wsBlockingRows, setWsBlockingRows] = createSignal<WorkspaceChoiceRow[]>([]);
 const [wsSocdSlotOptions, setWsSocdSlotOptions] = createSignal<WorkspaceOptionRow[]>([]);
 const [wsSocdPolicyOptions, setWsSocdPolicyOptions] = createSignal<WorkspaceOptionRow[]>([]);
+const [wsAddPersonaOptions, setWsAddPersonaOptions] = createSignal<WorkspaceOptionRow[]>([]);
+const [wsAddLayoutOptions, setWsAddLayoutOptions] = createSignal<WorkspaceOptionRow[]>([]);
 
 const [wsPillRunning, setWsPillRunning] = createSignal(false);
 const [wsPillIdle, setWsPillIdle] = createSignal(false);
@@ -112,6 +122,8 @@ const [wsStageReady, setWsStageReady] = createSignal(false);
 const [wsStageEmpty, setWsStageEmpty] = createSignal(false);
 const [wsHasDevice, setWsHasDevice] = createSignal(false);
 const [wsShowDirty, setWsShowDirty] = createSignal(false);
+const [wsCanAdd, setWsCanAdd] = createSignal(false);
+const [wsAddFull, setWsAddFull] = createSignal(false);
 
 // The action flash. SSR-only: the server fills these from the allowlisted
 // query parameter; a poll is not an action and never touches them.
@@ -129,10 +141,14 @@ export function applyWorkspace(p: WorkspacePayload): void {
   setWsRackCaption(p.view.rack_caption);
   setWsBlockingLine(p.view.blocking_line);
   setWsDirtyLine(p.view.dirty_line);
+  setWsAddPreset(p.view.add_preset);
+  setWsAddFullLine(p.view.add_full_line);
   setWsRackRows(p.view.rack);
   setWsBlockingRows(p.view.blocking);
   setWsSocdSlotOptions(p.view.socd_slots);
   setWsSocdPolicyOptions(p.view.socd_policies);
+  setWsAddPersonaOptions(p.view.add_personas);
+  setWsAddLayoutOptions(p.view.add_layouts);
   setWsPillRunning(p.view.pill_running);
   setWsPillIdle(p.view.pill_idle);
   setWsPillDown(p.view.pill_down);
@@ -140,6 +156,8 @@ export function applyWorkspace(p: WorkspacePayload): void {
   setWsStageEmpty(p.view.stage_empty);
   setWsHasDevice(p.view.has_device);
   setWsShowDirty(p.view.show_dirty);
+  setWsCanAdd(p.view.can_add);
+  setWsAddFull(p.view.add_full);
 }
 
 /** The poll failed: the page's OWN server is gone, which is a different fact
@@ -218,6 +236,20 @@ export function WorkspaceIsland() {
           () => wsHasDevice(),
           () => h("p", { class: "wsmeta" }, () => wsDeviceMeta()),
         ),
+        h(
+          "form",
+          { class: "wsform", method: "post", action: "/workspace/device/identify" },
+          h(
+            "button",
+            { class: "btn btn-ghost", type: "submit", "data-identify-submit": "" },
+            "Identify by pressing a key",
+          ),
+        ),
+        h(
+          "a",
+          { class: "wsmeta wslink", href: "/start" },
+          "Change, rescan or prepare the keyboard in guided setup",
+        ),
         // ── The player rack ─────────────────────────────────────────────────
         h("h2", { class: "wskicker" }, "Virtual controllers"),
         h("p", { class: "wsline" }, () => wsRackLine()),
@@ -277,6 +309,49 @@ export function WorkspaceIsland() {
           ),
         ),
         h("p", { class: "wsmeta" }, () => wsRackCaption()),
+        createShow(
+          () => wsCanAdd(),
+          () =>
+            h(
+              "form",
+              { class: "wsform", method: "post", action: "/workspace/controller" },
+              h(
+                "label",
+                { class: "bindlabel", for: "ws-add-persona" },
+                "Add",
+                h(
+                  "select",
+                  { id: "ws-add-persona", name: "persona" },
+                  createList(
+                    () => wsAddPersonaOptions(),
+                    (o) => o.value + "|" + o.label,
+                    (o) => h("option", { value: o.value }, o.label),
+                  ),
+                ),
+              ),
+              h(
+                "label",
+                { class: "bindlabel", for: "ws-add-layout" },
+                "starting from",
+                h(
+                  "select",
+                  { id: "ws-add-layout", name: "layout" },
+                  createList(
+                    () => wsAddLayoutOptions(),
+                    (o) => o.value + "|" + o.label,
+                    (o) => h("option", { value: o.value }, o.label),
+                  ),
+                ),
+              ),
+              // The preset name is SERVED, because it becomes a file name.
+              h("input", { type: "hidden", name: "preset", value: () => wsAddPreset() }),
+              h("button", { class: "btn btn-primary", type: "submit" }, "Add this controller"),
+            ),
+        ),
+        createShow(
+          () => wsAddFull(),
+          () => h("p", { class: "wsmeta" }, () => wsAddFullLine()),
+        ),
         createShow(
           () => wsStageReady(),
           () =>

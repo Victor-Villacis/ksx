@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "9fb47cfc8e0bc0f3d0ff8cec1f96f2efe1fcb053a2f39c014b5220b90437cb03",
+  "build_hash": "2641317bd47fd8908e902027c51c6b09335134edd21d767eaeaa3b1431738f71",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -19,8 +19,8 @@
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
     "studio.css": "studio.23c1bf31.css",
-    "workspace.ir": "workspace.e85dab74.ir",
-    "workspace.js": "workspace.8df861cc.js"
+    "workspace.ir": "workspace.697d45aa.ir",
+    "workspace.js": "workspace.7188e12c.js"
   },
   "routes": {
     "/start": {
@@ -37,15 +37,15 @@
     },
     "/workspace": {
       "js": [
-        "workspace.8df861cc.js"
+        "workspace.7188e12c.js"
       ],
       "css": [
         "studio.23c1bf31.css"
       ],
       "fonts": [],
-      "total_size_br": 42285,
+      "total_size_br": 42521,
       "budget_warn_threshold": 200000,
-      "ir": "workspace.e85dab74.ir"
+      "ir": "workspace.697d45aa.ir"
     },
     "/": {
       "js": [

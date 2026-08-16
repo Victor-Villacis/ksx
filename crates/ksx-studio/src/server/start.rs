@@ -489,7 +489,20 @@ pub(super) async fn start_form_device(
 /// writes a file, or starts a controller. Raw device identity and provider
 /// errors never cross the presentation boundary.
 pub(super) async fn start_form_identify(State(state): State<Arc<AppState>>) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+    let result = identify_and_stage(state).await;
+    let flash = match result {
+        StartIdentifyResult::Selected => START_IDENTIFY_OK,
+        StartIdentifyResult::TimedOut => START_IDENTIFY_TIMEOUT,
+        StartIdentifyResult::Failed => START_IDENTIFY_ERROR,
+    };
+    Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
+}
+
+/// The identify transaction itself, shared by `/start` and `/workspace`: one
+/// daemon-owned listen, one machine-inventory resolution, one reversible
+/// staged choice. The caller only decides where the flash goes.
+pub(super) async fn identify_and_stage(state: Arc<AppState>) -> StartIdentifyResult {
+    tokio::task::spawn_blocking(move || {
         let mut learn = state.control.learn_start();
         let Some(generation) = learn.generation else {
             return StartIdentifyResult::Failed;
@@ -540,17 +553,11 @@ pub(super) async fn start_form_identify(State(state): State<Arc<AppState>>) -> R
         }
     })
     .await
-    .unwrap_or(StartIdentifyResult::Failed);
-    let flash = match result {
-        StartIdentifyResult::Selected => START_IDENTIFY_OK,
-        StartIdentifyResult::TimedOut => START_IDENTIFY_TIMEOUT,
-        StartIdentifyResult::Failed => START_IDENTIFY_ERROR,
-    };
-    Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
+    .unwrap_or(StartIdentifyResult::Failed)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StartIdentifyResult {
+pub(super) enum StartIdentifyResult {
     Selected,
     TimedOut,
     Failed,

@@ -6224,6 +6224,51 @@ fn the_workspace_left_pane_edits_through_its_form_twins() {
         serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
     assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 1, "{api}");
     assert_eq!(api["view"]["rack_line"], "1 controller staged.", "{api}");
+
+    // Add one back through the workspace's own form: served persona roster,
+    // served layout roster, served preset name.
+    let preset = api["view"]["add_preset"].as_str().expect("a served name");
+    assert!(!preset.is_empty(), "{api}");
+    let response = post_form(
+        addr,
+        "/workspace/controller",
+        &format!(
+            "persona=xbox360&preset={}&layout=arcade-6button",
+            preset.replace(' ', "+")
+        ),
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 2, "{api}");
+}
+
+/// The workspace's Identify goes through the same daemon-owned transaction
+/// as /start's, and lands its flash on THIS page.
+#[test]
+fn workspace_identify_selects_the_board_and_returns_here() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let page = get(addr, "/workspace");
+    assert!(
+        page.contains(r#"action="/workspace/device/identify""#),
+        "{page}"
+    );
+
+    let response = post_form(addr, "/workspace/device/identify", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/workspace?flash="), "{response}");
+    assert!(response.contains("Keyboard%20identified"), "{response}");
+    let staged = control.staged();
+    assert_eq!(
+        staged
+            .device
+            .expect("the identified keyboard is staged")
+            .label,
+        "Ultimarc I-PAC 4X"
+    );
 }
 
 /// The flash is an allowlist, not a reflector: whatever lands in the query,
@@ -6246,9 +6291,11 @@ fn the_workspace_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
     for path in [
         "/workspace/blocking",
+        "/workspace/controller",
         "/workspace/controller/move",
         "/workspace/controller/remove",
         "/workspace/controller/socd",
+        "/workspace/device/identify",
         "/workspace/adopt",
     ] {
         let response = http(

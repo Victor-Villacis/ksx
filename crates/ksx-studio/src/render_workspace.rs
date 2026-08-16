@@ -42,7 +42,7 @@ const ISLAND_COMPONENT: &str = "WorkspaceIsland";
 
 /// How many `createShow` pairs this page has; the layout test pins both the
 /// count and every name.
-const SHOW_COUNT: usize = 9;
+const SHOW_COUNT: usize = 11;
 
 /// `() => wsRackRows()` compiles to `list:wsRackRows:array`. Rename a list
 /// signal in WorkspaceIsland.ts and the layout test fails by name here.
@@ -50,6 +50,8 @@ const LIST_SLOT_RACK: &str = "list:wsRackRows:array";
 const LIST_SLOT_BLOCKING: &str = "list:wsBlockingRows:array";
 const LIST_SLOT_SOCD_SLOTS: &str = "list:wsSocdSlotOptions:array";
 const LIST_SLOT_SOCD_POLICIES: &str = "list:wsSocdPolicyOptions:array";
+const LIST_SLOT_ADD_PERSONAS: &str = "list:wsAddPersonaOptions:array";
+const LIST_SLOT_ADD_LAYOUTS: &str = "list:wsAddLayoutOptions:array";
 
 /// Bare-named slots this page renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -75,6 +77,8 @@ fn scalar_slots(payload: &WorkspacePayload, flash: Option<&str>) -> serde_json::
         "wsRackCaption": payload.view.rack_caption,
         "wsBlockingLine": payload.view.blocking_line,
         "wsDirtyLine": payload.view.dirty_line,
+        "wsAddPreset": payload.view.add_preset,
+        "wsAddFullLine": payload.view.add_full_line,
         "wsFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
     })
 }
@@ -96,6 +100,8 @@ fn show_values(
         ("show:wsStageEmpty", payload.view.stage_empty),
         ("show:wsHasDevice", payload.view.has_device),
         ("show:wsShowDirty", payload.view.show_dirty),
+        ("show:wsCanAdd", payload.view.can_add),
+        ("show:wsAddFull", payload.view.add_full),
         ("show:wsFlashOk", flash.is_some() && !flash_err),
         ("show:wsFlashError", flash_err),
     ]
@@ -135,7 +141,7 @@ fn option_row(row: &WorkspaceOptionRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 4] {
+fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 6] {
     let view = &payload.view;
     [
         (
@@ -153,6 +159,14 @@ fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 4] {
         (
             LIST_SLOT_SOCD_POLICIES,
             SlotValue::array(view.socd_policies.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_ADD_PERSONAS,
+            SlotValue::array(view.add_personas.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_ADD_LAYOUTS,
+            SlotValue::array(view.add_layouts.iter().map(option_row).collect()),
         ),
     ]
 }

@@ -31,12 +31,24 @@ pub(super) const WS_ADOPT_BLOCKED: &str =
 pub(super) const WS_UNKNOWN_FLASH_ERROR: &str =
     "error: The workspace could not finish that request. Reopen ksx and try again.";
 
-pub(super) const WS_FLASH_ALLOWLIST: [&str; 6] = [
+pub(super) const WS_IDENTIFY_OK: &str =
+    "Keyboard identified and selected. Nothing has been captured, saved, or started.";
+
+pub(super) const WS_IDENTIFY_TIMEOUT: &str =
+    "error: No keyboard answered in time. Nothing changed; try Identify again and press one key.";
+
+pub(super) const WS_IDENTIFY_ERROR: &str = "error: That key press could not be matched to one \
+     selectable keyboard. Nothing changed; try again.";
+
+pub(super) const WS_FLASH_ALLOWLIST: [&str; 9] = [
     WS_EDIT_OK,
     WS_EDIT_ERROR,
     WS_MOVE_AT_END,
     WS_ADOPT_OK,
     WS_ADOPT_BLOCKED,
+    WS_IDENTIFY_OK,
+    WS_IDENTIFY_TIMEOUT,
+    WS_IDENTIFY_ERROR,
     WS_UNKNOWN_FLASH_ERROR,
 ];
 
@@ -155,6 +167,46 @@ pub(super) async fn workspace_form_socd(
         },
     )
     .await
+}
+
+#[derive(Deserialize)]
+pub(super) struct WorkspaceAddForm {
+    persona: String,
+    /// From `StagedSetupView::next_preset` — served, because it becomes a
+    /// file name.
+    preset: String,
+    /// A `TemplateRow::id` off the served roster; absent binds nothing and
+    /// `commit()` refuses that by name later.
+    #[serde(default)]
+    layout: Option<String>,
+}
+
+/// POST /workspace/controller — add the next controller.
+pub(super) async fn workspace_form_add(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<WorkspaceAddForm>,
+) -> Response {
+    workspace_stage_edit(
+        state,
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: form.persona,
+            preset: form.preset,
+            layout: form.layout,
+        },
+    )
+    .await
+}
+
+/// POST /workspace/device/identify — the shared identify transaction
+/// (`server/start.rs::identify_and_stage`), flashed in this page's words.
+pub(super) async fn workspace_form_identify(State(state): State<Arc<AppState>>) -> Response {
+    let flash = match identify_and_stage(state).await {
+        StartIdentifyResult::Selected => WS_IDENTIFY_OK,
+        StartIdentifyResult::TimedOut => WS_IDENTIFY_TIMEOUT,
+        StartIdentifyResult::Failed => WS_IDENTIFY_ERROR,
+    };
+    workspace_redirect(flash)
 }
 
 /// POST /workspace/adopt — the saved configuration into an EMPTY stage. The

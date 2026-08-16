@@ -367,6 +367,10 @@ impl<S: VerbSink> ControlSource for Client<S> {
         })
     }
 
+    fn stage_apply(&self) -> StageOutcome {
+        self.stage(Request::StageApply)
+    }
+
     fn save_macro(&self, request: &MacroWrite) -> MacroOutcome {
         let typed = match request.to_request() {
             Ok(typed) => typed,

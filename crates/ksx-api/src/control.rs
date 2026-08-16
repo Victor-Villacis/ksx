@@ -309,6 +309,18 @@ pub trait ControlSource: Send + Sync {
              stage (`ksx daemon`)",
         )
     }
+
+    /// **Apply the staged setup's bindings to the running session in place** —
+    /// pads stay plugged, nothing written. Refused with `needs-restart` when
+    /// the draft differs structurally (the message names the difference, and
+    /// [`ControlSource::stage_play`] is the verb that replaces the session),
+    /// and refused when nothing is running.
+    fn stage_apply(&self) -> StageOutcome {
+        StageOutcome::unavailable(
+            "this control source cannot apply the staged setup to a live session — a daemon \
+             holds both (`ksx daemon`)",
+        )
+    }
 }
 
 /// The `slot-assign` answer, as a surface reads it.

@@ -88,6 +88,15 @@ pub enum Request {
     StageCommit,
     /// **Play** the staged setup, with nothing written.
     StagePlay,
+    /// **Apply** the staged setup's BINDINGS to the running session in place —
+    /// pads stay plugged, keyboards stay captured, nothing re-enumerates, and
+    /// nothing is written. Refused (code `needs-restart`) when the draft
+    /// differs structurally from what is running — slot count or numbering,
+    /// persona, device assignment, blocking, capture backend — with the
+    /// difference named, so a surface can offer the honest alternative:
+    /// [`Self::StagePlay`], which replaces the session. Refused too when
+    /// nothing is running: there is no session to apply into.
+    StageApply,
     /// **Adopt the saved configuration into the stage**: build the draft from
     /// config.toml and its presets — or from one games.toml profile — so the
     /// everyday screen can show the setup this machine already has. A READ of
@@ -134,6 +143,7 @@ impl Request {
             Self::StageMacro(_) => "stage-macro",
             Self::StageCommit => "stage-commit",
             Self::StagePlay => "stage-play",
+            Self::StageApply => "stage-apply",
             Self::StageAdopt { .. } => "stage-adopt",
             Self::LearnKey => "learn-key",
             Self::LearnPoll => "learn-poll",
@@ -708,6 +718,7 @@ impl Response {
             | Request::StageEdit(_)
             | Request::StageCommit
             | Request::StagePlay
+            | Request::StageApply
             | Request::StageAdopt { .. } => {
                 Self::Stage(serde_json::from_value(value).map_err(read(verb))?)
             }

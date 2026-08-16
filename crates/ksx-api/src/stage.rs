@@ -1868,6 +1868,12 @@ pub struct StageOutcome {
     /// Stable refusal word (`too-many-xinput-slots`, `persona-not-implemented`,
     /// `bad-request`…).
     pub code: Option<String>,
+    /// The verb that works anyway, when the refusal knows one —
+    /// [`Refusal::remedy`], carried through instead of dropped so a surface
+    /// can offer the honest next step (`stage-apply`'s `needs-restart` names
+    /// `stage-play` here). Absent on the wire when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remedy: Option<String>,
     /// The setup AFTER the verb — unchanged when it was refused.
     pub setup: StagedSetupView,
     /// A save happened, and this is the config file it wrote. `None` for every
@@ -1902,6 +1908,7 @@ impl StageOutcome {
             ok: false,
             error: Some(refusal.message.clone()),
             code: Some(refusal.code.clone()),
+            remedy: refusal.remedy.clone(),
             setup: StagedSetupView::of(setup),
             ..Self::default()
         }

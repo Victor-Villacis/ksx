@@ -139,6 +139,20 @@ pub enum DaemonCommand {
     /// the next [`Self::Reload`] or [`Self::Start`], both of which go back to
     /// what is on disk.
     PlayStaged(Box<ksx_core::CommitSpec>),
+    /// **Apply a STAGED setup's bindings to the running session in place** —
+    /// the staging counterpart of [`Self::ApplyBindings`], with one deliberate
+    /// difference: where a structural change makes `ApplyBindings` bounce the
+    /// session (the edit is already SAVED, so restarting onto it is honest),
+    /// here it REFUSES and names the difference. An unsaved draft must never
+    /// tear a session down on its own — replacement is
+    /// [`Self::PlayStaged`], behind the surface's own explicit confirmation.
+    ///
+    /// Carries the [`ksx_core::CommitSpec`] for [`PlayStaged`](Self::PlayStaged)'s
+    /// reason: the setup exists only in [`DaemonState::staged`]. On success the
+    /// factory is repointed at the applied spec ([`point_at_staged`]), so a
+    /// later pause + resume brings back the draft that is actually playing.
+    /// The verdict lands in [`DaemonState::apply`], like every apply.
+    ApplyStaged(Box<ksx_core::CommitSpec>),
     /// Print the current state (headless mode's `status`).
     Status,
     /// Stop everything and exit the process.
@@ -316,6 +330,12 @@ pub struct ApplyReport {
     pub hot: bool,
     /// The session was torn down and started again.
     pub restarted: bool,
+    /// The change is REAL but cannot happen in place: applying it means
+    /// replugging the pads. Only [`DaemonCommand::ApplyStaged`] sets it — its
+    /// structural refusal, which the pipe reports as `needs-restart` so a
+    /// surface can offer the replace verb. `ApplyBindings` never does: its
+    /// edit is already saved, so it bounces instead of refusing.
+    pub needs_restart: bool,
     /// One human sentence, already saying which of the two happened.
     pub message: String,
 }
@@ -869,6 +889,18 @@ pub fn control_loop_with(
                     s.apply = Some(report);
                 }
             }
+            // The draft's road into a LIVE session without replugging: hot or
+            // refused, never a bounce — an unsaved draft does not get to tear
+            // a session down (that is `PlayStaged`, behind the surface's own
+            // confirmation).
+            Ok(DaemonCommand::ApplyStaged(spec)) => {
+                apply_generation += 1;
+                let report = apply_staged(apply_generation, &session, factory, &state, *spec);
+                let _ = writeln!(out, "{}", report.message);
+                if let Ok(mut s) = state.lock() {
+                    s.apply = Some(report);
+                }
+            }
             // Both windows are opened by the HOST, on a thread of its own, and
             // the control loop does not wait for either. A window that cannot
             // be created logs and says so; it never stops emulation, and
@@ -997,6 +1029,7 @@ fn apply_bindings(
         ok,
         hot,
         restarted,
+        needs_restart: false,
         message,
     };
     if session.is_none() {
@@ -1082,6 +1115,140 @@ fn apply_bindings(
             factory,
             panel,
             out,
+        ),
+    }
+}
+
+/// [`DaemonCommand::ApplyStaged`]: the staged draft's bindings into the live
+/// engine, or a refusal in words. The four answers, stated once:
+///
+/// - **nothing running** → refused. The draft lives in memory; there is no
+///   disk for "the next start" to read it from, so unlike
+///   [`apply_bindings`]'s nothing-running case there is nothing true to
+///   promise. Play is the verb that starts it.
+/// - **binding-only difference** → the rebuilt tables go to the live engine;
+///   pads stay plugged. The factory is then repointed at the applied spec
+///   ([`point_at_staged`]) so pause + resume brings back what is actually
+///   playing, not what was playing before the apply.
+/// - **structural difference** → refused, with [`SessionShape::bounce_reason`]'s
+///   own sentence naming what changed. NEVER a bounce: the draft is unsaved,
+///   and replacing a session it did not create is a decision the user makes
+///   through Play, not a side effect of an apply that could not be cheap.
+/// - **cannot tell** (still starting, no engine handle; or the draft does not
+///   resolve) → refused, session untouched, for `apply_bindings`'s reason:
+///   tearing a working session down over a draft we could not even compare is
+///   the worst of both.
+fn apply_staged(
+    generation: u64,
+    session: &Option<LiveSession>,
+    factory: &mut dyn SessionFactory,
+    state: &SharedState,
+    spec: ksx_core::CommitSpec,
+) -> ApplyReport {
+    let report = |ok: bool, hot: bool, message: String| ApplyReport {
+        generation,
+        ok,
+        hot,
+        restarted: false,
+        needs_restart: false,
+        message,
+    };
+    if session.is_none() {
+        return report(
+            false,
+            false,
+            "nothing is running to apply the draft into — Play starts it".to_owned(),
+        );
+    }
+
+    // Resolution (device enumeration included) happens HERE, on the control
+    // loop, exactly where `apply_bindings` resolves its plan: the comparison
+    // below is against resolved DeviceIds, so an unresolved spec cannot be
+    // compared honestly.
+    let plan = match crate::stage::resolve(&spec) {
+        Ok(plan) => plan,
+        Err(err) => {
+            return report(
+                false,
+                false,
+                format!(
+                    "the session keeps its current bindings: the draft does not resolve ({err})"
+                ),
+            );
+        }
+    };
+    apply_staged_plan(generation, session, factory, state, spec, &plan)
+}
+
+/// [`apply_staged`] after resolution — split so a test can hand it a plan
+/// without enumerating hardware.
+fn apply_staged_plan(
+    generation: u64,
+    session: &Option<LiveSession>,
+    factory: &mut dyn SessionFactory,
+    state: &SharedState,
+    spec: ksx_core::CommitSpec,
+    plan: &crate::run::plan::RunPlan,
+) -> ApplyReport {
+    let report = |ok: bool, hot: bool, message: String| ApplyReport {
+        generation,
+        ok,
+        hot,
+        restarted: false,
+        needs_restart: false,
+        message,
+    };
+    // Same grace as `apply_bindings`, same reason: mapping right after Play is
+    // the normal case, and the engine's swap door appears a moment after the
+    // session thread does.
+    let handle = {
+        let deadline = Instant::now() + SWAP_HANDLE_GRACE;
+        loop {
+            match session.as_ref().and_then(|live| live.swap.handle()) {
+                Some(handle) => break Some(handle),
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                None => break None,
+            }
+        }
+    };
+    match handle {
+        Some(handle) => match handle.apply(plan) {
+            Ok(crate::run::supervisor::SwapVerdict::Applied) => {
+                // The session now RUNS the draft, so the origin must say so —
+                // a pause followed by resume puts back the applied draft (as
+                // it stands then), never the setup the session started as.
+                point_at_staged(factory, state, Some(spec));
+                report(
+                    true,
+                    true,
+                    "the draft's bindings are live — pads untouched".to_owned(),
+                )
+            }
+            Ok(crate::run::supervisor::SwapVerdict::NeedsRestart(reason)) => ApplyReport {
+                generation,
+                ok: false,
+                hot: false,
+                restarted: false,
+                needs_restart: true,
+                message: format!(
+                    "the draft cannot go into the running session: {reason}, and that means \
+                     replugging the pads — nothing changed; Play replaces the session"
+                ),
+            },
+            Err(err) => report(
+                false,
+                false,
+                format!("nothing changed: {err} — Play starts the draft fresh"),
+            ),
+        },
+        None => report(
+            false,
+            false,
+            "the session is still starting and has no engine to swap into yet — nothing \
+             changed; try again in a moment, or Play to replace it"
+                .to_owned(),
         ),
     }
 }
@@ -2230,6 +2397,176 @@ mod tests {
             .expect("a device, a controller and an answer")
     }
 
+    // -- stage-apply: the draft into a LIVE session, hot or refused ---------
+
+    /// A plan whose one slot binds `preset`, on a fixed test board.
+    fn draft_plan(preset: ksx_core::Preset) -> crate::run::plan::RunPlan {
+        let device = ksx_core::DeviceId::from(r"HID\VID_D209&PID_0430&MI_00\TEST");
+        crate::run::plan::RunPlan {
+            source: crate::run::plan::PlanSource::Config,
+            config_path: std::path::PathBuf::from("test"),
+            slots: vec![ksx_core::ResolvedSlot {
+                spec: ksx_core::SlotSpec::new(1, Some(device.clone()), None, preset.name.clone())
+                    .expect("valid slot"),
+                preset,
+            }],
+            block_keyboards: ksx_core::Blocking::BoundKeys,
+            block_mice: false,
+            captureable: vec![device],
+            winusb: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn a_preset(name: &str, key: ksx_core::key::Key) -> ksx_core::Preset {
+        ksx_core::Preset {
+            name: name.to_owned(),
+            entries: vec![(
+                key,
+                ksx_core::preset::Binding::Button(ksx_core::pad::XButton::A),
+            )],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: Vec::new(),
+            protected: false,
+        }
+    }
+
+    /// A live session whose engine door is a test channel publishing `shape`.
+    fn live_session_shaped(
+        shape: crate::run::supervisor::SessionShape,
+    ) -> (
+        LiveSession,
+        crossbeam_channel::Receiver<crate::run::supervisor::EngineCtl>,
+    ) {
+        let swap = crate::run::supervisor::HotSwapSlot::default();
+        let rx = swap.publish_test_handle(shape);
+        (
+            LiveSession {
+                stop: Arc::new(AtomicBool::new(false)),
+                handle: None,
+                started: Instant::now(),
+                health: HealthSlot::default(),
+                swap,
+                reported: None,
+            },
+            rx,
+        )
+    }
+
+    /// **The binding-only case end to end**: the rebuilt tables go through the
+    /// engine door, the pads are never touched — and the ORIGIN moves to the
+    /// draft, because the session now runs it and a pause + resume must bring
+    /// back what is actually playing.
+    #[test]
+    fn applying_a_binding_only_draft_hot_swaps_and_repoints_the_origin() {
+        let running = crate::run::supervisor::SessionShape::of(&draft_plan(a_preset(
+            "Player 1",
+            ksx_core::key::Key::A,
+        )));
+        let (session, rx) = live_session_shaped(running);
+        let session = Some(session);
+        // The same shape, a different binding: the one change that is hot.
+        let plan = draft_plan(a_preset("Player 1", ksx_core::key::Key::B));
+        let mut factory = FakeFactory::default();
+        let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+
+        let report = apply_staged_plan(7, &session, &mut factory, &state, a_staged_setup(), &plan);
+        assert!(report.ok, "{}", report.message);
+        assert!(report.hot);
+        assert!(!report.restarted && !report.needs_restart);
+        assert_eq!(report.generation, 7);
+        assert_eq!(
+            report.message,
+            "the draft's bindings are live — pads untouched"
+        );
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(crate::run::supervisor::EngineCtl::SwapTables(_))
+            ),
+            "the tables must reach the live engine"
+        );
+        assert!(
+            factory.staged.lock().unwrap().is_some(),
+            "the factory now points at the draft the session is running"
+        );
+        assert_eq!(
+            state.lock().unwrap().origin,
+            ksx_api::SessionOrigin::Staged,
+            "a pause + resume must put back the APPLIED draft"
+        );
+    }
+
+    /// **A structural difference refuses and never bounces.** `ApplyBindings`
+    /// restarts the session for a structural change because its edit is
+    /// already saved; an unsaved draft has no such standing — replacement is
+    /// `PlayStaged`, behind the surface's own confirmation. The refusal names
+    /// the difference and touches nothing.
+    #[test]
+    fn a_structurally_different_draft_is_refused_never_bounced() {
+        let running = crate::run::supervisor::SessionShape::of(&draft_plan(a_preset(
+            "Player 1",
+            ksx_core::key::Key::A,
+        )));
+        let (session, rx) = live_session_shaped(running);
+        let session = Some(session);
+        // Same board, same preset name — but the controller is a different
+        // KIND of pad, which is a driver-visible change.
+        let mut plan = draft_plan(a_preset("Player 1", ksx_core::key::Key::A));
+        plan.slots[0].spec.persona = ksx_core::Persona::PlayStation;
+        let mut factory = FakeFactory::default();
+        let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+
+        let report = apply_staged_plan(3, &session, &mut factory, &state, a_staged_setup(), &plan);
+        assert!(!report.ok);
+        assert!(report.needs_restart, "the pipe's `needs-restart` source");
+        assert!(!report.hot && !report.restarted);
+        assert!(
+            report.message.contains("changed persona"),
+            "the difference is NAMED: {}",
+            report.message
+        );
+        assert!(
+            report.message.contains("Play replaces the session"),
+            "{}",
+            report.message
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing may reach the engine on a refusal"
+        );
+        assert!(
+            factory.staged.lock().unwrap().is_none(),
+            "a refused draft repoints nothing"
+        );
+        // The origin is left exactly as it was — here, the default a fresh
+        // state carries — because the session is still running what it ran.
+        assert_eq!(
+            state.lock().unwrap().origin,
+            ksx_api::SessionOrigin::Unknown
+        );
+    }
+
+    /// **Nothing running, nothing to apply into.** Unlike `ApplyBindings`'s
+    /// nothing-running case there is no disk for "the next start" to read the
+    /// draft from, so there is nothing true to promise — the refusal points at
+    /// Play instead.
+    #[test]
+    fn applying_with_no_session_is_refused_in_words() {
+        let mut factory = FakeFactory::default();
+        let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+        let report = apply_staged(1, &None, &mut factory, &state, a_staged_setup());
+        assert!(!report.ok);
+        assert!(!report.needs_restart);
+        assert_eq!(
+            report.message,
+            "nothing is running to apply the draft into — Play starts it"
+        );
+        assert!(factory.staged.lock().unwrap().is_none());
+    }
+
     /// **The daemon records which of its two starts ran**, because that is the
     /// only place the fact exists: from outside, a session built from
     /// `config.toml` and one built from an unsaved staged setup are identical.
@@ -3133,6 +3470,9 @@ mod tests {
                     // holding one, and the tray holds nothing. It reaches the
                     // control loop over the pipe (`stage-play`).
                     DaemonCommand::PlayStaged(_) => "start",
+                    // Same rule as both above: the draft's hot apply is a
+                    // surface act, pipe-only (`stage-apply`).
+                    DaemonCommand::ApplyStaged(_) => "reload",
                 }),
                 "{command:?} is in the tray menu but not reachable headlessly"
             );

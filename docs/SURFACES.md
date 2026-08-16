@@ -155,7 +155,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 
 | Capability | CLI | egui (cabinet) | Studio (browser) |
 |---|---|---|---|
-| First run: stage a setup, save or play | partial (`ksx stage` view/adopt/reorder/socd; save and play stay surface acts) | — | **primary** |
+| First run: stage a setup, save or play | partial (`ksx stage` view/adopt/reorder/socd/apply; save and play stay surface acts) | — | **primary** |
 | Author presets / key mappings | owns | — | **primary** |
 | Edit configuration | owns | slot→preset only | **primary** |
 | Rename / delete a controller layout | owns | — | **primary** (`/profiles`) |

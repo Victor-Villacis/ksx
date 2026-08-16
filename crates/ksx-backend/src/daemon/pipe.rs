@@ -519,7 +519,7 @@ fn handle_request_with_shutdown(
     };
     let Some(verb) = request.get("verb").and_then(|v| v.as_str()) else {
         return err_msg(
-            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"#,
+            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel)"#,
         );
     };
     match verb {
@@ -600,6 +600,7 @@ fn handle_request_with_shutdown(
         "stage-macro" => handle_stage_macro(&request, &deps.state),
         "stage-commit" => handle_stage_commit(deps),
         "stage-play" => handle_stage_play(deps, settle),
+        "stage-apply" => handle_stage_apply(deps, settle),
         "stage-adopt" => handle_stage_adopt(&request, deps),
         // Learn needs an IDLE daemon, and this refusal is deliberate — it was
         // re-examined in full on 2026-08-05 and kept.
@@ -669,7 +670,7 @@ fn handle_request_with_shutdown(
         other => err_msg(format!(
             "unknown verb '{other}' (status | start | stop | reload | quit | map | map-macro | \
              map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | \
-             stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"
+             stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel)"
         )),
     }
 }
@@ -1576,6 +1577,111 @@ fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
     outcome.saved = None;
     outcome.backup = None;
     stage_json(&outcome)
+}
+
+/// `{"verb":"stage-apply"}` — the draft's BINDINGS into the running session in
+/// place: pads stay plugged, nothing re-enumerates, nothing is written.
+///
+/// The dirty flag deliberately does not move: applying is not saving, and the
+/// draft still differs from its origin on disk exactly as much as it did. What
+/// changes is the session's ORIGIN — the control loop repoints it at the
+/// applied spec on success, so pause + resume brings back what is actually
+/// playing.
+///
+/// Refusals keep the session untouched, every one of them: an unsaved draft
+/// never tears a session down. Structural difference answers `needs-restart`
+/// with [`SessionShape::bounce_reason`]'s sentence naming what changed, and
+/// the remedy is the verb that IS allowed to replace the session —
+/// `stage-play`, behind the surface's own confirmation.
+///
+/// [`SessionShape::bounce_reason`]: crate::run::supervisor::SessionShape::bounce_reason
+fn handle_stage_apply(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
+    // Committed from the setup as it stands NOW — `play_staged`'s rule, for
+    // the same reason: the whole point is carrying the edits somebody just
+    // made into the live session.
+    let (spec, staged, meta) = {
+        let Ok(s) = deps.state.lock() else {
+            return stage_json(&ksx_api::StageOutcome::unavailable(
+                "the daemon's state lock is poisoned, so the staged setup could not be applied",
+            ));
+        };
+        match s.staged.commit() {
+            Ok(spec) => (spec, s.staged.clone(), s.stage_meta.clone()),
+            Err(refusal) => {
+                return stage_json(&stamp_stage_meta(
+                    ksx_api::StageOutcome::refused(
+                        &s.staged,
+                        &ksx_api::Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
+                    ),
+                    &s.stage_meta,
+                ));
+            }
+        }
+    };
+    let refused = |refusal: ksx_api::Refusal| {
+        stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&staged, &refusal),
+            &meta,
+        ))
+    };
+
+    // The pure preflight, before anything is enqueued (`play_staged`'s rule):
+    // a draft that cannot even plan is refused with the planner's own
+    // sentence, which names the slot and the preset.
+    if let Err(err) = crate::stage::plan(&spec) {
+        return refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            err.to_string(),
+        ));
+    }
+    if !matches!(
+        snapshot(&deps.state).run,
+        RunState::Running { .. } | RunState::Starting
+    ) {
+        return refused(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            "nothing is running to apply the draft into",
+            "Play starts it (`stage-play`)",
+        ));
+    }
+
+    let baseline = snapshot(&deps.state)
+        .apply
+        .map_or(0, |report| report.generation);
+    if deps
+        .tx
+        .send(DaemonCommand::ApplyStaged(Box::new(spec)))
+        .is_err()
+    {
+        return refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            "the daemon is shutting down",
+        ));
+    }
+    match await_apply(&deps.state, baseline, settle) {
+        Some(report) if report.ok => {
+            let mut outcome = ksx_api::StageOutcome::ok(&staged, report.message);
+            outcome.playing = true;
+            // NEVER a path: applying writes nothing (`stage-play`'s rule).
+            outcome.saved = None;
+            outcome.backup = None;
+            stage_json(&stamp_stage_meta(outcome, &meta))
+        }
+        Some(report) if report.needs_restart => refused(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::NEEDS_RESTART,
+            report.message,
+            "Play replaces the running session with the draft (`stage-play`)",
+        )),
+        Some(report) => refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            report.message,
+        )),
+        None => refused(ksx_api::Refusal::new(
+            ksx_api::codes::PIPE_ERROR,
+            "the daemon has not reported applying the draft yet — the session may still be \
+             starting",
+        )),
+    }
 }
 
 /// `{"verb":"start"}` — a session from **the config on disk**, optionally under
@@ -3685,6 +3791,141 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         );
     }
 
+    // -- stage-apply: the draft into a LIVE session, hot or refused ----------
+
+    /// The happy half: a running session, a ready draft, and a control loop
+    /// that answers "hot". The verb enqueues `ApplyStaged` with the WHOLE spec
+    /// (the setup is not on disk), claims no file, and leaves the stage staged
+    /// — applying is not saving, and the dirty flag must not move.
+    #[test]
+    fn applying_a_staged_draft_enqueues_the_spec_and_claims_no_file() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_ready(&deps);
+        // The stage has been edited, so the visit is dirty — and must STAY so.
+        assert!(snapshot(&state).stage_meta.dirty);
+
+        let loop_thread = answer_apply(
+            rx,
+            state.clone(),
+            super::super::ApplyReport {
+                generation: 0,
+                ok: true,
+                hot: true,
+                restarted: false,
+                needs_restart: false,
+                message: "the draft's bindings are live — pads untouched".to_owned(),
+            },
+        );
+        let applied = handle_request(r#"{"verb":"stage-apply"}"#, &deps, Duration::from_secs(2));
+        assert_eq!(applied["ok"], true, "{applied}");
+        assert_eq!(applied["playing"], true, "{applied}");
+        assert!(
+            applied["message"]
+                .as_str()
+                .unwrap()
+                .contains("pads untouched"),
+            "{applied}"
+        );
+        // NEVER a path: applying writes nothing.
+        assert_eq!(applied["saved"], serde_json::Value::Null);
+        assert_eq!(applied["backup"], serde_json::Value::Null);
+        // Applying is not saving: the draft is still here, still unsaved.
+        assert_eq!(applied["setup"]["empty"], false);
+        assert_eq!(applied["setup"]["dirty"], true, "{applied}");
+
+        let DaemonCommand::ApplyStaged(spec) = loop_thread.join().unwrap() else {
+            panic!("stage-apply must enqueue ApplyStaged, not ApplyBindings or a start");
+        };
+        assert_eq!(spec.slots.len(), 1);
+    }
+
+    /// The structural refusal carries the stable `needs-restart` code, the
+    /// difference in the message, and the replace verb as the remedy — the
+    /// three things a surface needs to offer the honest next step.
+    #[test]
+    fn a_structural_apply_answers_needs_restart_with_the_replace_remedy() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_ready(&deps);
+
+        let loop_thread = answer_apply(
+            rx,
+            state.clone(),
+            super::super::ApplyReport {
+                generation: 0,
+                ok: false,
+                hot: false,
+                restarted: false,
+                needs_restart: true,
+                message: "the draft cannot go into the running session: the slot count changed \
+                          (1 → 2), and that means replugging the pads — nothing changed; Play \
+                          replaces the session"
+                    .to_owned(),
+            },
+        );
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, Duration::from_secs(2));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], "needs-restart", "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("the slot count changed"),
+            "{refused}"
+        );
+        assert!(
+            refused["remedy"].as_str().unwrap().contains("stage-play"),
+            "{refused}"
+        );
+        assert!(matches!(
+            loop_thread.join().unwrap(),
+            DaemonCommand::ApplyStaged(_)
+        ));
+    }
+
+    /// With nothing running there is no session to apply into, and no disk
+    /// for "the next start" to read the draft from — refused before anything
+    /// is enqueued, with Play as the remedy.
+    #[test]
+    fn applying_with_nothing_running_is_refused_before_anything_is_enqueued() {
+        let state = shared(RunState::Stopped);
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state, no_profiles());
+        stage_ready(&deps);
+
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("nothing is running"),
+            "{refused}"
+        );
+        assert!(
+            refused["remedy"].as_str().unwrap().contains("stage-play"),
+            "{refused}"
+        );
+        assert!(rx.try_recv().is_err(), "nothing may be enqueued");
+    }
+
+    /// An incomplete draft refuses with the stage's own sentence — same words
+    /// as `stage-play` would give — and enqueues nothing.
+    #[test]
+    fn applying_an_incomplete_stage_is_refused_with_the_stages_own_words() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state, no_profiles());
+        // Nothing staged at all: commit() has a refusal for that.
+
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(rx.try_recv().is_err(), "nothing may be enqueued");
+    }
+
     // -- pause and resume (docs/FIRST-RUN.md §2, §6) -------------------------
     //
     // The mapper refuses to learn while a session runs, and answers that with
@@ -4554,6 +4795,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: true,
                 restarted: false,
+                needs_restart: false,
                 message: "bindings applied live — pads untouched".to_owned(),
             },
         );
@@ -4670,6 +4912,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: true,
                 restarted: false,
+                needs_restart: false,
                 message: "bindings applied live — pads untouched".to_owned(),
             },
         );
@@ -4712,6 +4955,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: false,
                 restarted: true,
+                needs_restart: false,
                 message: "session restarted — slot 3 changed persona (Xbox 360 → PlayStation \
                           (DS4)) needs the pads replugged"
                     .to_owned(),

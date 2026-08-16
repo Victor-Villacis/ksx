@@ -377,8 +377,8 @@ fn classify(cell: &str) -> Claim {
         "owns" | "primary" | "view" | "convenience" | "input" => Claim::Shipped,
         "slot→preset" => Claim::Shipped,
         // A face that ships SOME of the row's verbs and says which — the
-        // stage row's CLI cell (view/adopt/reorder/socd, while save and play
-        // stay surface acts). Shipped: the named verbs must resolve.
+        // stage row's CLI cell (view/adopt/reorder/socd/apply, while save and
+        // play stay surface acts). Shipped: the named verbs must resolve.
         "partial" => Claim::Shipped,
         "planned" | "never" | "—" | "-" => Claim::Absent,
         other => panic!(
@@ -483,7 +483,13 @@ const ANCHORS: &[Anchors] = &[
         // surface acts on purpose: the two buttons carry the §2 consequence
         // copy, and a shell spelling of them would be a third place for that
         // copy to drift. The row's CLI cell says exactly that.
-        cli: &["stage view", "stage adopt", "stage reorder", "stage socd"],
+        cli: &[
+            "stage view",
+            "stage adopt",
+            "stage reorder",
+            "stage socd",
+            "stage apply",
+        ],
         egui: &["Screen::FirstRun", "Ask::Stage"],
         // The two acts §2 requires be separable, plus the page they live on,
         // plus the one that gives a staged controller its BINDINGS. Naming

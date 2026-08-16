@@ -29,6 +29,10 @@ pub enum Verb {
     /// One staged slot's simultaneous-opposite-direction policy
     /// (`off` | `neutral` | `up-priority` | `last-input` | `first-input` — `ksx_core::Socd`'s own names).
     Socd { slot: u8, socd: String },
+    /// Apply the draft's bindings to the RUNNING session in place — pads stay
+    /// plugged, nothing written. The daemon refuses (naming the difference)
+    /// when the draft differs structurally; `stage-play` is the replace verb.
+    Apply,
 }
 
 impl Verb {
@@ -38,6 +42,7 @@ impl Verb {
             Self::Adopt { game } => Request::StageAdopt {
                 profile: game.clone(),
             },
+            Self::Apply => Request::StageApply,
             Self::Reorder { numbers } => {
                 Request::StageEdit(Box::new(ksx_api::StageEdit::ReorderSlots {
                     numbers: numbers.clone(),
@@ -170,6 +175,10 @@ mod tests {
         assert_eq!(
             Verb::Adopt { game: None }.request().to_string(),
             r#"{"verb":"stage-adopt"}"#
+        );
+        assert_eq!(
+            Verb::Apply.request().to_string(),
+            r#"{"verb":"stage-apply"}"#
         );
         assert_eq!(
             Verb::Adopt {

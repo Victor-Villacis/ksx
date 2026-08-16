@@ -1228,6 +1228,19 @@ enum StageCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Apply the draft's bindings to the running session, pads untouched
+    ///
+    /// Binding-only differences go into the live engine in place: pads stay
+    /// plugged, keyboards stay captured, a game in progress notices nothing
+    /// but the new bindings. A draft that differs STRUCTURALLY — controllers
+    /// added or removed, personas, devices, blocking — is refused with the
+    /// difference named, because replacing a running session is `stage play`'s
+    /// job and yours to confirm. Nothing is written to disk either way.
+    Apply {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2067,6 +2080,7 @@ fn main() -> anyhow::Result<()> {
             StageCommand::Socd { slot, socd, json } => {
                 stage_cli::run(stage_cli::Verb::Socd { slot, socd }, json)
             }
+            StageCommand::Apply { json } => stage_cli::run(stage_cli::Verb::Apply, json),
         },
         Command::Config { command } => match command {
             ConfigCommand::Export {

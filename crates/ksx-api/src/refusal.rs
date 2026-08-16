@@ -46,6 +46,11 @@ pub mod codes {
     /// one that has it. This is the honest answer a defaulted trait method
     /// gives, and it is never a silent no-op.
     pub const NOT_HERE: &str = "not-here";
+    /// The change is real but cannot happen in place: applying it means
+    /// replugging the pads (`stage-apply` on a structurally different draft).
+    /// The message names WHAT differs; the surface's honest next offer is the
+    /// verb that replaces the session (`stage-play`).
+    pub const NEEDS_RESTART: &str = "needs-restart";
 }
 
 /// A refusal: what was refused, why, and — when one exists — the command that

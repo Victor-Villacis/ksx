@@ -108,6 +108,17 @@ pub struct StagedSlotView {
     /// mapper edit until it is refreshed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoring: Option<ksx_config::PresetFile>,
+    /// This slot's simultaneous-opposite-direction policy — a
+    /// [`ksx_core::Socd`] name (`off` | `neutral` | `up-priority`). Older
+    /// daemons did not serve the field; absence reads as the default, which
+    /// is also what every staged slot starts on.
+    #[serde(default)]
+    pub socd: String,
+    /// The policy in the words a player reads ([`SocdOption::roster`]'s own
+    /// title), served beside the canonical name so no surface grows a second
+    /// name→label table.
+    #[serde(default)]
+    pub socd_label: String,
     /// **How many bindings a key can actually reach**
     /// ([`ksx_core::Preset::live_bindings`]).
     ///
@@ -422,6 +433,22 @@ pub struct StagedSetupView {
     pub default_layout: String,
     /// The blocking answers, in §3's own words.
     pub blocking_options: Vec<BlockingOption>,
+    /// The SOCD policies a slot can choose, served for the reason every
+    /// roster is: a surface that hardcoded three names would keep offering
+    /// them after the engine grew a fourth. Older daemons omit the field.
+    #[serde(default)]
+    pub socd_options: Vec<SocdOption>,
+    /// **The draft has edits its origin has not seen.** Written by the
+    /// DAEMON, which owns the visit — [`Self::of`] cannot know it, so it
+    /// composes `false` and the daemon overlays the truth. Feeds the dirty
+    /// dot and "Unsaved changes".
+    #[serde(default)]
+    pub dirty: bool,
+    /// Where this draft came from: empty for a fresh visit, `config` when it
+    /// was adopted from the saved config.toml, `profile:<title>` when adopted
+    /// from one saved game. Daemon-written, like [`Self::dirty`].
+    #[serde(default)]
+    pub origin: String,
     /// [`ESCAPE_HATCH_LINE`], served so it cannot be paraphrased on the way to
     /// a screen. §3 requires it beside the question, not buried.
     pub escape_hatch: String,
@@ -464,6 +491,8 @@ impl StagedSetupView {
                     preset: slot.preset.name.clone(),
                     authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
                     bindings: slot.preset.live_bindings(),
+                    socd: slot.socd.as_str().to_owned(),
+                    socd_label: socd_title(slot.socd),
                 })
                 .collect(),
             blocking: setup.blocking().map(|b| b.as_str().to_owned()),
@@ -476,12 +505,26 @@ impl StagedSetupView {
             layouts: TemplateRow::roster(),
             default_layout: default_layout(),
             blocking_options: BlockingOption::roster(),
+            socd_options: SocdOption::roster(),
             escape_hatch: ESCAPE_HATCH_LINE.to_owned(),
             blocking_scope: BLOCKING_SCOPE_LINE.to_owned(),
             not_ready: ready.as_ref().err().map(ToString::to_string),
             ready: ready.is_ok(),
+            // The daemon owns the visit; a view composed from the bare setup
+            // honestly claims nothing about it.
+            dirty: false,
+            origin: String::new(),
         }
     }
+}
+
+/// One policy's title, from [`SocdOption::roster`] — the single wording site.
+fn socd_title(socd: ksx_core::Socd) -> String {
+    SocdOption::roster()
+        .into_iter()
+        .find(|option| option.name == socd.as_str())
+        .map(|option| option.title)
+        .unwrap_or_else(|| socd.as_str().to_owned())
 }
 
 /// One edit to a staged setup, as a surface spells it.
@@ -567,6 +610,17 @@ pub enum StageEdit {
     /// Delete a staged controller. Free and complete: no file, no backup, no
     /// trace.
     RemoveSlot { number: u8 },
+    /// **Reorder the staged controllers** — `numbers` is the CURRENT slot
+    /// numbers in the desired new order, a whole-order write (the same
+    /// whole-value rule `SetBindings` and `bind_keys` follow, so a drag that
+    /// raced a poll carries its entire intent). The result renumbers
+    /// contiguously 1..=n; each controller keeps its persona, bindings and
+    /// SOCD answer.
+    ReorderSlots { numbers: Vec<u8> },
+    /// Set one staged controller's simultaneous-opposite-direction policy —
+    /// a `ksx_core::Socd` name (`off` | `neutral` | `up-priority`), the same
+    /// vocabulary `ksx slot assign --socd` writes onto a saved slot.
+    SetSocd { number: u8, socd: String },
     /// Moment 6's one question: `whole` (freeze) or `bound-keys` (split).
     SetBlocking { blocking: String },
     /// **Start over.** Always works.
@@ -688,6 +742,18 @@ impl StageEdit {
                 setup.set_bindings(*number, core).map_err(refuse)
             }
             Self::RemoveSlot { number } => setup.remove_slot(*number).map_err(refuse),
+            Self::ReorderSlots { numbers } => setup.reorder_slots(numbers).map_err(refuse),
+            Self::SetSocd { number, socd } => {
+                let socd: ksx_core::Socd =
+                    socd.trim().parse().map_err(|err: ksx_core::UnknownSocd| {
+                        Refusal::with_remedy(
+                            codes::BAD_REQUEST,
+                            err.to_string(),
+                            "send a ksx_core::Socd name: off | neutral | up-priority",
+                        )
+                    })?;
+                setup.set_socd(*number, socd).map_err(refuse)
+            }
             Self::SetBlocking { blocking } => {
                 let blocking: Blocking =
                     blocking
@@ -1900,7 +1966,12 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             let persona: Persona = option.name.parse().expect("a canonical name");
             assert_eq!(option.can_plug, persona.can_plug(), "{}", option.name);
             assert_eq!(option.available, persona.can_plug(), "{}", option.name);
-            assert_eq!(option.backend, persona.backend().as_str(), "{}", option.name);
+            assert_eq!(
+                option.backend,
+                persona.backend().as_str(),
+                "{}",
+                option.name
+            );
             assert_eq!(
                 option.backend_label,
                 persona.backend().label(),
@@ -1957,7 +2028,10 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .find(|option| option.name == "dualsense")
             .expect("DualSense remains in the served roster");
         assert!(dualsense.can_plug, "this remains a build capability");
-        assert!(!dualsense.available, "a second instance must not be offered");
+        assert!(
+            !dualsense.available,
+            "a second instance must not be offered"
+        );
         assert!(
             dualsense
                 .unavailable_reason
@@ -1982,11 +2056,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         let mut setup = StagedSetup::new();
         for number in 1..=MAX_XINPUT_SLOTS {
             setup = setup
-                .add_slot(
-                    number,
-                    Persona::Xbox360,
-                    ksx_core::Preset::builtin_empty(),
-                )
+                .add_slot(number, Persona::Xbox360, ksx_core::Preset::builtin_empty())
                 .expect("the four legal XInput slots stage");
         }
         let view = StagedSetupView::of(&setup);
@@ -2004,12 +2074,11 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             "{:?}",
             xbox.unavailable_reason
         );
-        assert!(
-            view.personas
-                .iter()
-                .find(|option| option.name == "playstation")
-                .is_some_and(|option| option.available)
-        );
+        assert!(view
+            .personas
+            .iter()
+            .find(|option| option.name == "playstation")
+            .is_some_and(|option| option.available));
     }
 
     /// Older daemon JSON had neither backend/capacity metadata nor the
@@ -2517,6 +2586,13 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 persona: "playstation".into(),
             },
             StageEdit::RemoveSlot { number: 1 },
+            StageEdit::ReorderSlots {
+                numbers: vec![3, 1, 2],
+            },
+            StageEdit::SetSocd {
+                number: 1,
+                socd: "up-priority".into(),
+            },
             StageEdit::SetBlocking {
                 blocking: "whole".into(),
             },

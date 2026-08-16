@@ -376,6 +376,10 @@ fn classify(cell: &str) -> Claim {
     match plain.split_whitespace().next().unwrap_or("") {
         "owns" | "primary" | "view" | "convenience" | "input" => Claim::Shipped,
         "slot→preset" => Claim::Shipped,
+        // A face that ships SOME of the row's verbs and says which — the
+        // stage row's CLI cell (view/adopt/reorder/socd, while save and play
+        // stay surface acts). Shipped: the named verbs must resolve.
+        "partial" => Claim::Shipped,
         "planned" | "never" | "—" | "-" => Claim::Absent,
         other => panic!(
             "docs/SURFACES.md §3 has a cell starting `{other}` ({cell:?}) that this guard \
@@ -474,12 +478,12 @@ struct Anchors {
 const ANCHORS: &[Anchors] = &[
     Anchors {
         capability: "First run: stage a setup, save or play",
-        // `planned` — and it is the reason the bookkeeping test below stopped
-        // demanding that every CLI anchor resolve. `ksx stage` does not exist;
-        // saying so IS the claim, exactly as `Screen::Mapper` below says the
-        // cabinet has no mapper. §3c records why the build order ran backwards
-        // here.
-        cli: &["stage"],
+        // `ksx stage` exists now (view / adopt / reorder / socd — the
+        // operator faces of the daemon-held draft). Save and Play stay
+        // surface acts on purpose: the two buttons carry the §2 consequence
+        // copy, and a shell spelling of them would be a third place for that
+        // copy to drift. The row's CLI cell says exactly that.
+        cli: &["stage view", "stage adopt", "stage reorder", "stage socd"],
         egui: &["Screen::FirstRun", "Ask::Stage"],
         // The two acts §2 requires be separable, plus the page they live on,
         // plus the one that gives a staged controller its BINDINGS. Naming

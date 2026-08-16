@@ -2327,11 +2327,7 @@ impl ControllerOutputView {
     /// DualSense is staged. It names the backend's supported personas because
     /// the Status/System panel inventories installed plumbing, while retaining
     /// the same package-versus-endpoint distinction the staged Play gate uses.
-    pub fn hidmaestro_inventory(
-        installed: bool,
-        partial: bool,
-        version: Option<String>,
-    ) -> Self {
+    pub fn hidmaestro_inventory(installed: bool, partial: bool, version: Option<String>) -> Self {
         Self::hidmaestro(
             output_requirement(ksx_core::PadBackend::HidMaestro, |_| true),
             installed,
@@ -2369,11 +2365,7 @@ impl ControllerOutputView {
         }
     }
 
-    fn base(
-        requirement: ControllerOutputRequirement,
-        code: &str,
-        version: Option<String>,
-    ) -> Self {
+    fn base(requirement: ControllerOutputRequirement, code: &str, version: Option<String>) -> Self {
         Self {
             backend: requirement.backend,
             label: requirement.label,
@@ -2525,10 +2517,7 @@ impl ControllerOutputsView {
     }
 
     /// Preserve the stage's requirements when the provider read refuses.
-    pub fn unreadable(
-        staged: &crate::StagedSetupView,
-        reason: impl std::fmt::Display,
-    ) -> Self {
+    pub fn unreadable(staged: &crate::StagedSetupView, reason: impl std::fmt::Display) -> Self {
         let requirements = Self::requirements(staged);
         if requirements.is_empty() {
             return if staged.reachable && staged.slots.is_empty() {
@@ -3580,9 +3569,10 @@ mod tests {
 
         let defaults = SetupView::default();
         assert_eq!(defaults.persona_options, crate::PersonaOption::roster());
-        assert!(defaults.persona_options.iter().any(|option| {
-            option.name == "dualsense" && option.can_plug
-        }));
+        assert!(defaults
+            .persona_options
+            .iter()
+            .any(|option| { option.name == "dualsense" && option.can_plug }));
     }
 
     fn staged_personas(personas: &[&str]) -> crate::StagedSetupView {
@@ -3651,10 +3641,8 @@ mod tests {
         assert_eq!(dualsense[0].backend, "hidmaestro");
         assert_eq!(dualsense[0].personas, vec![String::from("dualsense")]);
 
-        let mixed = ControllerOutputsView::requirements(&staged_personas(&[
-            "dualsense",
-            "xbox360",
-        ]));
+        let mixed =
+            ControllerOutputsView::requirements(&staged_personas(&["dualsense", "xbox360"]));
         assert_eq!(
             mixed
                 .iter()
@@ -3693,14 +3681,13 @@ mod tests {
     #[test]
     fn hidmaestro_is_verified_on_play_or_blocked_by_its_own_probe() {
         let staged = staged_personas(&["dualsense"]);
-        let installed = ControllerOutputsView::from_required(vec![
-            ControllerOutputView::hidmaestro(
+        let installed =
+            ControllerOutputsView::from_required(vec![ControllerOutputView::hidmaestro(
                 requirement(&staged, "hidmaestro"),
                 true,
                 false,
                 Some("1.6.1".into()),
-            ),
-        ]);
+            )]);
         assert_eq!(installed.state, controller_output_states::VERIFIED_ON_PLAY);
         assert!(installed.verified_on_play);
         assert!(!installed.ready);
@@ -3709,14 +3696,13 @@ mod tests {
         assert!(installed.line.contains("when Play starts"));
 
         for partial in [false, true] {
-            let missing = ControllerOutputsView::from_required(vec![
-                ControllerOutputView::hidmaestro(
+            let missing =
+                ControllerOutputsView::from_required(vec![ControllerOutputView::hidmaestro(
                     requirement(&staged, "hidmaestro"),
                     false,
                     partial,
                     None,
-                ),
-            ]);
+                )]);
             assert!(missing.blocked);
             assert!(!missing.can_play);
             assert_eq!(missing.state, controller_output_states::BLOCKED);

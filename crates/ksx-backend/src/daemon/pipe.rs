@@ -199,6 +199,13 @@ pub type StageCommitFn = Box<
 pub type StageCapturePreflightFn =
     Box<dyn Fn(&ksx_core::CommitSpec) -> Result<(), ksx_api::Refusal> + Send>;
 
+/// The reverse of [`StageCommitFn`]: build a stage from the saved
+/// configuration (`stage-adopt`). A READ — it takes a profile title and
+/// returns the setup or the refusal, and touches no daemon state itself, so
+/// protocol tests exercise the empty-stage guard above it with no disk.
+pub type StageAdoptFn =
+    Box<dyn Fn(Option<&str>) -> Result<ksx_core::StagedSetup, ksx_api::Refusal> + Send>;
+
 /// Everything a pipe request can reach. One struct so the transport, the
 /// tests and future verbs share a single wiring point.
 pub struct PipeDeps {
@@ -217,6 +224,9 @@ pub struct PipeDeps {
     /// The ONE act that turns the staged setup into files (`stage-commit`).
     /// Everything else about staging is memory (docs/FIRST-RUN.md §2).
     pub stage_commit: StageCommitFn,
+    /// Its reverse (`stage-adopt`): the saved configuration read into a fresh
+    /// stage, so the everyday screen can show what this machine already has.
+    pub stage_adopt: StageAdoptFn,
     pub stage_capture_preflight: StageCapturePreflightFn,
     pub learn: super::learn::LearnService,
 }
@@ -310,6 +320,11 @@ pub fn slot_assign_fn(root: ksx_config::ConfigRoot) -> SlotAssignFn {
 /// presets first, then one config write behind one timestamped backup.
 pub fn stage_commit_fn(root: ksx_config::ConfigRoot) -> StageCommitFn {
     Box::new(move |spec| crate::stage::apply(&ksx_config::Store::new(root.clone()), spec))
+}
+
+/// The real [`StageAdoptFn`]: [`crate::stage::adopt`] against `root`'s store.
+pub fn stage_adopt_fn(root: ksx_config::ConfigRoot) -> StageAdoptFn {
+    Box::new(move |profile| crate::stage::adopt(&ksx_config::Store::new(root.clone()), profile))
 }
 
 /// games.toml rows for the status response. Unreadable configuration reports
@@ -585,6 +600,7 @@ fn handle_request_with_shutdown(
         "stage-macro" => handle_stage_macro(&request, &deps.state),
         "stage-commit" => handle_stage_commit(deps),
         "stage-play" => handle_stage_play(deps, settle),
+        "stage-adopt" => handle_stage_adopt(&request, deps),
         // Learn needs an IDLE daemon, and this refusal is deliberate — it was
         // re-examined in full on 2026-08-05 and kept.
         //
@@ -1061,6 +1077,18 @@ fn macro_json(outcome: &ksx_api::MacroOutcome) -> serde_json::Value {
     })
 }
 
+/// The visit metadata, stamped onto an outcome's view. The daemon owns it —
+/// `StagedSetupView::of` composes honest defaults, and this is the one place
+/// the truth is written over them.
+fn stamp_stage_meta(
+    mut outcome: ksx_api::StageOutcome,
+    meta: &super::StageMeta,
+) -> ksx_api::StageOutcome {
+    outcome.setup.dirty = meta.dirty;
+    outcome.setup.origin = meta.origin.clone();
+    outcome
+}
+
 /// The staged setup as it stands. **A read: it changes nothing.**
 fn stage_view(state: &SharedState) -> serde_json::Value {
     let Ok(s) = state.lock() else {
@@ -1075,7 +1103,71 @@ fn stage_view(state: &SharedState) -> serde_json::Value {
     let mut outcome = ksx_api::StageOutcome::ok(&s.staged, "the staged setup");
     // A pure read reports no verb having happened.
     outcome.message = None;
-    stage_json(&outcome)
+    stage_json(&stamp_stage_meta(outcome, &s.stage_meta))
+}
+
+/// `{"verb":"stage-adopt"}` (optionally `"profile":"<title>"`) — the saved
+/// configuration, read into a fresh stage.
+///
+/// **Refused on a non-empty stage**, before any disk read: adoption must
+/// never overwrite a proposal, so a surface that means to replace one sends
+/// `discard` first, behind its own confirmation. The read itself is
+/// [`crate::stage::adopt`] behind [`PipeDeps::stage_adopt`]; nothing is
+/// written anywhere.
+fn handle_stage_adopt(request: &serde_json::Value, deps: &PipeDeps) -> serde_json::Value {
+    let profile = request
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned);
+    let Ok(mut s) = deps.state.lock() else {
+        return stage_json(&ksx_api::StageOutcome::unavailable(
+            "the daemon's state lock is poisoned, so the saved configuration could not be adopted",
+        ));
+    };
+    if !s.staged.is_empty() {
+        return stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(
+                &s.staged,
+                &ksx_api::Refusal::with_remedy(
+                    "stage-not-empty",
+                    "there is already a setup on this screen, and adopting the saved one would \
+                     overwrite it",
+                    "start over first (discard), then adopt — or keep editing what is here",
+                ),
+            ),
+            &s.stage_meta,
+        ));
+    }
+    match (deps.stage_adopt)(profile.as_deref()) {
+        Ok(setup) => {
+            s.staged = setup;
+            s.stage_meta = super::StageMeta {
+                dirty: false,
+                origin: profile
+                    .as_deref()
+                    .map_or_else(|| "config".to_owned(), |title| format!("profile:{title}")),
+            };
+            let message = profile.map_or_else(
+                || {
+                    "Showing the saved setup. Edits stay on this screen until Save or Play."
+                        .to_owned()
+                },
+                |title| {
+                    format!("Showing \"{title}\". Edits stay on this screen until Save or Play.")
+                },
+            );
+            stage_json(&stamp_stage_meta(
+                ksx_api::StageOutcome::ok(&s.staged, message),
+                &s.stage_meta,
+            ))
+        }
+        Err(refusal) => stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&s.staged, &refusal),
+            &s.stage_meta,
+        )),
+    }
 }
 
 /// `{"verb":"stage-edit","edit":"add-slot","persona":"playstation",…}` — one
@@ -1096,8 +1188,8 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
                 "code": ksx_api::codes::BAD_REQUEST,
                 "error": format!(
                     "stage-edit needs an \"edit\" naming one of choose-device | add-slot | \
-                     set-persona | set-layout | set-bindings | remove-slot | set-blocking | \
-                     discard: {err}"
+                     set-persona | set-layout | set-bindings | remove-slot | reorder-slots | \
+                     set-socd | set-blocking | discard: {err}"
                 ),
             })
         }
@@ -1117,11 +1209,24 @@ fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_a
     match edit.apply(&state.staged) {
         Ok(next) => {
             state.staged = next;
-            ksx_api::StageOutcome::ok(&state.staged, describe(edit))
+            // The visit metadata moves with the write, at this one site:
+            // Start over IS the fresh state (clean, no origin); every other
+            // edit is a proposal the origin has not seen.
+            match edit {
+                ksx_api::StageEdit::Discard => state.stage_meta = super::StageMeta::default(),
+                _ => state.stage_meta.dirty = true,
+            }
+            stamp_stage_meta(
+                ksx_api::StageOutcome::ok(&state.staged, describe(edit)),
+                &state.stage_meta,
+            )
         }
         // The setup is handed back UNCHANGED, which is the whole promise: a
         // user told "no" is still looking at a true screen.
-        Err(refusal) => ksx_api::StageOutcome::refused(&state.staged, &refusal),
+        Err(refusal) => stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&state.staged, &refusal),
+            &state.stage_meta,
+        ),
     }
 }
 
@@ -1254,6 +1359,19 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
         ksx_api::StageEdit::RemoveSlot { number } => {
             format!("Player {number} was removed from this setup.")
         }
+        ksx_api::StageEdit::ReorderSlots { numbers } => {
+            format!(
+                "Players reordered ({} of them). Each controller kept its layout and settings; \
+                 only the numbers changed.",
+                numbers.len()
+            )
+        }
+        ksx_api::StageEdit::SetSocd { number, .. } => {
+            format!(
+                "Player {number}'s opposite-directions rule changed. This change is still on \
+                 this screen."
+            )
+        }
         ksx_api::StageEdit::SetBlocking { .. } => {
             "Answered. LeftCtrl five times always frees or recaptures the keyboard without ending Play; Stop or Ctrl+Alt+Del ends Play."
                 .to_owned()
@@ -1297,10 +1415,16 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
             // configuration. Keep the first-run tray honest immediately,
             // without requiring a daemon restart.
             s.cabinet_ready = true;
+            // The draft now IS the saved config: clean, and its origin is the
+            // file it just became.
+            s.stage_meta = super::StageMeta {
+                dirty: false,
+                origin: "config".to_owned(),
+            };
             let mut outcome = ksx_api::StageOutcome::ok(&s.staged, written.message());
             outcome.saved = Some(written.config.display().to_string());
             outcome.backup = written.backup.map(|path| path.display().to_string());
-            stage_json(&outcome)
+            stage_json(&stamp_stage_meta(outcome, &s.stage_meta))
         }
         Err(err) => stage_json(&ksx_api::StageOutcome::refused(
             &s.staged,
@@ -2530,9 +2654,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                         Response::Stage(_)
                     )
                     | (
-                        Request::LearnKey
-                            | Request::LearnPoll
-                            | Request::LearnCancel { .. },
+                        Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. },
                         Response::Learn(_)
                     )
             );
@@ -2719,6 +2841,15 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         })
     }
 
+    fn no_stage_adopt() -> StageAdoptFn {
+        Box::new(|_profile| {
+            Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "this test daemon has no config root to adopt from",
+            ))
+        })
+    }
+
     fn deps(tx: Sender<DaemonCommand>, state: SharedState, profiles: ProfilesFn) -> PipeDeps {
         PipeDeps {
             tx,
@@ -2740,6 +2871,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             // so a test can assert that a REFUSED commit never reached the
             // writer, which "no file appeared" cannot prove.
             stage_commit: no_stage_commit(),
+            stage_adopt: no_stage_adopt(),
             stage_capture_preflight: Box::new(|_| Ok(())),
             learn: idle_learn(),
         }
@@ -2917,6 +3049,205 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             FAST,
         );
         assert_eq!(answered["ok"], true, "{answered}");
+    }
+
+    /// A one-slot setup the scripted [`StageAdoptFn`] hands back, standing in
+    /// for `crate::stage::adopt`'s disk read (unit-tested in stage.rs).
+    fn adopted_setup() -> ksx_core::StagedSetup {
+        ksx_core::StagedSetup::new()
+            .choose_device(ksx_core::stage::StagedDevice {
+                selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+                alias: "panel".to_owned(),
+                label: "panel".to_owned(),
+                backend: ksx_core::stage::StageCaptureBackend::Interception,
+            })
+            .unwrap()
+            .add_slot(1, ksx_core::Persona::Xbox360, {
+                ksx_core::Preset {
+                    name: "Player 1".to_owned(),
+                    entries: vec![(
+                        ksx_core::Key::A,
+                        ksx_core::preset::Binding::Button(ksx_core::pad::XButton::A),
+                    )],
+                    chords: Vec::new(),
+                    macros: Default::default(),
+                    turbo: Vec::new(),
+                    protected: false,
+                }
+            })
+            .unwrap()
+            .set_blocking(ksx_core::Blocking::BoundKeys)
+    }
+
+    /// **`stage-adopt` fills an empty stage and refuses over a proposal.**
+    ///
+    /// The refusal half is the load-bearing one: the everyday screen adopts on
+    /// arrival, and a daemon that let that adoption overwrite a half-made
+    /// setup from another tab would eat the exact edits staging exists to
+    /// protect. Fails against a handler that skipped the empty-stage guard.
+    #[test]
+    fn stage_adopt_fills_an_empty_stage_and_refuses_over_a_proposal() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state.clone(), fixed_profiles());
+        d.stage_adopt = Box::new(|profile| match profile {
+            None => Ok(adopted_setup()),
+            Some(title) if title == "Fight Night" => Ok(adopted_setup()),
+            Some(other) => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("no saved game is called \"{other}\""),
+            )),
+        });
+
+        let adopted = handle_request(r#"{"verb":"stage-adopt"}"#, &d, FAST);
+        assert_eq!(adopted["ok"], true, "{adopted}");
+        assert_eq!(adopted["setup"]["dirty"], false, "{adopted}");
+        assert_eq!(adopted["setup"]["origin"], "config", "{adopted}");
+        assert_eq!(adopted["setup"]["slots"][0]["preset"], "Player 1");
+
+        // The stage is now a proposal; adopting again must refuse and hand
+        // the proposal back untouched.
+        let refused = handle_request(r#"{"verb":"stage-adopt"}"#, &d, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], "stage-not-empty", "{refused}");
+        assert_eq!(refused["setup"]["slots"][0]["preset"], "Player 1");
+
+        // The profile spelling reaches the reader, and its origin says which
+        // game the draft came from.
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, fixed_profiles());
+        d.stage_adopt = Box::new(|profile| match profile {
+            Some("Fight Night") => Ok(adopted_setup()),
+            other => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("unexpected profile {other:?}"),
+            )),
+        });
+        let by_game = handle_request(
+            r#"{"verb":"stage-adopt","profile":"Fight Night"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(by_game["ok"], true, "{by_game}");
+        assert_eq!(
+            by_game["setup"]["origin"], "profile:Fight Night",
+            "{by_game}"
+        );
+    }
+
+    /// **The dirty flag is the daemon's, and it moves with the writes**: an
+    /// edit marks the draft dirty, Start over resets it, and a successful
+    /// Save cleans it with the origin becoming the file the draft just
+    /// became. Fails against a view that composed `dirty` client-side — the
+    /// exact drift `StagedSetupView`'s field docs forbid.
+    #[test]
+    fn stage_edits_mark_the_draft_dirty_and_start_over_or_save_clean_it() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state.clone(), fixed_profiles());
+        d.stage_commit = Box::new(|spec| {
+            Ok(crate::stage::Committed {
+                config: std::path::PathBuf::from("C:/cfg/config.toml"),
+                backup: None,
+                presets: Vec::new(),
+                preset_backups: Vec::new(),
+                alias: spec.device.alias.clone(),
+                slots: spec.slots.iter().map(|s| s.spec.number).collect(),
+            })
+        });
+
+        let view = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        assert_eq!(view["setup"]["dirty"], false, "a fresh visit is clean");
+
+        stage_ready(&d);
+        let view = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        assert_eq!(
+            view["setup"]["dirty"], true,
+            "edits dirty the draft: {view}"
+        );
+
+        let saved = handle_request(r#"{"verb":"stage-commit"}"#, &d, FAST);
+        assert_eq!(saved["ok"], true, "{saved}");
+        assert_eq!(saved["setup"]["dirty"], false, "Save cleans: {saved}");
+        assert_eq!(saved["setup"]["origin"], "config", "{saved}");
+
+        let edited = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-blocking","blocking":"whole"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(edited["setup"]["dirty"], true, "{edited}");
+        assert_eq!(
+            edited["setup"]["origin"], "config",
+            "editing does not change where the draft came from: {edited}"
+        );
+
+        let fresh = handle_request(r#"{"verb":"stage-edit","edit":"discard"}"#, &d, FAST);
+        assert_eq!(
+            fresh["setup"]["dirty"], false,
+            "Start over is clean: {fresh}"
+        );
+        assert_eq!(fresh["setup"]["origin"], "", "{fresh}");
+    }
+
+    /// SOCD and reorder land over the wire as ordinary stage edits, with the
+    /// view carrying the canonical name AND its served label, and the refusal
+    /// codes a surface routes on.
+    #[test]
+    fn socd_and_reorder_land_over_the_wire() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, fixed_profiles());
+        stage_up(&d);
+        let added = handle_request(
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"xbox360",
+                "preset":"Player 2","layout":"arcade-6button"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(added["ok"], true, "{added}");
+
+        let socd = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-socd","number":2,"socd":"up-priority"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(socd["ok"], true, "{socd}");
+        assert_eq!(socd["setup"]["slots"][1]["socd"], "up-priority", "{socd}");
+        assert_eq!(socd["setup"]["slots"][1]["socd_label"], "Up wins", "{socd}");
+
+        let unknown = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-socd","number":2,"socd":"sideways"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(unknown["ok"], false, "{unknown}");
+        assert_eq!(unknown["code"], ksx_api::codes::BAD_REQUEST, "{unknown}");
+
+        let reordered = handle_request(
+            r#"{"verb":"stage-edit","edit":"reorder-slots","numbers":[2,1]}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(reordered["ok"], true, "{reordered}");
+        assert_eq!(
+            reordered["setup"]["slots"][0]["preset"], "Player 2",
+            "{reordered}"
+        );
+        assert_eq!(reordered["setup"]["slots"][0]["number"], 1, "{reordered}");
+        assert_eq!(
+            reordered["setup"]["slots"][0]["socd"], "up-priority",
+            "SOCD moved with its controller: {reordered}"
+        );
+
+        let bad = handle_request(
+            r#"{"verb":"stage-edit","edit":"reorder-slots","numbers":[1,1]}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert_eq!(bad["code"], "bad-reorder", "{bad}");
     }
 
     /// Build N deliberately blank staged controllers. Blank layouts keep the

@@ -1953,12 +1953,7 @@ impl StartJourney {
                     )
                 },
             );
-            StartJourneyStep::new(
-                "workflow-mapping",
-                "pending",
-                "next",
-                detail,
-            )
+            StartJourneyStep::new("workflow-mapping", "pending", "next", detail)
         } else {
             StartJourneyStep::new(
                 "workflow-mapping",
@@ -2303,11 +2298,7 @@ const GUIDE_LINE: &str =
 /// served verbatim to the island and to `/api/start`, so a heading left lying
 /// in it would be a sentence about a machine that is fine, saying it is not.
 fn bus_heading(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
-    match (
-        outputs.blocked,
-        outputs.unknown,
-        outputs.verified_on_play,
-    ) {
+    match (outputs.blocked, outputs.unknown, outputs.verified_on_play) {
         (true, _, _) => "Play cannot plug a controller on this machine yet",
         (_, true, _) => "The required controller output could not be checked",
         (_, _, true) => "DualSense is verified when Play starts",
@@ -2321,11 +2312,7 @@ fn bus_heading(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
 /// variant (`studio.css` §4.9). The deferred HIDMaestro check is amber too:
 /// it is neither a false green nor a known failure.
 fn bus_cls(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
-    match (
-        outputs.blocked,
-        outputs.unknown,
-        outputs.verified_on_play,
-    ) {
+    match (outputs.blocked, outputs.unknown, outputs.verified_on_play) {
         (true, _, _) => "card alarm",
         (_, true, _) | (_, _, true) => "card alarm warn",
         _ => "",
@@ -2372,10 +2359,7 @@ fn persona_picker_label(option: &ksx_api::PersonaOption) -> String {
     };
     match option.instance_limit {
         Some(1) => format!("{} · {} · one per session", option.label, backend),
-        Some(limit) => format!(
-            "{} · {} · up to {limit} per session",
-            option.label, backend
-        ),
+        Some(limit) => format!("{} · {} · up to {limit} per session", option.label, backend),
         None if backend.trim().is_empty() => option.label.clone(),
         None => format!("{} · {}", option.label, backend),
     }
@@ -2555,10 +2539,7 @@ impl StartFlags {
             can_add: staged.reachable
                 && staged.device.is_some()
                 && staged.next_slot.is_some()
-                && staged
-                    .personas
-                    .iter()
-                    .any(|p| p.can_plug && p.available),
+                && staged.personas.iter().any(|p| p.can_plug && p.available),
             slots_full: staged.reachable && staged.device.is_some() && staged.next_slot.is_none(),
             has_gaps: staged.personas.iter().any(|p| !p.can_plug),
             can_layout: staged.reachable && !staged.slots.is_empty() && !staged.layouts.is_empty(),

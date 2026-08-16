@@ -80,8 +80,8 @@ pub use ksx_core::MAX_SLOTS;
 
 pub use client::{Client, VerbSink};
 pub use control::{
-    map_request, multi_key_refusal, with_key, without_key, BindConflict, BindOutcome, BindRequest,
-    ActiveSessionView, ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin,
+    map_request, multi_key_refusal, with_key, without_key, ActiveSessionView, BindConflict,
+    BindOutcome, BindRequest, ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin,
     SessionView, SlotOutcome,
 };
 pub use live::{
@@ -99,10 +99,10 @@ pub use machine::{
     NewProfile, PadsSpawnSpec, PadsView, PresetRow, PresetsView, ProfileDetail, ProfilesView,
     PrunePlanView, RenamePreset, SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer,
     SpawnOption, TemplateRow, UpdateProfile, UsbRow, VirtualPadRow, WinusbCertificateSweepSpec,
-    WinusbMutationView, WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow,
-    WinusbResidueView, WinusbView, CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD,
-    INSTALL_HIDMAESTRO_REMEDY, INSTALL_VIGEM_REMEDY, NO_BOARDS_LINE,
-    NO_OUTPUT_READ_REMEDY, RELEASE_LEAD, UNREAD_BOARDS_LINE, UNREAD_CONFIGURED_LINE,
+    WinusbMutationView, WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow, WinusbResidueView,
+    WinusbView, CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD, INSTALL_HIDMAESTRO_REMEDY, INSTALL_VIGEM_REMEDY,
+    NO_BOARDS_LINE, NO_OUTPUT_READ_REMEDY, RELEASE_LEAD, UNREAD_BOARDS_LINE,
+    UNREAD_CONFIGURED_LINE,
 };
 pub use pipe::{PipeTransport, TransportError, NO_CHANNEL};
 pub use refusal::{codes, Refusal, Refused};

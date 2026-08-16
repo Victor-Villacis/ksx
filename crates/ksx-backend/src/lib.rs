@@ -81,6 +81,7 @@ pub mod session;
 pub mod setup;
 pub mod slot_cli;
 pub mod slots;
+pub mod stage_cli;
 // Gated because it reaches `cabinet` and `studio_launch`, which are themselves
 // behind those features — so this is not a tidiness gate, it is what the module
 // can actually name.

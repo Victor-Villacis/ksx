@@ -1315,9 +1315,7 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     assert!(build.contains("requiresNetworkAtInstall -ne $true"));
 
     let dispatch = build
-        .split(
-            "- name: Exercise HIDMaestro installer private dispatch without loading SDK",
-        )
+        .split("- name: Exercise HIDMaestro installer private dispatch without loading SDK")
         .nth(1)
         .expect("compiled private-dispatch smoke")
         .split("- name: Build release")

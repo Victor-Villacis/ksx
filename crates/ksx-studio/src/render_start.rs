@@ -1970,12 +1970,10 @@ mod tests {
         assert_eq!(dualsense.backend, "hidmaestro");
         assert_eq!(dualsense.instance_limit, Some(1));
         assert!(!dualsense.available);
-        assert!(
-            dualsense
-                .unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("already has its one DualSense"))
-        );
+        assert!(dualsense
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("already has its one DualSense")));
         assert!(
             !staged
                 .rows
@@ -2029,26 +2027,20 @@ mod tests {
         }
         let staged = payload(StagedSetupView::of(&setup));
         assert!(staged.flags.can_add, "plain HID still fits this setup");
-        assert!(
-            !staged
-                .rows
-                .personas
-                .iter()
-                .any(|option| option.value == "xbox360")
-        );
-        assert!(
-            staged
-                .rows
-                .personas
-                .iter()
-                .any(|option| option.value == "playstation")
-        );
-        assert!(
-            staged
-                .lines
-                .controller_line
-                .contains("All 4 Xbox-style controller places")
-        );
+        assert!(!staged
+            .rows
+            .personas
+            .iter()
+            .any(|option| option.value == "xbox360"));
+        assert!(staged
+            .rows
+            .personas
+            .iter()
+            .any(|option| option.value == "playstation"));
+        assert!(staged
+            .lines
+            .controller_line
+            .contains("All 4 Xbox-style controller places"));
     }
 
     /// **Saving over an existing preset is said BEFORE the click.**

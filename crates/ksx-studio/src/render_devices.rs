@@ -1696,7 +1696,8 @@ mod tests {
             out.html
         );
         assert!(
-            out.html.contains(r#"<a href="/devices" aria-current="page">"#),
+            out.html
+                .contains(r#"<a href="/devices" aria-current="page">"#),
             "{}",
             out.html
         );

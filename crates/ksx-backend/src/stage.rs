@@ -375,6 +375,215 @@ pub fn apply(store: &Store, spec: &CommitSpec) -> Result<Committed, ksx_config::
     })
 }
 
+/// **Adopt the saved configuration into a fresh stage** — the reverse of
+/// [`to_config`], built so the everyday screen can show the setup this
+/// machine already has without anyone re-staging it by hand.
+///
+/// A READ of disk producing an in-memory [`StagedSetup`]; nothing is written.
+/// `profile` adopts one games.toml entry (its slots, its per-game SOCD and
+/// personas, its own blocking answer); absent adopts config.toml.
+///
+/// # Built THROUGH the staging operations, not by struct literal
+///
+/// `StagedSetup`'s fields are private and its doctrine is that every mutation
+/// revalidates (`ksx-core/src/stage.rs`). Adoption goes through
+/// `choose_device` + `add_slot` + `set_socd` + `set_blocking`, so a saved
+/// file that breaks a staging rule (a persona this build cannot plug, a
+/// sixth XInput slot someone hand-wrote) is REFUSED in the same words a hand
+/// edit would be — never smuggled past the rules because it came off disk.
+///
+/// # One keyboard, and honestly refused otherwise
+///
+/// The stage models a single-device draft (`FIRST-RUN.md` §2). A saved setup
+/// whose slots span several keyboards is real and legal on disk, and it
+/// cannot become a draft — the refusal says so and names the surfaces that
+/// can edit it instead, rather than silently adopting half the setup.
+pub fn adopt(
+    store: &Store,
+    profile: Option<&str>,
+) -> Result<ksx_core::StagedSetup, ksx_api::Refusal> {
+    use ksx_api::codes;
+
+    let config = store
+        .load_config()
+        .map_err(|err| load_refusal("config.toml", &err))?
+        .value;
+    let presets = store
+        .load_presets()
+        .map_err(|err| load_refusal("the presets folder", &err))?
+        .value;
+
+    // The slot rows + the blocking answer, from the chosen origin. Both
+    // resolve through THIS config's [[device]] table (`slot_spec` /
+    // `game_slot_spec`), which is what makes an alias mean one thing.
+    let (specs, blocking, origin) = match profile {
+        None => {
+            let specs = config
+                .slots
+                .iter()
+                .map(|slot| config.slot_spec(slot))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| load_refusal("config.toml", &err))?;
+            (
+                specs,
+                config.settings.block_keyboards,
+                "config.toml".to_owned(),
+            )
+        }
+        Some(title) => {
+            let games = store
+                .load_games()
+                .map_err(|err| load_refusal("games.toml", &err))?
+                .value;
+            let game = games
+                .games
+                .iter()
+                .find(|game| game.title.eq_ignore_ascii_case(title.trim()))
+                .ok_or_else(|| {
+                    ksx_api::Refusal::with_remedy(
+                        codes::REFUSED,
+                        format!("no saved game is called \"{}\"", title.trim()),
+                        "the exact titles are the ones `ksx run --game` and the game list show",
+                    )
+                })?;
+            let specs = game
+                .slots
+                .iter()
+                .map(|slot| config.game_slot_spec(slot))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| load_refusal("games.toml", &err))?;
+            (specs, game.block_keyboards, format!("\"{}\"", game.title))
+        }
+    };
+    if specs.is_empty() {
+        return Err(ksx_api::Refusal::with_remedy(
+            codes::REFUSED,
+            format!("{origin} has no slots to adopt — there is nothing saved to show yet"),
+            "set a keyboard and a controller up first; Save is what creates the slots",
+        ));
+    }
+
+    // ONE keyboard. Every slot must resolve to the same [[device]] entry —
+    // the entry is what carries the durable selector and the capture backend.
+    let mut device: Option<&DeviceEntry> = None;
+    for spec in &specs {
+        let Some(keyboard) = &spec.keyboard else {
+            continue;
+        };
+        let entry = config
+            .devices
+            .iter()
+            .find(|entry| entry.id.raw().eq_ignore_ascii_case(keyboard.as_str()))
+            .ok_or_else(|| {
+                ksx_api::Refusal::with_remedy(
+                    codes::REFUSED,
+                    format!(
+                        "slot {} names a keyboard no [[device]] entry describes, so there is no \
+                         durable identity to adopt",
+                        spec.number
+                    ),
+                    "re-pick the keyboard (Setup, or `ksx device pick`) so it gains an entry, \
+                     then adopt again",
+                )
+            })?;
+        match device {
+            None => device = Some(entry),
+            Some(chosen) if std::ptr::eq(chosen, entry) => {}
+            Some(chosen) => {
+                return Err(ksx_api::Refusal::with_remedy(
+                    codes::REFUSED,
+                    format!(
+                        "{origin} uses more than one keyboard (\"{}\" and \"{}\"), and a draft \
+                         holds exactly one",
+                        chosen.alias, entry.alias
+                    ),
+                    "edit that setup in Setup or with `ksx slot assign`; the draft screen \
+                     adopts single-keyboard setups",
+                ));
+            }
+        }
+    }
+    let device = match device {
+        Some(entry) => entry,
+        // Legal older configs may omit per-slot keyboards; unambiguous only
+        // when the config names exactly one device.
+        None => match config.devices.as_slice() {
+            [only] => only,
+            [] => {
+                return Err(ksx_api::Refusal::with_remedy(
+                    codes::REFUSED,
+                    format!("{origin} names no keyboard at all"),
+                    "pick one in Setup (or `ksx device pick`), then adopt again",
+                ))
+            }
+            _ => {
+                return Err(ksx_api::Refusal::with_remedy(
+                    codes::REFUSED,
+                    format!(
+                        "{origin}'s slots name no keyboard and config.toml describes several, \
+                         so ksx cannot guess which one the draft should hold"
+                    ),
+                    "assign the slots a keyboard (`ksx slot assign`), then adopt again",
+                ))
+            }
+        },
+    };
+
+    let stage_refusal = |refusal: ksx_core::stage::StageRefusal| {
+        ksx_api::Refusal::new(refusal.code(), refusal.to_string())
+    };
+
+    let mut setup = ksx_core::StagedSetup::new()
+        .choose_device(ksx_core::stage::StagedDevice {
+            selector: device.id.selector().clone(),
+            alias: device.alias.clone(),
+            // The alias is the one human name the saved file carries; the
+            // live scan's richer label can replace it on screen when a scan
+            // has actually seen the board.
+            label: device.alias.clone(),
+            backend: match device.backend {
+                ksx_config::Backend::Interception => StageCaptureBackend::Interception,
+                ksx_config::Backend::Winusb => StageCaptureBackend::Winusb,
+            },
+        })
+        .map_err(stage_refusal)?;
+
+    for spec in &specs {
+        let preset = presets
+            .iter()
+            .find(|preset| preset.name.eq_ignore_ascii_case(&spec.preset))
+            .ok_or_else(|| {
+                ksx_api::Refusal::with_remedy(
+                    codes::REFUSED,
+                    format!(
+                        "slot {} points at preset \"{}\" and no preset of that name is on disk",
+                        spec.number, spec.preset
+                    ),
+                    "restore or re-create the preset (`ksx preset new`), then adopt again",
+                )
+            })?
+            .to_core()
+            .map_err(|err| load_refusal("the presets folder", &err))?;
+        setup = setup
+            .add_slot(spec.number, spec.persona, preset)
+            .map_err(stage_refusal)?
+            .set_socd(spec.number, spec.socd)
+            .map_err(stage_refusal)?;
+    }
+    // A saved answer IS an answer: adopting never re-asks §3's question.
+    Ok(setup.set_blocking(blocking))
+}
+
+/// A failed read is not an absence (`SURFACES.md` §1b): adoption of a file
+/// that cannot be read refuses with the reason, never with an empty draft.
+fn load_refusal(what: &str, err: &ksx_config::ConfigError) -> ksx_api::Refusal {
+    ksx_api::Refusal::with_remedy(
+        ksx_api::codes::REFUSED,
+        format!("{what} could not be read: {err}"),
+        "nothing was adopted and nothing changed; fix the file and try again",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +619,162 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// **What is saved is what adopts back.** Stage a two-player setup with a
+    /// non-default SOCD, save it through the one translation (`apply`), then
+    /// adopt from the same store — the draft that comes back is the setup
+    /// that went in: device identity and backend, every slot's persona,
+    /// bindings and SOCD, and the blocking answer (already answered, never
+    /// re-asked). The one deliberate delta is the LABEL: a saved file carries
+    /// only the alias, and adoption says so instead of inventing a scan.
+    #[test]
+    fn what_is_saved_is_what_adopts_back() {
+        let root = TempRoot::new("adopt-roundtrip");
+        let store = root.store();
+        let staged = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .add_slot(
+                2,
+                Persona::PlayStation,
+                preset("Player 2", Key::B, XButton::B),
+            )
+            .unwrap()
+            .set_socd(2, ksx_core::Socd::UpPriority)
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+        apply(&store, &staged.commit().unwrap()).unwrap();
+
+        let adopted = adopt(&store, None).expect("a saved setup adopts");
+        let dev = adopted.device().expect("the device came back");
+        assert_eq!(dev.selector, device().selector);
+        assert_eq!(dev.alias, "panel");
+        assert_eq!(dev.backend, StageCaptureBackend::Interception);
+        assert_eq!(dev.label, "panel", "the saved file carries only the alias");
+        assert_eq!(adopted.blocking(), Some(Blocking::BoundKeys));
+        let slots = adopted.slots();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0].persona, Persona::Xbox360);
+        assert_eq!(slots[0].preset.name, "Player 1");
+        assert_eq!(slots[0].socd, ksx_core::Socd::Off);
+        assert_eq!(slots[1].persona, Persona::PlayStation);
+        assert_eq!(slots[1].socd, ksx_core::Socd::UpPriority);
+        assert_eq!(
+            slots[1].preset.entries,
+            preset("Player 2", Key::B, XButton::B).entries,
+            "bindings adopt as the preset file holds them"
+        );
+        // ...and the adopted draft is immediately playable: commit() accepts
+        // it, which is what makes adoption an everyday screen's seed.
+        adopted.commit().expect("an adopted setup is complete");
+    }
+
+    /// Adopting a saved GAME takes the game's own slots and the game's own
+    /// blocking answer — the per-game overrides are the whole reason profiles
+    /// exist, and adoption must not flatten them into config.toml's.
+    #[test]
+    fn adopting_a_saved_game_takes_its_slots_and_its_own_blocking() {
+        let root = TempRoot::new("adopt-game");
+        let store = root.store();
+        let staged = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Panel P1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+        apply(&store, &staged.commit().unwrap()).unwrap();
+        let games: GamesFile = toml::from_str(
+            r#"
+[[game]]
+title = "Fight Night"
+path = 'C:\games\fight.exe'
+block_keyboards = true
+
+[[game.slot]]
+number = 1
+preset = "Panel P1"
+persona = "playstation"
+socd = "neutral"
+"#,
+        )
+        .unwrap();
+        store.save_games(&games).unwrap();
+
+        let adopted = adopt(&store, Some("fight night")).expect("titles match case-insensitively");
+        assert_eq!(
+            adopted.blocking(),
+            Some(Blocking::Whole),
+            "the game's own answer"
+        );
+        let slots = adopted.slots();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(
+            slots[0].persona,
+            Persona::PlayStation,
+            "per-game persona override"
+        );
+        assert_eq!(slots[0].socd, ksx_core::Socd::Neutral, "per-game SOCD");
+
+        let missing = adopt(&store, Some("No Such Game")).unwrap_err();
+        assert!(missing.message.contains("No Such Game"), "{missing:?}");
+    }
+
+    /// The states adoption cannot represent are REFUSED with the reason and a
+    /// way forward — never half-adopted and never dressed as an empty draft.
+    #[test]
+    fn adopt_refuses_the_states_it_cannot_represent() {
+        // Nothing saved at all.
+        let root = TempRoot::new("adopt-empty");
+        let empty = adopt(&root.store(), None).unwrap_err();
+        assert!(empty.message.contains("has no slots to adopt"), "{empty:?}");
+
+        // A slot whose preset file is gone.
+        let root = TempRoot::new("adopt-no-preset");
+        let store = root.store();
+        let staged = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+        apply(&store, &staged.commit().unwrap()).unwrap();
+        let preset_path = store.preset_path("Player 1").unwrap();
+        std::fs::remove_file(&preset_path).unwrap();
+        let missing = adopt(&store, None).unwrap_err();
+        assert!(missing.message.contains("Player 1"), "{missing:?}");
+
+        // Two keyboards. Legal on disk, not representable as a draft.
+        let root = TempRoot::new("adopt-two-boards");
+        let store = root.store();
+        let staged = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+        apply(&store, &staged.commit().unwrap()).unwrap();
+        let mut config = store.load_config().unwrap().value;
+        config.devices.push(DeviceEntry {
+            id: DeviceRef::from_selector(DeviceSelector::parse("usb:04d9:0169:00").unwrap()),
+            alias: "desk".to_owned(),
+            backend: ksx_config::Backend::Interception,
+        });
+        config.slots.push(SlotEntry {
+            number: 2,
+            keyboard: Some("desk".to_owned()),
+            mouse: None,
+            preset: "Player 1".to_owned(),
+            persona: ksx_core::Persona::PlayStation,
+            socd: ksx_core::Socd::Off,
+            macros: Default::default(),
+        });
+        store.save_config(&config).unwrap();
+        let two = adopt(&store, None).unwrap_err();
+        assert!(two.message.contains("more than one keyboard"), "{two:?}");
+        assert!(two.remedy.is_some(), "a refusal carries its way forward");
     }
 
     fn device() -> StagedDevice {

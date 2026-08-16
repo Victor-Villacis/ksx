@@ -959,8 +959,7 @@ mod tests {
                 .filter(|name| values.get(*name).copied().unwrap_or(false))
                 .count();
             assert_eq!(
-                selected,
-                1,
+                selected, 1,
                 "HIDMaestro must render exactly one system state: {values:?}"
             );
             assert!(
@@ -1159,7 +1158,8 @@ mod tests {
             out.html
         );
         assert!(
-            out.html.contains(r#""hidmaestroLine":"The exact HIDMaestro package v1.6.1"#)
+            out.html
+                .contains(r#""hidmaestroLine":"The exact HIDMaestro package v1.6.1"#)
                 || out.html.contains(
                     "&quot;hidmaestroLine&quot;:&quot;The exact HIDMaestro package v1.6.1",
                 ),
@@ -1167,8 +1167,7 @@ mod tests {
             out.html
         );
         assert!(
-            out.html
-                .contains(r#""show:hidmaestroVerifiedOnPlay":true"#)
+            out.html.contains(r#""show:hidmaestroVerifiedOnPlay":true"#)
                 || out
                     .html
                     .contains("&quot;show:hidmaestroVerifiedOnPlay&quot;:true"),
@@ -1178,7 +1177,8 @@ mod tests {
         assert!(out.html.contains("HIDMaestro"), "{}", out.html);
         assert!(out.html.contains("check at Play"), "{}", out.html);
         assert!(
-            out.html.contains("when Play starts; no controller is running yet"),
+            out.html
+                .contains("when Play starts; no controller is running yet"),
             "the System row invented endpoint readiness: {}",
             out.html
         );
@@ -1538,7 +1538,8 @@ mod tests {
         assert!(out.html.contains("mapped keys captured"), "{}", out.html);
         assert!(out.html.contains("DualSense (HIDMaestro)"), "{}", out.html);
         assert!(
-            out.html.contains("LeftCtrl five times always toggles keyboard capture"),
+            out.html
+                .contains("LeftCtrl five times always toggles keyboard capture"),
             "{}",
             out.html
         );

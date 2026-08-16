@@ -339,6 +339,22 @@ pub struct ActiveSession {
 }
 
 /// The state the tray polls. Small, cloneable, no borrows of anything live.
+/// **Where the staged setup came from, and whether it has moved since** —
+/// the visit metadata beside [`DaemonState::staged`], written at the same few
+/// sites (`pipe::apply_stage_edit`, `pipe::handle_stage_commit`,
+/// `pipe::handle_stage_adopt`) and stamped onto every served
+/// `StagedSetupView`, which cannot know it on its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageMeta {
+    /// Edits since the draft was fresh, adopted, or saved. Feeds the dirty
+    /// dot and "Unsaved changes"; cleared by Save (the draft now IS the
+    /// config), by adoption, and by Start over.
+    pub dirty: bool,
+    /// Empty for a fresh visit; `config` once adopted from — or saved to —
+    /// config.toml; `profile:<title>` when adopted from one saved game.
+    pub origin: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DaemonState {
     pub run: RunState,
@@ -372,8 +388,12 @@ pub struct DaemonState {
     /// A fresh `StagedSetup` for a fresh daemon: this is deliberately NOT
     /// seeded from what is on disk. Staging is what a user is *proposing*, and
     /// pre-filling it would make "Start over" mean "back to the config file"
-    /// rather than "back to nothing".
+    /// rather than "back to nothing". (`stage-adopt` is the EXPLICIT verb a
+    /// surface sends when showing the saved setup is the point — it refuses
+    /// on a non-empty stage, so it can never overwrite a proposal.)
     pub staged: ksx_core::StagedSetup,
+    /// The visit metadata for [`Self::staged`] — see [`StageMeta`].
+    pub stage_meta: StageMeta,
     /// **What the running — or most recently started — session was built
     /// from**, and therefore what putting it back would mean.
     ///
@@ -1155,8 +1175,7 @@ fn start(
                 let mut err = std::io::stderr();
                 runner.run(stop, &mut err)
             }
-        })
-    {
+        }) {
         Ok(handle) => handle,
         Err(err) => {
             let message = format!("could not start the session thread: {err}");
@@ -1485,7 +1504,11 @@ pub fn run(
                 // adding and deleting controllers, changing personas — is
                 // memory, which is what makes exploring free
                 // (docs/FIRST-RUN.md §2).
-                stage_commit: pipe::stage_commit_fn(map_root),
+                stage_commit: pipe::stage_commit_fn(map_root.clone()),
+                // `stage-adopt`: the reverse read — the saved configuration
+                // into a fresh stage, so the everyday screen can show what
+                // this machine already has without re-staging it by hand.
+                stage_adopt: pipe::stage_adopt_fn(map_root),
                 stage_capture_preflight: Box::new(crate::stage::preflight_capture),
                 // The panel goes in by CLONE, not by moving it into
                 // `PipeDeps`: the daemon still owns the claim, and the pipe
@@ -2625,6 +2648,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         let tip = state.tooltip();
@@ -2644,6 +2668,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         assert!(long.tooltip().encode_utf16().count() <= 127);
@@ -2673,6 +2698,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         let tip = state.tooltip();
@@ -2728,6 +2754,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         assert!(state.tooltip().contains("REBOOT REQUIRED"), "{state:?}");
@@ -2752,6 +2779,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         let tip = state.tooltip();
@@ -2776,6 +2804,7 @@ mod tests {
             active: None,
             apply: None,
             staged: Default::default(),
+            stage_meta: Default::default(),
             origin: Default::default(),
         };
         assert!(!state.tooltip().contains("[!]"), "{}", state.tooltip());

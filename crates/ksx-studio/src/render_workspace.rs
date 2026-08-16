@@ -180,6 +180,7 @@ mod tests {
                     preset: "Player 1".into(),
                     authoring: None,
                     bindings: 12,
+                    ..Default::default()
                 },
                 ksx_api::StagedSlotView {
                     number: 2,
@@ -189,6 +190,7 @@ mod tests {
                     preset: "Player 2".into(),
                     authoring: None,
                     bindings: 12,
+                    ..Default::default()
                 },
             ],
             ..ksx_api::StagedSetupView::default()
@@ -288,7 +290,10 @@ mod tests {
         }
         .derived();
         let fresh_html = rendered(&render_workspace(&page, &fresh).html);
-        assert!(fresh_html.contains("No keyboard chosen yet."), "{fresh_html}");
+        assert!(
+            fresh_html.contains("No keyboard chosen yet."),
+            "{fresh_html}"
+        );
         assert!(
             fresh_html.contains("No controllers staged yet."),
             "{fresh_html}"

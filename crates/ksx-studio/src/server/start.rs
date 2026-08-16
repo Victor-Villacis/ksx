@@ -512,14 +512,11 @@ pub(super) async fn start_form_identify(State(state): State<Arc<AppState>>) -> R
                         Ok(identified) => identified,
                         Err(_) => return StartIdentifyResult::Failed,
                     };
-                    let outcome =
-                        state
-                            .control
-                            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
-                                selector: identified.selector,
-                                alias: identified.alias,
-                                label: identified.label,
-                            });
+                    let outcome = state.control.stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                        selector: identified.selector,
+                        alias: identified.alias,
+                        label: identified.label,
+                    });
                     return if outcome.ok {
                         StartIdentifyResult::Selected
                     } else {
@@ -1028,10 +1025,7 @@ pub(super) async fn start_form_save(State(state): State<Arc<AppState>>) -> Respo
     // now. A hand-authored POST must not bypass the disabled button.
     let current = collect_start(&state).await;
     if !current.flags.can_save {
-        return start_redirect(
-            StartAction::Save,
-            Err(current.lines.save_status),
-        );
+        return start_redirect(StartAction::Save, Err(current.lines.save_status));
     }
     let outcome = tokio::task::spawn_blocking(move || {
         let outcome = state.control.stage_commit();
@@ -1058,10 +1052,7 @@ pub(super) async fn start_form_save(State(state): State<Arc<AppState>>) -> Respo
 pub(super) async fn start_form_play(State(state): State<Arc<AppState>>) -> Response {
     let current = collect_start(&state).await;
     if !current.flags.can_play {
-        return start_redirect(
-            StartAction::Play,
-            Err(current.lines.play_status),
-        );
+        return start_redirect(StartAction::Play, Err(current.lines.play_status));
     }
     let outcome = tokio::task::spawn_blocking(move || {
         let outcome = state.control.stage_play();

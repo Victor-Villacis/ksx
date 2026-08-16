@@ -88,6 +88,19 @@ pub enum Request {
     StageCommit,
     /// **Play** the staged setup, with nothing written.
     StagePlay,
+    /// **Adopt the saved configuration into the stage**: build the draft from
+    /// config.toml and its presets — or from one games.toml profile — so the
+    /// everyday screen can show the setup this machine already has. A READ of
+    /// disk and a write of daemon memory only; no file changes. Refused when
+    /// the stage is non-empty, because adoption must never overwrite edits —
+    /// a surface that means to replace them sends `discard` first, behind its
+    /// own confirmation.
+    StageAdopt {
+        /// A games.toml profile title. Absent adopts config.toml — and it is
+        /// absent on the wire too, so the documented plain line stays plain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     LearnKey,
     LearnPoll,
     LearnCancel {
@@ -121,6 +134,7 @@ impl Request {
             Self::StageMacro(_) => "stage-macro",
             Self::StageCommit => "stage-commit",
             Self::StagePlay => "stage-play",
+            Self::StageAdopt { .. } => "stage-adopt",
             Self::LearnKey => "learn-key",
             Self::LearnPoll => "learn-poll",
             Self::LearnCancel { .. } => "learn-cancel",
@@ -684,7 +698,11 @@ impl Response {
             Request::SlotAssign(_) => {
                 Self::SlotAssign(serde_json::from_value(value).map_err(read(verb))?)
             }
-            Request::Stage | Request::StageEdit(_) | Request::StageCommit | Request::StagePlay => {
+            Request::Stage
+            | Request::StageEdit(_)
+            | Request::StageCommit
+            | Request::StagePlay
+            | Request::StageAdopt { .. } => {
                 Self::Stage(serde_json::from_value(value).map_err(read(verb))?)
             }
             Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. } => {

@@ -361,6 +361,12 @@ impl<S: VerbSink> ControlSource for Client<S> {
         self.stage(Request::StagePlay)
     }
 
+    fn stage_adopt(&self, profile: Option<&str>) -> StageOutcome {
+        self.stage(Request::StageAdopt {
+            profile: profile.map(str::to_owned),
+        })
+    }
+
     fn save_macro(&self, request: &MacroWrite) -> MacroOutcome {
         let typed = match request.to_request() {
             Ok(typed) => typed,

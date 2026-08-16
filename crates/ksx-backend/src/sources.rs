@@ -1399,9 +1399,7 @@ impl ksx_api::MachineSource for LocalMachine {
                     // healthy Doctor verdict.
                     let code = ksx_platform::advice::vigembus_advice(&bus)
                         .first()
-                        .map_or(ksx_api::vigem_output_codes::HEALTHY, |advice| {
-                            advice.code
-                        });
+                        .map_or(ksx_api::vigem_output_codes::HEALTHY, |advice| advice.code);
                     ksx_api::ControllerOutputView::vigem(requirement, code, version)
                 }
                 "hidmaestro" => {

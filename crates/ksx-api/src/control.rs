@@ -297,6 +297,18 @@ pub trait ControlSource: Send + Sync {
             "this control source cannot start a staged setup — a daemon holds it (`ksx daemon`)",
         )
     }
+
+    /// **Adopt the saved configuration into the stage** — config.toml (or one
+    /// games.toml profile) becomes the draft, read from disk into daemon
+    /// memory with nothing written. Refused when the stage is non-empty:
+    /// adoption never overwrites edits, so a surface that means to replace
+    /// them sends [`StageEdit::Discard`] first, behind its own confirmation.
+    fn stage_adopt(&self, _profile: Option<&str>) -> StageOutcome {
+        StageOutcome::unavailable(
+            "this control source cannot adopt the saved configuration — a daemon holds the \
+             stage (`ksx daemon`)",
+        )
+    }
 }
 
 /// The `slot-assign` answer, as a surface reads it.
@@ -1280,7 +1292,11 @@ mod tests {
         });
         let facts = active.active.expect("the live runner facts are carried");
         assert_eq!(facts.elapsed, "2m 07s");
-        assert!(facts.input.contains("1 selected keyboard"), "{}", facts.input);
+        assert!(
+            facts.input.contains("1 selected keyboard"),
+            "{}",
+            facts.input
+        );
         assert!(facts.input.contains("WinUSB"), "{}", facts.input);
         assert!(facts.outputs.contains("DualSense (HIDMaestro)"));
         assert_eq!(facts.escape_hatch, crate::stage::ESCAPE_HATCH_LINE);

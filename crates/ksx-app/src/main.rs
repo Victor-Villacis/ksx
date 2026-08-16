@@ -17,7 +17,7 @@
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, install, logging,
     macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run, session, setup,
-    slot_cli, winusb,
+    slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -880,6 +880,18 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// The staged setup a visit is deciding on (view / adopt / reorder / socd)
+    ///
+    /// The DAEMON holds the stage (docs/FIRST-RUN.md §2); every verb here is
+    /// one pipe request, the same lines Studio sends — nothing is validated
+    /// or written by this surface itself.
+    ///
+    /// Exit codes: 0 = done, 1 = the daemon refused (the reason is printed in
+    /// its own words), 2 = no daemon control channel.
+    Stage {
+        #[command(subcommand)]
+        command: StageCommand,
+    },
     /// Export / import the configuration as JSON (TOML stays canonical)
     ///
     /// TOML is the canonical format because it carries COMMENTS, and ksx
@@ -1153,6 +1165,55 @@ enum SessionCommand {
     },
     /// Stop the daemon and wait until its control pipe is closed
     Quit {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum StageCommand {
+    /// The staged setup as it stands (a read; changes nothing)
+    View {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Adopt the saved configuration into an EMPTY stage
+    ///
+    /// Builds the draft from config.toml and its presets — or, with --game,
+    /// from that games.toml profile (its slots, its per-game personas and
+    /// SOCD, its own freeze/split answer). Refused over a non-empty stage:
+    /// adoption never overwrites edits, so start over first if you mean to.
+    Adopt {
+        /// Adopt this games.toml profile instead of config.toml
+        #[arg(long, value_name = "TITLE")]
+        game: Option<String>,
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reorder the staged controllers (whole order, renumbered 1..n)
+    ///
+    /// Name every CURRENT slot number exactly once, in the new sequence:
+    /// `ksx stage reorder 3 1 2` makes today's P3 the new P1. Each controller
+    /// keeps its layout, persona and SOCD; only the numbers change.
+    Reorder {
+        /// The current slot numbers, in the desired new order
+        #[arg(required = true, value_name = "SLOT")]
+        numbers: Vec<u8>,
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set a staged controller's simultaneous-opposite-directions rule
+    Socd {
+        /// The staged slot number
+        #[arg(value_name = "SLOT")]
+        slot: u8,
+        /// off | neutral | up-priority (ksx_core::Socd's own names)
+        #[arg(value_name = "POLICY")]
+        socd: String,
         /// Print the raw pipe response (one JSON object) on stdout
         #[arg(long)]
         json: bool,
@@ -1979,6 +2040,18 @@ fn main() -> anyhow::Result<()> {
             SessionCommand::Resume { json } => session::run(session::Verb::Resume, json),
             SessionCommand::Reload { json } => session::run(session::Verb::Reload, json),
             SessionCommand::Quit { json } => session::run(session::Verb::Quit, json),
+        },
+        Command::Stage { command } => match command {
+            StageCommand::View { json } => stage_cli::run(stage_cli::Verb::View, json),
+            StageCommand::Adopt { game, json } => {
+                stage_cli::run(stage_cli::Verb::Adopt { game }, json)
+            }
+            StageCommand::Reorder { numbers, json } => {
+                stage_cli::run(stage_cli::Verb::Reorder { numbers }, json)
+            }
+            StageCommand::Socd { slot, socd, json } => {
+                stage_cli::run(stage_cli::Verb::Socd { slot, socd }, json)
+            }
         },
         Command::Config { command } => match command {
             ConfigCommand::Export {

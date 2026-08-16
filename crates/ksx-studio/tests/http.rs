@@ -667,7 +667,6 @@ impl Default for ScriptedMachine {
             output_mode: AtomicUsize::new(0),
         }
     }
-
 }
 
 const IPAC_KB: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
@@ -2134,10 +2133,7 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     // tab cannot issue an empty cancel that stops the listener a fresh tab now
     // owns.
     let unqualified = post_json(addr, "/api/learn/cancel", r#"{}"#);
-    assert!(
-        !unqualified.starts_with("HTTP/1.1 200"),
-        "{unqualified}"
-    );
+    assert!(!unqualified.starts_with("HTTP/1.1 200"), "{unqualified}");
     let still_listening: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/learn"))).expect("json");
     assert_eq!(still_listening["state"], "listening");
@@ -4198,7 +4194,10 @@ fn every_page_links_to_every_other_page() {
     ] {
         let response = get(addr, route);
         let body = body_of(&response);
-        assert!(body.contains(r#"href="/start#keyboard""#), "{route}: {body}");
+        assert!(
+            body.contains(r#"href="/start#keyboard""#),
+            "{route}: {body}"
+        );
         assert!(body.contains(r#">Keyboard<"#), "{route}: {body}");
         assert!(body.contains(r#">Mapping<"#), "{route}: {body}");
         assert!(body.contains(r#"href="/check""#), "{route}: {body}");
@@ -6104,7 +6103,10 @@ fn start_identify_selects_the_machine_providers_exact_board() {
     let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
 
     let page = get(addr, "/start");
-    assert!(page.contains(r#"action="/start/device/identify""#), "{page}");
+    assert!(
+        page.contains(r#"action="/start/device/identify""#),
+        "{page}"
+    );
     assert!(page.contains("Identify by pressing a key"), "{page}");
 
     let response = post_form(addr, "/start/device/identify", "");
@@ -6116,7 +6118,10 @@ fn start_identify_selects_the_machine_providers_exact_board() {
     assert_eq!(selected.label, "Ultimarc I-PAC 4X");
     assert_eq!(selected.alias, "panel");
     assert_eq!(selected.selector, "usb:d209:0430:00");
-    assert!(staged.slots.is_empty(), "identify must not create a controller");
+    assert!(
+        staged.slots.is_empty(),
+        "identify must not create a controller"
+    );
     assert_eq!(
         *machine.identified_from.lock().unwrap(),
         vec![IPAC_KB.to_owned()],

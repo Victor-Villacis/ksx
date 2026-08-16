@@ -5954,6 +5954,108 @@ a.strow:hover {
   background: var(--surface-hover);
 }
 
+/* Small print under a section line: the capture path, the capacity caption.
+   Facts, quieter than the line above them. */
+.wsmeta {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ── The rack: staged controllers, and the capture radio-rows ─────────────
+   One list vocabulary for both (Nocturne's .row anatomy on this pane):
+   title + optional note, a detail line, and the row's own actions. */
+.wsrack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wsrow,
+.wschoice {
+  padding: var(--sp-3);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* The current answer: selection tint + identity line — chosen, not alarmed.
+   (Same composite treatment as the mapper's selected rows; --cool-line's
+   recorded contrast exemption covers the ring.) */
+.wschoice.on {
+  background: var(--sel-tint);
+  border-color: var(--cool-line);
+}
+
+.wsrow-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.wsrow-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wsrow-note {
+  font-size: var(--fs-micro);
+  color: var(--cool);
+}
+
+.wsrow-detail {
+  margin-top: 2px;
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.wsrow-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.wsrow-acts form,
+.wschoice form {
+  display: inline-flex;
+  margin-top: var(--sp-1);
+}
+
+/* The shared per-pane form (the opposite-directions rule): label · select
+   pairs that wrap on the narrow pane. */
+.wsform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+/* Unsaved changes: identity-tinted, not alarmed — a dirty draft is a normal
+   working state, and the sentence says what Save and Play each do with it. */
+.wsdirty {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+  background: var(--sel-tint);
+  border-left: 2px solid var(--cool-line);
+  border-radius: var(--r-xs);
+}
+
+.wsemptyrow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
 @media (max-width: 68rem) {
   .wsmain {
     grid-template-columns: minmax(0, 1fr);

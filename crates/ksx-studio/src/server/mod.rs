@@ -197,12 +197,17 @@ pub fn serve(
         let app = Router::new()
             .route("/", get(status_page))
             .route("/api/status", get(api_status))
-            // ── /workspace — the Nocturne workspace shell (M0) ────────────
-            // Two read routes. The editing verbs arrive with M2–M4 as
-            // `/workspace/*` form twins beside `/api/*` JSON routes, the
-            // same two-lane shape `/map` carries below.
+            // ── /workspace — the Nocturne workspace (M2: left-pane verbs) ─
+            // The reads, plus the left pane's form twins — each ONE staging
+            // verb, 303 → /workspace?flash=. The center and right panes'
+            // verbs arrive with M3–M4.
             .route("/workspace", get(workspace_page))
             .route("/api/workspace", get(api_workspace))
+            .route("/workspace/blocking", post(workspace_form_blocking))
+            .route("/workspace/controller/move", post(workspace_form_move))
+            .route("/workspace/controller/remove", post(workspace_form_remove))
+            .route("/workspace/controller/socd", post(workspace_form_socd))
+            .route("/workspace/adopt", post(workspace_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))
             .route("/config/reload", post(config_reload))

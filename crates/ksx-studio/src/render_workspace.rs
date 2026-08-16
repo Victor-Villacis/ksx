@@ -32,7 +32,7 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
-use crate::snapshot::WorkspacePayload;
+use crate::snapshot::{WorkspaceChoiceRow, WorkspaceOptionRow, WorkspacePayload, WorkspaceSlotRow};
 
 /// The island table this page compiles to: exactly one island — the whole
 /// screen. Its name is the `activateIslands` registry key in
@@ -42,7 +42,14 @@ const ISLAND_COMPONENT: &str = "WorkspaceIsland";
 
 /// How many `createShow` pairs this page has; the layout test pins both the
 /// count and every name.
-const SHOW_COUNT: usize = 3;
+const SHOW_COUNT: usize = 9;
+
+/// `() => wsRackRows()` compiles to `list:wsRackRows:array`. Rename a list
+/// signal in WorkspaceIsland.ts and the layout test fails by name here.
+const LIST_SLOT_RACK: &str = "list:wsRackRows:array";
+const LIST_SLOT_BLOCKING: &str = "list:wsBlockingRows:array";
+const LIST_SLOT_SOCD_SLOTS: &str = "list:wsSocdSlotOptions:array";
+const LIST_SLOT_SOCD_POLICIES: &str = "list:wsSocdPolicyOptions:array";
 
 /// Bare-named slots this page renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -56,24 +63,97 @@ const CLIENT_ONLY_SLOTS: [&str; 0] = [];
 const ANONYMOUS_SLOTS: [&str; 0] = [];
 
 /// Scalar slot values, keyed by the signal names in WorkspaceIsland.ts.
-/// Every value is a [`WorkspaceDerived`] field — this function maps names,
-/// it words nothing.
-fn scalar_slots(payload: &WorkspacePayload) -> serde_json::Value {
+/// Every value is a [`WorkspaceDerived`] field except the flash — the one
+/// SSR-only slot, filled from the allowlisted query parameter and never from
+/// the payload (a poll is not an action).
+fn scalar_slots(payload: &WorkspacePayload, flash: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "wsStateDetail": payload.view.state_detail,
         "wsDeviceLine": payload.view.device_line,
+        "wsDeviceMeta": payload.view.device_meta,
         "wsRackLine": payload.view.rack_line,
+        "wsRackCaption": payload.view.rack_caption,
+        "wsBlockingLine": payload.view.blocking_line,
+        "wsDirtyLine": payload.view.dirty_line,
+        "wsFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
     })
 }
 
 /// Every show slot on this page, BY NAME. The three pills are exclusive by
 /// construction in [`crate::snapshot::WorkspaceDerived`]; this function maps
-/// names, it decides nothing.
-fn show_values(payload: &WorkspacePayload) -> [(&'static str, bool); SHOW_COUNT] {
+/// names, it decides nothing — except the flash split, which keys off the
+/// allowlisted copy's own `error:` prefix exactly as `/start`'s does.
+fn show_values(
+    payload: &WorkspacePayload,
+    flash: Option<&str>,
+) -> [(&'static str, bool); SHOW_COUNT] {
+    let flash_err = flash.is_some_and(|f| f.starts_with("error"));
     [
         ("show:wsPillRunning", payload.view.pill_running),
         ("show:wsPillIdle", payload.view.pill_idle),
         ("show:wsPillDown", payload.view.pill_down),
+        ("show:wsStageReady", payload.view.stage_ready),
+        ("show:wsStageEmpty", payload.view.stage_empty),
+        ("show:wsHasDevice", payload.view.has_device),
+        ("show:wsShowDirty", payload.view.show_dirty),
+        ("show:wsFlashOk", flash.is_some() && !flash_err),
+        ("show:wsFlashError", flash_err),
+    ]
+}
+
+fn rack_row(row: &WorkspaceSlotRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("number".to_owned(), SlotValue::Text(row.number.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        (
+            "socd_note".to_owned(),
+            SlotValue::Text(row.socd_note.clone()),
+        ),
+        ("up_order".to_owned(), SlotValue::Text(row.up_order.clone())),
+        (
+            "down_order".to_owned(),
+            SlotValue::Text(row.down_order.clone()),
+        ),
+    ])
+}
+
+fn choice_row(row: &WorkspaceChoiceRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("row_cls".to_owned(), SlotValue::Text(row.row_cls.clone())),
+        ("button".to_owned(), SlotValue::Text(row.button.clone())),
+    ])
+}
+
+fn option_row(row: &WorkspaceOptionRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("value".to_owned(), SlotValue::Text(row.value.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+    ])
+}
+
+fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 4] {
+    let view = &payload.view;
+    [
+        (
+            LIST_SLOT_RACK,
+            SlotValue::array(view.rack.iter().map(rack_row).collect()),
+        ),
+        (
+            LIST_SLOT_BLOCKING,
+            SlotValue::array(view.blocking.iter().map(choice_row).collect()),
+        ),
+        (
+            LIST_SLOT_SOCD_SLOTS,
+            SlotValue::array(view.socd_slots.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_SOCD_POLICIES,
+            SlotValue::array(view.socd_policies.iter().map(option_row).collect()),
+        ),
     ]
 }
 
@@ -89,13 +169,18 @@ fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
 }
 
 /// Populate every server-injected slot.
-fn build_slots(module: &IrModule, payload: &WorkspacePayload) -> SlotData {
-    let scalars = scalar_slots(payload).to_string();
+fn build_slots(module: &IrModule, payload: &WorkspacePayload, flash: Option<&str>) -> SlotData {
+    let scalars = scalar_slots(payload, flash).to_string();
     let mut slots = SlotData::from_json(&scalars, module)
         .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
-    for (name, value) in show_values(payload) {
+    for (name, value) in show_values(payload, flash) {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
             slots.set(id, SlotValue::Bool(value));
+        }
+    }
+    for (name, value) in list_values(payload) {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(id, value);
         }
     }
     slots
@@ -104,9 +189,14 @@ fn build_slots(module: &IrModule, payload: &WorkspacePayload) -> SlotData {
 /// Render /workspace for one payload: SSR slots for first paint, the same
 /// data as island props for hydration. Callers pass a payload built by
 /// `server/workspace.rs`'s one collector, which has already called
-/// [`WorkspacePayload::derived`].
-pub(crate) fn render_workspace(page: &EmbeddedPage, payload: &WorkspacePayload) -> PageOutput {
-    let slots = build_slots(&page.module, payload);
+/// [`WorkspacePayload::derived`] — and a flash that has already been through
+/// the allowlist (`server/workspace.rs::workspace_flash_from_query`).
+pub(crate) fn render_workspace(
+    page: &EmbeddedPage,
+    payload: &WorkspacePayload,
+    flash: Option<&str>,
+) -> PageOutput {
+    let slots = build_slots(&page.module, payload, flash);
     let prefix = body_prefix(payload, "/workspace");
     with_icon_links(render_page(&PageConfig {
         title: "ksx Studio — workspace",
@@ -193,6 +283,15 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            // The served rosters and ceilings a live daemon always carries —
+            // the fixture carries them too, so the pane's forms and captions
+            // render (and screenshot) as they will in production.
+            xinput_used: 1,
+            max_slots: ksx_core::MAX_SLOTS,
+            max_xinput_slots: ksx_core::MAX_XINPUT_SLOTS,
+            socd_options: ksx_api::SocdOption::roster(),
+            blocking_options: ksx_api::BlockingOption::roster(),
+            blocking: Some("bound-keys".into()),
             ..ksx_api::StagedSetupView::default()
         }
     }
@@ -215,17 +314,160 @@ mod tests {
     #[test]
     fn the_workspace_head_is_complete() {
         let page = EmbeddedPage::load("/workspace").unwrap();
-        assert_complete_head("/workspace", &render_workspace(&page, &cabinet()).html);
+        assert_complete_head(
+            "/workspace",
+            &render_workspace(&page, &cabinet(), None).html,
+        );
     }
 
     /// The draft renders as facts: the board's LABEL, the slot count.
     #[test]
     fn the_frame_renders_the_draft_it_was_given() {
         let page = EmbeddedPage::load("/workspace").unwrap();
-        let html = rendered(&render_workspace(&page, &cabinet()).html);
+        let html = rendered(&render_workspace(&page, &cabinet(), None).html);
         assert!(html.contains("Ultimarc I-PAC 4"), "{html}");
         assert!(html.contains("2 controllers staged."), "{html}");
         assert!(html.contains("Ready to play."), "{html}");
+    }
+
+    /// The rack renders each controller as a row with its composed facts —
+    /// and each row's Move buttons carry the WHOLE precomposed order, because
+    /// the daemon's reorder verb takes the whole order and this page must not
+    /// derive slot order a second time.
+    #[test]
+    fn the_rack_renders_rows_with_precomposed_move_orders() {
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let mut payload = cabinet();
+        payload.staged.slots[1].socd = "last-input".into();
+        payload.staged.slots[1].socd_label = "Last press wins".into();
+        let payload = WorkspacePayload {
+            view: Default::default(),
+            ..payload
+        }
+        .derived();
+        let html = rendered(&render_workspace(&page, &payload, None).html);
+        assert!(html.contains("P1 · Xbox 360"), "{html}");
+        assert!(html.contains("P2 · PlayStation"), "{html}");
+        assert!(html.contains("\"Player 1\" · 12 controls"), "{html}");
+        // P2's policy is narrated; P1's off default is not.
+        assert!(html.contains("Opposites: Last press wins"), "{html}");
+        // P1 moves down by submitting "2 1"; its up-order is the honest empty.
+        assert!(html.contains(r#"value="2 1""#), "{html}");
+        assert!(html.contains("/workspace/controller/move"), "{html}");
+        assert!(html.contains("/workspace/controller/remove"), "{html}");
+        // The served ceilings, never hardcoded ones.
+        let caption = &payload.view.rack_caption;
+        assert_eq!(caption, "2 of 16 controllers · 1 of 4 Xbox seats used.");
+        assert!(html.contains(caption.as_str()), "{html}");
+    }
+
+    /// The capture answer marks exactly the chosen row, and the current
+    /// answer's button never invites a no-op write.
+    #[test]
+    fn the_capture_answer_marks_the_chosen_row() {
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let mut payload = cabinet();
+        payload.staged.blocking = Some("bound-keys".into());
+        payload.staged.blocking_options = ksx_api::BlockingOption::roster();
+        let payload = WorkspacePayload {
+            view: Default::default(),
+            ..payload
+        }
+        .derived();
+        let chosen: Vec<&str> = payload
+            .view
+            .blocking
+            .iter()
+            .filter(|row| row.row_cls.contains("on"))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(chosen, ["bound-keys"]);
+        let html = rendered(&render_workspace(&page, &payload, None).html);
+        assert!(html.contains("This is how it is set"), "{html}");
+        assert!(html.contains("/workspace/blocking"), "{html}");
+
+        // Unanswered: no row marked, and the line says Play needs an answer.
+        let mut fresh = cabinet();
+        fresh.staged.blocking = None;
+        fresh.staged.blocking_options = ksx_api::BlockingOption::roster();
+        let fresh = WorkspacePayload {
+            view: Default::default(),
+            ..fresh
+        }
+        .derived();
+        assert!(fresh
+            .view
+            .blocking
+            .iter()
+            .all(|r| !r.row_cls.contains("on")));
+        assert!(fresh.view.blocking_line.contains("Not answered yet"));
+    }
+
+    /// A dirty draft says so — and a clean one says nothing, because narrating
+    /// "no unsaved changes" on every visit is noise.
+    #[test]
+    fn the_dirty_note_appears_exactly_when_the_draft_is_dirty() {
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let mut payload = cabinet();
+        payload.staged.dirty = true;
+        let dirty = WorkspacePayload {
+            view: Default::default(),
+            ..payload
+        }
+        .derived();
+        assert!(dirty.view.show_dirty);
+        let html = rendered(&render_workspace(&page, &dirty, None).html);
+        assert!(html.contains("Unsaved changes"), "{html}");
+
+        let clean = cabinet();
+        assert!(!clean.view.show_dirty);
+        assert!(clean.view.dirty_line.is_empty());
+    }
+
+    /// An EMPTY draft offers both roads in — guided setup, and adopting the
+    /// saved configuration — while a populated one offers neither.
+    #[test]
+    fn an_empty_draft_offers_setup_and_adoption() {
+        let empty = WorkspacePayload {
+            staged: ksx_api::StagedSetupView {
+                reachable: true,
+                empty: true,
+                ..ksx_api::StagedSetupView::default()
+            },
+            session: idle_session(),
+            view: Default::default(),
+        }
+        .derived();
+        assert!(empty.view.stage_empty && !empty.view.stage_ready);
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let html = rendered(&render_workspace(&page, &empty, None).html);
+        assert!(html.contains("/workspace/adopt"), "{html}");
+        assert!(html.contains("Show the saved setup here"), "{html}");
+
+        assert!(cabinet().view.stage_ready && !cabinet().view.stage_empty);
+    }
+
+    /// The flash renders with its `error:` prefix STRIPPED (the prefix is the
+    /// classifier's, not the reader's) and the right show slot lit.
+    #[test]
+    fn the_flash_splits_on_its_own_error_prefix() {
+        let ok_shows: std::collections::BTreeMap<&str, bool> =
+            show_values(&cabinet(), Some("Draft updated."))
+                .into_iter()
+                .collect();
+        assert!(ok_shows["show:wsFlashOk"]);
+        assert!(!ok_shows["show:wsFlashError"]);
+        let err_shows: std::collections::BTreeMap<&str, bool> =
+            show_values(&cabinet(), Some("error: nope"))
+                .into_iter()
+                .collect();
+        assert!(!err_shows["show:wsFlashOk"]);
+        assert!(err_shows["show:wsFlashError"]);
+        let scalars = scalar_slots(&cabinet(), Some("error: The draft could not be updated."));
+        assert_eq!(
+            scalars["wsFlashLine"], "The draft could not be updated.",
+            "the classifier prefix is not customer copy"
+        );
     }
 
     /// Exactly one state pill renders, whatever the session says — a header
@@ -251,8 +493,11 @@ mod tests {
             }
             .derived();
             let values: std::collections::BTreeMap<&str, bool> =
-                show_values(&payload).into_iter().collect();
-            let lit = values.values().filter(|on| **on).count();
+                show_values(&payload, None).into_iter().collect();
+            let lit = values
+                .iter()
+                .filter(|(name, on)| name.starts_with("show:wsPill") && **on)
+                .count();
             assert_eq!(lit, 1, "exactly one pill: {values:?}");
             assert!(
                 values.get(expected).copied().unwrap_or(false),
@@ -274,7 +519,7 @@ mod tests {
             view: Default::default(),
         }
         .derived();
-        let html = rendered(&render_workspace(&page, &unreachable).html);
+        let html = rendered(&render_workspace(&page, &unreachable, None).html);
         assert!(html.contains("The draft could not be read."), "{html}");
         assert!(!html.contains("No keyboard chosen yet."), "{html}");
         assert!(!html.contains("No controllers staged yet."), "{html}");
@@ -289,7 +534,7 @@ mod tests {
             view: Default::default(),
         }
         .derived();
-        let fresh_html = rendered(&render_workspace(&page, &fresh).html);
+        let fresh_html = rendered(&render_workspace(&page, &fresh, None).html);
         assert!(
             fresh_html.contains("No keyboard chosen yet."),
             "{fresh_html}"
@@ -306,7 +551,7 @@ mod tests {
     #[test]
     fn the_skeleton_names_itself_and_points_at_the_working_surfaces() {
         let page = EmbeddedPage::load("/workspace").unwrap();
-        let html = rendered(&render_workspace(&page, &cabinet()).html);
+        let html = rendered(&render_workspace(&page, &cabinet(), None).html);
         assert!(html.contains("workspace preview"), "{html}");
         assert!(html.contains("The workspace is being built here"), "{html}");
         assert!(html.contains(r#"href="/start""#), "{html}");
@@ -353,22 +598,26 @@ mod tests {
             .filter_map(|e| module.strings.get(e.name_str_idx).ok())
             .collect();
 
-        let scalars = scalar_slots(&WorkspacePayload::default());
+        let scalars = scalar_slots(&WorkspacePayload::default(), None);
         for key in scalars.as_object().unwrap().keys() {
             assert!(
                 names.contains(&key.as_str()),
                 "scalar slot '{key}' missing from the embedded IR; slots: {names:?}"
             );
         }
-        let array_slots: Vec<&str> = names
+        let ir_lists: std::collections::BTreeSet<&str> = names
             .iter()
             .copied()
             .filter(|n| n.starts_with("list:") && n.ends_with(":array"))
             .collect();
-        assert!(
-            array_slots.is_empty(),
-            "M0 has no lists; a new createList needs a LIST_SLOT_* constant \
-             and an injection here first: {array_slots:?}"
+        let seam_lists: std::collections::BTreeSet<&str> =
+            list_values(&WorkspacePayload::default())
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect();
+        assert_eq!(
+            ir_lists, seam_lists,
+            "list slots drifted between WorkspaceIsland.ts and list_values()"
         );
         let ir_shows: std::collections::BTreeSet<&str> = names
             .iter()
@@ -376,7 +625,7 @@ mod tests {
             .filter(|n| n.starts_with("show:"))
             .collect();
         let seam_shows: std::collections::BTreeSet<&str> =
-            show_values(&WorkspacePayload::default())
+            show_values(&WorkspacePayload::default(), None)
                 .into_iter()
                 .map(|(name, _)| name)
                 .collect();
@@ -406,6 +655,7 @@ mod tests {
             .keys()
             .map(String::as_str)
             .chain(seam_shows.iter().copied())
+            .chain(seam_lists.iter().copied())
             .collect();
         crate::render::assert_island_slot_contract(
             module,
@@ -421,7 +671,7 @@ mod tests {
     #[test]
     fn the_payload_block_matches_the_api_payload_shape() {
         let page = EmbeddedPage::load("/workspace").unwrap();
-        let html = render_workspace(&page, &cabinet()).html;
+        let html = render_workspace(&page, &cabinet(), None).html;
         let start = html
             .find("<script id=\"__ksx-payload\"")
             .expect("the payload block");

@@ -6134,3 +6134,134 @@ fn start_identify_selects_the_machine_providers_exact_board() {
         "the machine resolver must receive the daemon learner's exact identity"
     );
 }
+
+// ── /workspace — the left pane's form twins (M2) ────────────────────────────
+
+/// The whole left pane, no JavaScript anywhere: stage a draft, reorder it,
+/// set a slot's opposite-directions rule, answer the capture question, remove
+/// a controller — every step one POST, every answer a 303 with an allowlisted
+/// flash, every fact read back from the same payload the island polls.
+#[test]
+fn the_workspace_left_pane_edits_through_its_form_twins() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    // Stage a draft with /start's twins — one stage, two doors onto it.
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=playstation&preset=Player+2&layout=arcade-6button",
+    );
+
+    let page = get(addr, "/workspace");
+    assert!(page.contains("P1 · Xbox 360"), "{page}");
+    assert!(page.contains("P2 · PlayStation"), "{page}");
+    assert!(
+        page.contains(r#"action="/workspace/controller/move""#),
+        "{page}"
+    );
+    assert!(
+        page.contains(r#"action="/workspace/controller/socd""#),
+        "{page}"
+    );
+    assert!(page.contains(r#"action="/workspace/blocking""#), "{page}");
+
+    // Reorder: one whole-order write, and the renumbering is the daemon's.
+    let response = post_form(addr, "/workspace/controller/move", "number=1&order=2+1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"][0]["title"], "P1 · PlayStation", "{api}");
+    assert_eq!(api["view"]["rack"][1]["title"], "P2 · Xbox 360", "{api}");
+
+    // The first row's "Move up" is already at that end: no write, and the
+    // honest sentence rather than an error.
+    let response = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    assert!(response.contains("already%20at%20that%20end"), "{response}");
+
+    // A slot's opposite-directions rule, in the served roster's own words.
+    let response = post_form(
+        addr,
+        "/workspace/controller/socd",
+        "number=1&socd=last-input",
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(
+        api["view"]["rack"][0]["socd_note"], "Opposites: Last press wins",
+        "{api}"
+    );
+
+    // The capture answer.
+    let response = post_form(addr, "/workspace/blocking", "blocking=whole");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert!(
+        api["view"]["blocking_line"]
+            .as_str()
+            .unwrap()
+            .starts_with("Freeze"),
+        "{api}"
+    );
+
+    // Remove one; the rack shrinks and says so.
+    let response = post_form(addr, "/workspace/controller/remove", "number=2");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 1, "{api}");
+    assert_eq!(api["view"]["rack_line"], "1 controller staged.", "{api}");
+}
+
+/// The flash is an allowlist, not a reflector: whatever lands in the query,
+/// only this module's own copy reaches the page.
+#[test]
+fn an_unknown_workspace_flash_is_never_reflected() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let page = get(addr, "/workspace?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
+    assert!(!page.contains("alert(1)"), "{page}");
+    assert!(
+        page.contains("could not finish that request"),
+        "the unknown-flash fallback must render: {page}"
+    );
+}
+
+/// Every mutating `/workspace` route is behind the guard: a rebound host must
+/// not be able to edit this machine's draft.
+#[test]
+fn the_workspace_routes_are_behind_the_guard() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in [
+        "/workspace/blocking",
+        "/workspace/controller/move",
+        "/workspace/controller/remove",
+        "/workspace/controller/socd",
+        "/workspace/adopt",
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
+            "{path} accepted a cross-origin POST: {response}"
+        );
+    }
+}

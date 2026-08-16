@@ -3139,6 +3139,50 @@ impl WorkspacePayload {
     }
 }
 
+/// One staged controller as the workspace rack renders it. Every string is
+/// composed HERE and every form value is precomposed — including the
+/// whole-order sequence each Move button submits, because the daemon's
+/// reorder verb takes the WHOLE order (`StageEdit::ReorderSlots`) and a page
+/// that recomputed it client-side would be a second derivation of slot order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSlotRow {
+    /// The slot number, as the string a form field submits.
+    pub number: String,
+    /// "P1 · Xbox 360".
+    pub title: String,
+    /// "\"Player 1\" · 12 controls".
+    pub detail: String,
+    /// "Opposites: Up wins", or empty for the off default — a policy nobody
+    /// set is not narrated.
+    pub socd_note: String,
+    /// The whole slot order after moving this row UP, space-separated
+    /// (`"2 1 3"`), or empty for the first row — the server answers an empty
+    /// submission with the honest already-there sentence.
+    pub up_order: String,
+    /// Same, moving DOWN; empty for the last row.
+    pub down_order: String,
+}
+
+/// One radio-row of a workspace choice group (keyboard capture). The chosen
+/// state is a composed CLASS and a composed button label, never client logic.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceChoiceRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    /// `"wschoice on"` for the current answer, `"wschoice"` otherwise.
+    pub row_cls: String,
+    /// "This is how it is set" / "Choose".
+    pub button: String,
+}
+
+/// A `<select>` option, value + label, both served.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOptionRow {
+    pub value: String,
+    pub label: String,
+}
+
 /// Everything the workspace SHOWS that is not verbatim provider data. The
 /// island reads these fields and renders them; it derives nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3149,22 +3193,80 @@ pub struct WorkspaceDerived {
     /// (`FIRST-RUN.md` §5 — the label is the identifier on screen), or the
     /// honest empty/unreadable sentence.
     pub device_line: String,
+    /// The board's capture path in small print — "USB · Interception",
+    /// "USB · built-in (WinUSB)" — or empty with no board.
+    pub device_meta: String,
     /// The Virtual-controllers section's one line.
     pub rack_line: String,
+    /// The staged controllers, in slot order.
+    pub rack: Vec<WorkspaceSlotRow>,
+    /// The capacity sentence under the rack — served ceilings, never
+    /// hardcoded ones.
+    pub rack_caption: String,
+    /// P1..Pn for the shared opposite-directions form.
+    pub socd_slots: Vec<WorkspaceOptionRow>,
+    /// The served SOCD roster (`SocdOption`), as select options.
+    pub socd_policies: Vec<WorkspaceOptionRow>,
+    /// The capture question's current-answer sentence.
+    pub blocking_line: String,
+    /// The three capture answers as radio-rows.
+    pub blocking: Vec<WorkspaceChoiceRow>,
+    /// "Unsaved changes — …" when the draft is dirty, else empty.
+    pub dirty_line: String,
     pub pill_running: bool,
     pub pill_idle: bool,
     pub pill_down: bool,
+    /// The pane-structure branches: a readable non-empty draft shows the
+    /// rack and its forms; a readable EMPTY draft shows the build/adopt
+    /// affordances; an unreachable one shows neither (the lines above carry
+    /// the failed-read sentences).
+    pub stage_ready: bool,
+    pub stage_empty: bool,
+    pub has_device: bool,
+    pub show_dirty: bool,
 }
 
 impl WorkspaceDerived {
     fn of(p: &WorkspacePayload) -> Self {
+        let staged = &p.staged;
+        let ready = staged.reachable && !staged.empty;
         Self {
             state_detail: session_play_status(&p.session),
-            device_line: workspace_device_line(&p.staged),
-            rack_line: workspace_rack_line(&p.staged),
+            device_line: workspace_device_line(staged),
+            device_meta: workspace_device_meta(staged),
+            rack_line: workspace_rack_line(staged),
+            rack: workspace_rack_rows(staged),
+            rack_caption: workspace_rack_caption(staged),
+            socd_slots: staged
+                .slots
+                .iter()
+                .map(|slot| WorkspaceOptionRow {
+                    value: slot.number.to_string(),
+                    label: format!("P{}", slot.number),
+                })
+                .collect(),
+            socd_policies: staged
+                .socd_options
+                .iter()
+                .map(|option| WorkspaceOptionRow {
+                    value: option.name.clone(),
+                    label: option.title.clone(),
+                })
+                .collect(),
+            blocking_line: workspace_blocking_line(staged),
+            blocking: workspace_blocking_rows(staged),
+            dirty_line: if ready && staged.dirty {
+                "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
+            } else {
+                String::new()
+            },
             pill_running: p.session.reachable && p.session.running,
             pill_idle: p.session.reachable && !p.session.running,
             pill_down: !p.session.reachable,
+            stage_ready: ready,
+            stage_empty: staged.reachable && staged.empty,
+            has_device: staged.reachable && staged.device.is_some(),
+            show_dirty: ready && staged.dirty,
         }
     }
 }
@@ -3191,6 +3293,119 @@ fn workspace_rack_line(staged: &ksx_api::StagedSetupView) -> String {
         1 => "1 controller staged.".to_owned(),
         n => format!("{n} controllers staged."),
     }
+}
+
+/// The capture path in the words `/start`'s device rows use, from the served
+/// backend name — matched, never parsed out of a selector.
+fn workspace_device_meta(staged: &ksx_api::StagedSetupView) -> String {
+    let Some(device) = staged.device.as_ref().filter(|_| staged.reachable) else {
+        return String::new();
+    };
+    match device.backend.as_str() {
+        "winusb" => "USB · built-in (WinUSB)".to_owned(),
+        "interception" => "USB · Interception".to_owned(),
+        // A backend this build has no words for still gets shown — the served
+        // name is at least true, and hiding it would claim there is none.
+        other => other.to_owned(),
+    }
+}
+
+fn workspace_rack_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceSlotRow> {
+    if !staged.reachable {
+        return Vec::new();
+    }
+    let order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
+    let swapped = |a: usize, b: usize| -> String {
+        let mut next = order.clone();
+        next.swap(a, b);
+        next.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
+    };
+    staged
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(at, slot)| WorkspaceSlotRow {
+            number: slot.number.to_string(),
+            title: format!("P{} · {}", slot.number, slot.persona_label),
+            detail: format!(
+                "\"{}\" · {} control{}",
+                slot.preset,
+                slot.bindings,
+                if slot.bindings == 1 { "" } else { "s" }
+            ),
+            socd_note: match slot.socd.as_str() {
+                "" | "off" => String::new(),
+                _ => format!("Opposites: {}", slot.socd_label),
+            },
+            up_order: if at == 0 {
+                String::new()
+            } else {
+                swapped(at - 1, at)
+            },
+            down_order: if at + 1 == order.len() {
+                String::new()
+            } else {
+                swapped(at, at + 1)
+            },
+        })
+        .collect()
+}
+
+/// Served ceilings, never hardcoded ones — and only the Xbox half when it is
+/// the binding constraint, because "1 of 4" beside "1 of 16" reads as two
+/// unrelated quotas until one of them refuses.
+fn workspace_rack_caption(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable || staged.slots.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{} of {} controllers · {} of {} Xbox seats used.",
+        staged.slots.len(),
+        staged.max_slots,
+        staged.xinput_used,
+        staged.max_xinput_slots
+    )
+}
+
+fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return String::new();
+    }
+    let current = staged.blocking.as_deref().unwrap_or("");
+    match staged
+        .blocking_options
+        .iter()
+        .find(|option| option.name == current)
+    {
+        Some(option) => format!("{} — {}", option.title, option.detail),
+        None => "Not answered yet. Play needs an answer; pick one below.".to_owned(),
+    }
+}
+
+fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {
+    if !staged.reachable {
+        return Vec::new();
+    }
+    let current = staged.blocking.as_deref().unwrap_or("");
+    staged
+        .blocking_options
+        .iter()
+        .map(|option| WorkspaceChoiceRow {
+            name: option.name.clone(),
+            title: option.title.clone(),
+            detail: option.detail.clone(),
+            row_cls: if option.name == current {
+                "wschoice on".to_owned()
+            } else {
+                "wschoice".to_owned()
+            },
+            button: if option.name == current {
+                "This is how it is set".to_owned()
+            } else {
+                "Choose".to_owned()
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]

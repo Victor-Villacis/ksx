@@ -34,11 +34,24 @@ import { h, createSignal, createList, createShow } from "@getforma/core";
 /** One staged controller row — see `WorkspaceSlotRow` in snapshot.rs. */
 export interface WorkspaceSlotRow {
   number: string;
+  row_cls: string;
+  href: string;
   title: string;
   detail: string;
   socd_note: string;
   up_order: string;
   down_order: string;
+}
+
+/** One binding-list row — see `WorkspaceBindRow` in snapshot.rs. */
+export interface WorkspaceBindRow {
+  function: string;
+  label: string;
+  keys: string;
+  notes: string;
+  cls: string;
+  clear: string;
+  slot: string;
 }
 
 /** One capture radio-row — see `WorkspaceChoiceRow` in snapshot.rs. */
@@ -74,6 +87,10 @@ export interface WorkspaceDerived {
   add_preset: string;
   add_full_line: string;
   pad_caption: string;
+  bind_title: string;
+  bind_rows: WorkspaceBindRow[];
+  bind_foot: string;
+  map_href: string;
   dirty_line: string;
   pill_running: boolean;
   pill_idle: boolean;
@@ -111,6 +128,10 @@ const [wsDirtyLine, setWsDirtyLine] = createSignal("");
 const [wsAddPreset, setWsAddPreset] = createSignal("");
 const [wsAddFullLine, setWsAddFullLine] = createSignal("");
 const [wsPadCaption, setWsPadCaption] = createSignal("");
+const [wsBindTitle, setWsBindTitle] = createSignal("");
+const [wsBindFoot, setWsBindFoot] = createSignal("");
+const [wsMapHref, setWsMapHref] = createSignal("/map");
+const [wsBindRows, setWsBindRows] = createSignal<WorkspaceBindRow[]>([]);
 
 const [wsRackRows, setWsRackRows] = createSignal<WorkspaceSlotRow[]>([]);
 const [wsBlockingRows, setWsBlockingRows] = createSignal<WorkspaceChoiceRow[]>([]);
@@ -150,6 +171,10 @@ export function applyWorkspace(p: WorkspacePayload): void {
   setWsAddPreset(p.view.add_preset);
   setWsAddFullLine(p.view.add_full_line);
   setWsPadCaption(p.view.pad_caption);
+  setWsBindTitle(p.view.bind_title);
+  setWsBindFoot(p.view.bind_foot);
+  setWsMapHref(p.view.map_href);
+  setWsBindRows(p.view.bind_rows);
   setWsRackRows(p.view.rack);
   setWsBlockingRows(p.view.blocking);
   setWsSocdSlotOptions(p.view.socd_slots);
@@ -284,6 +309,10 @@ export function WorkspaceIsland() {
             (s) =>
               s.number +
               "|" +
+              s.row_cls +
+              "|" +
+              s.href +
+              "|" +
               s.title +
               "|" +
               s.detail +
@@ -296,11 +325,11 @@ export function WorkspaceIsland() {
             (s) =>
               h(
                 "li",
-                { class: "wsrow" },
+                { class: s.row_cls },
                 h(
                   "div",
                   { class: "wsrow-head" },
-                  h("span", { class: "wsrow-title" }, s.title),
+                  h("a", { class: "wsrow-title", href: s.href }, s.title),
                   h("span", { class: "wsrow-note" }, s.socd_note),
                 ),
                 h("p", { class: "wsrow-detail" }, s.detail),
@@ -320,6 +349,12 @@ export function WorkspaceIsland() {
                     h("input", { type: "hidden", name: "number", value: s.number }),
                     h("input", { type: "hidden", name: "order", value: s.down_order }),
                     h("button", { class: "btn btn-ghost", type: "submit" }, "Move down"),
+                  ),
+                  h(
+                    "form",
+                    { method: "post", action: "/workspace/controller/duplicate" },
+                    h("input", { type: "hidden", name: "number", value: s.number }),
+                    h("button", { class: "btn btn-ghost", type: "submit" }, "Duplicate"),
                   ),
                   h(
                     "form",
@@ -604,7 +639,53 @@ export function WorkspaceIsland() {
         "aside",
         { class: "wspane" },
         h("h2", { class: "wskicker" }, "Bindings"),
-        h("a", { class: "wsempty", href: "/map" }, "Edit button mappings in Controls"),
+        h("p", { class: "wsline" }, () => wsBindTitle()),
+        h(
+          "ul",
+          { class: "wsbinds" },
+          createList(
+            () => wsBindRows(),
+            (b) =>
+              b.function +
+              "|" +
+              b.label +
+              "|" +
+              b.keys +
+              "|" +
+              b.notes +
+              "|" +
+              b.cls +
+              "|" +
+              b.clear +
+              "|" +
+              b.slot,
+            (b) =>
+              h(
+                "li",
+                { class: b.cls },
+                h(
+                  "div",
+                  { class: "wsbind-head" },
+                  h("span", { class: "wsbind-label" }, b.label),
+                  h("span", { class: "wsbind-keys" }, b.keys),
+                ),
+                h("p", { class: "wsbind-notes" }, b.notes),
+                h(
+                  "form",
+                  { class: "wsbind-clear", method: "post", action: "/workspace/bind/clear" },
+                  h("input", { type: "hidden", name: "slot", value: b.slot }),
+                  h("input", { type: "hidden", name: "function", value: b.function }),
+                  h("button", { class: "btn btn-ghost", type: "submit" }, b.clear),
+                ),
+              ),
+          ),
+        ),
+        h("p", { class: "wsmeta" }, () => wsBindFoot()),
+        h(
+          "a",
+          { class: "wsempty", href: () => wsMapHref() },
+          "Rebind, chords and macros in Controls",
+        ),
       ),
     ),
   );

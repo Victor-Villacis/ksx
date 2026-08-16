@@ -19,9 +19,17 @@ void WorkspacePage; // compile-time anchor only (see above)
  *  session change on human actions, not at display rate. */
 const POLL_MS = 2000;
 
+/** The poll echoes the page's own query string, so `?slot=N` selection —
+ *  which is a server-resolved LINK, not client state — survives every
+ *  refresh: the poll looks at the same controller the paint did. (`flash`
+ *  rides along and is ignored by the API; a poll is not an action.) */
+function pollUrl(): string {
+  return "/api/workspace" + window.location.search;
+}
+
 async function poll(): Promise<void> {
   try {
-    applyWorkspace(await fetchJSON<WorkspacePayload>("/api/workspace"));
+    applyWorkspace(await fetchJSON<WorkspacePayload>(pollUrl()));
   } catch {
     applyWorkspaceUnreachable();
   }

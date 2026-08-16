@@ -40,7 +40,14 @@ pub(super) const WS_IDENTIFY_TIMEOUT: &str =
 pub(super) const WS_IDENTIFY_ERROR: &str = "error: That key press could not be matched to one \
      selectable keyboard. Nothing changed; try again.";
 
-pub(super) const WS_FLASH_ALLOWLIST: [&str; 9] = [
+pub(super) const WS_DUP_OK: &str =
+    "Controller duplicated — same layout, same rules, next free slot. Nothing has been saved.";
+
+pub(super) const WS_DUP_FULL: &str =
+    "error: Every controller slot is staged, so there is nothing free to duplicate into. \
+     Remove one first.";
+
+pub(super) const WS_FLASH_ALLOWLIST: [&str; 11] = [
     WS_EDIT_OK,
     WS_EDIT_ERROR,
     WS_MOVE_AT_END,
@@ -49,6 +56,8 @@ pub(super) const WS_FLASH_ALLOWLIST: [&str; 9] = [
     WS_IDENTIFY_OK,
     WS_IDENTIFY_TIMEOUT,
     WS_IDENTIFY_ERROR,
+    WS_DUP_OK,
+    WS_DUP_FULL,
     WS_UNKNOWN_FLASH_ERROR,
 ];
 
@@ -209,6 +218,112 @@ pub(super) async fn workspace_form_identify(State(state): State<Arc<AppState>>) 
     workspace_redirect(flash)
 }
 
+#[derive(Deserialize)]
+pub(super) struct WorkspaceClearForm {
+    slot: u8,
+    function: String,
+}
+
+/// POST /workspace/bind/clear — one control back to unbound, on the staged
+/// slot. The daemon's own staged-bind verb with the canonical clear
+/// placeholder; turbo and toggle clear with the keys, which is that verb's
+/// documented rule.
+pub(super) async fn workspace_form_bind_clear(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<WorkspaceClearForm>,
+) -> Response {
+    let ok = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
+            return false;
+        };
+        state
+            .control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: form.slot,
+                preset: slot.preset.clone(),
+                function: form.function,
+                keys: vec!["none".to_owned()],
+                force: false,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    })
+    .await
+    .unwrap_or(false);
+    workspace_redirect(if ok { WS_EDIT_OK } else { WS_EDIT_ERROR })
+}
+
+/// POST /workspace/controller/duplicate — the same controller again, in the
+/// next free slot: same persona, same bindings, same opposite-directions
+/// rule, under the served next preset name (it becomes a file name on Save).
+///
+/// A COMPOSITION of existing staging verbs, not a new daemon verb: the slot
+/// rows carry their whole authoring table, so add + set-bindings + set-socd
+/// is the entire operation — and if the middle step refuses, the fresh slot
+/// is removed again rather than left half-made. Every step touches daemon
+/// memory only.
+pub(super) async fn workspace_form_duplicate(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<WorkspaceSlotForm>,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(source) = staged.slots.iter().find(|slot| slot.number == form.number) else {
+            return WS_EDIT_ERROR;
+        };
+        let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
+        else {
+            return WS_DUP_FULL;
+        };
+        let Some(mut authoring) = source.authoring.clone() else {
+            // An older daemon serves no authoring table; there is nothing
+            // honest to copy from.
+            return WS_EDIT_ERROR;
+        };
+        let persona = source.persona.clone();
+        let socd = source.socd.clone();
+
+        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: Some(new_number),
+            persona,
+            preset: new_preset.clone(),
+            layout: None,
+        });
+        if !added.ok {
+            return WS_EDIT_ERROR;
+        }
+        // The copy keeps everything except the NAME, which must be the served
+        // fresh one — a save writes one preset file per slot, and two slots
+        // pointing at one file would alias their edits forever after.
+        authoring.name = new_preset;
+        let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+            number: new_number,
+            preset: Box::new(authoring),
+        });
+        if !bound.ok {
+            let _ = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
+            return WS_EDIT_ERROR;
+        }
+        if !socd.is_empty() && socd != "off" {
+            // Best-effort on purpose: the duplicate exists and binds; a socd
+            // refusal here would be a daemon older than the socd verb, and
+            // the row's own rule form remains the road to fix it.
+            let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+                number: new_number,
+                socd,
+            });
+        }
+        WS_DUP_OK
+    })
+    .await
+    .unwrap_or(WS_EDIT_ERROR);
+    workspace_redirect(flash)
+}
+
 /// POST /workspace/adopt — the saved configuration into an EMPTY stage. The
 /// daemon refuses over a proposal (adoption never overwrites edits), and that
 /// refusal gets its own sentence because its remedy is different.
@@ -224,15 +339,25 @@ pub(super) async fn workspace_form_adopt(State(state): State<Arc<AppState>>) -> 
     workspace_redirect(flash)
 }
 
+/// The workspace page's query: the action flash, and WHICH controller the
+/// page is looking at — selection is a server-resolved link, so it works
+/// with no JavaScript and survives a reload.
+#[derive(Deserialize)]
+pub(super) struct WorkspaceQuery {
+    pub(super) flash: Option<String>,
+    pub(super) slot: Option<u8>,
+}
+
 /// One fresh [`WorkspacePayload`]: the daemon-held draft and the session, on
 /// a blocking worker like every other collector read, derived on the way out
 /// so no caller can serve sentences that contradict the facts beside them.
-pub(super) async fn collect_workspace(state: &Arc<AppState>) -> WorkspacePayload {
+pub(super) async fn collect_workspace(state: &Arc<AppState>, slot: Option<u8>) -> WorkspacePayload {
     let ws_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         WorkspacePayload {
             staged: ws_state.control.staged(),
             session: ws_state.control.session(),
+            selected: slot,
             view: Default::default(),
         }
         .derived()
@@ -242,6 +367,7 @@ pub(super) async fn collect_workspace(state: &Arc<AppState>) -> WorkspacePayload
         WorkspacePayload {
             staged: ksx_api::StagedSetupView::unreachable("reading the draft panicked"),
             session: SessionView::unreachable("reading the draft panicked"),
+            selected: slot,
             view: Default::default(),
         }
         .derived()
@@ -251,9 +377,9 @@ pub(super) async fn collect_workspace(state: &Arc<AppState>) -> WorkspacePayload
 /// `GET /workspace` — the three-pane shell, server-rendered.
 pub(super) async fn workspace_page(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<WorkspaceQuery>,
 ) -> Response {
-    let payload = collect_workspace(&state).await;
+    let payload = collect_workspace(&state, query.slot).await;
     let flash = workspace_flash_from_query(query.flash.as_deref());
     let out = render_workspace(&state.workspace_page, &payload, flash.as_deref());
     (
@@ -275,9 +401,14 @@ pub(super) async fn workspace_page(
 }
 
 /// The 2 s poller's endpoint — the same [`WorkspacePayload`] the page embeds
-/// as island props (parity unit-tested in render_workspace.rs).
-pub(super) async fn api_workspace(State(state): State<Arc<AppState>>) -> Response {
-    let payload = collect_workspace(&state).await;
+/// as island props (parity unit-tested in render_workspace.rs). The client
+/// echoes the page's own query string, so the poll looks at the same slot
+/// the paint did.
+pub(super) async fn api_workspace(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Response {
+    let payload = collect_workspace(&state, query.slot).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),

@@ -207,8 +207,13 @@ pub fn serve(
             .route("/workspace/controller/move", post(workspace_form_move))
             .route("/workspace/controller/remove", post(workspace_form_remove))
             .route("/workspace/controller/socd", post(workspace_form_socd))
+            .route(
+                "/workspace/controller/duplicate",
+                post(workspace_form_duplicate),
+            )
             .route("/workspace/controller", post(workspace_form_add))
             .route("/workspace/device/identify", post(workspace_form_identify))
+            .route("/workspace/bind/clear", post(workspace_form_bind_clear))
             .route("/workspace/adopt", post(workspace_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))

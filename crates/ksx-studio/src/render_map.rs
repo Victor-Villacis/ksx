@@ -302,7 +302,7 @@ fn selected_slot(payload: &MapPayload) -> Option<&MapperSlot> {
 /// (docs/INPUT-TRANSFORMS.md §1a: `A = ["S", "Enter"]`, press either), and
 /// A multi-bind preset uses it; the page had been folding the list
 /// into one tag and the writer had been replacing it.
-fn keys_of(slot: &MapperSlot, function: &str) -> Vec<String> {
+pub(crate) fn keys_of(slot: &MapperSlot, function: &str) -> Vec<String> {
     slot.bindings.get(function).cloned().unwrap_or_default()
 }
 
@@ -313,7 +313,7 @@ const KEY_SEP: &str = " · ";
 
 /// "G", "S · Enter", or "—" for unbound — every key, for the tooltip/aria
 /// text and the legend's own reading.
-fn key_tag(slot: &MapperSlot, function: &str) -> String {
+pub(crate) fn key_tag(slot: &MapperSlot, function: &str) -> String {
     let keys = keys_of(slot, function);
     if keys.is_empty() {
         "—".to_owned()
@@ -374,7 +374,7 @@ const SHARE_MAX: usize = 3;
 /// is one key that drives both, whether or not either control has others. (It
 /// used to compare the joined tags, which quietly stopped noticing the moment
 /// a control held more than one key.)
-fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
+pub(crate) fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
     let zones = zones_for(&slot.persona);
     let keys: Vec<Vec<String>> = zones.iter().map(|z| keys_of(slot, z.fn_name)).collect();
     keys.iter()
@@ -397,7 +397,7 @@ fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
 /// driving eight controls cannot blow the row apart. Empty = not shared (the
 /// CSS hides it through the row's `l-shared` class, never `:empty`, which
 /// cannot work on an SSR text slot).
-fn share_text(names: &[String]) -> String {
+pub(crate) fn share_text(names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
     }
@@ -493,7 +493,7 @@ fn legend_group(z: &Zone) -> &'static str {
 
 /// Group + identity as one string — the row's tooltip/aria text and what a
 /// shared-key badge calls a co-bound control.
-fn legend_label(z: &Zone) -> String {
+pub(crate) fn legend_label(z: &Zone) -> String {
     format!("{}{}", legend_group(z), z.label)
 }
 

@@ -52,6 +52,7 @@ const LIST_SLOT_SOCD_SLOTS: &str = "list:wsSocdSlotOptions:array";
 const LIST_SLOT_SOCD_POLICIES: &str = "list:wsSocdPolicyOptions:array";
 const LIST_SLOT_ADD_PERSONAS: &str = "list:wsAddPersonaOptions:array";
 const LIST_SLOT_ADD_LAYOUTS: &str = "list:wsAddLayoutOptions:array";
+const LIST_SLOT_BINDS: &str = "list:wsBindRows:array";
 
 /// Bare-named slots this page renders and the seam deliberately never fills.
 /// EMPTY, and that is the claim.
@@ -80,6 +81,9 @@ fn scalar_slots(payload: &WorkspacePayload, flash: Option<&str>) -> serde_json::
         "wsAddPreset": payload.view.add_preset,
         "wsAddFullLine": payload.view.add_full_line,
         "wsPadCaption": payload.view.pad_caption,
+        "wsBindTitle": payload.view.bind_title,
+        "wsBindFoot": payload.view.bind_foot,
+        "wsMapHref": payload.view.map_href,
         "wsFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
     })
 }
@@ -113,6 +117,8 @@ fn show_values(
 fn rack_row(row: &WorkspaceSlotRow) -> SlotValue {
     SlotValue::object(vec![
         ("number".to_owned(), SlotValue::Text(row.number.clone())),
+        ("row_cls".to_owned(), SlotValue::Text(row.row_cls.clone())),
+        ("href".to_owned(), SlotValue::Text(row.href.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         (
@@ -144,9 +150,25 @@ fn option_row(row: &WorkspaceOptionRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 6] {
+fn bind_row(row: &crate::snapshot::WorkspaceBindRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("function".to_owned(), SlotValue::Text(row.function.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("keys".to_owned(), SlotValue::Text(row.keys.clone())),
+        ("notes".to_owned(), SlotValue::Text(row.notes.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("clear".to_owned(), SlotValue::Text(row.clear.clone())),
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+    ])
+}
+
+fn list_values(payload: &WorkspacePayload) -> [(&'static str, SlotValue); 7] {
     let view = &payload.view;
     [
+        (
+            LIST_SLOT_BINDS,
+            SlotValue::array(view.bind_rows.iter().map(bind_row).collect()),
+        ),
         (
             LIST_SLOT_RACK,
             SlotValue::array(view.rack.iter().map(rack_row).collect()),
@@ -317,6 +339,7 @@ mod tests {
         WorkspacePayload {
             staged: staged_draft(),
             session: idle_session(),
+            selected: None,
             view: Default::default(),
         }
         .derived()
@@ -452,6 +475,7 @@ mod tests {
                 ..ksx_api::StagedSetupView::default()
             },
             session: idle_session(),
+            selected: None,
             view: Default::default(),
         }
         .derived();
@@ -462,6 +486,109 @@ mod tests {
         assert!(html.contains("Show the saved setup here"), "{html}");
 
         assert!(cabinet().view.stage_ready && !cabinet().view.stage_empty);
+    }
+
+    /// `?slot=N` drives the whole view: the rack marks the row, the stage
+    /// flips to that controller's family, and the right pane lists ITS
+    /// bindings — composed off the same machinery the mapper reads, so the
+    /// notes speak the mapper's own words (turbo's effective rate, toggle's
+    /// press-holds sentence, multi-bind fan-out).
+    #[test]
+    fn selecting_a_slot_drives_rack_stage_and_binding_list_together() {
+        let mut payload = cabinet();
+        // Give P2 a real authoring table: two keys on A (one shared with B),
+        // a turbo'd RT, a latched LB.
+        let core = ksx_core::Preset {
+            name: "Player 2".into(),
+            entries: vec![
+                (
+                    ksx_core::Key::G,
+                    ksx_core::Binding::Button(ksx_core::XButton::A),
+                ),
+                (
+                    ksx_core::Key::H,
+                    ksx_core::Binding::Button(ksx_core::XButton::A),
+                ),
+                (
+                    ksx_core::Key::G,
+                    ksx_core::Binding::Button(ksx_core::XButton::B),
+                ),
+                (
+                    ksx_core::Key::T,
+                    ksx_core::Binding::Trigger(ksx_core::Trigger::Right),
+                ),
+                (
+                    ksx_core::Key::L,
+                    ksx_core::Binding::Button(ksx_core::XButton::LeftBumper),
+                ),
+            ],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: vec![ksx_core::TurboBinding::new(
+                ksx_core::Binding::Trigger(ksx_core::Trigger::Right),
+                12,
+            )],
+            toggle: vec![ksx_core::Binding::Button(ksx_core::XButton::LeftBumper)],
+            protected: false,
+        };
+        payload.staged.slots[1].authoring = Some(ksx_config::PresetFile::from_core(&core));
+        let payload = WorkspacePayload {
+            selected: Some(2),
+            view: Default::default(),
+            ..payload
+        }
+        .derived();
+
+        assert!(payload.view.bind_title.starts_with("P2 · PlayStation"));
+        assert!(payload.view.pad_ps, "the stage follows the selection");
+        let on: Vec<&str> = payload
+            .view
+            .rack
+            .iter()
+            .filter(|row| row.row_cls.contains("on"))
+            .map(|row| row.number.as_str())
+            .collect();
+        assert_eq!(on, ["2"], "exactly the selected row is marked");
+        assert_eq!(payload.view.map_href, "/map?target=stage&slot=2");
+
+        let row = |f: &str| {
+            payload
+                .view
+                .bind_rows
+                .iter()
+                .find(|row| row.function == f)
+                .unwrap_or_else(|| panic!("{f} row missing"))
+        };
+        assert_eq!(row("A").keys, "G · H");
+        assert!(
+            row("A").notes.contains("this key also drives"),
+            "{:?}",
+            row("A").notes
+        );
+        assert!(row("rt").notes.contains("Turbo ~12 Hz"));
+        assert!(row("lb").notes.contains("Toggle: a press holds"));
+        assert_eq!(row("X").keys, "—");
+        assert_eq!(row("X").clear, "", "an unbound row offers no Clear");
+        assert_eq!(row("A").clear, "Clear");
+        assert!(
+            payload.view.bind_foot.contains("controls bound"),
+            "{}",
+            payload.view.bind_foot
+        );
+        assert!(
+            payload.view.bind_foot.contains("1 key shared"),
+            "G drives A and B — one shared key: {}",
+            payload.view.bind_foot
+        );
+
+        // An unknown ?slot falls back to the FIRST slot, never to nothing.
+        let fallback = WorkspacePayload {
+            selected: Some(9),
+            view: Default::default(),
+            ..cabinet()
+        }
+        .derived();
+        assert!(fallback.view.bind_title.starts_with("P1 · Xbox 360"));
     }
 
     /// The flash renders with its `error:` prefix STRIPPED (the prefix is the
@@ -506,6 +633,7 @@ mod tests {
             let payload = WorkspacePayload {
                 staged: staged_draft(),
                 session,
+                selected: None,
                 view: Default::default(),
             }
             .derived();
@@ -533,6 +661,7 @@ mod tests {
         let unreachable = WorkspacePayload {
             staged: ksx_api::StagedSetupView::unreachable("no daemon in this test"),
             session: SessionView::unreachable("no daemon in this test"),
+            selected: None,
             view: Default::default(),
         }
         .derived();
@@ -548,6 +677,7 @@ mod tests {
                 ..ksx_api::StagedSetupView::default()
             },
             session: idle_session(),
+            selected: None,
             view: Default::default(),
         }
         .derived();
@@ -631,6 +761,7 @@ mod tests {
                 ..ksx_api::StagedSetupView::default()
             },
             session: idle_session(),
+            selected: None,
             view: Default::default(),
         }
         .derived();

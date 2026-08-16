@@ -3120,6 +3120,11 @@ pub struct WorkspacePayload {
     /// not a file. Its own `reachable`/`error` fields say when there is none.
     pub staged: ksx_api::StagedSetupView,
     pub session: crate::control::SessionView,
+    /// The slot the page is LOOKING AT (`?slot=N`), resolved by the server —
+    /// absent or unknown falls back to the first staged slot. The poller
+    /// echoes the page's own query string, so a poll cannot flip the view.
+    #[serde(default)]
+    pub selected: Option<u8>,
     /// Every displayed string and every `show:` branch, computed once —
     /// recomputed from the fields above by [`Self::derived`]; never assembled
     /// by hand.
@@ -3148,6 +3153,11 @@ impl WorkspacePayload {
 pub struct WorkspaceSlotRow {
     /// The slot number, as the string a form field submits.
     pub number: String,
+    /// `"wsrow"`, `"wsrow on"` for the selected controller.
+    pub row_cls: String,
+    /// `/workspace?slot=N` — selection is a LINK, so switching controllers
+    /// works with no JavaScript at all.
+    pub href: String,
     /// "P1 · Xbox 360".
     pub title: String,
     /// "\"Player 1\" · 12 controls".
@@ -3181,6 +3191,29 @@ pub struct WorkspaceChoiceRow {
 pub struct WorkspaceOptionRow {
     pub value: String,
     pub label: String,
+}
+
+/// One binding-list row of the workspace's right pane: the selected slot's
+/// controls in the zone tables' own order, each with the composed strings
+/// the Nocturne row anatomy renders and the fields its Clear twin submits.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBindRow {
+    /// Canonical function name — the form field and the row key.
+    pub function: String,
+    /// "LS ▲", "D-pad ◀", "A" — the mapper's own legend label.
+    pub label: String,
+    /// "G · H", or the honest "—" for an unbound control.
+    pub keys: String,
+    /// The row's modifiers as one quiet sentence: "Turbo ~12 Hz · Toggle ·
+    /// this key also drives A, B" — empty when the row is plain.
+    pub notes: String,
+    /// `"wsbind"` (+" unbound"/" shared").
+    pub cls: String,
+    /// "Clear" on a bound row, empty (and therefore hidden) on an unbound
+    /// one — the list idiom for a per-row action that is sometimes a no-op.
+    pub clear: String,
+    /// The slot number the Clear twin submits.
+    pub slot: String,
 }
 
 /// Everything the workspace SHOWS that is not verbatim provider data. The
@@ -3226,6 +3259,16 @@ pub struct WorkspaceDerived {
     /// and bound count, with the Sony-vocabulary honesty caption for
     /// PlayStation-family pads ("shown on a generic gamepad outline").
     pub pad_caption: String,
+    /// The right pane's heading line: the SELECTED controller's identity, or
+    /// the honest empty/unreachable sentence.
+    pub bind_title: String,
+    /// The selected controller's binding list, in zone order.
+    pub bind_rows: Vec<WorkspaceBindRow>,
+    /// "14 of 25 controls bound · 2 keys shared." — or empty with no slot.
+    pub bind_foot: String,
+    /// Where the full mapper lives for the selected slot
+    /// (`/map?target=stage&slot=N`), or `/map` with none.
+    pub map_href: String,
     /// "Unsaved changes — …" when the draft is dirty, else empty.
     pub dirty_line: String,
     pub pill_running: bool,
@@ -3248,16 +3291,30 @@ pub struct WorkspaceDerived {
     pub pad_ps: bool,
 }
 
+/// The slot the page is looking at: the requested one when it still exists,
+/// else the first — a removed slot must not leave the pane staring at
+/// nothing when there is something honest to show.
+fn workspace_selected(p: &WorkspacePayload) -> Option<&ksx_api::StagedSlotView> {
+    if !p.staged.reachable {
+        return None;
+    }
+    p.selected
+        .and_then(|n| p.staged.slots.iter().find(|slot| slot.number == n))
+        .or_else(|| p.staged.slots.first())
+}
+
 impl WorkspaceDerived {
     fn of(p: &WorkspacePayload) -> Self {
         let staged = &p.staged;
         let ready = staged.reachable && !staged.empty;
+        let selected = workspace_selected(p);
+        let binds = workspace_bind_rows(staged, selected);
         Self {
             state_detail: session_play_status(&p.session),
             device_line: workspace_device_line(staged),
             device_meta: workspace_device_meta(staged),
             rack_line: workspace_rack_line(staged),
-            rack: workspace_rack_rows(staged),
+            rack: workspace_rack_rows(staged, selected.map(|slot| slot.number)),
             rack_caption: workspace_rack_caption(staged),
             socd_slots: staged
                 .slots
@@ -3302,7 +3359,11 @@ impl WorkspaceDerived {
             } else {
                 String::new()
             },
-            pad_caption: workspace_pad_caption(staged),
+            pad_caption: workspace_pad_caption(selected),
+            bind_title: binds.title,
+            bind_rows: binds.rows,
+            bind_foot: binds.foot,
+            map_href: binds.map_href,
             dirty_line: if ready && staged.dirty {
                 "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
             } else {
@@ -3319,14 +3380,8 @@ impl WorkspaceDerived {
                 && staged.next_slot.is_some()
                 && staged.personas.iter().any(|p| p.can_plug && p.available),
             add_full: ready && staged.next_slot.is_none(),
-            pad_ps: staged
-                .slots
-                .first()
-                .is_some_and(|slot| staged.reachable && !slot.is_xinput),
-            pad_xbox: !staged
-                .slots
-                .first()
-                .is_some_and(|slot| staged.reachable && !slot.is_xinput),
+            pad_ps: selected.is_some_and(|slot| !slot.is_xinput),
+            pad_xbox: !selected.is_some_and(|slot| !slot.is_xinput),
         }
     }
 }
@@ -3370,7 +3425,10 @@ fn workspace_device_meta(staged: &ksx_api::StagedSetupView) -> String {
     }
 }
 
-fn workspace_rack_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceSlotRow> {
+fn workspace_rack_rows(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<u8>,
+) -> Vec<WorkspaceSlotRow> {
     if !staged.reachable {
         return Vec::new();
     }
@@ -3386,6 +3444,12 @@ fn workspace_rack_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceSlotRo
         .enumerate()
         .map(|(at, slot)| WorkspaceSlotRow {
             number: slot.number.to_string(),
+            row_cls: if selected == Some(slot.number) {
+                "wsrow on".to_owned()
+            } else {
+                "wsrow".to_owned()
+            },
+            href: format!("/workspace?slot={}", slot.number),
             title: format!("P{} · {}", slot.number, slot.persona_label),
             detail: format!(
                 "\"{}\" · {} control{}",
@@ -3446,11 +3510,8 @@ fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
 /// bound it is. No vocabulary caveat any more — the stage shows each
 /// family's OWN outline (`WorkspaceDerived::pad_ps`), so the art and the
 /// words already agree.
-fn workspace_pad_caption(staged: &ksx_api::StagedSetupView) -> String {
-    if !staged.reachable {
-        return String::new();
-    }
-    let Some(slot) = staged.slots.first() else {
+fn workspace_pad_caption(selected: Option<&ksx_api::StagedSlotView>) -> String {
+    let Some(slot) = selected else {
         return String::new();
     };
     format!(
@@ -3461,6 +3522,123 @@ fn workspace_pad_caption(staged: &ksx_api::StagedSetupView) -> String {
         slot.bindings,
         if slot.bindings == 1 { "" } else { "s" }
     )
+}
+
+/// The right pane's whole content for one selected controller, composed off
+/// the SAME machinery the mapper reads (`ksx_api::staged_mapper_slot` + the
+/// zone tables in render_map.rs), so the two surfaces cannot describe one
+/// binding differently.
+struct WorkspaceBinds {
+    title: String,
+    rows: Vec<WorkspaceBindRow>,
+    foot: String,
+    map_href: String,
+}
+
+fn workspace_bind_rows(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+) -> WorkspaceBinds {
+    let empty = |title: &str| WorkspaceBinds {
+        title: title.to_owned(),
+        rows: Vec::new(),
+        foot: String::new(),
+        map_href: "/map".to_owned(),
+    };
+    if !staged.reachable {
+        return empty("Not readable right now.");
+    }
+    let Some(slot) = selected else {
+        return empty("No controller staged yet.");
+    };
+    let keyboard = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
+        // An older daemon serves no authoring table; the mapper page carries
+        // the full explanation, so point there rather than paraphrasing.
+        return WorkspaceBinds {
+            title: format!("P{} · {}", slot.number, slot.persona_label),
+            rows: Vec::new(),
+            foot: String::new(),
+            map_href: format!("/map?target=stage&slot={}", slot.number),
+        };
+    };
+    let shared = crate::render_map::shared_labels(&mapper);
+    let zones = crate::render_map::zones_for(&mapper.persona);
+    let rows: Vec<WorkspaceBindRow> = zones
+        .iter()
+        .zip(&shared)
+        .map(|(zone, share)| {
+            let keys = crate::render_map::key_tag(&mapper, zone.fn_name);
+            let unbound = keys == "—";
+            let mut notes: Vec<String> = Vec::new();
+            if let Some(effective) = mapper.turbo.get(zone.fn_name) {
+                notes.push(format!("Turbo ~{effective} Hz"));
+            }
+            if mapper.toggle.contains(zone.fn_name) {
+                notes.push("Toggle: a press holds until the next press".to_owned());
+            }
+            if !share.is_empty() {
+                notes.push(format!(
+                    "this key also drives {}",
+                    crate::render_map::share_text(share)
+                ));
+            }
+            let mut cls = String::from("wsbind");
+            if unbound {
+                cls.push_str(" unbound");
+            }
+            if !share.is_empty() {
+                cls.push_str(" shared");
+            }
+            WorkspaceBindRow {
+                function: zone.fn_name.to_owned(),
+                label: crate::render_map::legend_label(zone),
+                keys,
+                notes: notes.join(" · "),
+                cls,
+                clear: if unbound {
+                    String::new()
+                } else {
+                    "Clear".to_owned()
+                },
+                slot: slot.number.to_string(),
+            }
+        })
+        .collect();
+    let bound = rows.iter().filter(|row| row.keys != "—").count();
+    // A key is SHARED when it drives more than one control — counted once,
+    // by inverting the binding table, so a key that merely sits beside a
+    // shared one on some row never inflates the number.
+    let shared_keys: usize = {
+        let mut fanout: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for keys in mapper.bindings.values() {
+            for key in keys {
+                *fanout.entry(key.as_str()).or_default() += 1;
+            }
+        }
+        fanout.values().filter(|count| **count > 1).count()
+    };
+    let foot = match shared_keys {
+        0 => format!("{bound} of {} controls bound.", rows.len()),
+        1 => format!("{bound} of {} controls bound · 1 key shared.", rows.len()),
+        n => format!(
+            "{bound} of {} controls bound · {n} keys shared.",
+            rows.len()
+        ),
+    };
+    WorkspaceBinds {
+        title: format!(
+            "P{} · {} — \"{}\"",
+            slot.number, slot.persona_label, slot.preset
+        ),
+        rows,
+        foot,
+        map_href: format!("/map?target=stage&slot={}", slot.number),
+    }
 }
 
 fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {

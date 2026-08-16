@@ -6072,6 +6072,91 @@ a.strow:hover {
   gap: var(--sp-2);
 }
 
+/* The selected rack row: selection tint + identity line, and the title link
+   inherits the row's colours rather than the default link blue. */
+.wsrow.on {
+  background: var(--sel-tint);
+  border-color: var(--cool-line);
+}
+
+a.wsrow-title {
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+a.wsrow-title:hover {
+  text-decoration: underline;
+}
+
+/* ── The binding list (right pane): one row per control, zone order ─────── */
+.wsbinds {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.wsbind {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wsbind:last-child {
+  border-bottom: none;
+}
+
+.wsbind-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.wsbind-label {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+
+.wsbind-keys {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+}
+
+.wsbind.unbound .wsbind-keys {
+  color: var(--text-tertiary);
+}
+
+/* Shared keys wear identity, not alarm: fan-out is information (§1a). */
+.wsbind.shared .wsbind-keys {
+  color: var(--cool);
+}
+
+.wsbind-notes {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+
+.wsbind-notes:empty {
+  display: none;
+}
+
+/* A per-row action that is sometimes a no-op: an empty label hides the
+   whole form, so unbound rows offer nothing and the layout never jumps. */
+.wsbind-clear button:empty {
+  display: none;
+}
+
+.wsbind-clear:has(button:empty) {
+  display: none;
+}
+
 /* ── The stage controllers (vendored silhouettes + our control layer) ─────
    Decorative in M2 (aria-hidden; the caption is the accessible summary).
    Every fill and stroke is a token, so both themes come from the one art —

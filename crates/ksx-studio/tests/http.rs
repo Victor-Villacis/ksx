@@ -6271,6 +6271,120 @@ fn workspace_identify_selects_the_board_and_returns_here() {
     );
 }
 
+/// Duplicate is a COMPOSITION of existing staging verbs, and the copy is
+/// honest: same bindings, same opposite-directions rule, the served fresh
+/// preset name — never the same name twice, because a save writes one file
+/// per slot.
+#[test]
+fn duplicating_a_controller_copies_bindings_rule_and_takes_the_served_name() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/workspace/controller/socd",
+        "number=1&socd=last-input",
+    );
+
+    let response = post_form(addr, "/workspace/controller/duplicate", "number=1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Controller%20duplicated"), "{response}");
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    let rack = api["view"]["rack"].as_array().unwrap();
+    assert_eq!(rack.len(), 2, "{api}");
+    assert_eq!(rack[1]["socd_note"], "Opposites: Last press wins", "{api}");
+    // Same binding count, different preset name.
+    let d0 = rack[0]["detail"].as_str().unwrap();
+    let d1 = rack[1]["detail"].as_str().unwrap();
+    assert_eq!(
+        d0.split("· ").last(),
+        d1.split("· ").last(),
+        "the copy binds what the original binds: {api}"
+    );
+    assert!(
+        d0.contains("Player 1") && !d1.contains("\"Player 1\""),
+        "{api}"
+    );
+
+    let staged = control.staged();
+    assert_eq!(staged.slots[0].bindings, staged.slots[1].bindings);
+    assert_ne!(staged.slots[0].preset, staged.slots[1].preset);
+}
+
+/// `?slot=N` selection is a server-resolved LINK: the rack marks the row,
+/// the right pane lists that controller's bindings, and the Clear twin puts
+/// one control back to unbound — no JavaScript anywhere in the loop.
+#[test]
+fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=playstation&preset=Player+2&layout=arcade-6button",
+    );
+
+    let page = get(addr, "/workspace?slot=2");
+    assert!(page.contains("P2 · PlayStation — \"Player 2\""), "{page}");
+    assert!(page.contains(r#"action="/workspace/bind/clear""#), "{page}");
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+        .expect("workspace payload");
+    assert_eq!(api["view"]["rack"][1]["row_cls"], "wsrow on", "{api}");
+    assert_eq!(
+        api["view"]["pad_ps"], true,
+        "the stage follows the selection"
+    );
+    let rows = api["view"]["bind_rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 25, "one row per zone: {api}");
+    let bound_before = rows.iter().filter(|r| r["keys"] != "—").count();
+    assert!(bound_before > 0, "{api}");
+    let cleared_fn = rows
+        .iter()
+        .find(|r| r["keys"] != "—")
+        .and_then(|r| r["function"].as_str())
+        .unwrap()
+        .to_owned();
+
+    let response = post_form(
+        addr,
+        "/workspace/bind/clear",
+        &format!("slot=2&function={}", cleared_fn.replace('.', "%2E")),
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+        .expect("workspace payload");
+    let row = api["view"]["bind_rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["function"] == cleared_fn.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(row["keys"], "—", "{api}");
+    assert_eq!(row["clear"], "", "{api}");
+}
+
 /// The flash is an allowlist, not a reflector: whatever lands in the query,
 /// only this module's own copy reaches the page.
 #[test]
@@ -6293,9 +6407,11 @@ fn the_workspace_routes_are_behind_the_guard() {
         "/workspace/blocking",
         "/workspace/controller",
         "/workspace/controller/move",
+        "/workspace/controller/duplicate",
         "/workspace/controller/remove",
         "/workspace/controller/socd",
         "/workspace/device/identify",
+        "/workspace/bind/clear",
         "/workspace/adopt",
     ] {
         let response = http(

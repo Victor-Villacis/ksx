@@ -2438,11 +2438,12 @@ preset = "default"
         )
     }
 
-    /// A plain SOCD slot is completely clean: the policy generates chords, and
-    /// generated chords are not something the user can get wrong.
+    /// A plain SOCD slot is completely clean: the static policies generate
+    /// chords, the order-aware ones run in the engine, and neither is
+    /// something the user can get wrong.
     #[test]
     fn an_ordinary_socd_slot_reports_nothing() {
-        for policy in ["off", "neutral", "up-priority"] {
+        for policy in ["off", "neutral", "up-priority", "last-input", "first-input"] {
             assert_eq!(
                 validate(&socd_config(policy), &[stick_preset()]),
                 Vec::new(),

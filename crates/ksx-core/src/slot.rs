@@ -62,9 +62,11 @@ pub struct SlotSpec {
     /// [`Persona::Xbox360`]; set with [`SlotSpec::with_persona`].
     pub persona: Persona,
     /// What this slot does with simultaneous opposing directions. Defaults to
-    /// [`Socd::Off`] — no generated chords, no behavioral change at all — and
-    /// is applied by generating chords onto the resolved preset
-    /// ([`crate::socd`]), never by a special case in the engine.
+    /// [`Socd::Off`] — no generated chords, no behavioral change at all. The
+    /// static policies are applied by generating chords onto the resolved
+    /// preset ([`crate::socd`]); the two order-aware policies
+    /// ([`Socd::is_runtime`]) generate nothing and are read from HERE by
+    /// `EngineTables::build`, which keeps a per-control order memory for them.
     pub socd: Socd,
     /// Does this slot run macros at all? Defaults to [`MacroSwitch::On`] — the
     /// behavior of every configuration written before the switch existed — and

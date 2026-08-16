@@ -559,7 +559,7 @@ pub struct SlotAssignRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     /// **What opposite directions on this slot's stick do** - a
-    /// [`ksx_core::Socd`] name (`off`, `neutral`, `up-priority`).
+    /// [`ksx_core::Socd`] name (`off`, `neutral`, `up-priority`, `last-input`, `first-input`).
     ///
     /// ABSENT means "not asked about", the same three-state rule
     /// [`Self::persona`] follows and for the same reason: `Socd::default()` is

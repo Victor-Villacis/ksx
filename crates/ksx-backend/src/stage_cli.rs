@@ -27,7 +27,7 @@ pub enum Verb {
     /// sequence, renumbered contiguously by the daemon.
     Reorder { numbers: Vec<u8> },
     /// One staged slot's simultaneous-opposite-direction policy
-    /// (`off` | `neutral` | `up-priority` — `ksx_core::Socd`'s own names).
+    /// (`off` | `neutral` | `up-priority` | `last-input` | `first-input` — `ksx_core::Socd`'s own names).
     Socd { slot: u8, socd: String },
 }
 

@@ -109,7 +109,7 @@ pub struct StagedSlotView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoring: Option<ksx_config::PresetFile>,
     /// This slot's simultaneous-opposite-direction policy — a
-    /// [`ksx_core::Socd`] name (`off` | `neutral` | `up-priority`). Older
+    /// [`ksx_core::Socd`] name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`). Older
     /// daemons did not serve the field; absence reads as the default, which
     /// is also what every staged slot starts on.
     #[serde(default)]
@@ -293,7 +293,7 @@ pub const BLOCKING_SCOPE_LINE: &str =
 /// it can tell that this is that.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocdOption {
-    /// `off` | `neutral` | `up-priority` - a `ksx_core::Socd` name.
+    /// `off` | `neutral` | `up-priority` | `last-input` | `first-input` - a `ksx_core::Socd` name.
     pub name: String,
     pub title: String,
     pub detail: String,
@@ -310,6 +310,8 @@ impl SocdOption {
                     ksx_core::Socd::Off => "Send both",
                     ksx_core::Socd::Neutral => "Cancel to centre",
                     ksx_core::Socd::UpPriority => "Up wins",
+                    ksx_core::Socd::LastInput => "Last press wins",
+                    ksx_core::Socd::FirstInput => "First press wins",
                 }
                 .to_owned(),
                 detail: match socd {
@@ -325,6 +327,15 @@ impl SocdOption {
                         "Left and right together read as centre, but up beats down - so \
                          down-back rolled into up-back jumps instead of crouching. The \
                          fighting-game standard."
+                    }
+                    ksx_core::Socd::LastInput => {
+                        "Holding one direction and tapping the opposite follows the newer \
+                         press, and letting it go hands back to the held key. SOCD last-input \
+                         priority - \"snap tap\", the leverless standard."
+                    }
+                    ksx_core::Socd::FirstInput => {
+                        "The direction pressed first holds until it is released; the opposite \
+                         press waits its turn. SOCD first-input priority."
                     }
                 }
                 .to_owned(),
@@ -618,7 +629,7 @@ pub enum StageEdit {
     /// SOCD answer.
     ReorderSlots { numbers: Vec<u8> },
     /// Set one staged controller's simultaneous-opposite-direction policy —
-    /// a `ksx_core::Socd` name (`off` | `neutral` | `up-priority`), the same
+    /// a `ksx_core::Socd` name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`), the same
     /// vocabulary `ksx slot assign --socd` writes onto a saved slot.
     SetSocd { number: u8, socd: String },
     /// Moment 6's one question: `whole` (freeze) or `bound-keys` (split).
@@ -750,7 +761,8 @@ impl StageEdit {
                         Refusal::with_remedy(
                             codes::BAD_REQUEST,
                             err.to_string(),
-                            "send a ksx_core::Socd name: off | neutral | up-priority",
+                            "send a ksx_core::Socd name: off | neutral | up-priority | \
+                             last-input | first-input",
                         )
                     })?;
                 setup.set_socd(*number, socd).map_err(refuse)
@@ -2634,6 +2646,50 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         // The tag is the field a surface switches on.
         let text = serde_json::to_string(&StageEdit::Discard).unwrap();
         assert_eq!(text, r#"{"edit":"discard"}"#);
+    }
+
+    /// The SOCD roster serves every engine policy, in `Socd::ALL` order, each
+    /// with a jargon-free title — the reason it is a served roster at all is
+    /// that a surface hardcoding three names would keep offering them after
+    /// the engine grew the order-aware pair, which it now has (§2.6a).
+    #[test]
+    fn the_socd_roster_carries_all_five_policies() {
+        let roster = SocdOption::roster();
+        assert_eq!(
+            roster.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(),
+            vec!["off", "neutral", "up-priority", "last-input", "first-input"]
+        );
+        assert_eq!(
+            roster.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Send both",
+                "Cancel to centre",
+                "Up wins",
+                "Last press wins",
+                "First press wins"
+            ]
+        );
+        // Every detail names its consequence; the order-aware pair also name
+        // the standard they implement, so a player can find the mode their
+        // community calls "snap tap".
+        assert!(
+            roster[3].detail.contains("snap tap"),
+            "{}",
+            roster[3].detail
+        );
+        assert!(roster[4].detail.contains("first"), "{}", roster[4].detail);
+
+        // The community spellings land through the same parser every surface
+        // uses, so `ksx stage socd 1 snap-tap` needs no extra vocabulary.
+        let edit = StageEdit::SetSocd {
+            number: 1,
+            socd: "snap-tap".into(),
+        };
+        let setup = staged_with_preset(&authored_preset());
+        let changed = edit.apply(&setup).expect("snap-tap is last-input");
+        let view = StagedSetupView::of(&changed);
+        assert_eq!(view.slots[0].socd, "last-input");
+        assert_eq!(view.slots[0].socd_label, "Last press wins");
     }
 
     #[test]

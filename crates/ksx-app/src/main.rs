@@ -1221,7 +1221,7 @@ enum StageCommand {
         /// The staged slot number
         #[arg(value_name = "SLOT")]
         slot: u8,
-        /// off | neutral | up-priority (ksx_core::Socd's own names)
+        /// off | neutral | up-priority | last-input | first-input (ksx_core::Socd's own names)
         #[arg(value_name = "POLICY")]
         socd: String,
         /// Print the raw pipe response (one JSON object) on stdout
@@ -1687,13 +1687,16 @@ enum SlotCommand {
         #[arg(long, value_name = "NAME", value_parser = parse_persona)]
         persona: Option<ksx_core::Persona>,
         /// What opposite directions on this slot's stick do: off, neutral,
-        /// up-priority
+        /// up-priority, last-input, first-input
         ///
         /// A joystick can report left and right at once; a game cannot act on
         /// both. `neutral` cancels the pair to centre. `up-priority` cancels
         /// left+right but lets up beat down, which is the fighting-game
         /// standard - it turns down-back into up-back as a JUMP rather than a
-        /// crouch. `off` reports exactly what the keys say.
+        /// crouch. `last-input` follows whichever direction was pressed most
+        /// recently and hands back on release ("snap tap", the leverless
+        /// standard); `first-input` holds the first press until it is
+        /// released. `off` reports exactly what the keys say.
         ///
         /// Omit it to leave the slot's SOCD exactly as it is. This never
         /// defaults to `off`, because that would quietly switch a fighting

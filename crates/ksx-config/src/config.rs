@@ -129,7 +129,8 @@ pub struct SlotEntry {
     pub persona: Persona,
     /// What this slot does with simultaneous opposing directions:
     /// `"off"` (default — today's behavior, nothing generated), `"neutral"`,
-    /// or `"up-priority"`. See [`ksx_core::socd`].
+    /// `"up-priority"`, `"last-input"` or `"first-input"`. See
+    /// [`ksx_core::socd`].
     #[serde(
         default,
         with = "crate::socd_serde",

@@ -113,6 +113,19 @@ pub fn engine_for(preset: Preset) -> Engine {
     }])
 }
 
+/// An engine whose one slot carries an SOCD policy — the runtime modes read
+/// it from the spec; the static modes are expected to be applied to the
+/// preset by the caller (`apply_socd`), exactly as `plan.rs` does.
+pub fn engine_with_socd(preset: Preset, socd: ksx_core::Socd) -> Engine {
+    let dev = ipac_device();
+    Engine::new(vec![ResolvedSlot {
+        spec: SlotSpec::new(1, Some(dev), None, preset.name.clone())
+            .expect("valid slot")
+            .with_socd(socd),
+        preset,
+    }])
+}
+
 fn axis(axis: Axis, value: i16) -> Binding {
     Binding::Axis { axis, value }
 }

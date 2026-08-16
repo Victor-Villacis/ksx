@@ -298,6 +298,30 @@ struct ToggleRt {
     latched: bool,
 }
 
+/// One opposing control under an ORDER-AWARE SOCD policy
+/// (docs/INPUT-TRANSFORMS.md §2.6: last-input / first-input).
+///
+/// The static policies (neutral, up-priority) are generated chords and never
+/// build one of these. This is the order memory a chord cannot express: which
+/// side rose more recently. Its whole OUTPUT is bits in the same `consumed`
+/// mask chord consumption writes, so suppression, resumption, all-keys-up and
+/// the one-batch release discipline are the existing machinery untouched.
+#[derive(Clone, Debug)]
+struct SocdRt {
+    /// Dense key ids driving the NEGATIVE half (left/down) — keys driving
+    /// only that half; a self-opposing key belongs to neither side.
+    neg: SmallVec<[u32; 2]>,
+    /// ...and the POSITIVE half (right/up).
+    pos: SmallVec<[u32; 2]>,
+    /// Was each side driving at the last sync? The edge detectors — sides
+    /// rise when the GROUP goes from silent to driving, so autorepeat and a
+    /// second key on an already-driving side are not new presses.
+    neg_was: bool,
+    pos_was: bool,
+    /// When both sides are held, which one wins. Meaningful only then.
+    pos_wins: bool,
+}
+
 struct SlotRuntime {
     number: u8,
     /// Index into `Engine::devices`.
@@ -372,6 +396,17 @@ struct SlotRuntime {
     /// above it are latches; the full ordering is dense keys < chords <
     /// macro steps < turbo < toggle, written down once in [`Self::holder_now`].
     toggle_base: u32,
+
+    // ---- order-aware SOCD runtime ------------------------------------------
+    /// One entry per opposing control; EMPTY unless the slot's policy is
+    /// last-input or first-input (the static policies are chords).
+    socd: Vec<SocdRt>,
+    /// `true` = last-input (the riser wins), `false` = first-input (the
+    /// incumbent wins). Meaningless while `socd` is empty.
+    socd_last: bool,
+    /// Every key in any side, deduped — joins the scan like `chord_keys`, so
+    /// a suppression change is applied in the same batch as its cause.
+    socd_keys: SmallVec<[u32; 8]>,
 
     /// `false` ⇒ no chords, macros, turbo or toggles: this slot takes the
     /// pre-chord code path end to end, exactly as it did before any of them
@@ -493,6 +528,11 @@ impl SlotRuntime {
         timers: &mut Timers,
     ) {
         self.recompute_chords(down);
+        // Order-aware SOCD adds its suppression to the mask chords just
+        // wrote, BEFORE anything reads it: a user's chord over the pair has
+        // already consumed its keys (so neither side is "driving" and the
+        // chord wins), and the latch/turbo passes below see the settled mask.
+        self.sync_socd(down);
         // After consumption, before turbo: a latch's sources are dense keys
         // and chords, both settled by now — and a latch can itself be a turbo
         // SOURCE (§3a's toggle-turbo), so it must have its final answer before
@@ -514,8 +554,16 @@ impl SlotRuntime {
             for i in 0..self.chord_keys.len() {
                 self.scan.push(self.chord_keys[i]);
             }
-            if let Some(k) = event_key {
+            // SOCD keys rescan every pass for the same reason chord keys do:
+            // this event may have moved their suppression, not their bit.
+            for i in 0..self.socd_keys.len() {
+                let k = self.socd_keys[i];
                 if !self.chord_keys.contains(&k) {
+                    self.scan.push(k);
+                }
+            }
+            if let Some(k) = event_key {
+                if !self.chord_keys.contains(&k) && !self.socd_keys.contains(&k) {
                     self.scan.push(k);
                 }
             }
@@ -525,6 +573,64 @@ impl SlotRuntime {
             self.drain_macro_dirty();
         }
         self.apply_scan(down);
+    }
+
+    /// Order-aware SOCD (docs/INPUT-TRANSFORMS.md §2.6): when both sides of a
+    /// control are held, suppress the losing side's keys by writing the same
+    /// `consumed` bits a chord would — one suppression mechanism, two writers.
+    ///
+    /// WHO WINS is the only difference between the two modes, and it is one
+    /// bit of memory per control: last-input hands the control to whichever
+    /// side rose most recently; first-input leaves it with the side that was
+    /// already driving. Releasing the winner hands the control to the other
+    /// side in the same batch (its keys stop being suppressed and resume in
+    /// `apply_scan`) — the resume-on-release rule chords already follow.
+    ///
+    /// A side is DRIVING while any of its keys is down and not consumed by a
+    /// chord: a hand-written chord over the pair outranks the policy at
+    /// runtime exactly as it shadows generation for the static modes.
+    fn sync_socd(&mut self, down: &[u64]) {
+        if self.socd.is_empty() {
+            return;
+        }
+        if self.chords.is_empty() {
+            // `recompute_chords` early-returned, so the mask is ours to reset.
+            self.consumed.iter_mut().for_each(|w| *w = 0);
+        }
+        for i in 0..self.socd.len() {
+            let neg_now = self.socd[i]
+                .neg
+                .iter()
+                .any(|&k| bit(down, k) && !bit(&self.consumed, k));
+            let pos_now = self.socd[i]
+                .pos
+                .iter()
+                .any(|&k| bit(down, k) && !bit(&self.consumed, k));
+            let p = &mut self.socd[i];
+            if neg_now && pos_now {
+                match (p.neg_was, p.pos_was) {
+                    // One side was already driving and the other just rose:
+                    // the ONLY moment the two modes disagree. The riser wins
+                    // under last-input; the incumbent keeps it under
+                    // first-input.
+                    (true, false) => p.pos_wins = self.socd_last,
+                    (false, true) => p.pos_wins = !self.socd_last,
+                    // Both rose at once (a full resync can do this): there is
+                    // no order to honor, so the NEGATIVE side wins — a fixed
+                    // answer, not a file-order accident, and the same one both
+                    // modes give so the tie cannot distinguish them.
+                    (false, false) => p.pos_wins = false,
+                    // Both were already held: the winner stands.
+                    (true, true) => {}
+                }
+                for j in 0..if p.pos_wins { p.neg.len() } else { p.pos.len() } {
+                    let k = if p.pos_wins { p.neg[j] } else { p.pos[j] };
+                    set_bit(&mut self.consumed, k, true);
+                }
+            }
+            p.neg_was = neg_now;
+            p.pos_was = pos_now;
+        }
     }
 
     /// Apply only what a macro transition moved — the tick path, where no key
@@ -683,6 +789,11 @@ impl SlotRuntime {
         for t in &mut self.toggle {
             t.latched = false;
             t.source_was = false;
+        }
+        for p in &mut self.socd {
+            p.neg_was = false;
+            p.pos_was = false;
+            p.pos_wins = false;
         }
         self.macro_dirty.clear();
         self.held.iter_mut().for_each(|w| *w = 0);
@@ -1323,6 +1434,35 @@ impl EngineTables {
                         .collect()
                 },
                 toggle_base: 0,
+                // Order-aware SOCD (§2.6): the static policies arrived here
+                // as generated chords already ON the preset; only last-input
+                // and first-input build order memory. Sides come from the
+                // preset's own entries, so every key here is interned already
+                // — `intern_key` is only re-asked to say which id.
+                socd: if rs.spec.socd.is_runtime() {
+                    crate::socd::opposing_sides(&rs.preset)
+                        .into_iter()
+                        .map(|sides| SocdRt {
+                            neg: sides
+                                .neg
+                                .iter()
+                                .map(|&k| intern_key(&mut index, &mut targets, k))
+                                .collect(),
+                            pos: sides
+                                .pos
+                                .iter()
+                                .map(|&k| intern_key(&mut index, &mut targets, k))
+                                .collect(),
+                            neg_was: false,
+                            pos_was: false,
+                            pos_wins: false,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                socd_last: matches!(rs.spec.socd, crate::Socd::LastInput),
+                socd_keys: SmallVec::new(),
                 stateful: false,
             });
         }
@@ -1333,7 +1473,8 @@ impl EngineTables {
             slot.stateful = !slot.chords.is_empty()
                 || !slot.macros.is_empty()
                 || !slot.turbo.is_empty()
-                || !slot.toggle.is_empty();
+                || !slot.toggle.is_empty()
+                || !slot.socd.is_empty();
         }
         let has_state = runtimes.iter().any(|s| s.stateful);
         let macro_count: usize = runtimes.iter().map(|s| s.macros.len()).sum();
@@ -1370,6 +1511,17 @@ impl EngineTables {
                         continue;
                     }
                     holder_bindings[index[&key] as usize].push(binding);
+                }
+                // Every key on either side of an SOCD control, deduped — the
+                // scan companions to `chord_keys`, for the same reason: an
+                // event can move their SUPPRESSION without moving their bit.
+                let mut socd_keys: SmallVec<[u32; 8]> = SmallVec::new();
+                for pair in &runtimes[si].socd {
+                    for &k in pair.neg.iter().chain(pair.pos.iter()) {
+                        if !socd_keys.contains(&k) {
+                            socd_keys.push(k);
+                        }
+                    }
                 }
                 let mut chord_keys: SmallVec<[u32; 8]> = SmallVec::new();
                 for c in 0..runtimes[si].chords.len() {
@@ -1577,6 +1729,7 @@ impl EngineTables {
                     .len()
                     .max(
                         chord_keys.len()
+                            + socd_keys.len()
                             + 1
                             + slot.chords.len()
                             + steps as usize
@@ -1588,6 +1741,7 @@ impl EngineTables {
                 slot.holder_bindings = holder_bindings;
                 slot.all_holders = all_holders;
                 slot.chord_keys = chord_keys;
+                slot.socd_keys = socd_keys;
                 slot.held = vec![0u64; hwords];
                 slot.prev_held = vec![0u64; hwords];
                 slot.consumed = vec![0u64; words];

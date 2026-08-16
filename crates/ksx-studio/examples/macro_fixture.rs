@@ -221,6 +221,69 @@ impl ControlSource for Store {
             available: true,
             unavailable_reason: None,
         };
+        // Real authoring tables, so the binding pane (and its screenshots)
+        // show rows with the interesting notes: a multi-bind with fan-out, a
+        // turbo'd trigger, a latched bumper — the states a reviewer needs to
+        // see rendered.
+        let authored = |name: &str| {
+            use ksx_core::preset::Binding;
+            use ksx_core::{Axis, DpadDirection, Key, XButton, AXIS_MAX, AXIS_MIN};
+            let core = ksx_core::Preset {
+                name: name.to_owned(),
+                entries: vec![
+                    (Key::G, Binding::Button(XButton::A)),
+                    (Key::H, Binding::Button(XButton::A)),
+                    (Key::G, Binding::Button(XButton::B)),
+                    (Key::J, Binding::Button(XButton::X)),
+                    (Key::K, Binding::Button(XButton::Y)),
+                    (Key::T, Binding::Trigger(ksx_core::Trigger::Right)),
+                    (Key::L, Binding::Button(XButton::LeftBumper)),
+                    (
+                        Key::W,
+                        Binding::Axis {
+                            axis: Axis::Y,
+                            value: AXIS_MAX,
+                        },
+                    ),
+                    (
+                        Key::S,
+                        Binding::Axis {
+                            axis: Axis::Y,
+                            value: AXIS_MIN,
+                        },
+                    ),
+                    (
+                        Key::A,
+                        Binding::Axis {
+                            axis: Axis::X,
+                            value: AXIS_MIN,
+                        },
+                    ),
+                    (
+                        Key::D,
+                        Binding::Axis {
+                            axis: Axis::X,
+                            value: AXIS_MAX,
+                        },
+                    ),
+                    (Key::Up, Binding::Dpad(DpadDirection::Up)),
+                    (Key::Down, Binding::Dpad(DpadDirection::Down)),
+                    (Key::Enter, Binding::Button(XButton::Start)),
+                ],
+                chords: Vec::new(),
+                macros: Default::default(),
+                turbo: vec![ksx_core::TurboBinding::new(
+                    Binding::Trigger(ksx_core::Trigger::Right),
+                    12,
+                )],
+                toggle: vec![Binding::Button(XButton::LeftBumper)],
+                protected: false,
+            };
+            let bindings = core.live_bindings();
+            (ksx_config::PresetFile::from_core(&core), bindings)
+        };
+        let (p1_file, p1_bindings) = authored("Player 1");
+        let (p2_file, p2_bindings) = authored("Player 2");
         let mut slots = vec![
             ksx_api::StagedSlotView {
                 number: 1,
@@ -228,10 +291,10 @@ impl ControlSource for Store {
                 persona_label: "Xbox 360".into(),
                 is_xinput: true,
                 preset: "Player 1".into(),
-                authoring: None,
+                authoring: Some(p1_file),
                 socd: "last-input".into(),
                 socd_label: "Last press wins".into(),
-                bindings: 14,
+                bindings: p1_bindings,
             },
             ksx_api::StagedSlotView {
                 number: 2,
@@ -239,10 +302,10 @@ impl ControlSource for Store {
                 persona_label: "PlayStation".into(),
                 is_xinput: false,
                 preset: "Player 2".into(),
-                authoring: None,
+                authoring: Some(p2_file),
                 socd: String::new(),
                 socd_label: String::new(),
-                bindings: 12,
+                bindings: p2_bindings,
             },
         ];
         if ps_first {

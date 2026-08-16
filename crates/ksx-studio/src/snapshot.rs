@@ -3582,9 +3582,13 @@ fn workspace_bind_rows(
                 notes.push("Toggle: a press holds until the next press".to_owned());
             }
             if !share.is_empty() {
+                // `share_text` is the mapper's compact badge ("also A · B",
+                // capped); this sentence gives it a subject, so the badge's
+                // own "also " comes off first.
+                let names = crate::render_map::share_text(share);
                 notes.push(format!(
                     "this key also drives {}",
-                    crate::render_map::share_text(share)
+                    names.trim_start_matches("also ")
                 ));
             }
             let mut cls = String::from("wsbind");

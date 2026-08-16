@@ -73,6 +73,7 @@ export interface WorkspaceDerived {
   add_layouts: WorkspaceOptionRow[];
   add_preset: string;
   add_full_line: string;
+  pad_caption: string;
   dirty_line: string;
   pill_running: boolean;
   pill_idle: boolean;
@@ -107,6 +108,7 @@ const [wsBlockingLine, setWsBlockingLine] = createSignal("");
 const [wsDirtyLine, setWsDirtyLine] = createSignal("");
 const [wsAddPreset, setWsAddPreset] = createSignal("");
 const [wsAddFullLine, setWsAddFullLine] = createSignal("");
+const [wsPadCaption, setWsPadCaption] = createSignal("");
 
 const [wsRackRows, setWsRackRows] = createSignal<WorkspaceSlotRow[]>([]);
 const [wsBlockingRows, setWsBlockingRows] = createSignal<WorkspaceChoiceRow[]>([]);
@@ -143,6 +145,7 @@ export function applyWorkspace(p: WorkspacePayload): void {
   setWsDirtyLine(p.view.dirty_line);
   setWsAddPreset(p.view.add_preset);
   setWsAddFullLine(p.view.add_full_line);
+  setWsPadCaption(p.view.pad_caption);
   setWsRackRows(p.view.rack);
   setWsBlockingRows(p.view.blocking);
   setWsSocdSlotOptions(p.view.socd_slots);
@@ -447,11 +450,68 @@ export function WorkspaceIsland() {
         h(
           "div",
           { class: "wsstage" },
+          // The Nocturne schematic (640×400): the prototype's exact geometry,
+          // repainted with the existing token ladder via CSS classes. ART in
+          // M2 — aria-hidden, pointer-events none; the interactive zone
+          // overlay and live lighting arrive with M3/M4. The caption below it
+          // is the accessible summary meanwhile.
+          h(
+            "svg",
+            {
+              class: "wspad",
+              viewBox: "0 0 640 400",
+              "aria-hidden": "true",
+              focusable: "false",
+            },
+            h("rect", { class: "wspad-zone", x: "150", y: "18", width: "80", height: "27", rx: "11" }),
+            h("rect", { class: "wspad-zone", x: "410", y: "18", width: "80", height: "27", rx: "11" }),
+            h("text", { class: "wspad-sys", x: "190", y: "36", "text-anchor": "middle" }, "LT"),
+            h("text", { class: "wspad-sys", x: "450", y: "36", "text-anchor": "middle" }, "RT"),
+            h("rect", { class: "wspad-zone", x: "130", y: "54", width: "112", height: "24", rx: "12" }),
+            h("rect", { class: "wspad-zone", x: "398", y: "54", width: "112", height: "24", rx: "12" }),
+            h("text", { class: "wspad-sys", x: "186", y: "70", "text-anchor": "middle" }, "LB"),
+            h("text", { class: "wspad-sys", x: "454", y: "70", "text-anchor": "middle" }, "RB"),
+            h("rect", { class: "wspad-shell", x: "110", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(19 159 284)" }),
+            h("rect", { class: "wspad-shell", x: "432", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(-19 481 284)" }),
+            h("rect", { class: "wspad-shell", x: "95", y: "85", width: "450", height: "176", rx: "74" }),
+            h("circle", { class: "wspad-well", cx: "175", cy: "141", r: "40" }),
+            h("path", { class: "wspad-zone", d: "M175 93 l9 13 h-18 z" }),
+            h("path", { class: "wspad-zone", d: "M175 189 l9 -13 h-18 z" }),
+            h("path", { class: "wspad-zone", d: "M127 141 l13 -9 v18 z" }),
+            h("path", { class: "wspad-zone", d: "M223 141 l-13 -9 v18 z" }),
+            h("circle", { class: "wspad-stick", cx: "175", cy: "141", r: "25" }),
+            h("circle", { class: "wspad-well", cx: "390", cy: "213", r: "40" }),
+            h("path", { class: "wspad-zone", d: "M390 165 l9 13 h-18 z" }),
+            h("path", { class: "wspad-zone", d: "M390 261 l9 -13 h-18 z" }),
+            h("path", { class: "wspad-zone", d: "M342 213 l13 -9 v18 z" }),
+            h("path", { class: "wspad-zone", d: "M438 213 l-13 -9 v18 z" }),
+            h("circle", { class: "wspad-stick", cx: "390", cy: "213", r: "25" }),
+            h("rect", { class: "wspad-zone", x: "244", y: "177", width: "24", height: "30", rx: "6" }),
+            h("rect", { class: "wspad-zone", x: "244", y: "223", width: "24", height: "30", rx: "6" }),
+            h("rect", { class: "wspad-zone", x: "211", y: "203", width: "30", height: "24", rx: "6" }),
+            h("rect", { class: "wspad-zone", x: "271", y: "203", width: "30", height: "24", rx: "6" }),
+            h("circle", { class: "wspad-well", cx: "256", cy: "215", r: "9" }),
+            h("circle", { class: "wspad-zone", cx: "465", cy: "106", r: "20" }),
+            h("circle", { class: "wspad-zone", cx: "501", cy: "142", r: "20" }),
+            h("circle", { class: "wspad-zone", cx: "465", cy: "178", r: "20" }),
+            h("circle", { class: "wspad-zone", cx: "429", cy: "142", r: "20" }),
+            h("text", { class: "wspad-face", x: "465", y: "111", "text-anchor": "middle" }, "Y"),
+            h("text", { class: "wspad-face", x: "501", y: "147", "text-anchor": "middle" }, "B"),
+            h("text", { class: "wspad-face", x: "465", y: "183", "text-anchor": "middle" }, "A"),
+            h("text", { class: "wspad-face", x: "429", y: "147", "text-anchor": "middle" }, "X"),
+            h("rect", { class: "wspad-zone", x: "286", y: "132", width: "26", height: "18", rx: "7" }),
+            h("rect", { class: "wspad-zone", x: "328", y: "132", width: "26", height: "18", rx: "7" }),
+            h("circle", { class: "wspad-well", cx: "320", cy: "103", r: "17" }),
+            h("circle", { class: "wspad-guide", cx: "320", cy: "103", r: "7" }),
+            h("text", { class: "wspad-sys", x: "299", y: "168", "text-anchor": "middle" }, "VIEW"),
+            h("text", { class: "wspad-sys", x: "341", y: "168", "text-anchor": "middle" }, "MENU"),
+          ),
           h("p", { class: "wsstate" }, () => wsStateDetail()),
+          h("p", { class: "wsmeta" }, () => wsPadCaption()),
           h(
             "p",
             { class: "wsnote" },
-            "The workspace is being built here — one screen for the keyboard, the controllers and the bindings. Until it lands, the pages in the Tools menu remain the working surfaces.",
+            "The zone-by-zone binding surface is being built here. Until it lands, Controls in the Tools menu remains the working mapper.",
           ),
         ),
       ),

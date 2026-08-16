@@ -3222,6 +3222,10 @@ pub struct WorkspaceDerived {
     pub add_preset: String,
     /// The ceiling sentence when every slot is staged, else empty.
     pub add_full_line: String,
+    /// The schematic's accessible summary: the first controller's identity
+    /// and bound count, with the Sony-vocabulary honesty caption for
+    /// PlayStation-family pads ("shown on a generic gamepad outline").
+    pub pad_caption: String,
     /// "Unsaved changes — …" when the draft is dirty, else empty.
     pub dirty_line: String,
     pub pill_running: bool,
@@ -3293,6 +3297,7 @@ impl WorkspaceDerived {
             } else {
                 String::new()
             },
+            pad_caption: workspace_pad_caption(staged),
             dirty_line: if ready && staged.dirty {
                 "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
             } else {
@@ -3422,6 +3427,30 @@ fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
         Some(option) => format!("{} — {}", option.title, option.detail),
         None => "Not answered yet. Play needs an answer; pick one below.".to_owned(),
     }
+}
+
+/// The schematic's one accessible sentence: which pad it stands for and how
+/// bound it is — and the honesty caption when the vocabulary on the art is
+/// not the pad's own (a PlayStation-family pad on the generic outline).
+fn workspace_pad_caption(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return String::new();
+    }
+    let Some(slot) = staged.slots.first() else {
+        return String::new();
+    };
+    let mut caption = format!(
+        "P{} · {} — \"{}\", {} control{} bound.",
+        slot.number,
+        slot.persona_label,
+        slot.preset,
+        slot.bindings,
+        if slot.bindings == 1 { "" } else { "s" }
+    );
+    if !slot.is_xinput {
+        caption.push_str(" Sony names apply; shown on a generic gamepad outline.");
+    }
+    caption
 }
 
 fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {

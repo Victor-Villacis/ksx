@@ -79,6 +79,7 @@ fn scalar_slots(payload: &WorkspacePayload, flash: Option<&str>) -> serde_json::
         "wsDirtyLine": payload.view.dirty_line,
         "wsAddPreset": payload.view.add_preset,
         "wsAddFullLine": payload.view.add_full_line,
+        "wsPadCaption": payload.view.pad_caption,
         "wsFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
     })
 }
@@ -560,16 +561,52 @@ mod tests {
         assert_ne!(html, fresh_html);
     }
 
-    /// The skeleton says what it is and where the working surfaces are —
-    /// the one sentence that keeps a transition-period screenshot honest.
+    /// The transition period stays honest: the page says what is still being
+    /// built and where the working surfaces are.
     #[test]
     fn the_skeleton_names_itself_and_points_at_the_working_surfaces() {
         let page = EmbeddedPage::load("/workspace").unwrap();
         let html = rendered(&render_workspace(&page, &cabinet(), None).html);
         assert!(html.contains("workspace preview"), "{html}");
-        assert!(html.contains("The workspace is being built here"), "{html}");
+        assert!(
+            html.contains("binding surface is being built here"),
+            "{html}"
+        );
         assert!(html.contains(r#"href="/start""#), "{html}");
         assert!(html.contains(r#"href="/map""#), "{html}");
+    }
+
+    /// The schematic's caption is the pad's accessible summary — and it says
+    /// so out loud when the art's vocabulary is not the pad's own.
+    #[test]
+    fn the_pad_caption_summarizes_the_first_controller_honestly() {
+        let cabinet = cabinet();
+        assert_eq!(
+            cabinet.view.pad_caption,
+            "P1 · Xbox 360 — \"Player 1\", 12 controls bound."
+        );
+        // A PlayStation pad first: Sony names, generic outline, said plainly.
+        let mut flipped = cabinet.clone();
+        flipped.staged.slots.reverse();
+        flipped.staged.slots[0].number = 1;
+        let flipped = WorkspacePayload {
+            view: Default::default(),
+            ..flipped
+        }
+        .derived();
+        assert!(
+            flipped
+                .view
+                .pad_caption
+                .contains("Sony names apply; shown on a generic gamepad outline"),
+            "{}",
+            flipped.view.pad_caption
+        );
+        // The schematic itself is decorative and says so.
+        let page = EmbeddedPage::load("/workspace").unwrap();
+        let html = rendered(&render_workspace(&page, &cabinet, None).html);
+        assert!(html.contains(r#"class="wspad""#), "{html}");
+        assert!(html.contains(r#"aria-hidden="true""#), "{html}");
     }
 
     /// The entry seeds signals from the payload block BEFORE building the

@@ -6056,6 +6056,60 @@ a.strow:hover {
   gap: var(--sp-2);
 }
 
+/* ── The pad schematic (Nocturne's 640×400 outline, on the token ladder) ──
+   Decorative in M2 (aria-hidden; the caption is the accessible summary).
+   Every fill and stroke is a token, so both themes come from the one art —
+   the same rule the vendored realistic art gets from its injected sheet. */
+.wspad {
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  max-height: 330px;
+}
+
+.wspad-shell {
+  fill: var(--surface-raised);
+  stroke: var(--border-subtle);
+  stroke-width: 1.5;
+}
+
+.wspad-well {
+  fill: var(--surface-inset);
+  stroke: var(--border-subtle);
+  stroke-width: 1.5;
+}
+
+.wspad-zone {
+  fill: var(--surface-inset);
+  stroke: var(--border-default);
+  stroke-width: 1.5;
+}
+
+.wspad-stick {
+  fill: var(--surface-hover);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.wspad-guide {
+  fill: var(--text-tertiary);
+}
+
+.wspad-face {
+  fill: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.wspad-sys {
+  fill: var(--text-tertiary);
+  font-size: 11px;
+  font-family: inherit;
+  pointer-events: none;
+}
+
 @media (max-width: 68rem) {
   .wsmain {
     grid-template-columns: minmax(0, 1fr);

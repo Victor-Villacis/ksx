@@ -3092,7 +3092,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let mut d = deps(tx, state.clone(), fixed_profiles());
         d.stage_adopt = Box::new(|profile| match profile {
             None => Ok(adopted_setup()),
-            Some(title) if title == "Fight Night" => Ok(adopted_setup()),
+            Some("Fight Night") => Ok(adopted_setup()),
             Some(other) => Err(ksx_api::Refusal::new(
                 ksx_api::codes::REFUSED,
                 format!("no saved game is called \"{other}\""),

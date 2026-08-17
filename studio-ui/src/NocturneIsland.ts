@@ -74,6 +74,10 @@ const [nTickCls, setNTickCls] = createSignal("n-tickrow none");
 const [nStageCls, setNStageCls] = createSignal("n-stage");
 const [nRtCls, setNRtCls] = createSignal("np-zone");
 const [nSlotMeta, setNSlotMeta] = createSignal("16 bound · XInput 1/4");
+const [nIdLinkCls, setNIdLinkCls] = createSignal("n-link");
+const [nIdBoxCls, setNIdBoxCls] = createSignal("n-idbox none");
+const [nIdText, setNIdText] = createSignal("Press a key on the keyboard you want to use");
+const [nSavedText, setNSavedText] = createSignal("Saved 2 days ago");
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
 const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
@@ -94,6 +98,8 @@ const ui: {
   conflict: boolean;
   macro: boolean;
   live: boolean;
+  identify: "off" | "listening" | "resolved";
+  saved: boolean;
   leftRail: boolean;
   rightRail: boolean;
   dev: 1 | 2 | 3;
@@ -108,6 +114,8 @@ const ui: {
   conflict: false,
   macro: false,
   live: false,
+  identify: "off",
+  saved: false,
   leftRail: false,
   rightRail: false,
   dev: 1,
@@ -128,6 +136,20 @@ function applyNocturneUi(): void {
   setNStageCls(ui.live ? "n-stage live" : "n-stage");
   setNRtCls(ui.live ? "np-zone lit" : "np-zone");
   setNSlotMeta(ui.live ? "live · 16 bound · XInput 1/4" : "16 bound · XInput 1/4");
+  setNIdLinkCls(ui.identify === "listening" ? "n-link on" : "n-link");
+  setNIdBoxCls(
+    ui.identify === "listening"
+      ? "n-idbox listen"
+      : ui.identify === "resolved"
+        ? "n-idbox done"
+        : "n-idbox none",
+  );
+  setNIdText(
+    ui.identify === "resolved"
+      ? "Resolved to Corsair K70 RGB MK.2"
+      : "Press a key on the keyboard you want to use",
+  );
+  setNSavedText(ui.saved ? "Saved just now" : "Saved 2 days ago");
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
@@ -217,6 +239,13 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
 /** Delegated clicks on the island root (the map.ts idiom): every interactive
  *  placeholder carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
+  // Identify-by-key resolves on the next physical keypress (shot 05); the
+  // listener lives on document because keyboard focus is wherever it is.
+  document.addEventListener("keydown", () => {
+    if (ui.identify !== "listening") return;
+    ui.identify = "resolved";
+    applyNocturneUi();
+  });
   root.addEventListener("input", (ev) => {
     const t = ev.target as HTMLElement | null;
     if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
@@ -278,6 +307,8 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "mode-freeze") ui.mode = "freeze";
     else if (hit === "mode-split") ui.mode = "split";
     else if (hit === "mode-off") ui.mode = "off";
+    else if (hit === "identify") ui.identify = ui.identify === "listening" ? "off" : "listening";
+    else if (hit === "save") ui.saved = true;
     else if (hit === "filter-reset") {
       const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
       if (inp) inp.value = "";
@@ -545,8 +576,8 @@ export function NocturneIsland() {
             ),
         ),
       ),
-      h("span", { class: "n-save" }, "Save"),
-      h("span", { class: "n-saved" }, "Saved 2 days ago"),
+      h("button", { type: "button", "data-nx": "save", class: "n-save" }, "Save"),
+      h("span", { class: "n-saved" }, () => nSavedText()),
       h("div", { class: "n-spring" }),
       h(
         "div",
@@ -637,7 +668,15 @@ export function NocturneIsland() {
           "div",
           { class: "n-linkrow" },
           h("button", { class: "n-link", type: "button" }, "Rescan"),
-          h("button", { class: "n-link", type: "button" }, "Identify by key"),
+          h("button", { type: "button", "data-nx": "identify", class: () => nIdLinkCls() }, "Identify by key"),
+        ),
+        // Identify states (shots 04/05): the pulsing listen card, then the
+        // plain accent resolved line the next keypress produces.
+        h(
+          "div",
+          { class: () => nIdBoxCls() },
+          h("span", { class: "n-idot" }),
+          h("span", { class: "n-idtxt" }, () => nIdText()),
         ),
         h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "Keyboard behaviour")),
         // Behaviour radios (shot 06): selection moves the dot and the wash.

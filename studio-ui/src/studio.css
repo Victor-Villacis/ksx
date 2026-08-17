@@ -8034,3 +8034,75 @@ a.wsrow-title:hover {
   border-color: var(--n-accent);
   box-shadow: 0 0 10px rgba(150, 138, 224, 0.5);
 }
+
+
+/* Identify-by-key (shots 04/05) + the saved chip */
+
+@keyframes noct-pulse {
+  0%,
+  100% {
+    opacity: 0.32;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.n-link.on {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--n-accent);
+  color: #161826;
+}
+
+.n-idbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 6px 0;
+  font-size: 11.5px;
+  text-wrap: pretty;
+}
+
+.n-idbox.none {
+  display: none;
+}
+
+.n-idbox.listen {
+  padding: 10px 12px;
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  color: var(--n-text);
+}
+
+.n-idbox.done {
+  color: var(--n-accent-2);
+}
+
+.n-idot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--n-accent);
+  animation: noct-pulse 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-idot {
+    animation: none;
+  }
+}
+
+.n-idbox.done .n-idot {
+  display: none;
+}
+
+.n-save {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}

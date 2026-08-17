@@ -66,6 +66,14 @@ const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
 const [nConflictOpen, setNConflictOpen] = createSignal(false);
 const [nMacroOpen, setNMacroOpen] = createSignal(false);
+const [nPlayCls, setNPlayCls] = createSignal("n-play");
+const [nStatsCls, setNStatsCls] = createSignal("n-stats none");
+const [nPauseCls, setNPauseCls] = createSignal("n-pause none");
+const [nStopCls, setNStopCls] = createSignal("n-stop none");
+const [nTickCls, setNTickCls] = createSignal("n-tickrow none");
+const [nStageCls, setNStageCls] = createSignal("n-stage");
+const [nRtCls, setNRtCls] = createSignal("np-zone");
+const [nSlotMeta, setNSlotMeta] = createSignal("16 bound · XInput 1/4");
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
 const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
@@ -85,6 +93,7 @@ const ui: {
   dlg: boolean;
   conflict: boolean;
   macro: boolean;
+  live: boolean;
   leftRail: boolean;
   rightRail: boolean;
   dev: 1 | 2 | 3;
@@ -98,6 +107,7 @@ const ui: {
   dlg: false,
   conflict: false,
   macro: false,
+  live: false,
   leftRail: false,
   rightRail: false,
   dev: 1,
@@ -110,6 +120,14 @@ function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
   setNConflictOpen(ui.conflict);
   setNMacroOpen(ui.macro);
+  setNPlayCls(ui.live ? "n-play none" : "n-play");
+  setNStatsCls(ui.live ? "n-stats" : "n-stats none");
+  setNPauseCls(ui.live ? "n-pause" : "n-pause none");
+  setNStopCls(ui.live ? "n-stop" : "n-stop none");
+  setNTickCls(ui.live ? "n-tickrow" : "n-tickrow none");
+  setNStageCls(ui.live ? "n-stage live" : "n-stage");
+  setNRtCls(ui.live ? "np-zone lit" : "np-zone");
+  setNSlotMeta(ui.live ? "live · 16 bound · XInput 1/4" : "16 bound · XInput 1/4");
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
@@ -127,23 +145,27 @@ function applyNocturneUi(): void {
   setNMode3Cls(ui.mode === "off" ? "n-radio on" : "n-radio");
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
-  setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
+  setNWedgeLeftCls(ui.live || ui.sel === "left" ? "np-zone lit" : "np-zone");
   setNWedgeUpCls(ui.sel === "up" ? "np-zone lit" : "np-zone");
   setNxOpenLeft(ui.sel === "left");
   setNxOpenUp(ui.sel === "up");
   setNMetaHint(
-    ui.sel === "left"
-      ? "Left stick — Left selected"
-      : ui.sel === "up"
-        ? "Left stick — Up selected"
-        : "Click an input, then a key below",
+    ui.live
+      ? "Live — lit inputs are firing"
+      : ui.sel === "left"
+        ? "Left stick — Left selected"
+        : ui.sel === "up"
+          ? "Left stick — Up selected"
+          : "Click an input, then a key below",
   );
   setNKbHint(
-    ui.sel === "left"
-      ? "Click a key to bind it to Left stick — Left"
-      : ui.sel === "up"
-        ? "Click a key to bind it to Left stick — Up"
-        : "Click a bound key to inspect it",
+    ui.live
+      ? "Bound keys drive pads · other keys type"
+      : ui.sel === "left"
+        ? "Click a key to bind it to Left stick — Left"
+        : ui.sel === "up"
+          ? "Click a key to bind it to Left stick — Up"
+          : "Click a bound key to inspect it",
   );
   setNHoldCls(ui.act === "hold" ? "nx-pill on" : "nx-pill");
   setNTogCls(ui.act === "toggle" ? "nx-pill on" : "nx-pill");
@@ -236,6 +258,18 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "conflict-close") ui.conflict = false;
     else if (hit === "macro-open") ui.macro = true;
     else if (hit === "macro-close") ui.macro = false;
+    else if (hit === "play" || hit === "stop") {
+      ui.live = hit === "play";
+      ui.sel = null;
+      // The frozen live moment (shot 23): W (RT) and A (Left) held. Keycap
+      // lighting is IMPERATIVE classList - per-key signals cannot exist on
+      // const-unrolled rows, and this is exactly the live-echo idiom the
+      // real workspace will use.
+      for (const cap of Array.from(root.querySelectorAll<HTMLElement>(".n-key.bound"))) {
+        const t = cap.querySelector(".n-key-cap")?.textContent;
+        cap.classList.toggle("lit", ui.live && (t === "W" || t === "A"));
+      }
+    }
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
     else if (hit === "dev-1") ui.dev = 1;
@@ -514,8 +548,17 @@ export function NocturneIsland() {
       h("span", { class: "n-save" }, "Save"),
       h("span", { class: "n-saved" }, "Saved 2 days ago"),
       h("div", { class: "n-spring" }),
+      h(
+        "div",
+        { class: () => nStatsCls() },
+        h("span", null, "0:02"),
+        h("span", null, "1.4 ms"),
+        h("span", null, "4 ev"),
+      ),
       h("span", { class: "n-hint" }, "L-Ctrl ×5 pauses capture"),
-      h("button", { class: "n-play", type: "button" }, "▷ Play"),
+      h("button", { type: "button", "data-nx": "play", class: () => nPlayCls() }, "▷ Play"),
+      h("button", { type: "button", class: () => nPauseCls() }, "⏸ Pause & edit"),
+      h("button", { type: "button", "data-nx": "stop", class: () => nStopCls() }, "⏹ Stop"),
     ),
     // ═══ Three panes ══════════════════════════════════════════════════════
     h(
@@ -657,7 +700,7 @@ export function NocturneIsland() {
             "div",
             { class: "n-slot-txt" },
             h("div", { class: "n-slot-name" }, "Xbox 360"),
-            h("div", { class: "n-slot-meta" }, "16 bound · XInput 1/4"),
+            h("div", { class: "n-slot-meta" }, () => nSlotMeta()),
           ),
           h("button", { class: "n-slot-act", type: "button", title: "Duplicate" }, "⧉"),
           h("button", { class: "n-slot-act", type: "button", title: "Remove" }, "✕"),
@@ -696,13 +739,29 @@ export function NocturneIsland() {
         ),
         h(
           "div",
-          { class: "n-stage" },
+          { class: () => nTickCls() },
+          h(
+            "span",
+            { class: "n-tick" },
+            h("span", { class: "n-tick-dot" }),
+            h("span", null, "P1 L←"),
+          ),
+          h(
+            "span",
+            { class: "n-tick on" },
+            h("span", { class: "n-tick-dot" }),
+            h("span", null, "P1 RT"),
+          ),
+        ),
+        h(
+          "div",
+          { class: () => nStageCls() },
           // The prototype's own 640×400 schematic, exact geometry and colors.
           h(
             "svg",
             { class: "n-pad", viewBox: "0 0 640 400", "aria-hidden": "true", focusable: "false" },
             h("rect", { class: "np-zone", x: "150", y: "18", width: "80", height: "27", rx: "11" }),
-            h("rect", { class: "np-zone", x: "410", y: "18", width: "80", height: "27", rx: "11" }),
+            h("rect", { x: "410", y: "18", width: "80", height: "27", rx: "11", class: () => nRtCls() }),
             h("text", { class: "np-lab", x: "190", y: "36", "text-anchor": "middle" }, "LT"),
             h("text", { class: "np-lab", x: "450", y: "36", "text-anchor": "middle" }, "RT"),
             h("rect", { class: "np-zone", x: "130", y: "54", width: "112", height: "24", rx: "12" }),

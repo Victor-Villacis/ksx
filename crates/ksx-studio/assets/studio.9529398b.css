@@ -7936,3 +7936,101 @@ a.wsrow-title:hover {
   color: var(--n-text-3);
   text-wrap: pretty;
 }
+
+
+/* Live mode (shots 22-23) */
+
+.n-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--n-text-2);
+}
+
+.n-stats.none {
+  display: none;
+}
+
+.n-pause {
+  padding: 6px 14px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--n-text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.n-stop {
+  padding: 6px 14px;
+  border: 1px solid rgba(231, 154, 166, 0.5);
+  border-radius: 9px;
+  background: rgba(231, 154, 166, 0.1);
+  color: #e79aa6;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.n-play.none,
+.n-pause.none,
+.n-stop.none {
+  display: none;
+}
+
+.n-tickrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 8px;
+  flex-wrap: wrap;
+}
+
+.n-tickrow.none {
+  display: none;
+}
+
+.n-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--n-line);
+  color: var(--n-text-2);
+  font-size: 11px;
+}
+
+.n-tick.on {
+  color: var(--n-text);
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+}
+
+.n-tick-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--n-text-3);
+}
+
+.n-tick.on .n-tick-dot {
+  background: var(--n-accent);
+}
+
+.n-stage.live {
+  border-color: rgba(150, 138, 224, 0.4);
+  box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
+}
+
+/* Lit = firing right now: the wedge/pill glows, the pressed keycap glows.
+   Steady, never strobing (the 3 Hz cap). */
+.np-zone.lit {
+  filter: drop-shadow(0 0 6px rgba(150, 138, 224, 0.9));
+}
+
+.n-key.lit {
+  background: rgba(150, 138, 224, 0.5);
+  border-color: var(--n-accent);
+  box-shadow: 0 0 10px rgba(150, 138, 224, 0.5);
+}

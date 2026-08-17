@@ -1,4 +1,4 @@
-import { h } from "@getforma/core";
+import { createShow, createSignal, h } from "@getforma/core";
 
 // ── /nocturne — THE DESIGN PROOF ───────────────────────────────────────────
 //
@@ -18,12 +18,100 @@ import { h } from "@getforma/core";
 // every object is a literal, and every conditional (bound-vs-not, chip-vs-
 // Assign) is PRECOMPUTED into class fields; structure never varies per item.
 //
-// NO helper functions returning h() (each becomes its own island — M2c). NO
-// createSignal: increment 1 is the static idle state; interactive states
-// (capture, dialogs, live) arrive as later increments with island-local UI
-// signals. Styling is studio.css §9, scoped under `.nocturne` with `--n-*`
-// properties carrying the prototype's exact palette — this route proves the
-// DESIGN as designed; the production workspace keeps the KSX palette.
+// NO helper functions returning h() (each becomes its own island — M2c).
+// Increment 2 adds the FIRST interactive states — the expanded-row editor
+// (walkthrough shots 15-17) and the capture-armed variant (shot 12) — as
+// island-local UI signals with one derivation point (applyNocturneUi) and a
+// delegated click listener (nocturneWire, the map.ts idiom). Every signal
+// default IS the idle state, so SSR still paints shot 01 exactly and parity
+// holds. Every dynamic binding is an ARROW-WRAPPED getter (`() => sig()`) —
+// the compiler treats a bare identifier as an un-evaluable child/attr and
+// silently degrades it (build warning gate catches this); visibility inside
+// the expander is class-driven (`… none`) rather than nested createShow. Styling is studio.css §9, scoped under `.nocturne`
+// with `--n-*` properties carrying the prototype's exact palette — this
+// route proves the DESIGN as designed; the production workspace keeps the
+// KSX palette.
+
+// ── UI state (increment 2): the expanded-row editor + capture-armed ────────
+//
+// One tiny model, one derivation point. Signal DEFAULTS are the idle screen;
+// applyNocturneUi recomputes every dynamic slot from the model after each
+// click. The strings are the prototype's own (extracted from the committed
+// artifact bundle), including the composed explainer sentence.
+
+const [nMetaHint, setNMetaHint] = createSignal("Click an input, then a key below");
+const [nKbHint, setNKbHint] = createSignal("Click a bound key to inspect it");
+const [nRowUpCls, setNRowUpCls] = createSignal("n-bind");
+const [nRowLeftCls, setNRowLeftCls] = createSignal("n-bind on");
+const [nWedgeUpCls, setNWedgeUpCls] = createSignal("np-zone");
+const [nWedgeLeftCls, setNWedgeLeftCls] = createSignal("np-zone");
+const [nHoldCls, setNHoldCls] = createSignal("nx-pill on");
+const [nTogCls, setNTogCls] = createSignal("nx-pill");
+const [nSwCls, setNSwCls] = createSignal("nx-sw");
+const [nTogBadgeCls, setNTogBadgeCls] = createSignal("nx-badge none");
+const [nRateBadgeCls, setNRateBadgeCls] = createSignal("nx-badge rate none");
+const [nRatesCls, setNRatesCls] = createSignal("nx-rates none");
+const [nxExplain, setNxExplain] = createSignal(
+  "Fires while the key is held. Analog input — a key drives it to full travel.",
+);
+const [nxOpenLeft, setNxOpenLeft] = createSignal(false);
+const [nxOpenUp, setNxOpenUp] = createSignal(false);
+
+const ui: { sel: "left" | "up" | null; act: "hold" | "toggle"; turbo: boolean } = {
+  sel: null,
+  act: "hold",
+  turbo: false,
+};
+
+function applyNocturneUi(): void {
+  setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
+  setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
+  setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
+  setNWedgeUpCls(ui.sel === "up" ? "np-zone lit" : "np-zone");
+  setNxOpenLeft(ui.sel === "left");
+  setNxOpenUp(ui.sel === "up");
+  setNMetaHint(
+    ui.sel === "left"
+      ? "Left stick — Left selected"
+      : ui.sel === "up"
+        ? "Left stick — Up selected"
+        : "Click an input, then a key below",
+  );
+  setNKbHint(
+    ui.sel === "left"
+      ? "Click a key to bind it to Left stick — Left"
+      : ui.sel === "up"
+        ? "Click a key to bind it to Left stick — Up"
+        : "Click a bound key to inspect it",
+  );
+  setNHoldCls(ui.act === "hold" ? "nx-pill on" : "nx-pill");
+  setNTogCls(ui.act === "toggle" ? "nx-pill on" : "nx-pill");
+  setNTogBadgeCls(ui.act === "toggle" ? "nx-badge" : "nx-badge none");
+  setNSwCls(ui.turbo ? "nx-sw on" : "nx-sw");
+  setNRatesCls(ui.turbo ? "nx-rates" : "nx-rates none");
+  setNRateBadgeCls(ui.turbo ? "nx-badge rate" : "nx-badge rate none");
+  setNxExplain(
+    (ui.act === "toggle" ? "Latches on until pressed again. " : "Fires while the key is held. ") +
+      (ui.turbo ? "Turbo repeats it 10/s — bounded ~15/s by the 60 Hz update loop. " : "") +
+      "Analog input — a key drives it to full travel.",
+  );
+}
+
+/** Delegated clicks on the island root (the map.ts idiom): every interactive
+ *  placeholder carries `data-nx`; everything else is inert. */
+export function nocturneWire(root: HTMLElement): void {
+  root.addEventListener("click", (ev) => {
+    const hit = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+    if (!hit) return;
+    ev.preventDefault();
+    if (hit === "row-left") ui.sel = ui.sel === "left" ? null : "left";
+    else if (hit === "row-up") ui.sel = ui.sel === "up" ? null : "up";
+    else if (hit === "act-hold") ui.act = "hold";
+    else if (hit === "act-toggle") ui.act = "toggle";
+    else if (hit === "turbo") ui.turbo = !ui.turbo;
+    applyNocturneUi();
+  });
+}
 
 // ── Placeholder data — the walkthrough's exact idle state ──────────────────
 
@@ -57,10 +145,12 @@ const EMPTY_SLOTS = [{ p: "P2" }, { p: "P3" }, { p: "P4" }];
 // Right pane, one const per group (nested maps do not unroll). `on` rows get
 // a lit dot + a key chip; the rest show the Assign button (`none` hides the
 // unused half — structure must not vary per item).
-const BIND_LSTICK = [
-  { cls: "n-bind", label: "Left stick — Up", chip: "", chip_cls: "n-keychip none", asn_cls: "n-assign" },
+// Left stick — Up and — Left are bespoke dynamic rows (the capture-armed and
+// expanded-row demos); only the inert rows stay in const arrays.
+const BIND_LS_DOWN = [
   { cls: "n-bind", label: "Left stick — Down", chip: "", chip_cls: "n-keychip none", asn_cls: "n-assign" },
-  { cls: "n-bind on", label: "Left stick — Left", chip: "A", chip_cls: "n-keychip", asn_cls: "n-assign none" },
+];
+const BIND_LS_TAIL = [
   { cls: "n-bind on", label: "Left stick — Right", chip: "D", chip_cls: "n-keychip", asn_cls: "n-assign none" },
   { cls: "n-bind", label: "Left stick — Click (L3)", chip: "", chip_cls: "n-keychip none", asn_cls: "n-assign" },
 ];
@@ -299,7 +389,7 @@ export function NocturneIsland() {
           h("span", { class: "n-meta-name" }, "Xbox 360"),
           h("span", { class: "n-meta-sub" }, "ViGEmBus · XInput · SOCD Neutral"),
           h("div", { class: "n-spring" }),
-          h("span", { class: "n-meta-hint" }, "Click an input, then a key below"),
+          h("span", { class: "n-meta-hint" }, () => nMetaHint()),
         ),
         h(
           "div",
@@ -320,9 +410,9 @@ export function NocturneIsland() {
             h("rect", { class: "np-body", x: "432", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(-19 481 284)" }),
             h("rect", { class: "np-body", x: "95", y: "85", width: "450", height: "176", rx: "74" }),
             h("circle", { class: "np-well", cx: "175", cy: "141", r: "40" }),
-            h("path", { class: "np-zone", d: "M175 93 l9 13 h-18 z" }),
+            h("path", { class: () => nWedgeUpCls(), d: "M175 93 l9 13 h-18 z" }),
             h("path", { class: "np-zone", d: "M175 189 l9 -13 h-18 z" }),
-            h("path", { class: "np-zone", d: "M127 141 l13 -9 v18 z" }),
+            h("path", { class: () => nWedgeLeftCls(), d: "M127 141 l13 -9 v18 z" }),
             h("path", { class: "np-zone", d: "M223 141 l-13 -9 v18 z" }),
             h("circle", { class: "np-stick", cx: "175", cy: "141", r: "25" }),
             h("circle", { class: "np-well", cx: "390", cy: "213", r: "40" }),
@@ -357,7 +447,7 @@ export function NocturneIsland() {
           { class: "n-kbhead" },
           h("span", { class: "n-kick" }, "Corsair K70 RGB MK.2 · USB · 104 keys"),
           h("div", { class: "n-spring" }),
-          h("span", { class: "n-meta-hint" }, "Click a bound key to inspect it"),
+          h("span", { class: "n-meta-hint" }, () => nKbHint()),
         ),
         h(
           "div",
@@ -458,7 +548,138 @@ export function NocturneIsland() {
           h("span", { class: "n-kick" }, "Left stick"),
           h("span", { class: "n-kick-n" }, "2/5"),
         ),
-        ...BIND_LSTICK.map((r) =>
+        // Left stick — Up: the capture-armed demo (shot 12). Clicking the row
+        // (or its Assign chip) opens the armed editor: Key = the light
+        // "Press or click a key" button, everything else at its defaults.
+        h(
+          "div",
+          { class: () => nRowUpCls(), "data-nx": "row-up" },
+          h("span", { class: "n-bind-dot" }),
+          h("span", { class: "n-bind-label" }, "Left stick — Up"),
+          h("span", { class: "n-keychip none" }, ""),
+          h("button", { class: "n-assign", type: "button" }, "Assign"),
+        ),
+        createShow(() => nxOpenUp(), () =>
+          h(
+            "div",
+            { class: "nx-x" },
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Key"),
+              h("button", { class: "nx-keybtn armed", type: "button" }, "Press or click a key"),
+              h("button", { class: "nx-ghost", type: "button" }, "Clear"),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Activation"),
+              h(
+                "div",
+                { class: "nx-pills" },
+                h("button", { class: "nx-pill on", type: "button" }, "Hold"),
+                h("button", { class: "nx-pill", type: "button" }, "Toggle"),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Turbo"),
+              h("div", { class: "nx-sw" }, h("span", { class: "nx-knob" })),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Macro"),
+              h(
+                "div",
+                { class: "nx-macro" },
+                h("button", { class: "nx-ghost", type: "button" }, "● Record"),
+                h("button", { class: "nx-ghost", type: "button" }, "Steps…"),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nx-explain" },
+              "Fires while the key is held. Analog input — a key drives it to full travel.",
+            ),
+          ),
+        ),
+        ...BIND_LS_DOWN.map((r) =>
+          h(
+            "div",
+            { class: r.cls },
+            h("span", { class: "n-bind-dot" }),
+            h("span", { class: "n-bind-label" }, r.label),
+            h("span", { class: r.chip_cls }, r.chip),
+            h("button", { class: r.asn_cls, type: "button" }, "Assign"),
+          ),
+        ),
+        // Left stick — Left: the expanded-row demo (shots 15-17). The header
+        // grows the Toggle / 10-per-second badges as the editor's state
+        // changes; the editor's pills, switch, rates strip and explainer are
+        // all signal-driven off applyNocturneUi.
+        h(
+          "div",
+          { class: () => nRowLeftCls(), "data-nx": "row-left" },
+          h("span", { class: "n-bind-dot" }),
+          h("span", { class: "n-bind-label" }, "Left stick — Left"),
+          h("span", { class: () => nTogBadgeCls() }, "Toggle"),
+          h("span", { class: () => nRateBadgeCls() }, "10/s"),
+          h("span", { class: "n-keychip" }, "A"),
+          h("button", { class: "n-assign none", type: "button" }, "Assign"),
+        ),
+        createShow(() => nxOpenLeft(), () =>
+          h(
+            "div",
+            { class: "nx-x" },
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Key"),
+              h("button", { class: "nx-keybtn", type: "button" }, "Rebind — A"),
+              h("button", { class: "nx-ghost", type: "button" }, "Clear"),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Activation"),
+              h(
+                "div",
+                { class: "nx-pills" },
+                h("button", { class: () => nHoldCls(), type: "button", "data-nx": "act-hold" }, "Hold"),
+                h("button", { class: () => nTogCls(), type: "button", "data-nx": "act-toggle" }, "Toggle"),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Turbo"),
+              h("div", { class: () => nSwCls(), "data-nx": "turbo" }, h("span", { class: "nx-knob" })),
+              h(
+                "div",
+                { class: () => nRatesCls() },
+                h("span", { class: "nx-rate" }, "5/s"),
+                h("span", { class: "nx-rate on" }, "10/s"),
+                h("span", { class: "nx-rate" }, "15/s"),
+                h("span", { class: "nx-dot" }),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nx-row" },
+              h("span", { class: "nx-lab" }, "Macro"),
+              h(
+                "div",
+                { class: "nx-macro" },
+                h("button", { class: "nx-ghost", type: "button" }, "● Record"),
+                h("button", { class: "nx-ghost", type: "button" }, "Steps…"),
+              ),
+            ),
+            h("div", { class: "nx-explain" }, () => nxExplain()),
+          ),
+        ),
+        ...BIND_LS_TAIL.map((r) =>
           h(
             "div",
             { class: r.cls },

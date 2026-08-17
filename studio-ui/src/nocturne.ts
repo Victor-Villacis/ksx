@@ -5,13 +5,18 @@ import { activateIslands } from "@getforma/core";
 // NocturnePage never runs in the browser — esbuild tree-shakes it — but this
 // import is what anchors IR emission. Do not remove it.
 import { NocturnePage } from "./NocturnePage";
-import { NocturneIsland } from "./NocturneIsland";
+import { NocturneIsland, nocturneWire } from "./NocturneIsland";
 
 void NocturnePage; // compile-time anchor only (see above)
 
 // /nocturne is the design-proof route: placeholder data authored directly in
-// the island, no payload script, no polling, no form wiring. Hydration still
-// runs so the SSR/hydration parity gate exercises the tree.
+// the island, no payload script, no polling, no form twins. The only client
+// behavior is nocturneWire's delegated clicks flipping the island's UI-state
+// demos (expanded row, capture-armed); signal defaults are the idle screen,
+// so hydration and the parity gate still see shot 01's first paint.
 activateIslands({
-  NocturneIsland: () => NocturneIsland(),
+  NocturneIsland: (el) => {
+    nocturneWire(el);
+    return NocturneIsland();
+  },
 });

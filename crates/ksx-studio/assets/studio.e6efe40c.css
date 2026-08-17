@@ -6906,20 +6906,34 @@ a.wsrow-title:hover {
   cursor: pointer;
 }
 
+/* Row anatomy measured from the prototype source: gap 7 / padding 7px 9px /
+   radius 7; the 5px dot; both chips are the SAME monospace 58px-min element —
+   bound = neutral fill, Assign = ghost ring. Selected (lit) row = accent
+   wash + inset ring. */
+
 .n-bind {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 6px;
-  border-radius: 8px;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 7px;
+}
+
+.n-bind[data-nx] {
+  cursor: pointer;
+}
+
+.n-bind.sel {
+  background: rgba(150, 138, 224, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
 }
 
 .n-bind-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   flex: none;
   border-radius: 50%;
-  background: #2e3142;
+  background: #3f424d;
 }
 
 .n-bind.on .n-bind-dot {
@@ -6929,38 +6943,246 @@ a.wsrow-title:hover {
 .n-bind-label {
   font-size: 13px;
   color: #c6c9d6;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .n-bind.on .n-bind-label {
   color: var(--n-text);
 }
 
-.n-keychip {
-  margin-left: auto;
-  min-width: 34px;
-  padding: 4px 10px;
-  border: 1px solid rgba(150, 138, 224, 0.35);
-  border-radius: 7px;
-  background: var(--n-accent-tint);
-  color: #cfc9f2;
-  font-size: 12px;
+.n-keychip,
+.n-assign {
+  flex: none;
+  min-width: 58px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
   text-align: center;
 }
 
+.n-keychip {
+  background: #292b31;
+  color: #e4e7f5;
+}
+
 .n-assign {
-  margin-left: auto;
-  padding: 4px 12px;
-  border: 1px solid var(--n-line);
-  border-radius: 7px;
-  background: #20222f;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #3f424d;
   color: var(--n-text-2);
-  font-size: 12px;
   cursor: pointer;
 }
 
 .n-assign.none,
 .n-keychip.none {
   display: none;
+}
+
+/* ── The expanded-row editor (shots 12, 15-17) ── */
+
+@keyframes noct-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nx-x {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 2px 0 6px;
+  padding: 12px 11px 13px;
+  border-radius: 8px;
+  background: #1d1f2b;
+  box-shadow: inset 0 0 0 1px #292b31;
+  animation: noct-rise 0.16s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-x {
+    animation: none;
+  }
+}
+
+.nx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nx-lab {
+  width: 70px;
+  flex: none;
+  font-size: 11px;
+  color: var(--n-text-2);
+}
+
+.nx-keybtn {
+  padding: 4px 10px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--n-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.nx-keybtn.armed {
+  background: var(--n-text);
+  border-color: transparent;
+  color: #161826;
+  font-weight: 500;
+}
+
+.nx-ghost {
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--n-accent-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.nx-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.nx-pill {
+  padding: 4px 9px;
+  border: none;
+  border-radius: 6px;
+  background: var(--n-panel-2);
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: #cfd3e5;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.nx-pill.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  color: #161826;
+  font-weight: 500;
+}
+
+.nx-sw {
+  width: 34px;
+  height: 19px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 2px;
+  border-radius: 11px;
+  background: #292b31;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  cursor: pointer;
+}
+
+.nx-sw.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  justify-content: flex-end;
+}
+
+.nx-knob {
+  width: 15px;
+  height: 15px;
+  display: block;
+  border-radius: 50%;
+  background: var(--n-text-3);
+}
+
+.nx-sw.on .nx-knob {
+  background: #161826;
+}
+
+.nx-rates {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nx-rates.none {
+  display: none;
+}
+
+.nx-rate {
+  padding: 2px 5px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: var(--n-text-2);
+  font-size: 9.5px;
+}
+
+.nx-rate.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  color: #161826;
+}
+
+/* Steady, not strobing: the prototype pulses this at the turbo rate (10 Hz);
+   the strobe cap (≤3 Hz, photosensitivity, non-negotiable) overrides it. */
+.nx-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--n-accent);
+  box-shadow: 0 0 8px rgba(150, 138, 224, 0.9);
+}
+
+.nx-badge {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #2b2741;
+  color: #b5abfc;
+  font-size: 9.5px;
+}
+
+.nx-badge.rate {
+  background: #423a6a;
+  color: #d2cefd;
+}
+
+.nx-badge.none {
+  display: none;
+}
+
+.nx-macro {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.nx-explain {
+  font-size: 11px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+/* The lit schematic wedge: the selected control's zone, accent-filled. */
+.np-zone.lit {
+  fill: var(--n-accent-2);
+  stroke: var(--n-accent);
 }
 
 .n-right-foot {

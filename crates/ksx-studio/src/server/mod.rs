@@ -215,8 +215,14 @@ pub fn serve(
             .route("/api/nocturne", get(api_nocturne))
             .route("/nocturne/device", post(nocturne_form_device))
             .route("/nocturne/device/identify", post(nocturne_form_identify))
-            .route("/nocturne/capture/prepare", post(nocturne_form_capture_prepare))
-            .route("/nocturne/capture/release", post(nocturne_form_capture_release))
+            .route(
+                "/nocturne/capture/prepare",
+                post(nocturne_form_capture_prepare),
+            )
+            .route(
+                "/nocturne/capture/release",
+                post(nocturne_form_capture_release),
+            )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
@@ -420,8 +426,14 @@ pub fn serve(
             // keep working — pressing them lands the answer on /nocturne.
             .route("/start/device", post(nocturne_form_device))
             .route("/start/device/identify", post(nocturne_form_identify))
-            .route("/start/capture/prepare", post(nocturne_form_capture_prepare))
-            .route("/start/capture/release", post(nocturne_form_capture_release))
+            .route(
+                "/start/capture/prepare",
+                post(nocturne_form_capture_prepare),
+            )
+            .route(
+                "/start/capture/release",
+                post(nocturne_form_capture_release),
+            )
             .route("/start/controller", post(start_form_controller))
             .route(
                 "/start/controller/persona",

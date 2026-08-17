@@ -3908,11 +3908,9 @@ impl NocturneDerived {
                 "Prepared for play — this keyboard will not type until it is released here."
                     .to_owned()
             }
-            "held" => {
-                "Held by ksx but staged for the ordinary Windows path — release it from the \
+            "held" => "Held by ksx but staged for the ordinary Windows path — release it from the \
                  held-keyboards list on the Start screen."
-                    .to_owned()
-            }
+                .to_owned(),
             _ => "This keyboard is not ready for capture right now.".to_owned(),
         };
         let capd_cls = match mode {

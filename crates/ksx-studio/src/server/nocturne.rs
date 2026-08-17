@@ -403,10 +403,7 @@ pub(super) fn capture_target(
         return Err(CaptureResult::TargetChanged);
     }
     Ok((
-        board
-            .selector
-            .clone()
-            .ok_or(CaptureResult::TargetChanged)?,
+        board.selector.clone().ok_or(CaptureResult::TargetChanged)?,
         current_instance.clone(),
     ))
 }

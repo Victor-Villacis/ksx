@@ -59,6 +59,8 @@ const [nxOpenUp, setNxOpenUp] = createSignal(false);
 const [nMenuOpen, setNMenuOpen] = createSignal(false);
 const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
+const [nLeftCls, setNLeftCls] = createSignal("n-left");
+const [nRightCls, setNRightCls] = createSignal("n-right");
 
 const ui: {
   sel: "left" | "up" | null;
@@ -67,6 +69,8 @@ const ui: {
   menu: boolean;
   auto: boolean;
   dlg: boolean;
+  leftRail: boolean;
+  rightRail: boolean;
 } = {
   sel: null,
   act: "hold",
@@ -74,12 +78,16 @@ const ui: {
   menu: false,
   auto: false,
   dlg: false,
+  leftRail: false,
+  rightRail: false,
 };
 
 function applyNocturneUi(): void {
   setNMenuOpen(ui.menu);
   setNAutoCls(ui.auto ? "nx-sw on" : "nx-sw");
   setNDlgOpen(ui.dlg);
+  setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
+  setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
   setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
@@ -138,6 +146,8 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "auto") ui.auto = !ui.auto;
     else if (hit === "slot-new") ui.dlg = true;
     else if (hit === "dlg-close") ui.dlg = false;
+    else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
+    else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
     // "dlg-noop" (the dialog panel itself) falls through: it exists so panel
     // clicks stop at the panel instead of reaching the backdrop's dlg-close.
     applyNocturneUi();
@@ -419,13 +429,21 @@ export function NocturneIsland() {
       // ── Left pane ────────────────────────────────────────────────────────
       h(
         "aside",
-        { class: "n-left" },
+        { class: () => nLeftCls() },
+        // Collapsed 52px rail (shot 27): expand, the staged players, add.
+        h(
+          "div",
+          { class: "n-rail" },
+          h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "›"),
+          h("span", { class: "n-pbadge" }, "P1"),
+          h("button", { class: "n-pbadge plus", type: "button", "data-nx": "slot-new" }, "+"),
+        ),
         h(
           "div",
           { class: "n-kick-row" },
           h("span", { class: "n-kick" }, "Keyboard"),
           h("span", { class: "n-kick-n" }, "4 found"),
-          h("button", { class: "n-collapse", type: "button" }, "‹"),
+          h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "‹"),
         ),
         ...DEVICES.map((d) =>
           h(
@@ -650,11 +668,19 @@ export function NocturneIsland() {
       // ── Right pane ───────────────────────────────────────────────────────
       h(
         "aside",
-        { class: "n-right" },
+        { class: () => nRightCls() },
+        // Collapsed 48px rail (shot 36): expand, the vertical label, count.
+        h(
+          "div",
+          { class: "n-rail" },
+          h("button", { class: "n-collapse", type: "button", "data-nx": "pane-right" }, "‹"),
+          h("span", { class: "n-rail-vlab" }, "Bindings"),
+          h("span", { class: "n-rail-n" }, "16"),
+        ),
         h(
           "div",
           { class: "n-filter-row" },
-          h("button", { class: "n-collapse", type: "button" }, "›"),
+          h("button", { class: "n-collapse", type: "button", "data-nx": "pane-right" }, "›"),
           h(
             "div",
             { class: "n-filter" },

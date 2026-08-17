@@ -7561,3 +7561,64 @@ a.wsrow-title:hover {
 .n-slot.empty {
   cursor: pointer;
 }
+
+
+/* ── Pane collapse rails (shots 27 / 36) ── */
+
+.n-rail {
+  display: none;
+}
+
+.n-left.rail {
+  width: 52px;
+  padding: 10px 8px;
+  overflow: visible;
+}
+
+.n-right.rail {
+  width: 48px;
+  padding: 10px 6px;
+  overflow: visible;
+}
+
+.n-left.rail > *,
+.n-right.rail > * {
+  display: none;
+}
+
+.n-left.rail > .n-rail,
+.n-right.rail > .n-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The shared .n-collapse order: 4 is a kick-row concern; rails stack top-down. */
+.n-rail .n-collapse {
+  order: 0;
+}
+
+.n-rail .n-pbadge.plus {
+  background: transparent;
+  border: 1px dashed var(--n-line-2);
+  color: var(--n-text-3);
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.n-rail-vlab {
+  writing-mode: vertical-rl;
+  margin: 4px 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--n-text-3);
+}
+
+.n-rail-n {
+  font-size: 11px;
+  color: var(--n-text-2);
+}

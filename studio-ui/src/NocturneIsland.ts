@@ -56,14 +56,26 @@ const [nxExplain, setNxExplain] = createSignal(
 );
 const [nxOpenLeft, setNxOpenLeft] = createSignal(false);
 const [nxOpenUp, setNxOpenUp] = createSignal(false);
+const [nMenuOpen, setNMenuOpen] = createSignal(false);
+const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 
-const ui: { sel: "left" | "up" | null; act: "hold" | "toggle"; turbo: boolean } = {
+const ui: {
+  sel: "left" | "up" | null;
+  act: "hold" | "toggle";
+  turbo: boolean;
+  menu: boolean;
+  auto: boolean;
+} = {
   sel: null,
   act: "hold",
   turbo: false,
+  menu: false,
+  auto: false,
 };
 
 function applyNocturneUi(): void {
+  setNMenuOpen(ui.menu);
+  setNAutoCls(ui.auto ? "nx-sw on" : "nx-sw");
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
   setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
@@ -102,13 +114,24 @@ function applyNocturneUi(): void {
 export function nocturneWire(root: HTMLElement): void {
   root.addEventListener("click", (ev) => {
     const hit = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
-    if (!hit) return;
+    if (!hit) {
+      // Any un-annotated click closes an open dropdown (menus dismiss on
+      // outside clicks; menu rows are placeholder actions that also close —
+      // they carry no data-nx, so they land here via the chip ancestor).
+      if (ui.menu) {
+        ui.menu = false;
+        applyNocturneUi();
+      }
+      return;
+    }
     ev.preventDefault();
     if (hit === "row-left") ui.sel = ui.sel === "left" ? null : "left";
     else if (hit === "row-up") ui.sel = ui.sel === "up" ? null : "up";
     else if (hit === "act-hold") ui.act = "hold";
     else if (hit === "act-toggle") ui.act = "toggle";
     else if (hit === "turbo") ui.turbo = !ui.turbo;
+    else if (hit === "menu") ui.menu = !ui.menu;
+    else if (hit === "auto") ui.auto = !ui.auto;
     applyNocturneUi();
   });
 }
@@ -280,10 +303,100 @@ export function NocturneIsland() {
       h("span", { class: "n-ver" }, "v0.4.1"),
       h(
         "div",
-        { class: "n-chip" },
+        { class: "n-chip", "data-nx": "menu" },
         h("span", { class: "n-chip-ico" }, "▣"),
         h("span", null, "Apex Legends — WASD"),
         h("span", { class: "n-chip-caret" }, "▾"),
+        // The config dropdown (shot 02): saved configurations, the four
+        // actions, saved games (one broken), autostart. Placeholder rows —
+        // clicking any of them just dismisses the menu; only the autostart
+        // switch holds state.
+        createShow(
+          () => nMenuOpen(),
+          () =>
+            h(
+              "div",
+              { class: "nm" },
+              h("div", { class: "nm-kick" }, "Saved configurations"),
+              h(
+                "div",
+                { class: "nm-cfg on" },
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-cfg-t" }, "Apex Legends — WASD"),
+                  h("div", { class: "nm-cfg-m" }, "Updated 2 days ago"),
+                ),
+                h("span", { class: "nm-check" }, "✓"),
+              ),
+              h(
+                "div",
+                { class: "nm-cfg" },
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-cfg-t" }, "Forza — analog triggers"),
+                  h("div", { class: "nm-cfg-m" }, "Updated last week"),
+                ),
+              ),
+              h(
+                "div",
+                { class: "nm-cfg" },
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-cfg-t" }, "Couch co-op — 2 players"),
+                  h("div", { class: "nm-cfg-m" }, "Updated 3 weeks ago"),
+                ),
+              ),
+              h("div", { class: "nm-div" }),
+              h("div", { class: "nm-item" }, "Start over — discard draft"),
+              h("div", { class: "nm-item" }, "Save as new…"),
+              h("div", { class: "nm-item" }, "Import from file…"),
+              h("div", { class: "nm-item" }, "Export “Apex Legends — WASD”…"),
+              h("div", { class: "nm-div" }),
+              h("div", { class: "nm-kick games" }, "Saved games"),
+              h(
+                "div",
+                { class: "nm-game" },
+                h("span", { class: "nm-gico" }, "▶"),
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-game-t" }, "Street Fighter 6 — cabinet"),
+                  h("div", { class: "nm-cfg-m" }, "2P · Couch co-op — 2 players"),
+                ),
+              ),
+              h(
+                "div",
+                { class: "nm-game broken" },
+                h("span", { class: "nm-gico broken" }, "!"),
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-game-t" }, "MAME — Galaga"),
+                  h("div", { class: "nm-cfg-m" }, "1P · Apex Legends — WASD · launch path missing"),
+                ),
+              ),
+              h("div", { class: "nm-item" }, "Save current setup as a game…"),
+              h("div", { class: "nm-div" }),
+              h(
+                "div",
+                { class: "nm-auto" },
+                h("div", { class: () => nAutoCls(), "data-nx": "auto" }, h("span", { class: "nx-knob" })),
+                h(
+                  "div",
+                  { class: "nm-cfg-txt" },
+                  h("div", { class: "nm-auto-t" }, "Start KSX when I sign in"),
+                  h(
+                    "div",
+                    { class: "nm-auto-note" },
+                    "KSX never starts itself — after a restart someone must open it before the pads work. On, the cabinet comes up ready on its own.",
+                  ),
+                ),
+              ),
+            ),
+        ),
       ),
       h("span", { class: "n-save" }, "Save"),
       h("span", { class: "n-saved" }, "Saved 2 days ago"),

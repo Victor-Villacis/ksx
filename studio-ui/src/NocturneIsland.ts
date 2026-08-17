@@ -26,8 +26,13 @@ import { createShow, createSignal, h } from "@getforma/core";
 // default IS the idle state, so SSR still paints shot 01 exactly and parity
 // holds. Every dynamic binding is an ARROW-WRAPPED getter (`() => sig()`) —
 // the compiler treats a bare identifier as an un-evaluable child/attr and
-// silently degrades it (build warning gate catches this); visibility inside
-// the expander is class-driven (`… none`) rather than nested createShow. Styling is studio.css §9, scoped under `.nocturne`
+// silently degrades it (build warning gate catches this) — and every dynamic
+// attribute is the LAST prop on its element: hydration re-applies the binding
+// by removing and re-appending the attribute, so SSR's source-order paint
+// only matches the adopted DOM when the dynamic attr already serializes last
+// (the parity gate caught this on the schematic wedges). Visibility inside
+// the expander is class-driven (`… none`) rather than nested createShow.
+// Styling is studio.css §9, scoped under `.nocturne`
 // with `--n-*` properties carrying the prototype's exact palette — this
 // route proves the DESIGN as designed; the production workspace keeps the
 // KSX palette.
@@ -401,7 +406,7 @@ export function NocturneIsland() {
               h(
                 "div",
                 { class: "nm-auto" },
-                h("div", { class: () => nAutoCls(), "data-nx": "auto" }, h("span", { class: "nx-knob" })),
+                h("div", { "data-nx": "auto", class: () => nAutoCls() }, h("span", { class: "nx-knob" })),
                 h(
                   "div",
                   { class: "nm-cfg-txt" },
@@ -549,9 +554,9 @@ export function NocturneIsland() {
             h("rect", { class: "np-body", x: "432", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(-19 481 284)" }),
             h("rect", { class: "np-body", x: "95", y: "85", width: "450", height: "176", rx: "74" }),
             h("circle", { class: "np-well", cx: "175", cy: "141", r: "40" }),
-            h("path", { class: () => nWedgeUpCls(), d: "M175 93 l9 13 h-18 z" }),
+            h("path", { d: "M175 93 l9 13 h-18 z", class: () => nWedgeUpCls() }),
             h("path", { class: "np-zone", d: "M175 189 l9 -13 h-18 z" }),
-            h("path", { class: () => nWedgeLeftCls(), d: "M127 141 l13 -9 v18 z" }),
+            h("path", { d: "M127 141 l13 -9 v18 z", class: () => nWedgeLeftCls() }),
             h("path", { class: "np-zone", d: "M223 141 l-13 -9 v18 z" }),
             h("circle", { class: "np-stick", cx: "175", cy: "141", r: "25" }),
             h("circle", { class: "np-well", cx: "390", cy: "213", r: "40" }),
@@ -700,7 +705,7 @@ export function NocturneIsland() {
         // "Press or click a key" button, everything else at its defaults.
         h(
           "div",
-          { class: () => nRowUpCls(), "data-nx": "row-up" },
+          { "data-nx": "row-up", class: () => nRowUpCls() },
           h("span", { class: "n-bind-dot" }),
           h("span", { class: "n-bind-label" }, "Left stick — Up"),
           h("span", { class: "n-keychip none" }, ""),
@@ -768,7 +773,7 @@ export function NocturneIsland() {
         // all signal-driven off applyNocturneUi.
         h(
           "div",
-          { class: () => nRowLeftCls(), "data-nx": "row-left" },
+          { "data-nx": "row-left", class: () => nRowLeftCls() },
           h("span", { class: "n-bind-dot" }),
           h("span", { class: "n-bind-label" }, "Left stick — Left"),
           h("span", { class: () => nTogBadgeCls() }, "Toggle"),
@@ -794,15 +799,15 @@ export function NocturneIsland() {
               h(
                 "div",
                 { class: "nx-pills" },
-                h("button", { class: () => nHoldCls(), type: "button", "data-nx": "act-hold" }, "Hold"),
-                h("button", { class: () => nTogCls(), type: "button", "data-nx": "act-toggle" }, "Toggle"),
+                h("button", { type: "button", "data-nx": "act-hold", class: () => nHoldCls() }, "Hold"),
+                h("button", { type: "button", "data-nx": "act-toggle", class: () => nTogCls() }, "Toggle"),
               ),
             ),
             h(
               "div",
               { class: "nx-row" },
               h("span", { class: "nx-lab" }, "Turbo"),
-              h("div", { class: () => nSwCls(), "data-nx": "turbo" }, h("span", { class: "nx-knob" })),
+              h("div", { "data-nx": "turbo", class: () => nSwCls() }, h("span", { class: "nx-knob" })),
               h(
                 "div",
                 { class: () => nRatesCls() },

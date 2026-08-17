@@ -3834,7 +3834,7 @@ impl NocturneDerived {
         }
 
         let dev_count = if scan_read {
-            format!("{} found", dev_rows.len() + dev_other.len())
+            format!("{} found", dev_rows.len())
         } else {
             "unavailable".to_owned()
         };

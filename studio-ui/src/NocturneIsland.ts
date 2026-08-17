@@ -100,10 +100,23 @@ const [nCapInstance, setNCapInstance] = createSignal("");
 const [nCapPrep, setNCapPrep] = createSignal(false);
 const [nCapRel, setNCapRel] = createSignal(false);
 
-// The action flash. SSR-only: the server fills these from the allowlisted
-// query parameter; a poll is not an action and never touches them.
-const [nFlashLine] = createSignal("");
-const [nFlashCls] = createSignal("n-flash none");
+// The action flash. The server fills these from the allowlisted query
+// parameter on a full-page load; with JavaScript on, the fetch-submit layer
+// reads the redirect's ?flash= and applies the same copy here. A poll is not
+// an action and never touches them.
+const [nFlashLine, setNFlashLine] = createSignal("");
+const [nFlashCls, setNFlashCls] = createSignal("n-flash none");
+
+/** Report one action outcome (the redirect's allowlisted ?flash= copy), and
+ *  settle any in-flight identify banner. */
+export function applyFlash(flash: string | null): void {
+  ui.identify = false;
+  applyNocturneUi();
+  if (!flash || !flash.trim()) return;
+  const err = flash.startsWith("error");
+  setNFlashLine(flash.replace(/^error:\s*/, ""));
+  setNFlashCls(err ? "n-flash err" : "n-flash ok");
+}
 
 /** Copy one served payload into the signals. */
 export function applyNocturne(p: NocturnePayload): void {

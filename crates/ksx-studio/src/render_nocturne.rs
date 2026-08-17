@@ -331,7 +331,9 @@ mod tests {
             "Mystery composite",
             "No supported capture path",
             "2 keyboard-capable boards found.",
-            "2 found",
+            // dev_count counts PICKABLE boards only (matching the kicker's
+            // KEYBOARD semantics); the summary sentence carries the rest.
+            "1 found",
             // The staged selection heads the keyboard area.
             "Ultimarc I-PAC 4 · USB",
             // The optional built-in path line (interception ready + eligible).

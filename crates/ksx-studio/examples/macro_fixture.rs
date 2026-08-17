@@ -98,14 +98,41 @@ fn seed_macros() -> Vec<MacroView> {
     ]
 }
 
-/// The one piece of state the fixture keeps: what Save wrote, so the poll that
-/// follows serves it back exactly as a real preset file would.
+/// The fixture's state: what Save wrote (served back exactly as a real
+/// preset file would), the staged keyboard the migrated /nocturne verbs
+/// edit, and a scripted learner so identify-by-key completes a real
+/// round-trip against this double.
 #[derive(Clone)]
-struct Store(Arc<Mutex<Vec<MacroView>>>);
+struct Store {
+    macros: Arc<Mutex<Vec<MacroView>>>,
+    stage: Arc<Mutex<FixtureStage>>,
+    /// `Some(generation)` while the scripted learner is "listening"; the next
+    /// poll answers with a hit on the fixture I-PAC and clears it.
+    listening: Arc<Mutex<Option<u64>>>,
+}
+
+struct FixtureStage {
+    device: ksx_api::StagedDeviceView,
+    blocking: String,
+}
 
 impl Store {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(seed_macros())))
+        Self {
+            macros: Arc::new(Mutex::new(seed_macros())),
+            stage: Arc::new(Mutex::new(FixtureStage {
+                device: ksx_api::StagedDeviceView {
+                    label: "Ultimarc I-PAC 4".into(),
+                    alias: "panel".into(),
+                    selector: "usb:d209:0430:00".into(),
+                    rung: "model".into(),
+                    survives_replug: true,
+                    backend: "interception".into(),
+                },
+                blocking: "bound-keys".into(),
+            })),
+            listening: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -158,7 +185,7 @@ impl StatusSource for Store {
     }
 
     fn macros(&self, preset: &str) -> MacroSnapshot {
-        MacroSnapshot::read(preset, self.0.lock().unwrap().clone())
+        MacroSnapshot::read(preset, self.macros.lock().unwrap().clone())
     }
 }
 
@@ -193,6 +220,134 @@ fn fixture_session() -> SessionView {
 }
 
 impl ControlSource for Store {
+    /// The migrated /nocturne keyboard verbs, against this double: choosing a
+    /// board, answering split-or-freeze, and following a capture transition
+    /// mutate the fixture's staged keyboard so the page behaves — everything
+    /// else keeps refusing in the trait's honest words.
+    fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
+        let ok = |message: &str, setup: ksx_api::StagedSetupView| ksx_api::StageOutcome {
+            ok: true,
+            message: Some(message.to_owned()),
+            error: None,
+            code: None,
+            remedy: None,
+            setup,
+            saved: None,
+            backup: None,
+            playing: false,
+        };
+        let refused = |error: &str, setup: ksx_api::StagedSetupView| ksx_api::StageOutcome {
+            ok: false,
+            message: None,
+            error: Some(error.to_owned()),
+            code: Some("bad-request".to_owned()),
+            remedy: None,
+            setup,
+            saved: None,
+            backup: None,
+            playing: false,
+        };
+        match edit {
+            ksx_api::StageEdit::ChooseDevice {
+                selector,
+                alias,
+                label,
+            } => {
+                self.stage.lock().unwrap().device = ksx_api::StagedDeviceView {
+                    label: label.clone(),
+                    alias: alias.clone(),
+                    selector: selector.clone(),
+                    rung: "model".into(),
+                    survives_replug: true,
+                    backend: "interception".into(),
+                };
+                ok("device staged", self.staged())
+            }
+            ksx_api::StageEdit::SetBlocking { blocking } => {
+                let known = ksx_api::BlockingOption::roster()
+                    .iter()
+                    .any(|option| option.name == *blocking);
+                if !known {
+                    return refused("unknown blocking mode", self.staged());
+                }
+                self.stage.lock().unwrap().blocking = blocking.clone();
+                ok("blocking staged", self.staged())
+            }
+            ksx_api::StageEdit::SetDeviceBackend {
+                expected_selector,
+                backend,
+            } => {
+                let mut stage = self.stage.lock().unwrap();
+                if stage.device.selector != *expected_selector {
+                    drop(stage);
+                    return refused("the staged selection changed", self.staged());
+                }
+                stage.device.backend = backend.clone();
+                drop(stage);
+                ok("backend staged", self.staged())
+            }
+            _ => refused(
+                "the fixture stages only the migrated keyboard verbs — a daemon holds the rest",
+                self.staged(),
+            ),
+        }
+    }
+
+    /// A scripted learner: listening answers the NEXT poll with a hit on the
+    /// fixture I-PAC, so identify-by-key completes its whole transaction
+    /// (listen → resolve → stage) against this double.
+    fn learn_start(&self) -> ksx_api::LearnView {
+        let mut listening = self.listening.lock().unwrap();
+        let generation = listening.map_or(1, |generation| generation + 1);
+        *listening = Some(generation);
+        ksx_api::LearnView {
+            ok: true,
+            state: "listening".into(),
+            generation: Some(generation),
+            remaining_ms: Some(11_000),
+            device: None,
+            key: None,
+            error: None,
+        }
+    }
+
+    fn learn_poll(&self) -> ksx_api::LearnView {
+        let mut listening = self.listening.lock().unwrap();
+        match listening.take() {
+            Some(generation) => ksx_api::LearnView {
+                ok: true,
+                state: "hit".into(),
+                generation: Some(generation),
+                remaining_ms: None,
+                device: Some("HID\\VID_D209&PID_0430\\FIXTURE".into()),
+                key: Some("G".into()),
+                error: None,
+            },
+            None => ksx_api::LearnView {
+                ok: true,
+                state: "idle".into(),
+                generation: None,
+                remaining_ms: None,
+                device: None,
+                key: None,
+                error: None,
+            },
+        }
+    }
+
+    fn learn_cancel_generation(&self, _generation: Option<u64>) -> ksx_api::LearnView {
+        *self.listening.lock().unwrap() = None;
+        ksx_api::LearnView {
+            ok: true,
+            state: "cancelled".into(),
+            generation: None,
+            remaining_ms: None,
+            device: None,
+            key: None,
+            error: None,
+        }
+    }
+
     fn session(&self) -> SessionView {
         fixture_session()
     }
@@ -207,6 +362,13 @@ impl ControlSource for Store {
     /// how a reviewer screenshots the stage's DualShock schematic (the show
     /// pair follows the first slot's family).
     fn staged(&self) -> ksx_api::StagedSetupView {
+        // One lock, taken before the struct literal: two `.lock()` calls
+        // inside one literal would hold the first guard to the end of the
+        // whole expression and deadlock on the second.
+        let (staged_device, staged_blocking) = {
+            let stage = self.stage.lock().unwrap();
+            (stage.device.clone(), stage.blocking.clone())
+        };
         let ps_first = std::env::var("KSX_FIXTURE_FIRST").as_deref() == Ok("ps");
         let persona = |name: &str, label: &str, is_xinput: bool| ksx_api::PersonaOption {
             name: name.into(),
@@ -317,16 +479,9 @@ impl ControlSource for Store {
             reachable: true,
             error: None,
             empty: false,
-            device: Some(ksx_api::StagedDeviceView {
-                label: "Ultimarc I-PAC 4".into(),
-                alias: "panel".into(),
-                selector: "usb:d209:0430:00".into(),
-                rung: "model".into(),
-                survives_replug: true,
-                backend: "interception".into(),
-            }),
+            device: Some(staged_device),
             slots,
-            blocking: Some("bound-keys".into()),
+            blocking: Some(staged_blocking),
             next_slot: Some(3),
             next_preset: Some("Player 3".into()),
             xinput_used: 1,
@@ -361,7 +516,7 @@ impl ControlSource for Store {
     /// Whole table in, whole table out — the same shape `mapping::save_macro`
     /// writes, so what the next poll serves is what the grid sent.
     fn save_macro(&self, request: &MacroWrite) -> MacroOutcome {
-        let mut held = self.0.lock().unwrap();
+        let mut held = self.macros.lock().unwrap();
         held.retain(|m| !m.name.eq_ignore_ascii_case(&request.name));
         if !request.delete {
             held.push(MacroView {
@@ -407,6 +562,32 @@ fn main() {
     // pages and worth being able to look at.
     struct NoMachine;
     impl ksx_api::MachineSource for NoMachine {
+        /// Resolve the scripted learner's hit back to a board, completing the
+        /// identify round-trip against this double.
+        fn device_identify(
+            &self,
+            observed_instance: &str,
+        ) -> Result<ksx_api::DeviceIdentifyView, ksx_api::Refusal> {
+            if observed_instance.eq_ignore_ascii_case("HID\\VID_D209&PID_0430\\FIXTURE") {
+                Ok(ksx_api::DeviceIdentifyView {
+                    selector: "usb:d209:0430:00".into(),
+                    alias: "panel".into(),
+                    label: "Ultimarc I-PAC 4".into(),
+                })
+            } else if observed_instance.eq_ignore_ascii_case("HID\\VID_046D&PID_C545\\FIXTURE") {
+                Ok(ksx_api::DeviceIdentifyView {
+                    selector: "usb:046d:c545:00".into(),
+                    alias: "g915".into(),
+                    label: "Logitech G915 TKL".into(),
+                })
+            } else {
+                Err(ksx_api::Refusal::not_here(
+                    "identifying a keyboard by key press",
+                    "run `ksx setup`",
+                ))
+            }
+        }
+
         /// The one machine read the migrated /nocturne keyboard pane renders:
         /// a small believable inventory, aligned with the fixture's staged
         /// I-PAC (same selector, so the chosen row marks and the

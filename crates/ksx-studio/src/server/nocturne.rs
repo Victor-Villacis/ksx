@@ -26,6 +26,9 @@ use crate::snapshot::NocturnePayload;
 
 pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved or started.";
 
+pub(super) const N_BLOCKING_OK: &str =
+    "Capture behaviour updated. Nothing has been saved or started.";
+
 pub(super) const N_EDIT_ERROR: &str =
     "error: The change could not be made. Reopen ksx and try again; nothing was changed.";
 
@@ -82,8 +85,9 @@ pub(super) const N_CAPTURE_RELEASED_STAGE_CHANGED: &str = "error: Windows releas
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 19] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 20] = [
     N_DEVICE_OK,
+    N_BLOCKING_OK,
     N_EDIT_ERROR,
     N_IDENTIFY_OK,
     N_IDENTIFY_TIMEOUT,
@@ -260,7 +264,7 @@ pub(super) async fn nocturne_form_blocking(
     })
     .await
     .unwrap_or(false);
-    nocturne_redirect(if ok { N_DEVICE_OK } else { N_EDIT_ERROR })
+    nocturne_redirect(if ok { N_BLOCKING_OK } else { N_EDIT_ERROR })
 }
 
 // ── WinUSB prepare/release (moved from /start, with every guard intact) ─────

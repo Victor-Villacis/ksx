@@ -3780,6 +3780,9 @@ pub struct NocturneDerived {
     pub dev_rows: Vec<NocturneDeviceRow>,
     pub dev_other: Vec<NocturneOtherRow>,
     pub mode_rows: Vec<NocturneChoiceRow>,
+    /// Why the behaviour section has nothing to offer, when it does not —
+    /// an empty roster with no sentence is a silent hole, not a state.
+    pub mode_note: String,
     /// The prepared-for-play control, composed from [`StartCaptureView`]'s
     /// mode machine. `capd_cls` hides the whole control (`none`) or strips
     /// its action (`noact`); the two dialog shows are exclusive.
@@ -3862,6 +3865,12 @@ impl NocturneDerived {
             None => "No keyboard selected — pick one on the left".to_owned(),
         };
 
+        let mode_note = if staged.reachable {
+            String::new()
+        } else {
+            "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
+                .to_owned()
+        };
         let current_mode = staged.blocking.as_deref().unwrap_or("");
         let mode_rows = if staged.reachable {
             staged
@@ -3931,6 +3940,7 @@ impl NocturneDerived {
             dev_rows,
             dev_other,
             mode_rows,
+            mode_note,
             cap_line,
             capd_cls,
             cap_sw_cls,

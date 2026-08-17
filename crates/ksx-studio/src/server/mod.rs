@@ -209,8 +209,9 @@ pub fn serve(
             // verb, 303 → /workspace?flash=. The center and right panes'
             // verbs arrive with M3–M4.
             .route("/workspace", get(workspace_page))
-            // ── /nocturne — the design proof (render_nocturne.rs): the
-            // whole prototype as static placeholder SSR, no reads, no verbs.
+            // ── /nocturne — the Nocturne front end. The keyboard section
+            // is MIGRATED product surface (reads + verbs in nocturne.rs);
+            // the rest is still the design proof's placeholder.
             .route("/nocturne", get(nocturne_page_handler))
             .route("/api/nocturne", get(api_nocturne))
             .route("/nocturne/device", post(nocturne_form_device))

@@ -73,6 +73,7 @@ export interface NocturneView {
   dev_rows: NocturneDeviceRowView[];
   dev_other: NocturneOtherRowView[];
   mode_rows: NocturneChoiceRowView[];
+  mode_note: string;
   cap_line: string;
   capd_cls: string;
   cap_sw_cls: string;
@@ -88,6 +89,7 @@ export interface NocturnePayload {
 }
 
 const [nDevCount, setNDevCount] = createSignal("");
+const [nModeNote, setNModeNote] = createSignal("");
 const [nDevNote, setNDevNote] = createSignal("");
 const [nDevRows, setNDevRows] = createSignal<NocturneDeviceRowView[]>([]);
 const [nDevOther, setNDevOther] = createSignal<NocturneOtherRowView[]>([]);
@@ -122,6 +124,7 @@ export function applyFlash(flash: string | null): void {
 export function applyNocturne(p: NocturnePayload): void {
   const v = p.view;
   setNDevCount(v.dev_count);
+  setNModeNote(v.mode_note);
   setNDevNote(v.dev_note);
   setNKbTitle(v.kb_title);
   setNDevRows(v.dev_rows);
@@ -690,7 +693,7 @@ export function NocturneIsland() {
         // alias, and label. Clicking a row IS "Use this device".
         createList(
           () => nDevRows(),
-          (r) => r.selector + "|" + r.cls + "|" + r.name + "|" + r.meta,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
           (r) =>
             h(
               "form",
@@ -703,10 +706,10 @@ export function NocturneIsland() {
                 { type: "submit", class: r.cls },
                 h("span", { class: "n-dev-ico" }, "⌨"),
                 h(
-                  "div",
+                  "span",
                   { class: "n-dev-txt" },
-                  h("div", { class: "n-dev-name" }, r.name),
-                  h("div", { class: "n-dev-meta" }, r.meta),
+                  h("span", { class: "n-dev-name" }, r.name),
+                  h("span", { class: "n-dev-meta" }, r.meta),
                 ),
                 h("span", { class: "n-dev-dot" }),
               ),
@@ -756,6 +759,7 @@ export function NocturneIsland() {
           h("span", { class: "n-idtxt" }, () => nIdText()),
         ),
         h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "Keyboard behaviour")),
+        h("p", { class: "n-devnote" }, () => nModeNote()),
         // The split-or-freeze answer — SERVED: BlockingOption::roster's own
         // words, the staged answer marked, each row a /nocturne/blocking form.
         createList(
@@ -771,10 +775,10 @@ export function NocturneIsland() {
                 { type: "submit", class: r.cls },
                 h("span", { class: "n-radio-dot" }),
                 h(
-                  "div",
+                  "span",
                   { class: "n-radio-txt" },
-                  h("div", { class: "n-radio-title" }, r.title),
-                  h("div", { class: "n-radio-detail" }, r.detail),
+                  h("span", { class: "n-radio-title" }, r.title),
+                  h("span", { class: "n-radio-detail" }, r.detail),
                 ),
               ),
             ),

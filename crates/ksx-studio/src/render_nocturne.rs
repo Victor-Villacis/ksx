@@ -33,6 +33,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nDevCount": payload.view.dev_count,
         "nDevNote": payload.view.dev_note,
         "nKbTitle": payload.view.kb_title,
+        "nModeNote": payload.view.mode_note,
         "nCapLine": payload.view.cap_line,
         "nCapdCls": payload.view.capd_cls,
         "nCapSwCls": payload.view.cap_sw_cls,
@@ -223,8 +224,9 @@ mod tests {
         // per member field) belongs to the seam wholesale.
         const SERVED_LIST_PREFIXES: [&str; 3] =
             ["list:nDevRows:", "list:nDevOther:", "list:nModeRows:"];
-        const SERVED_SLOTS: [&str; 12] = [
+        const SERVED_SLOTS: [&str; 13] = [
             "nDevCount",
+            "nModeNote",
             "nDevNote",
             "nKbTitle",
             "nCapLine",

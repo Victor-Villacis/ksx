@@ -6430,3 +6430,103 @@ fn the_workspace_routes_are_behind_the_guard() {
         );
     }
 }
+
+/// **The MIGRATED keyboard section, over HTTP.** `/nocturne` serves the
+/// scan-backed device rows and the roster beside the placeholder half,
+/// reflects only its own allowlisted flash copy, and its verbs — the same
+/// handlers `/start`'s old routes now point at — answer on `/nocturne` with
+/// every guard intact.
+#[test]
+fn nocturne_serves_the_migrated_keyboard_section_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    // The page embeds its payload and renders the machine's board beside the
+    // roster's own words and the design-proof placeholder half.
+    let raw = get(addr, "/nocturne");
+    assert!(
+        body_of(&raw).contains("__ksx-payload"),
+        "payload block missing"
+    );
+    let page = rendered_body(&raw);
+    assert!(page.contains("I-PAC"), "{page}");
+    assert!(page.contains("Freeze this keyboard"), "{page}");
+    assert!(page.contains("16 of 24 inputs bound"), "{page}");
+
+    // Only copy this page can emit is reflected back onto it.
+    let hostile = rendered_body(&get(
+        addr,
+        "/nocturne?flash=error%3A%20daemon%20pipe%20C%3A%5Cksx%20--secret%20claim",
+    ));
+    assert!(hostile.contains("could not be finished"), "{hostile}");
+    for raw in ["daemon pipe", "--secret", r"C:\ksx"] {
+        assert!(
+            !hostile.contains(raw),
+            "raw flash fragment {raw:?}: {hostile}"
+        );
+    }
+
+    // Picking a board IS the old "Use this device": one staged value.
+    let picked = post_form(
+        addr,
+        "/nocturne/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    assert!(
+        picked.contains("location: /nocturne?flash=Keyboard%20selected"),
+        "{picked}"
+    );
+    assert_eq!(
+        control.staged().device.expect("staged device").selector,
+        "usb:d209:0430:00"
+    );
+
+    // The capture answer carries its own sentence, not the device one…
+    let blocked = post_form(addr, "/nocturne/blocking", "blocking=bound-keys");
+    assert!(
+        blocked.contains("Capture%20behaviour%20updated"),
+        "{blocked}"
+    );
+    assert_eq!(control.staged().blocking.as_deref(), Some("bound-keys"));
+    // …and a junk answer refuses without touching the staged one.
+    let junk = post_form(addr, "/nocturne/blocking", "blocking=everything");
+    assert!(junk.contains("flash=error"), "{junk}");
+    assert_eq!(control.staged().blocking.as_deref(), Some("bound-keys"));
+
+    // A crafted prepare missing a consent never reaches the provider — the
+    // same server-side validation the old card had, behind the new fold.
+    let missing = post_form(
+        addr,
+        "/nocturne/capture/prepare",
+        "expected_selector=usb%3Ad209%3A0430%3A00&         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&         confirm_spare_keyboard=yes&confirm_machine_certificate=yes",
+    );
+    assert!(missing.contains("Confirm%20all%20three"), "{missing}");
+    assert!(machine.prepared_with.lock().unwrap().is_empty());
+
+    // The poller serves the same derived facts the page painted.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("nocturne payload");
+    assert!(
+        api["view"]["kb_title"]
+            .as_str()
+            .expect("kb_title")
+            .contains("I-PAC"),
+        "{api}"
+    );
+    assert!(
+        !api["view"]["mode_rows"]
+            .as_array()
+            .expect("mode rows")
+            .is_empty(),
+        "{api}"
+    );
+
+    // A dead daemon refuses in the page's own words, with nothing raw.
+    let dead = start_server(Arc::new(ScriptedControl::dead()));
+    let refused = post_form(dead, "/nocturne/blocking", "blocking=bound-keys");
+    assert!(
+        refused.contains("location: /nocturne?flash=error"),
+        "{refused}"
+    );
+}

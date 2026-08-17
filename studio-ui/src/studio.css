@@ -8132,6 +8132,17 @@ a.wsrow-title:hover {
   display: flex;
 }
 
+/* The row internals are spans (a button cannot contain divs); restore the
+   block layout the div version had. */
+.n-devform .n-dev-txt,
+.n-devform .n-dev-name,
+.n-devform .n-dev-meta,
+.n-modeform .n-radio-txt,
+.n-modeform .n-radio-title,
+.n-modeform .n-radio-detail {
+  display: block;
+}
+
 .n-modeform button.n-radio {
   display: flex;
 }
@@ -8183,6 +8194,12 @@ a.wsrow-title:hover {
   display: none;
 }
 
+/* pointer-events cannot stop a keyboard: Enter on the focused summary would
+   open an EMPTY popover in the no-action state. */
+.n-capd.noact .n-capbody {
+  display: none;
+}
+
 .n-capdet {
   position: relative;
 }
@@ -8203,7 +8220,7 @@ a.wsrow-title:hover {
 }
 
 .n-capsum::after {
-  content: "be";
+  content: "\25BE";
   color: var(--n-text-3);
   font-size: 11px;
 }

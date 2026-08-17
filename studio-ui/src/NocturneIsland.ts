@@ -65,6 +65,7 @@ const [nMenuOpen, setNMenuOpen] = createSignal(false);
 const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
 const [nConflictOpen, setNConflictOpen] = createSignal(false);
+const [nMacroOpen, setNMacroOpen] = createSignal(false);
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
 const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
@@ -83,6 +84,7 @@ const ui: {
   auto: boolean;
   dlg: boolean;
   conflict: boolean;
+  macro: boolean;
   leftRail: boolean;
   rightRail: boolean;
   dev: 1 | 2 | 3;
@@ -95,6 +97,7 @@ const ui: {
   auto: false,
   dlg: false,
   conflict: false,
+  macro: false,
   leftRail: false,
   rightRail: false,
   dev: 1,
@@ -106,6 +109,7 @@ function applyNocturneUi(): void {
   setNAutoCls(ui.auto ? "nx-sw on" : "nx-sw");
   setNDlgOpen(ui.dlg);
   setNConflictOpen(ui.conflict);
+  setNMacroOpen(ui.macro);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
@@ -230,6 +234,8 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "slot-new") ui.dlg = true;
     else if (hit === "dlg-close") ui.dlg = false;
     else if (hit === "conflict-close") ui.conflict = false;
+    else if (hit === "macro-open") ui.macro = true;
+    else if (hit === "macro-close") ui.macro = false;
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
     else if (hit === "dev-1") ui.dev = 1;
@@ -293,6 +299,25 @@ const BIND_DPAD = [
 const BIND_SYSTEM = [
   { cls: "n-bind on", label: "View", chip: "Tab", chip_cls: "n-keychip", asn_cls: "n-assign none" },
   { cls: "n-bind on", label: "Menu", chip: "Esc", chip_cls: "n-keychip", asn_cls: "n-assign none" },
+];
+
+// The macro editor's step-panel chips and direction grids (shot 32): the
+// open step holds nothing, so every chip is off and each grid's centre
+// (neutral) cell is the lit one.
+const MB_CHIPS = [
+  { cls: "nmc", label: "A" }, { cls: "nmc", label: "B" }, { cls: "nmc", label: "X" },
+  { cls: "nmc", label: "Y" }, { cls: "nmc", label: "LB" }, { cls: "nmc", label: "RB" },
+  { cls: "nmc", label: "LT" }, { cls: "nmc", label: "RT" }, { cls: "nmc", label: "L3" },
+  { cls: "nmc", label: "R3" }, { cls: "nmc", label: "Vw" }, { cls: "nmc", label: "Mn" },
+];
+const MG_CELLS = [
+  { cls: "nmg-cell", label: "↖" }, { cls: "nmg-cell", label: "↑" }, { cls: "nmg-cell", label: "↗" },
+  { cls: "nmg-cell", label: "←" }, { cls: "nmg-cell on", label: "·" }, { cls: "nmg-cell", label: "→" },
+  { cls: "nmg-cell", label: "↙" }, { cls: "nmg-cell", label: "↓" }, { cls: "nmg-cell", label: "↘" },
+];
+const M_MOTIONS = [
+  { label: "¼→ 236" }, { label: "¼← 214" }, { label: "½→ 41236" },
+  { label: "½← 63214" }, { label: "DP→ 623" }, { label: "DP← 421" }, { label: "360→" },
 ];
 
 // The keyboard, exactly as the design draws the K70: main block + nav block +
@@ -881,7 +906,7 @@ export function NocturneIsland() {
                 "div",
                 { class: "nx-macro" },
                 h("button", { class: "nx-ghost", type: "button" }, "● Record"),
-                h("button", { class: "nx-ghost", type: "button" }, "Steps…"),
+                h("button", { class: "nx-ghost", type: "button", "data-nx": "macro-open" }, "Steps…"),
               ),
             ),
             h(
@@ -959,7 +984,7 @@ export function NocturneIsland() {
                 "div",
                 { class: "nx-macro" },
                 h("button", { class: "nx-ghost", type: "button" }, "● Record"),
-                h("button", { class: "nx-ghost", type: "button" }, "Steps…"),
+                h("button", { class: "nx-ghost", type: "button", "data-nx": "macro-open" }, "Steps…"),
               ),
             ),
             h("div", { class: "nx-explain" }, () => nxExplain()),
@@ -1057,6 +1082,135 @@ export function NocturneIsland() {
         ),
         h("div", { class: "n-right-foot" }, "16 of 24 inputs bound"),
       ),
+    ),
+    // ═══ Macro editor (shots 31/32) ═══════════════════════════════════════
+    // Opened by either expander's Steps… button; Done and the backdrop close
+    // it. Static: one 80 ms step, expanded, holding nothing — the exact
+    // state of shot 32 — with the motion writer, the three grids, and the
+    // On-release / After-it-ends / Short-steps footer verbatim.
+    createShow(
+      () => nMacroOpen(),
+      () =>
+        h(
+          "div",
+          { class: "nd-back", "data-nx": "macro-close" },
+          h(
+            "div",
+            { class: "nd nm-dlg", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Macro editor" },
+            h(
+              "div",
+              null,
+              h("div", { class: "nd-kick" }, "Macro editor"),
+              h("div", { class: "nd-title sm" }, "Left stick — Left — Xbox 360 · P1"),
+              h(
+                "div",
+                { class: "nm-lede" },
+                "Each step holds everything ticked in it at once, for its duration, before the next begins — a diagonal is ONE step holding two directions, so ¼→ is three steps: ↓, then ↘, then →.",
+              ),
+            ),
+            h(
+              "div",
+              { class: "nmo-row" },
+              h("span", { class: "nmo-kick" }, "Write a motion"),
+              h("span", { class: "nx-pill" }, "D-pad"),
+              h("span", { class: "nx-pill on" }, "Left stick"),
+              h("span", { class: "nx-pill" }, "Right stick"),
+              h("span", { class: "nmo-vsep" }),
+              ...M_MOTIONS.map((m) => h("span", { class: "nmo-motion" }, m.label)),
+            ),
+            h(
+              "div",
+              { class: "nms-area" },
+              h(
+                "div",
+                { class: "nms-wrap open" },
+                h(
+                  "div",
+                  { class: "nms-row" },
+                  h("span", { class: "nms-idx" }, "1"),
+                  h("span", { class: "nms-dur" }, "80 ms"),
+                  h("span", { class: "nms-holds" }, "holds nothing"),
+                  h("span", { class: "nms-edit on" }, "Close"),
+                  h("span", { class: "nms-mini" }, "＋"),
+                  h("span", { class: "nms-mini" }, "✕"),
+                ),
+                h(
+                  "div",
+                  { class: "nms-panel" },
+                  h("div", { class: "nms-chips" }, ...MB_CHIPS.map((c) => h("span", { class: c.cls }, c.label))),
+                  h(
+                    "div",
+                    { class: "nms-grids" },
+                    h(
+                      "div",
+                      { class: "nmg" },
+                      h("span", { class: "nmg-name" }, "D-pad"),
+                      h("div", { class: "nmg-grid" }, ...MG_CELLS.map((c) => h("span", { class: c.cls }, c.label))),
+                    ),
+                    h(
+                      "div",
+                      { class: "nmg" },
+                      h("span", { class: "nmg-name" }, "Left stick"),
+                      h("div", { class: "nmg-grid" }, ...MG_CELLS.map((c) => h("span", { class: c.cls }, c.label))),
+                    ),
+                    h(
+                      "div",
+                      { class: "nmg" },
+                      h("span", { class: "nmg-name" }, "Right stick"),
+                      h("div", { class: "nmg-grid" }, ...MG_CELLS.map((c) => h("span", { class: c.cls }, c.label))),
+                    ),
+                  ),
+                ),
+              ),
+              h("button", { class: "nx-ghost nms-add", type: "button" }, "＋ Add step"),
+            ),
+            h(
+              "div",
+              { class: "nm-foot" },
+              h(
+                "div",
+                { class: "nm-frow first" },
+                h("span", { class: "nm-flab" }, "On release"),
+                h("span", { class: "nx-pill on" }, "Finish the sequence"),
+                h("span", { class: "nx-pill" }, "Stop at once"),
+                h(
+                  "span",
+                  { class: "nm-fnote" },
+                  "Finishing lets it run out — tap the trigger and the quarter-circle comes out whole.",
+                ),
+              ),
+              h(
+                "div",
+                { class: "nm-frow" },
+                h("span", { class: "nm-flab" }, "After it ends"),
+                h("span", { class: "nx-pill on" }, "Run once per press"),
+                h("span", { class: "nx-pill" }, "Repeat while held"),
+              ),
+              h(
+                "div",
+                { class: "nm-frow" },
+                h("span", { class: "nm-flab" }, "Short steps"),
+                h("div", { class: "nx-sw" }, h("span", { class: "nx-knob" })),
+                h(
+                  "span",
+                  { class: "nm-fnote" },
+                  "60 Hz — steps under 33 ms (2 frames) show red and are raised to land, unless allowed to run as written.",
+                ),
+              ),
+              h(
+                "div",
+                { class: "nm-trig" },
+                "Trigger — A starts this macro. It is the ordinary binding on Left stick — Left; rebind the key there and the macro follows it.",
+              ),
+              h(
+                "div",
+                { class: "nd-actions" },
+                h("button", { class: "nd-btn", type: "button" }, "▶ Test on the pad"),
+                h("button", { class: "nd-btn primary", type: "button", "data-nx": "macro-close" }, "Done"),
+              ),
+            ),
+          ),
+        ),
     ),
     // ═══ Key-conflict dialog (bundle template; the shots never caught it —
     // the prototype resolved conflicts before the walkthrough's screenshot).

@@ -7685,3 +7685,254 @@ a.wsrow-title:hover {
   color: var(--n-text-2);
   text-wrap: pretty;
 }
+
+
+/* Macro editor (shots 31/32) */
+
+.nm-dlg {
+  width: min(680px, 100%);
+  gap: 13px;
+  max-height: 86vh;
+}
+
+.nm-lede {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--n-text-2);
+  text-wrap: pretty;
+}
+
+.nmo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nmo-kick {
+  margin-right: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--n-text-3);
+}
+
+.nmo-vsep {
+  width: 1px;
+  height: 18px;
+  background: rgba(233, 233, 237, 0.12);
+}
+
+.nmo-motion {
+  padding: 4px 9px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  color: #b5abfc;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.nms-area {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 120px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.nms-wrap {
+  display: flex;
+  flex-direction: column;
+  padding: 5px 8px;
+  border-radius: 8px;
+}
+
+.nms-wrap.open {
+  background: #1d1f2b;
+  box-shadow: inset 0 0 0 1px #292b31;
+}
+
+.nms-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nms-idx {
+  width: 18px;
+  flex: none;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--n-text-3);
+}
+
+.nms-dur {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--n-panel-2);
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: #b5abfc;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.nms-holds {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #e4e7f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nms-edit {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: var(--n-panel-2);
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: #cfd3e5;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.nms-edit.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  color: #161826;
+}
+
+.nms-mini {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.nms-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 2px 4px 26px;
+}
+
+.nms-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nmc {
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--n-panel-2);
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: var(--n-text-2);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.nmc.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  color: #161826;
+}
+
+.nms-grids {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.nmg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nmg-name {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--n-text-3);
+}
+
+.nmg-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  gap: 3px;
+}
+
+.nmg-cell {
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--n-panel-2);
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  color: var(--n-text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.nmg-cell.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  color: #161826;
+}
+
+.nms-add {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.nm-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  box-shadow: inset 0 1px 0 rgba(233, 233, 237, 0.08);
+}
+
+.nm-frow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nm-frow.first {
+  padding-top: 10px;
+}
+
+.nm-flab {
+  width: 96px;
+  flex: none;
+  font-size: 11px;
+  color: var(--n-text-2);
+}
+
+.nm-fnote {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+.nm-trig {
+  font-size: 11.5px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}

@@ -212,6 +212,12 @@ pub fn serve(
             // ── /nocturne — the design proof (render_nocturne.rs): the
             // whole prototype as static placeholder SSR, no reads, no verbs.
             .route("/nocturne", get(nocturne_page_handler))
+            .route("/api/nocturne", get(api_nocturne))
+            .route("/nocturne/device", post(nocturne_form_device))
+            .route("/nocturne/device/identify", post(nocturne_form_identify))
+            .route("/nocturne/capture/prepare", post(nocturne_form_capture_prepare))
+            .route("/nocturne/capture/release", post(nocturne_form_capture_release))
+            .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
             .route("/workspace/controller/move", post(workspace_form_move))
@@ -409,10 +415,13 @@ pub fn serve(
             // (the same argument `/setup/export.json` makes).
             .route("/start", get(start_page))
             .route("/api/start", get(api_start))
-            .route("/start/device", post(start_form_device))
-            .route("/start/device/identify", post(start_form_identify))
-            .route("/start/capture/prepare", post(start_form_capture_prepare))
-            .route("/start/capture/release", post(start_form_capture_release))
+            // MIGRATED (2026-08-17): the keyboard verbs live in nocturne.rs
+            // now. The old paths stay registered so /start's intact frames
+            // keep working — pressing them lands the answer on /nocturne.
+            .route("/start/device", post(nocturne_form_device))
+            .route("/start/device/identify", post(nocturne_form_identify))
+            .route("/start/capture/prepare", post(nocturne_form_capture_prepare))
+            .route("/start/capture/release", post(nocturne_form_capture_release))
             .route("/start/controller", post(start_form_controller))
             .route(
                 "/start/controller/persona",
@@ -426,7 +435,7 @@ pub fn serve(
             // that has not saved anything yet.
             .route("/start/controller/layout", post(start_form_layout))
             .route("/start/controller/remove", post(start_form_remove))
-            .route("/start/blocking", post(start_form_blocking))
+            .route("/start/blocking", post(nocturne_form_blocking))
             .route("/start/autostart", post(start_form_autostart))
             .route("/start/discard", post(start_form_discard))
             .route("/start/save", post(start_form_save))

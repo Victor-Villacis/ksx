@@ -406,7 +406,66 @@ fn main() {
     // read the bus rather than inventing one — which are real states of those
     // pages and worth being able to look at.
     struct NoMachine;
-    impl ksx_api::MachineSource for NoMachine {}
+    impl ksx_api::MachineSource for NoMachine {
+        /// The one machine read the migrated /nocturne keyboard pane renders:
+        /// a small believable inventory, aligned with the fixture's staged
+        /// I-PAC (same selector, so the chosen row marks and the
+        /// prepared-for-play control composes its Prepare state). Everything
+        /// else keeps the trait's refusing defaults — /devices and /pads
+        /// still render their honest refusal states, and a prepare/release
+        /// POST against this fixture answers with the provider refusal
+        /// sentence rather than pretending Windows was asked.
+        fn device_scan(&self) -> Result<ksx_api::DeviceScanView, ksx_api::Refusal> {
+            Ok(ksx_api::DeviceScanView {
+                boards_summary: "2 keyboard-capable boards found; 1 more device has no keyboard \
+                                 interface."
+                    .into(),
+                interception_available: false,
+                boards: vec![
+                    ksx_api::BoardRow {
+                        name: "Ultimarc I-PAC 4".into(),
+                        transport_label: "USB".into(),
+                        backends: "Built-in path (WinUSB) after preparing".into(),
+                        selector: Some("usb:d209:0430:00".into()),
+                        alias_hint: "panel".into(),
+                        keyboard: Some("HID\\VID_D209&PID_0430\\FIXTURE".into()),
+                        interfaces: vec![ksx_api::UsbRow {
+                            instance_id: "HID\\VID_D209&PID_0430\\FIXTURE".into(),
+                            ..Default::default()
+                        }],
+                        interception_eligible: true,
+                        winusb_eligible: true,
+                        can_type: true,
+                        ..Default::default()
+                    },
+                    ksx_api::BoardRow {
+                        name: "Logitech G915 TKL".into(),
+                        transport_label: "Bluetooth".into(),
+                        backends: "Shared capture driver only".into(),
+                        selector: Some("usb:046d:c545:00".into()),
+                        alias_hint: "g915".into(),
+                        keyboard: Some("HID\\VID_046D&PID_C545\\FIXTURE".into()),
+                        interfaces: vec![ksx_api::UsbRow {
+                            instance_id: "HID\\VID_046D&PID_C545\\FIXTURE".into(),
+                            ..Default::default()
+                        }],
+                        interception_eligible: true,
+                        winusb_eligible: false,
+                        can_type: true,
+                        ..Default::default()
+                    },
+                    ksx_api::BoardRow {
+                        name: "Composite pointing device".into(),
+                        transport_label: "USB".into(),
+                        backends: "No keyboard interface — cannot be split".into(),
+                        selector: None,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+        }
+    }
 
     if let Err(err) = ksx_studio::serve(
         bind,

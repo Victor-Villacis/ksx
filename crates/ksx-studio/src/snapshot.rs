@@ -1491,21 +1491,32 @@ enum StartCaptureMode {
 
 impl StartCaptureView {
     fn of(payload: &StartPayload) -> Self {
-        let Some(device) = payload.staged.device.as_ref() else {
+        Self::from_parts(&payload.staged, &payload.scan, payload.scan_read())
+    }
+
+    /// The ONE capture-mode derivation, shared by `/start`'s card and
+    /// `/nocturne`'s prepared-for-play control. Extracted rather than copied
+    /// when the keyboard backend migrated (2026-08-17): two mode machines
+    /// would eventually disagree about the same physical keyboard.
+    pub(crate) fn from_parts(
+        staged: &ksx_api::StagedSetupView,
+        scan: &ksx_api::DeviceScanView,
+        scan_read: bool,
+    ) -> Self {
+        let Some(device) = staged.device.as_ref() else {
             return Self::default();
         };
-        if !payload.staged.reachable {
+        if !staged.reachable {
             return Self::default();
         }
-        if !payload.scan_read() {
+        if !scan_read {
             return Self::blocked(device.selector.clone());
         }
 
         // A selector chosen from the served inventory should name one board.
         // Re-check that invariant instead of taking the first match: a stale
         // or malformed inventory must remove the action, never retarget it.
-        let mut matches = payload
-            .scan
+        let mut matches = scan
             .boards
             .iter()
             .filter(|board| board.selector.as_deref() == Some(device.selector.as_str()));
@@ -1518,8 +1529,7 @@ impl StartCaptureView {
         let Some(instance_id) = board.keyboard.as_ref() else {
             return Self::blocked(device.selector.clone());
         };
-        if payload
-            .scan
+        if scan
             .boards
             .iter()
             .flat_map(|candidate| candidate.interfaces.iter())
@@ -1536,7 +1546,7 @@ impl StartCaptureView {
         let interception = "interception";
         let winusb = "winusb";
         let interception_ready = backend == interception
-            && payload.scan.interception_available
+            && scan.interception_available
             && board.interception_eligible
             && board.can_type
             && !board.claimed;
@@ -1581,6 +1591,21 @@ impl StartCaptureView {
             self.mode,
             StartCaptureMode::Ready | StartCaptureMode::PrepareOptional | StartCaptureMode::Release
         )
+    }
+
+    /// The mode as a stable word, for derivations OUTSIDE this module
+    /// (`NocturneDerived`) that need the full seven-way answer without the
+    /// private enum crossing the boundary.
+    pub(crate) fn mode_word(&self) -> &'static str {
+        match self.mode {
+            StartCaptureMode::None => "none",
+            StartCaptureMode::Ready => "ready",
+            StartCaptureMode::Prepare => "prepare",
+            StartCaptureMode::PrepareOptional => "prepare-optional",
+            StartCaptureMode::Release => "release",
+            StartCaptureMode::Held => "held",
+            StartCaptureMode::Blocked => "blocked",
+        }
     }
 
     fn prepare(&self) -> bool {
@@ -3669,6 +3694,254 @@ fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceCh
             },
         })
         .collect()
+}
+
+// ═══ /nocturne — THE MIGRATED KEYBOARD SECTION ═════════════════════════════
+//
+// The first real payload behind the Nocturne route (2026-08-17): the keyboard
+// facts ONLY — device pick rows off the live machine scan, the split/freeze
+// roster, and the prepared-for-play control composed from the SAME
+// [`StartCaptureView`] mode machine `/start`'s card uses. Everything else on
+// the page stays the design proof's placeholder until its own migration pass.
+
+/// `/nocturne`'s served facts. Independent reads with independent failure
+/// modes, exactly like [`StartPayload`]: a dead daemon must not read as "you
+/// have staged nothing" and a refused enumeration must not read as "you have
+/// no keyboards".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NocturnePayload {
+    pub staged: ksx_api::StagedSetupView,
+    pub scan: ksx_api::DeviceScanView,
+    /// Empty when the scan answered; otherwise the refusal, verbatim.
+    #[serde(default)]
+    pub unavailable: String,
+    /// Every sentence and row the page renders, composed once, here.
+    #[serde(default)]
+    pub view: NocturneDerived,
+}
+
+impl NocturnePayload {
+    /// Recompose [`view`](Self::view) from this payload's own facts — called
+    /// on the way OUT, like every other `composed()`/`derived()` here.
+    #[must_use]
+    pub fn derived(mut self) -> Self {
+        self.view = NocturneDerived::of(&self);
+        self
+    }
+
+    fn scan_read(&self) -> bool {
+        self.unavailable.trim().is_empty()
+    }
+}
+
+/// One pickable keyboard row: the row IS the `/nocturne/device` form's
+/// button, so the three hidden values ride beside the display fields. All
+/// three are SERVED — `FIRST-RUN.md` §6 forbids asking anyone to type a
+/// device path, and this page has no text input either.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneDeviceRow {
+    pub cls: String,
+    pub name: String,
+    pub meta: String,
+    pub selector: String,
+    pub alias: String,
+    pub label: String,
+}
+
+/// One board that cannot be picked, and why — kept visible, never hidden:
+/// a list that silently drops rows teaches a user the machine has fewer
+/// keyboards than it does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneOtherRow {
+    pub name: String,
+    pub meta: String,
+}
+
+/// One split-or-freeze answer, from `BlockingOption::roster()` — the same
+/// words `/start` and `/workspace` ask with, deliberately not a third wording.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneChoiceRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    pub cls: String,
+}
+
+/// Every sentence `/nocturne` states as a served fact.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneDerived {
+    /// The device kicker's count — "N found", or the honest refusal word.
+    pub dev_count: String,
+    /// `scan.boards_summary` or the refusal sentence — the one line that
+    /// distinguishes "no keyboard-capable board" from "nothing could be read".
+    pub dev_note: String,
+    /// The keyboard header over the key grid: the STAGED selection's identity.
+    pub kb_title: String,
+    pub dev_rows: Vec<NocturneDeviceRow>,
+    pub dev_other: Vec<NocturneOtherRow>,
+    pub mode_rows: Vec<NocturneChoiceRow>,
+    /// The prepared-for-play control, composed from [`StartCaptureView`]'s
+    /// mode machine. `capd_cls` hides the whole control (`none`) or strips
+    /// its action (`noact`); the two dialog shows are exclusive.
+    pub cap_line: String,
+    pub capd_cls: String,
+    pub cap_sw_cls: String,
+    pub cap_selector: String,
+    pub cap_instance: String,
+    pub cap_prepare: bool,
+    pub cap_release: bool,
+}
+
+impl NocturneDerived {
+    fn of(p: &NocturnePayload) -> Self {
+        let staged = &p.staged;
+        let scan_read = p.scan_read();
+        let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
+
+        let mut dev_rows = Vec::new();
+        let mut dev_other = Vec::new();
+        if scan_read {
+            for b in &p.scan.boards {
+                match b.selector.clone() {
+                    Some(selector) => {
+                        let is_chosen = chosen == Some(selector.as_str());
+                        let verdict = if b.claimed {
+                            "Held by ksx"
+                        } else if b.cannot_type_line.trim().is_empty() {
+                            "Ready to use"
+                        } else {
+                            "Cannot type right now"
+                        };
+                        dev_rows.push(NocturneDeviceRow {
+                            cls: if is_chosen {
+                                "n-dev on".to_owned()
+                            } else {
+                                "n-dev".to_owned()
+                            },
+                            name: b.name.clone(),
+                            meta: format!("{} · {}", b.transport_label, verdict),
+                            selector,
+                            alias: b.alias_hint.clone(),
+                            label: b.name.clone(),
+                        });
+                    }
+                    None => dev_other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: b.backends.clone(),
+                    }),
+                }
+            }
+        }
+
+        let dev_count = if scan_read {
+            format!("{} found", dev_rows.len() + dev_other.len())
+        } else {
+            "unavailable".to_owned()
+        };
+        let dev_note = if scan_read {
+            p.scan.boards_summary.clone()
+        } else {
+            p.unavailable.clone()
+        };
+
+        let kb_title = match staged.device.as_ref() {
+            _ if !staged.reachable => "The draft could not be read — reopen ksx".to_owned(),
+            Some(d) => {
+                let transport = p
+                    .scan
+                    .boards
+                    .iter()
+                    .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
+                    .map(|b| b.transport_label.as_str())
+                    .filter(|t| !t.trim().is_empty());
+                match transport {
+                    Some(t) => format!("{} · {}", d.label, t),
+                    None => d.label.clone(),
+                }
+            }
+            None => "No keyboard selected — pick one on the left".to_owned(),
+        };
+
+        let current_mode = staged.blocking.as_deref().unwrap_or("");
+        let mode_rows = if staged.reachable {
+            staged
+                .blocking_options
+                .iter()
+                .map(|option| NocturneChoiceRow {
+                    name: option.name.clone(),
+                    title: option.title.clone(),
+                    detail: option.detail.clone(),
+                    cls: if option.name == current_mode {
+                        "n-radio on".to_owned()
+                    } else {
+                        "n-radio".to_owned()
+                    },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let cap = StartCaptureView::from_parts(staged, &p.scan, scan_read);
+        let mode = cap.mode_word();
+        let (cap_prepare, cap_release) = match mode {
+            "prepare" | "prepare-optional" => (true, false),
+            "release" => (false, true),
+            _ => (false, false),
+        };
+        let cap_line = match mode {
+            "none" => String::new(),
+            "ready" => {
+                "Ready through the shared capture driver — typing normally until Play.".to_owned()
+            }
+            "prepare-optional" => {
+                "Typing normally — the shared driver is ready; preparing the built-in path is \
+                 optional."
+                    .to_owned()
+            }
+            "prepare" => {
+                "Prepare for play — Windows stops this keyboard's ordinary typing until it is \
+                 released here."
+                    .to_owned()
+            }
+            "release" => {
+                "Prepared for play — this keyboard will not type until it is released here."
+                    .to_owned()
+            }
+            "held" => {
+                "Held by ksx but staged for the ordinary Windows path — release it from the \
+                 held-keyboards list on the Start screen."
+                    .to_owned()
+            }
+            _ => "This keyboard is not ready for capture right now.".to_owned(),
+        };
+        let capd_cls = match mode {
+            "none" => "n-capd none".to_owned(),
+            "prepare" | "prepare-optional" | "release" => "n-capd".to_owned(),
+            _ => "n-capd noact".to_owned(),
+        };
+        let cap_sw_cls = if mode == "release" {
+            "n-capsw on".to_owned()
+        } else {
+            "n-capsw".to_owned()
+        };
+
+        Self {
+            dev_count,
+            dev_note,
+            kb_title,
+            dev_rows,
+            dev_other,
+            mode_rows,
+            cap_line,
+            capd_cls,
+            cap_sw_cls,
+            cap_selector: cap.expected_selector.clone(),
+            cap_instance: cap.instance_id.clone(),
+            cap_prepare,
+            cap_release,
+        }
+    }
 }
 
 #[cfg(test)]

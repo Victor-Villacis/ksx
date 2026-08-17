@@ -8106,3 +8106,194 @@ a.wsrow-title:hover {
   cursor: pointer;
   font-family: inherit;
 }
+
+
+/* ── Migration pass 1: the REAL keyboard section ── */
+
+/* Device and behaviour rows are form-buttons now; strip button chrome so the
+   row classes keep painting them. */
+.n-devform,
+.n-modeform {
+  display: block;
+}
+
+.n-devform button,
+.n-modeform button {
+  width: 100%;
+  border: 1px solid transparent;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.n-devform button.n-dev {
+  display: flex;
+}
+
+.n-modeform button.n-radio {
+  display: flex;
+}
+
+.n-devnote {
+  margin: 6px 6px 0;
+  font-size: 10.5px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+/* The action flash under the title bar. */
+.n-flash {
+  padding: 7px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--n-panel-2);
+}
+
+.n-flash.ok {
+  color: var(--n-accent-2);
+}
+
+.n-flash.err {
+  color: #e79aa6;
+}
+
+.n-flash.none {
+  display: none;
+}
+
+/* Prepared-for-play: one line + switch by the keyboard, consents on demand. */
+.n-capd {
+  margin: 0 0 8px;
+}
+
+.n-capd.none {
+  display: none;
+}
+
+.n-capd.noact .n-capsum {
+  pointer-events: none;
+}
+
+.n-capd.noact .n-capsw {
+  display: none;
+}
+
+.n-capd.noact .n-capsum::after {
+  display: none;
+}
+
+.n-capdet {
+  position: relative;
+}
+
+.n-capsum {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+
+.n-capsum::-webkit-details-marker {
+  display: none;
+}
+
+.n-capsum::after {
+  content: "be";
+  color: var(--n-text-3);
+  font-size: 11px;
+}
+
+.n-capsum:hover {
+  background: rgba(233, 233, 237, 0.05);
+}
+
+.n-capsw {
+  width: 34px;
+  height: 19px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 2px;
+  border-radius: 11px;
+  background: #292b31;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+}
+
+.n-capsw.on {
+  background: var(--n-accent);
+  box-shadow: none;
+  justify-content: flex-end;
+}
+
+.n-capsw.on .nx-knob {
+  background: #161826;
+}
+
+.n-capline {
+  font-size: 11.5px;
+  color: var(--n-text-2);
+  text-wrap: pretty;
+}
+
+.n-capd:not(.noact) .n-capline {
+  color: var(--n-text);
+}
+
+.n-capbody {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: min(460px, 90vw);
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--n-panel-2);
+  box-shadow:
+    0 0 0 1px #595d6c,
+    0 16px 40px rgba(0, 0, 0, 0.65);
+  animation: noct-rise 0.14s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-capbody {
+    animation: none;
+  }
+}
+
+.n-capform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.n-capconsent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #cfd3e5;
+  text-wrap: pretty;
+  cursor: pointer;
+}
+
+.n-capconsent input {
+  margin-top: 2px;
+  accent-color: #968ae0;
+}
+
+.n-capnote {
+  font-size: 10.5px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+.n-caprow-act {
+  display: flex;
+  justify-content: flex-end;
+}

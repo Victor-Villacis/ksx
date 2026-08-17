@@ -1,4 +1,4 @@
-import { createShow, createSignal, h } from "@getforma/core";
+import { createList, createShow, createSignal, h } from "@getforma/core";
 
 // ── /nocturne — THE DESIGN PROOF ───────────────────────────────────────────
 //
@@ -36,6 +36,98 @@ import { createShow, createSignal, h } from "@getforma/core";
 // with `--n-*` properties carrying the prototype's exact palette — this
 // route proves the DESIGN as designed; the production workspace keeps the
 // KSX palette.
+
+// ── SERVED state (migration pass 1, 2026-08-17): the keyboard section ──────
+//
+// The left pane's device list, the split-or-freeze roster, the keyboard
+// header and the prepared-for-play control are REAL now: composed in
+// snapshot.rs (NocturneDerived), injected by render_nocturne.rs, seeded here
+// from the embedded payload before the tree builds (ledger #5), refreshed by
+// the 2 s poll. These signals are COPIERS, never derivers.
+
+export interface NocturneDeviceRowView {
+  cls: string;
+  name: string;
+  meta: string;
+  selector: string;
+  alias: string;
+  label: string;
+}
+
+export interface NocturneOtherRowView {
+  name: string;
+  meta: string;
+}
+
+export interface NocturneChoiceRowView {
+  name: string;
+  title: string;
+  detail: string;
+  cls: string;
+}
+
+export interface NocturneView {
+  dev_count: string;
+  dev_note: string;
+  kb_title: string;
+  dev_rows: NocturneDeviceRowView[];
+  dev_other: NocturneOtherRowView[];
+  mode_rows: NocturneChoiceRowView[];
+  cap_line: string;
+  capd_cls: string;
+  cap_sw_cls: string;
+  cap_selector: string;
+  cap_instance: string;
+  cap_prepare: boolean;
+  cap_release: boolean;
+}
+
+export interface NocturnePayload {
+  unavailable: string;
+  view: NocturneView;
+}
+
+const [nDevCount, setNDevCount] = createSignal("");
+const [nDevNote, setNDevNote] = createSignal("");
+const [nDevRows, setNDevRows] = createSignal<NocturneDeviceRowView[]>([]);
+const [nDevOther, setNDevOther] = createSignal<NocturneOtherRowView[]>([]);
+const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nCapLine, setNCapLine] = createSignal("");
+const [nCapdCls, setNCapdCls] = createSignal("n-capd none");
+const [nCapSwCls, setNCapSwCls] = createSignal("n-capsw");
+const [nCapSelector, setNCapSelector] = createSignal("");
+const [nCapInstance, setNCapInstance] = createSignal("");
+const [nCapPrep, setNCapPrep] = createSignal(false);
+const [nCapRel, setNCapRel] = createSignal(false);
+
+// The action flash. SSR-only: the server fills these from the allowlisted
+// query parameter; a poll is not an action and never touches them.
+const [nFlashLine] = createSignal("");
+const [nFlashCls] = createSignal("n-flash none");
+
+/** Copy one served payload into the signals. */
+export function applyNocturne(p: NocturnePayload): void {
+  const v = p.view;
+  setNDevCount(v.dev_count);
+  setNDevNote(v.dev_note);
+  setNKbTitle(v.kb_title);
+  setNDevRows(v.dev_rows);
+  setNDevOther(v.dev_other);
+  setNModeRows(v.mode_rows);
+  setNCapLine(v.cap_line);
+  setNCapdCls(v.capd_cls);
+  setNCapSwCls(v.cap_sw_cls);
+  setNCapSelector(v.cap_selector);
+  setNCapInstance(v.cap_instance);
+  setNCapPrep(v.cap_prepare);
+  setNCapRel(v.cap_release);
+}
+
+/** The poll could not reach the server: say so, change nothing else. */
+export function applyNocturneUnreachable(): void {
+  setNDevCount("unavailable");
+  setNDevNote("ksx could not be reached — this list may be stale. Reopen ksx.");
+}
 
 // ── UI state (increment 2): the expanded-row editor + capture-armed ────────
 //
@@ -80,13 +172,7 @@ const [nIdText, setNIdText] = createSignal("Press a key on the keyboard you want
 const [nSavedText, setNSavedText] = createSignal("Saved 2 days ago");
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
-const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
-const [nDev2Cls, setNDev2Cls] = createSignal("n-dev");
-const [nDev3Cls, setNDev3Cls] = createSignal("n-dev");
-const [nKbTitle, setNKbTitle] = createSignal("Corsair K70 RGB MK.2 · USB · 104 keys");
-const [nMode1Cls, setNMode1Cls] = createSignal("n-radio");
-const [nMode2Cls, setNMode2Cls] = createSignal("n-radio on");
-const [nMode3Cls, setNMode3Cls] = createSignal("n-radio");
+const [nKbTitle, setNKbTitle] = createSignal("");
 
 const ui: {
   sel: "left" | "up" | null;
@@ -98,12 +184,10 @@ const ui: {
   conflict: boolean;
   macro: boolean;
   live: boolean;
-  identify: "off" | "listening" | "resolved";
+  identify: boolean;
   saved: boolean;
   leftRail: boolean;
   rightRail: boolean;
-  dev: 1 | 2 | 3;
-  mode: "freeze" | "split" | "off";
 } = {
   sel: null,
   act: "hold",
@@ -114,12 +198,10 @@ const ui: {
   conflict: false,
   macro: false,
   live: false,
-  identify: "off",
+  identify: false,
   saved: false,
   leftRail: false,
   rightRail: false,
-  dev: 1,
-  mode: "split",
 };
 
 function applyNocturneUi(): void {
@@ -136,35 +218,12 @@ function applyNocturneUi(): void {
   setNStageCls(ui.live ? "n-stage live" : "n-stage");
   setNRtCls(ui.live ? "np-zone lit" : "np-zone");
   setNSlotMeta(ui.live ? "live · 16 bound · XInput 1/4" : "16 bound · XInput 1/4");
-  setNIdLinkCls(ui.identify === "listening" ? "n-link on" : "n-link");
-  setNIdBoxCls(
-    ui.identify === "listening"
-      ? "n-idbox listen"
-      : ui.identify === "resolved"
-        ? "n-idbox done"
-        : "n-idbox none",
-  );
-  setNIdText(
-    ui.identify === "resolved"
-      ? "Resolved to Corsair K70 RGB MK.2"
-      : "Press a key on the keyboard you want to use",
-  );
+  setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
+  setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
+  setNIdText("Press a key on the keyboard you want to use");
   setNSavedText(ui.saved ? "Saved just now" : "Saved 2 days ago");
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
-  setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
-  setNDev2Cls(ui.dev === 2 ? "n-dev on" : "n-dev");
-  setNDev3Cls(ui.dev === 3 ? "n-dev on" : "n-dev");
-  setNKbTitle(
-    ui.dev === 2
-      ? "Logitech G915 TKL · Wireless · 87 keys"
-      : ui.dev === 3
-        ? "Apple Magic Keyboard · Bluetooth · 78 keys"
-        : "Corsair K70 RGB MK.2 · USB · 104 keys",
-  );
-  setNMode1Cls(ui.mode === "freeze" ? "n-radio on" : "n-radio");
-  setNMode2Cls(ui.mode === "split" ? "n-radio on" : "n-radio");
-  setNMode3Cls(ui.mode === "off" ? "n-radio on" : "n-radio");
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
   setNWedgeLeftCls(ui.live || ui.sel === "left" ? "np-zone lit" : "np-zone");
@@ -239,12 +298,16 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
 /** Delegated clicks on the island root (the map.ts idiom): every interactive
  *  placeholder carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
-  // Identify-by-key resolves on the next physical keypress (shot 05); the
-  // listener lives on document because keyboard focus is wherever it is.
-  document.addEventListener("keydown", () => {
-    if (ui.identify !== "listening") return;
-    ui.identify = "resolved";
-    applyNocturneUi();
+  // Identify-by-key is a REAL verb now: the form posts and the server
+  // listens for one keypress (up to 11 s), then redirects with the outcome
+  // flash. The submit hook only shows the listening banner while the
+  // round-trip is in flight.
+  root.addEventListener("submit", (ev) => {
+    const form = ev.target as HTMLElement | null;
+    if (form && form.classList.contains("n-idform")) {
+      ui.identify = true;
+      applyNocturneUi();
+    }
   });
   root.addEventListener("input", (ev) => {
     const t = ev.target as HTMLElement | null;
@@ -301,13 +364,6 @@ export function nocturneWire(root: HTMLElement): void {
     }
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
-    else if (hit === "dev-1") ui.dev = 1;
-    else if (hit === "dev-2") ui.dev = 2;
-    else if (hit === "dev-3") ui.dev = 3;
-    else if (hit === "mode-freeze") ui.mode = "freeze";
-    else if (hit === "mode-split") ui.mode = "split";
-    else if (hit === "mode-off") ui.mode = "off";
-    else if (hit === "identify") ui.identify = ui.identify === "listening" ? "off" : "listening";
     else if (hit === "save") ui.saved = true;
     else if (hit === "filter-reset") {
       const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
@@ -591,6 +647,8 @@ export function NocturneIsland() {
       h("button", { type: "button", class: () => nPauseCls() }, "⏸ Pause & edit"),
       h("button", { type: "button", "data-nx": "stop", class: () => nStopCls() }, "⏹ Stop"),
     ),
+    // The action flash (SSR-only: filled from the allowlisted query).
+    h("div", { role: "status", class: () => nFlashCls() }, () => nFlashLine()),
     // ═══ Three panes ══════════════════════════════════════════════════════
     h(
       "main",
@@ -611,64 +669,70 @@ export function NocturneIsland() {
           "div",
           { class: "n-kick-row" },
           h("span", { class: "n-kick" }, "Keyboard"),
-          h("span", { class: "n-kick-n" }, "4 found"),
+          h("span", { class: "n-kick-n" }, () => nDevCount()),
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "‹"),
         ),
-        // Device rows (shot 03): the three online boards select; the offline
-        // Huntsman stays dimmed and inert, exactly as the prototype guards it.
-        h(
-          "div",
-          { "data-nx": "dev-1", class: () => nDev1Cls() },
-          h("span", { class: "n-dev-ico" }, "⌨"),
-          h(
-            "div",
-            { class: "n-dev-txt" },
-            h("div", { class: "n-dev-name" }, "K70 RGB MK.2"),
-            h("div", { class: "n-dev-meta" }, "USB · 104 keys"),
-          ),
-          h("span", { class: "n-dev-dot" }),
+        // Device rows — SERVED (migration pass 1): every row is the
+        // /nocturne/device form's button, carrying its served selector,
+        // alias, and label. Clicking a row IS "Use this device".
+        createList(
+          () => nDevRows(),
+          (r) => r.selector + "|" + r.cls + "|" + r.name + "|" + r.meta,
+          (r) =>
+            h(
+              "form",
+              { class: "n-devform", method: "post", action: "/nocturne/device" },
+              h("input", { type: "hidden", name: "selector", value: r.selector }),
+              h("input", { type: "hidden", name: "alias", value: r.alias }),
+              h("input", { type: "hidden", name: "label", value: r.label }),
+              h(
+                "button",
+                { type: "submit", class: r.cls },
+                h("span", { class: "n-dev-ico" }, "⌨"),
+                h(
+                  "div",
+                  { class: "n-dev-txt" },
+                  h("div", { class: "n-dev-name" }, r.name),
+                  h("div", { class: "n-dev-meta" }, r.meta),
+                ),
+                h("span", { class: "n-dev-dot" }),
+              ),
+            ),
         ),
-        h(
-          "div",
-          { "data-nx": "dev-2", class: () => nDev2Cls() },
-          h("span", { class: "n-dev-ico" }, "⌨"),
-          h(
-            "div",
-            { class: "n-dev-txt" },
-            h("div", { class: "n-dev-name" }, "G915 TKL"),
-            h("div", { class: "n-dev-meta" }, "Wireless · 87 keys"),
-          ),
-          h("span", { class: "n-dev-dot" }),
+        // Boards that cannot be picked, and why — visible, never hidden.
+        createList(
+          () => nDevOther(),
+          (r) => r.name + "|" + r.meta,
+          (r) =>
+            h(
+              "div",
+              { class: "n-dev off" },
+              h("span", { class: "n-dev-ico" }, "⌨"),
+              h(
+                "div",
+                { class: "n-dev-txt" },
+                h("div", { class: "n-dev-name" }, r.name),
+                h("div", { class: "n-dev-meta" }, r.meta),
+              ),
+              h("span", { class: "n-dev-dot" }),
+            ),
         ),
-        h(
-          "div",
-          { "data-nx": "dev-3", class: () => nDev3Cls() },
-          h("span", { class: "n-dev-ico" }, "⌨"),
-          h(
-            "div",
-            { class: "n-dev-txt" },
-            h("div", { class: "n-dev-name" }, "Magic Keyboard"),
-            h("div", { class: "n-dev-meta" }, "Bluetooth · 78 keys"),
-          ),
-          h("span", { class: "n-dev-dot" }),
-        ),
-        h(
-          "div",
-          { class: "n-dev off" },
-          h("span", { class: "n-dev-ico" }, "⌨"),
-          h(
-            "div",
-            { class: "n-dev-txt" },
-            h("div", { class: "n-dev-name" }, "Huntsman Mini"),
-            h("div", { class: "n-dev-meta" }, "Offline · last seen 3 days ago"),
-          ),
-          h("span", { class: "n-dev-dot" }),
-        ),
+        h("p", { class: "n-devnote" }, () => nDevNote()),
         h(
           "div",
           { class: "n-linkrow" },
-          h("button", { class: "n-link", type: "button" }, "Rescan"),
-          h("button", { type: "button", "data-nx": "identify", class: () => nIdLinkCls() }, "Identify by key"),
+          // Rescan is a fresh GET: the collector re-reads the machine on
+          // every request, so reloading IS the scan (FIRST-RUN §5).
+          h(
+            "form",
+            { method: "get", action: "/nocturne" },
+            h("button", { class: "n-link", type: "submit" }, "Rescan"),
+          ),
+          h(
+            "form",
+            { class: "n-idform", method: "post", action: "/nocturne/device/identify" },
+            h("button", { type: "submit", class: () => nIdLinkCls() }, "Identify by key"),
+          ),
         ),
         // Identify states (shots 04/05): the pulsing listen card, then the
         // plain accent resolved line the next keypress produces.
@@ -679,51 +743,28 @@ export function NocturneIsland() {
           h("span", { class: "n-idtxt" }, () => nIdText()),
         ),
         h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "Keyboard behaviour")),
-        // Behaviour radios (shot 06): selection moves the dot and the wash.
-        h(
-          "div",
-          { "data-nx": "mode-freeze", class: () => nMode1Cls() },
-          h("span", { class: "n-radio-dot" }),
-          h(
-            "div",
-            { class: "n-radio-txt" },
-            h("div", { class: "n-radio-title" }, "Whole keyboard — Freeze"),
+        // The split-or-freeze answer — SERVED: BlockingOption::roster's own
+        // words, the staged answer marked, each row a /nocturne/blocking form.
+        createList(
+          () => nModeRows(),
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) =>
             h(
-              "div",
-              { class: "n-radio-detail" },
-              "This keyboard is devoted to play. All input captured; typing suppressed.",
+              "form",
+              { class: "n-modeform", method: "post", action: "/nocturne/blocking" },
+              h("input", { type: "hidden", name: "blocking", value: r.name }),
+              h(
+                "button",
+                { type: "submit", class: r.cls },
+                h("span", { class: "n-radio-dot" }),
+                h(
+                  "div",
+                  { class: "n-radio-txt" },
+                  h("div", { class: "n-radio-title" }, r.title),
+                  h("div", { class: "n-radio-detail" }, r.detail),
+                ),
+              ),
             ),
-          ),
-        ),
-        h(
-          "div",
-          { "data-nx": "mode-split", class: () => nMode2Cls() },
-          h("span", { class: "n-radio-dot" }),
-          h(
-            "div",
-            { class: "n-radio-txt" },
-            h("div", { class: "n-radio-title" }, "Bound keys only — Split"),
-            h(
-              "div",
-              { class: "n-radio-detail" },
-              "Mapped keys drive the pad; every other key keeps typing normally.",
-            ),
-          ),
-        ),
-        h(
-          "div",
-          { "data-nx": "mode-off", class: () => nMode3Cls() },
-          h("span", { class: "n-radio-dot" }),
-          h(
-            "div",
-            { class: "n-radio-txt" },
-            h("div", { class: "n-radio-title" }, "Capture off"),
-            h(
-              "div",
-              { class: "n-radio-detail" },
-              "Keyboard behaves normally; mapped keys also drive the pad.",
-            ),
-          ),
         ),
         h(
           "div",
@@ -849,6 +890,111 @@ export function NocturneIsland() {
           h("span", { class: "n-kick" }, () => nKbTitle()),
           h("div", { class: "n-spring" }),
           h("span", { class: "n-meta-hint" }, () => nKbHint()),
+        ),
+        // ── Prepared-for-play (migrated from /start's capture card) ────────
+        //
+        // The whole ceremony folds into one line + switch beside the board it
+        // is about. The switch does not mutate anything by itself: opening it
+        // reveals the SAME consent form the old card carried — three
+        // checkboxes to prepare, one to release, every sentence verbatim,
+        // server-validated — because taking a keyboard off the Windows stack
+        // and installing a certificate stays a consented act, however small
+        // the control that starts it. `details` keeps the fold native, so the
+        // form exists in SSR and works without JavaScript.
+        h(
+          "div",
+          { class: () => nCapdCls() },
+          h(
+            "details",
+            { class: "n-capdet" },
+            h(
+              "summary",
+              { class: "n-capsum" },
+              h("span", { class: () => nCapSwCls() }, h("span", { class: "nx-knob" })),
+              h("span", { class: "n-capline" }, () => nCapLine()),
+            ),
+            h(
+              "div",
+              { class: "n-capbody" },
+              createShow(
+                () => nCapPrep(),
+                () =>
+                  h(
+                    "form",
+                    { class: "n-capform", method: "post", action: "/nocturne/capture/prepare" },
+                    h("input", { type: "hidden", name: "expected_selector", value: () => nCapSelector() }),
+                    h("input", { type: "hidden", name: "instance_id", value: () => nCapInstance() }),
+                    h(
+                      "p",
+                      { class: "n-capnote" },
+                      "Windows prepares only the keyboard you selected. It stops ordinary typing until you release it here.",
+                    ),
+                    h(
+                      "label",
+                      { class: "n-capconsent" },
+                      h("input", { type: "checkbox", name: "confirm_spare_keyboard", value: "yes", required: "" }),
+                      h("span", null, "I connected and tested a different keyboard that can still type."),
+                    ),
+                    h(
+                      "label",
+                      { class: "n-capconsent" },
+                      h("input", { type: "checkbox", name: "confirm_rebind", value: "yes", required: "" }),
+                      h(
+                        "span",
+                        null,
+                        "I understand this selected keyboard will stop ordinary typing until I release it here, and I will release it before connecting another identical keyboard.",
+                      ),
+                    ),
+                    h(
+                      "label",
+                      { class: "n-capconsent" },
+                      h("input", { type: "checkbox", name: "confirm_machine_certificate", value: "yes", required: "" }),
+                      h(
+                        "span",
+                        null,
+                        "I allow ksx to install a machine-local signing certificate for this computer's generated device package.",
+                      ),
+                    ),
+                    h(
+                      "div",
+                      { class: "n-caprow-act" },
+                      h("button", { class: "nd-btn primary", type: "submit" }, "Prepare selected keyboard"),
+                    ),
+                    h(
+                      "p",
+                      { class: "n-capnote" },
+                      "Windows will show a permission prompt. The app stays open and does not show a command window.",
+                    ),
+                  ),
+              ),
+              createShow(
+                () => nCapRel(),
+                () =>
+                  h(
+                    "form",
+                    { class: "n-capform", method: "post", action: "/nocturne/capture/release" },
+                    h("input", { type: "hidden", name: "expected_selector", value: () => nCapSelector() }),
+                    h("input", { type: "hidden", name: "instance_id", value: () => nCapInstance() }),
+                    h(
+                      "p",
+                      { class: "n-capnote" },
+                      "Release removes the Windows package and returns this keyboard to ordinary typing. Your unsaved choices stay on this screen.",
+                    ),
+                    h(
+                      "label",
+                      { class: "n-capconsent" },
+                      h("input", { type: "checkbox", name: "confirm_release", value: "yes", required: "" }),
+                      h("span", null, "I want to return this selected keyboard to ordinary typing."),
+                    ),
+                    h(
+                      "div",
+                      { class: "n-caprow-act" },
+                      h("button", { class: "nd-btn primary", type: "submit" }, "Release selected keyboard"),
+                    ),
+                  ),
+              ),
+            ),
+          ),
         ),
         h(
           "div",

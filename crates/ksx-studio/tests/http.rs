@@ -5335,8 +5335,10 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
         "/start/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
+    // MIGRATED (2026-08-17): the keyboard verbs answer on /nocturne now —
+    // the old form still works, but the outcome lands on the new page.
     assert!(
-        refused.contains("location: /start?flash=error"),
+        refused.contains("location: /nocturne?flash=error"),
         "{refused}"
     );
     for raw in ["daemon", "pipe", "control%20channel", "%60ksx"] {

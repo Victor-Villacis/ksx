@@ -3827,7 +3827,17 @@ pub struct NocturneDerived {
     /// The keyboard header over the key grid: the STAGED selection's identity.
     pub kb_title: String,
     pub dev_rows: Vec<NocturneDeviceRow>,
+    /// Pickable HID devices that do NOT identify themselves as keyboards —
+    /// the explicit experimentation playground, never mixed into the
+    /// ordinary keyboard list (the same split `/start` draws).
+    pub dev_exp: Vec<NocturneDeviceRow>,
     pub dev_other: Vec<NocturneOtherRow>,
+    /// The two folds' headers ("… · N") and visibility classes; empty tiers
+    /// hide their fold entirely.
+    pub exp_head: String,
+    pub exp_fold_cls: String,
+    pub other_head: String,
+    pub other_fold_cls: String,
     pub mode_rows: Vec<NocturneChoiceRow>,
     /// Why the behaviour section has nothing to offer, when it does not —
     /// an empty roster with no sentence is a silent hole, not a state.
@@ -3877,39 +3887,63 @@ impl NocturneDerived {
         let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
 
         let mut dev_rows = Vec::new();
+        let mut dev_exp = Vec::new();
         let mut dev_other = Vec::new();
         if scan_read {
             for b in &p.scan.boards {
-                match b.selector.clone() {
-                    Some(selector) => {
-                        let is_chosen = chosen == Some(selector.as_str());
-                        let verdict = if b.claimed {
-                            "Held by ksx"
-                        } else if b.cannot_type_line.trim().is_empty() {
-                            "Ready to use"
-                        } else {
-                            "Cannot type right now"
-                        };
-                        dev_rows.push(NocturneDeviceRow {
-                            cls: if is_chosen {
-                                "n-dev on".to_owned()
-                            } else {
-                                "n-dev".to_owned()
-                            },
-                            name: b.name.clone(),
-                            meta: format!("{} · {}", b.transport_label, verdict),
-                            selector,
-                            alias: b.alias_hint.clone(),
-                            label: b.name.clone(),
-                        });
-                    }
-                    None => dev_other.push(NocturneOtherRow {
+                if !b.pickable {
+                    dev_other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: format!("{} · {}", b.transport_label, b.backends),
+                    });
+                    continue;
+                }
+                let Some(selector) = b.selector.clone() else {
+                    dev_other.push(NocturneOtherRow {
                         name: b.name.clone(),
                         meta: b.backends.clone(),
-                    }),
+                    });
+                    continue;
+                };
+                let is_chosen = chosen == Some(selector.as_str());
+                let verdict = if b.claimed {
+                    "Held by ksx"
+                } else if b.cannot_type_line.trim().is_empty() {
+                    "Ready to use"
+                } else {
+                    "Cannot type right now"
+                };
+                let row = NocturneDeviceRow {
+                    cls: if is_chosen {
+                        "n-dev on".to_owned()
+                    } else {
+                        "n-dev".to_owned()
+                    },
+                    name: b.name.clone(),
+                    meta: format!("{} · {}", b.transport_label, verdict),
+                    selector,
+                    alias: b.alias_hint.clone(),
+                    label: b.name.clone(),
+                };
+                if b.looks_like_a_keyboard {
+                    dev_rows.push(row);
+                } else {
+                    dev_exp.push(row);
                 }
             }
         }
+        let exp_head = format!("Not keyboards — experimental · {}", dev_exp.len());
+        let exp_fold_cls = if dev_exp.is_empty() {
+            "n-devfold none".to_owned()
+        } else {
+            "n-devfold".to_owned()
+        };
+        let other_head = format!("Unavailable devices · {}", dev_other.len());
+        let other_fold_cls = if dev_other.is_empty() {
+            "n-devfold none".to_owned()
+        } else {
+            "n-devfold".to_owned()
+        };
 
         let dev_count = if scan_read {
             format!("{} found", dev_rows.len())
@@ -4201,7 +4235,12 @@ impl NocturneDerived {
             dev_note,
             kb_title,
             dev_rows,
+            dev_exp,
             dev_other,
+            exp_head,
+            exp_fold_cls,
+            other_head,
+            other_fold_cls,
             mode_rows,
             mode_note,
             cap_line,

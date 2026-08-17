@@ -517,6 +517,8 @@ fn main() {
                         interception_eligible: true,
                         winusb_eligible: true,
                         can_type: true,
+                        pickable: true,
+                        looks_like_a_keyboard: true,
                         ..Default::default()
                     },
                     ksx_api::BoardRow {
@@ -533,6 +535,27 @@ fn main() {
                         interception_eligible: true,
                         winusb_eligible: false,
                         can_type: true,
+                        pickable: true,
+                        looks_like_a_keyboard: true,
+                        ..Default::default()
+                    },
+                    // The experimentation tier: pickable HID, NOT a keyboard.
+                    ksx_api::BoardRow {
+                        name: "AURA LED Controller".into(),
+                        transport_label: "USB".into(),
+                        backends: "Shared capture driver only".into(),
+                        selector: Some("usb:0b05:1939:00".into()),
+                        alias_hint: "aura".into(),
+                        keyboard: Some("HID\\VID_0B05&PID_1939\\FIXTURE".into()),
+                        interfaces: vec![ksx_api::UsbRow {
+                            instance_id: "HID\\VID_0B05&PID_1939\\FIXTURE".into(),
+                            ..Default::default()
+                        }],
+                        interception_eligible: true,
+                        winusb_eligible: false,
+                        can_type: false,
+                        pickable: true,
+                        looks_like_a_keyboard: false,
                         ..Default::default()
                     },
                     ksx_api::BoardRow {

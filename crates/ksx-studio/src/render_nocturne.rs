@@ -25,6 +25,7 @@ use crate::snapshot::{
 const SHOW_COUNT: usize = 2;
 
 const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
+const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
 const LIST_SLOT_RACK: &str = "list:nRackRows:array";
@@ -43,6 +44,10 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nDevNote": payload.view.dev_note,
         "nKbTitle": payload.view.kb_title,
         "nModeNote": payload.view.mode_note,
+        "nExpHead": payload.view.exp_head,
+        "nExpFoldCls": payload.view.exp_fold_cls,
+        "nOtherHead": payload.view.other_head,
+        "nOtherFoldCls": payload.view.other_fold_cls,
         "nCapLine": payload.view.cap_line,
         "nCapdCls": payload.view.capd_cls,
         "nCapSwCls": payload.view.cap_sw_cls,
@@ -155,7 +160,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 9] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 10] {
     let view = &payload.view;
     [
         (
@@ -185,6 +190,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 9] {
         (
             LIST_SLOT_DEVICES,
             SlotValue::array(view.dev_rows.iter().map(device_row).collect()),
+        ),
+        (
+            LIST_SLOT_EXP,
+            SlotValue::array(view.dev_exp.iter().map(device_row).collect()),
         ),
         (
             LIST_SLOT_OTHER,
@@ -285,6 +294,8 @@ mod tests {
                     interception_eligible: true,
                     winusb_eligible: true,
                     can_type: true,
+                    pickable: true,
+                    looks_like_a_keyboard: true,
                     interfaces: vec![ksx_api::UsbRow {
                         instance_id: "HID\\VID_D209&PID_0430\\1".to_owned(),
                         ..Default::default()
@@ -327,8 +338,9 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 9] = [
+        const SERVED_LIST_PREFIXES: [&str; 10] = [
             "list:nDevRows:",
+            "list:nDevExp:",
             "list:nDevOther:",
             "list:nModeRows:",
             "list:nRackRows:",
@@ -338,9 +350,13 @@ mod tests {
             "list:nSocdOpts:",
             "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 27] = [
+        const SERVED_SLOTS: [&str; 31] = [
             "nDevCount",
             "nModeNote",
+            "nExpHead",
+            "nExpFoldCls",
+            "nOtherHead",
+            "nOtherFoldCls",
             "nVersion",
             "nChipText",
             "nSaveText",
@@ -412,6 +428,7 @@ mod tests {
         }
         for name in [
             LIST_SLOT_DEVICES,
+            LIST_SLOT_EXP,
             LIST_SLOT_OTHER,
             LIST_SLOT_MODES,
             LIST_SLOT_RACK,

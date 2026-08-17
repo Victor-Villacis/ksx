@@ -84,7 +84,12 @@ export interface NocturneView {
   kb_title: string;
   mode_note: string;
   dev_rows: NocturneDeviceRowView[];
+  dev_exp: NocturneDeviceRowView[];
   dev_other: NocturneOtherRowView[];
+  exp_head: string;
+  exp_fold_cls: string;
+  other_head: string;
+  other_fold_cls: string;
   mode_rows: NocturneChoiceRowView[];
   cap_line: string;
   capd_cls: string;
@@ -126,7 +131,12 @@ const [nDevCount, setNDevCount] = createSignal("");
 const [nModeNote, setNModeNote] = createSignal("");
 const [nDevNote, setNDevNote] = createSignal("");
 const [nDevRows, setNDevRows] = createSignal<NocturneDeviceRowView[]>([]);
+const [nDevExp, setNDevExp] = createSignal<NocturneDeviceRowView[]>([]);
 const [nDevOther, setNDevOther] = createSignal<NocturneOtherRowView[]>([]);
+const [nExpHead, setNExpHead] = createSignal("");
+const [nExpFoldCls, setNExpFoldCls] = createSignal("n-devfold none");
+const [nOtherHead, setNOtherHead] = createSignal("");
+const [nOtherFoldCls, setNOtherFoldCls] = createSignal("n-devfold none");
 const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nKbTitle, setNKbTitle] = createSignal("");
 const [nCapLine, setNCapLine] = createSignal("");
@@ -171,7 +181,12 @@ export function applyNocturne(p: NocturnePayload): void {
   setNDevNote(v.dev_note);
   setNKbTitle(v.kb_title);
   setNDevRows(v.dev_rows);
+  setNDevExp(v.dev_exp);
   setNDevOther(v.dev_other);
+  setNExpHead(v.exp_head);
+  setNExpFoldCls(v.exp_fold_cls);
+  setNOtherHead(v.other_head);
+  setNOtherFoldCls(v.other_fold_cls);
   setNModeRows(v.mode_rows);
   setNCapLine(v.cap_line);
   setNCapdCls(v.capd_cls);
@@ -502,23 +517,69 @@ export function NocturneIsland() {
               ),
             ),
         ),
-        // Boards that cannot be picked, and why — visible, never hidden.
-        createList(
-          () => nDevOther(),
-          (r) => r.name + "|" + r.meta,
-          (r) =>
-            h(
-              "div",
-              { class: "n-dev off" },
-              h("span", { class: "n-dev-ico" }, "⌨"),
+        // The experimentation playground and the unavailable tier live in
+        // FOLDS: honest, complete, and out of the way — the long scroll of
+        // hubs and transports is one click, not the default view.
+        h(
+          "details",
+          { class: () => nExpFoldCls() },
+          h("summary", { class: "n-devfold-sum" }, () => nExpHead()),
+          h(
+            "p",
+            { class: "n-devnote" },
+            "These devices can sometimes work, but they do not identify themselves as keyboards. They are here for unusual controllers and experimentation; choose one only when you recognize it.",
+          ),
+          createList(
+            () => nDevExp(),
+            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
+            (r) =>
+              h(
+                "form",
+                { class: "n-devform", method: "post", action: "/nocturne/device" },
+                h("input", { type: "hidden", name: "selector", value: r.selector }),
+                h("input", { type: "hidden", name: "alias", value: r.alias }),
+                h("input", { type: "hidden", name: "label", value: r.label }),
+                h(
+                  "button",
+                  { type: "submit", class: r.cls },
+                  h("span", { class: "n-dev-ico" }, "⚙"),
+                  h(
+                    "span",
+                    { class: "n-dev-txt" },
+                    h("span", { class: "n-dev-name" }, r.name),
+                    h("span", { class: "n-dev-meta" }, r.meta),
+                  ),
+                  h("span", { class: "n-dev-dot" }),
+                ),
+              ),
+          ),
+        ),
+        h(
+          "details",
+          { class: () => nOtherFoldCls() },
+          h("summary", { class: "n-devfold-sum" }, () => nOtherHead()),
+          h(
+            "p",
+            { class: "n-devnote" },
+            "Boards with no keyboard interface, listed so \"why is my device not here\" has an answer.",
+          ),
+          createList(
+            () => nDevOther(),
+            (r) => r.name + "|" + r.meta,
+            (r) =>
               h(
                 "div",
-                { class: "n-dev-txt" },
-                h("div", { class: "n-dev-name" }, r.name),
-                h("div", { class: "n-dev-meta" }, r.meta),
+                { class: "n-dev off" },
+                h("span", { class: "n-dev-ico" }, "⌨"),
+                h(
+                  "div",
+                  { class: "n-dev-txt" },
+                  h("div", { class: "n-dev-name" }, r.name),
+                  h("div", { class: "n-dev-meta" }, r.meta),
+                ),
+                h("span", { class: "n-dev-dot" }),
               ),
-              h("span", { class: "n-dev-dot" }),
-            ),
+          ),
         ),
         h("p", { class: "n-devnote" }, () => nDevNote()),
         h(

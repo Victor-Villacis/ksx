@@ -1,16 +1,16 @@
 import { createList, createShow, createSignal, h } from "@getforma/core";
+import { fetchJSON } from "@getforma/core/http";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
-// Migration state (2026-08-17, pass 2): the KEYBOARD pane, the CONTROLLER
-// RACK, the BINDING LIST, the stage's meta bar and the SESSION verbs are
-// REAL — served by render_nocturne.rs off the live machine scan, the
-// daemon-held draft and the session, and mutated only through real verbs.
-// No invented values remain on the page: what cannot be real yet is either
-// absent or says so in a served sentence. Still to migrate: the learn-driven
-// rebind editor (rows are read-only + Clear until then), the configuration
-// menu's contents, the keyboard diagram's per-key mapping, and the live
-// input echo.
+// Migration state (2026-08-17, pass 5): the KEYBOARD pane, the CONTROLLER
+// RACK, the BINDING LIST with its LEARN-DRIVEN REBIND EDITOR, the dressed
+// keyboard diagram, the stage's meta bar and the SESSION verbs are REAL —
+// served by render_nocturne.rs off the live machine scan, the daemon-held
+// draft and the session, and mutated only through real verbs. No invented
+// values remain on the page: what cannot be real yet is either absent or
+// says so in a served sentence. Still to migrate: the configuration menu's
+// contents and the live input echo.
 //
 // The compiler contracts this file obeys (earned the hard way; see the
 // FORMA-DOGFOOD additions): `...CONST.map(…)` unrolls only FLAT module-level
@@ -83,6 +83,9 @@ export interface NocturneBindRowView {
   chip_cls: string;
   clear_cls: string;
   slot: string;
+  turbo: string;
+  hold_cls: string;
+  tog_cls: string;
 }
 
 export interface NocturneView {
@@ -308,6 +311,354 @@ function applyNocturneUi(): void {
   setNIdText("Press a key on the keyboard you want to use");
 }
 
+// ── The learn flow (ported from map.ts, single-target) ─────────────────────
+// click Rebind/Add → POST /api/learn/start → poll GET /api/learn every 33 ms
+// until hit / timeout / cancelled → on hit POST /nocturne/api/bind (conflict
+// → the consequence dialog re-POSTs with force) → flash the outcome → the 2 s
+// poll repaints the rows from the staged truth.
+//
+// The fail-closed handshake is kept verbatim in spirit: the browser keeps its
+// own generation (late HTTP completions check it) AND the daemon's exact
+// learner generation (another tab, Identify, or a setup proof can supersede
+// the listener; no key is ever written unless the polled result still belongs
+// to this exact attempt).
+
+interface NocturneLearnView {
+  ok: boolean;
+  state: string;
+  generation: number | null;
+  remaining_ms: number | null;
+  device: string | null;
+  key: string | null;
+  error: string | null;
+}
+
+interface NocturneBindOutcome {
+  ok: boolean;
+  message: string | null;
+  error: string | null;
+  code: string | null;
+  conflicts: { scope: string; preset: string; function: string; slot: number | null }[];
+  also_drives: string[];
+}
+
+interface LearnTarget {
+  fn: string;
+  label: string;
+  slot: string;
+  mode: "replace" | "add";
+}
+
+/** PadForge's recorder tick — snappy but far under the daemon's own rate. */
+const LEARN_POLL_MS = 33;
+
+const [nLearnCls, setNLearnCls] = createSignal("n-learnbar none");
+const [nLearnText, setNLearnText] = createSignal("");
+const [nLearnSub, setNLearnSub] = createSignal("");
+const [nConfOpen, setNConfOpen] = createSignal(false);
+const [nConfTitle, setNConfTitle] = createSignal("");
+const [nConfLines, setNConfLines] = createSignal("");
+
+let learnRow: LearnTarget | null = null;
+/** Browser-request supersede guard: every arm bumps it; late completions
+ *  compare. Deliberately separate from the daemon generation below. */
+let learnGen = 0;
+/** Exact daemon learner generation returned by `learn-key`. */
+let daemonGen: number | null = null;
+let learnTimer: number | undefined;
+/** At most one daemon `learn-key` start in flight (clicks can cross). */
+let learnStartFlight: Promise<NocturneLearnView> | null = null;
+let learnRoot: HTMLElement | null = null;
+/** The hit waiting on the conflict dialog's verdict. */
+let pendingConflict: { row: LearnTarget; key: string } | null = null;
+
+/** The page poller, installed by the entry so a successful JSON bind
+ *  repaints the rows immediately instead of waiting out the 2 s tick. */
+let nocturnePollFn: () => void = () => {};
+
+export function setNocturnePoll(fn: () => void): void {
+  nocturnePollFn = fn;
+}
+
+function learnSentence(mode: "replace" | "add"): string {
+  return mode === "add"
+    ? "The key joins this control's list — any one of them presses it."
+    : "The key replaces this control's binding.";
+}
+
+function validGen(value: number | null): value is number {
+  return value !== null && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Best-effort daemon cleanup. The daemon compares generations atomically,
+ *  so either request order is safe when a start and a cancel cross. */
+async function cancelDaemonGen(generation: number): Promise<void> {
+  try {
+    await fetch("/api/learn/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ generation }),
+    });
+  } catch {
+    // A lost cleanup expires at the daemon's bounded learner timeout.
+  }
+}
+
+function stopLearnTimer(): void {
+  if (learnTimer !== undefined) {
+    window.clearInterval(learnTimer);
+    learnTimer = undefined;
+  }
+}
+
+/** While armed the panel's keys reach Windows and therefore this page; a
+ *  letter would type into anything focusable and Space would "click" the
+ *  button that armed the learn. Swallow everything at the capture phase —
+ *  except Escape, which cancels. */
+function guardLearnKeys(ev: KeyboardEvent): void {
+  if (!learnRow) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (ev.key === "Escape") void cancelLearn();
+}
+
+function armFocusGuard(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) active.blur();
+  window.addEventListener("keydown", guardLearnKeys, true);
+  window.addEventListener("keypress", guardLearnKeys, true);
+}
+
+function disarmFocusGuard(): void {
+  window.removeEventListener("keydown", guardLearnKeys, true);
+  window.removeEventListener("keypress", guardLearnKeys, true);
+}
+
+function markArmedRow(fnName: string | null): void {
+  if (!learnRoot) return;
+  for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm"))) {
+    el.classList.remove("arm");
+  }
+  if (fnName !== null) {
+    learnRoot
+      .querySelector<HTMLElement>(`.n-bind[data-fn="${CSS.escape(fnName)}"]`)
+      ?.classList.add("arm");
+  }
+}
+
+function armLearnUi(row: LearnTarget): void {
+  setNLearnCls("n-learnbar listen");
+  setNLearnText(`Press the panel key for P${row.slot} · ${row.label}`);
+  setNLearnSub(`${learnSentence(row.mode)} Esc cancels.`);
+  markArmedRow(row.fn);
+}
+
+function disarmLearnUi(): void {
+  setNLearnCls("n-learnbar none");
+  markArmedRow(null);
+}
+
+/** Retire the current browser attempt in one place. */
+function retireLearn(): void {
+  stopLearnTimer();
+  learnGen += 1;
+  learnRow = null;
+  daemonGen = null;
+  disarmFocusGuard();
+  disarmLearnUi();
+}
+
+async function startLearn(row: LearnTarget): Promise<void> {
+  // PadForge convention: clicking the control being recorded cancels it.
+  if (learnRow && learnRow.fn === row.fn && learnRow.mode === row.mode) {
+    await cancelLearn();
+    return;
+  }
+  // Retire the previous attempt BEFORE installing the new target, so a timer
+  // poll can never snapshot the new target with the old daemon generation.
+  const previousDaemonGen = daemonGen;
+  const gen = ++learnGen;
+  stopLearnTimer();
+  learnRow = null;
+  daemonGen = null;
+  disarmFocusGuard();
+  if (previousDaemonGen !== null) void cancelDaemonGen(previousDaemonGen);
+  learnRow = row;
+  pendingConflict = null;
+  setNConfOpen(false);
+  armFocusGuard();
+  armLearnUi(row);
+  try {
+    // A previous start may still be travelling to the sequential pipe: wait
+    // for and retire its exact daemon generation before sending ours.
+    const prior = learnStartFlight;
+    if (prior !== null) {
+      try {
+        const superseded = await prior;
+        if (validGen(superseded.generation)) void cancelDaemonGen(superseded.generation);
+      } catch {
+        // The prior owner reports its own transport failure.
+      }
+      if (learnGen !== gen) return;
+    }
+    const flight = fetchJSON<NocturneLearnView>("/api/learn/start", { method: "POST" });
+    learnStartFlight = flight;
+    let started: NocturneLearnView;
+    try {
+      started = await flight;
+    } finally {
+      if (learnStartFlight === flight) learnStartFlight = null;
+    }
+    if (learnGen !== gen) {
+      // Reached the daemon but superseded here: retire only its generation.
+      if (validGen(started.generation)) void cancelDaemonGen(started.generation);
+      return;
+    }
+    if (
+      !validGen(started.generation) ||
+      (started.state !== "listening" && started.state !== "hit")
+    ) {
+      retireLearn();
+      applyFlash(
+        "error: Can't listen for a key right now — if a session is running, stop it first. Nothing changed.",
+      );
+      return;
+    }
+    daemonGen = started.generation;
+    stopLearnTimer();
+    learnTimer = window.setInterval(() => void pollLearn(), LEARN_POLL_MS);
+    // A fast press can land before the start response reaches the browser.
+    if (started.state === "hit") void pollLearn();
+  } catch {
+    if (learnGen !== gen) return;
+    retireLearn();
+    applyFlash("error: Can't listen for a key — is ksx studio still running?");
+  }
+}
+
+async function pollLearn(): Promise<void> {
+  const row = learnRow;
+  const gen = learnGen;
+  const expected = daemonGen;
+  if (!row) {
+    stopLearnTimer();
+    return;
+  }
+  let learn: NocturneLearnView;
+  try {
+    learn = await fetchJSON<NocturneLearnView>("/api/learn");
+  } catch {
+    return; // transient — keep listening on the last known state
+  }
+  if (learnGen !== gen) return; // superseded meanwhile
+  if (expected === null || !validGen(learn.generation) || learn.generation !== expected) {
+    // A different action owns the daemon listener now. Fail closed: never
+    // bind its hit into this attempt, never cancel the newer listener.
+    retireLearn();
+    applyFlash("error: Another key-listening action replaced this one. Nothing changed.");
+    return;
+  }
+  switch (learn.state) {
+    case "listening": {
+      const secs = Math.max(0, Math.ceil((learn.remaining_ms ?? 0) / 1000));
+      setNLearnSub(`${learnSentence(row.mode)} ${secs}s left · Esc cancels.`);
+      break;
+    }
+    case "hit":
+      // Retire before the asynchronous write: the 33 ms timer and the
+      // fast-hit poll may overlap, and only the first terminal response may
+      // reach the bind verb.
+      retireLearn();
+      if (learn.key) void writeLearnedKey(row, learn.key, false);
+      break;
+    case "timeout":
+      retireLearn();
+      applyFlash(
+        `error: Timed out — no key was pressed in time for ${row.label}. Nothing changed.`,
+      );
+      break;
+    case "cancelled":
+      retireLearn();
+      break;
+    default:
+      // failed / unavailable / idle-after-restart: report and stop.
+      retireLearn();
+      applyFlash("error: Key listening stopped. Nothing changed.");
+      break;
+  }
+}
+
+async function cancelLearn(): Promise<void> {
+  const generation = daemonGen;
+  retireLearn();
+  pendingConflict = null;
+  setNConfOpen(false);
+  // Generation-qualified end to end: a stale attempt cannot stop a listener
+  // that superseded it in the daemon.
+  if (generation === null) return;
+  await cancelDaemonGen(generation);
+}
+
+/** One learned key onto one staged control, through the server-resolved bind
+ *  verb. The server reads the slot's preset identity and current key list
+ *  itself; this browser is never trusted with a key list it made up. */
+async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): Promise<void> {
+  let outcome: NocturneBindOutcome;
+  try {
+    outcome = await fetchJSON<NocturneBindOutcome>("/nocturne/api/bind", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: Number(row.slot),
+        function: row.fn,
+        key,
+        mode: row.mode,
+        force,
+      }),
+    });
+  } catch {
+    applyFlash("error: The bind request failed — is ksx studio still running?");
+    return;
+  }
+  if (outcome.ok) {
+    pendingConflict = null;
+    setNConfOpen(false);
+    let line =
+      row.mode === "add"
+        ? `${key} added to ${row.label} — any of its keys presses it.`
+        : `${row.label} is now ${key}.`;
+    if (outcome.also_drives.length > 0) {
+      line += ` That key also drives ${outcome.also_drives.join(" · ")}.`;
+    }
+    applyFlash(line);
+    nocturnePollFn();
+  } else if (outcome.code === "conflict" && outcome.conflicts.length > 0) {
+    // Cross-slot (or a second macro trigger): fan-out is the product, but it
+    // is asked about, never assumed. "Use here too" takes nothing away.
+    pendingConflict = { row, key };
+    const lines = outcome.conflicts.map((c) => {
+      const control = c.function.startsWith("macro.")
+        ? `the "${c.function.slice(6)}" macro`
+        : c.function;
+      const where = c.slot !== null ? ` for Player ${c.slot}` : " for another player";
+      return c.scope === "macro"
+        ? `${key} already starts ${control}${where}`
+        : `${key} already controls ${control}${where}`;
+    });
+    setNConfTitle(`Give ${key} to ${row.label} too?`);
+    setNConfLines(
+      `${lines.join("; ")}. "Use here too" shares the key — the other control keeps it as well; nothing is taken away.`,
+    );
+    setNConfOpen(true);
+  } else {
+    pendingConflict = null;
+    setNConfOpen(false);
+    // The error is authored, self-contained customer copy either way: the
+    // server module's own guard sentences, or its consumerized fallback.
+    applyFlash(`error: ${outcome.error ?? "That control could not be changed. Nothing changed."}`);
+  }
+}
+
 /** The filter (client chrome over served rows): IMPERATIVE hide/show — the
  *  live-echo idiom, legitimate for state no slot carries. */
 function applyNocturneFilter(root: HTMLElement, q: string): void {
@@ -323,6 +674,7 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
 /** Delegated events on the island root (the map.ts idiom): every interactive
  *  control carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
+  learnRoot = root;
   // Identify-by-key is a REAL verb: the form posts and the server listens
   // for one keypress (up to 11 s). The submit hook only shows the listening
   // banner while the round-trip is in flight; applyFlash settles it.
@@ -361,6 +713,30 @@ export function nocturneWire(root: HTMLElement): void {
       const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
+    } else if (hit === "bind-learn" || hit === "bind-add") {
+      // The row's own facts travel on its element, never re-derived here.
+      const holder = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = holder?.dataset.fn ?? "";
+      const slot = holder?.dataset.slot ?? "";
+      const label = holder?.querySelector(".n-bind-label")?.textContent?.trim() || fnName;
+      if (fnName && slot) {
+        void startLearn({
+          fn: fnName,
+          label,
+          slot,
+          mode: hit === "bind-add" ? "add" : "replace",
+        });
+      }
+    } else if (hit === "learn-cancel") {
+      void cancelLearn();
+    } else if (hit === "conf-force") {
+      const pend = pendingConflict;
+      pendingConflict = null;
+      setNConfOpen(false);
+      if (pend) void writeLearnedKey(pend.row, pend.key, true);
+    } else if (hit === "conf-cancel") {
+      pendingConflict = null;
+      setNConfOpen(false);
     } else if (hit === "dlg-noop") {
       // A dialog panel: exists so panel clicks stop here instead of
       // reaching the backdrop's dlg-close. Never preventDefault — the
@@ -949,31 +1325,137 @@ export function NocturneIsland() {
           { class: "n-group-head" },
           h("span", { class: "n-kick" }, () => nBindTitle()),
         ),
-        // Read-only + Clear until the learn pass: every row is the mapper's
-        // own truth (keys, fan-out, turbo and toggle notes); rebinding
-        // arrives with the learn-driven editor.
+        // The capture banner: INLINE, role=status — a deliberate a11y
+        // contract change from /map's dialog, documented at M9. It says
+        // which control is armed and that Esc cancels; the countdown ticks
+        // in the sub-line.
+        h(
+          "div",
+          { role: "status", class: () => nLearnCls() },
+          h("span", { class: "n-learn-dot" }),
+          h(
+            "span",
+            { class: "n-learn-txt" },
+            h("span", { class: "n-learn-line" }, () => nLearnText()),
+            h("span", { class: "n-learn-sub" }, () => nLearnSub()),
+          ),
+          h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
+        ),
+        // Every row is the mapper's own truth (keys, fan-out, turbo and
+        // toggle notes) AND a native disclosure: the summary is the row,
+        // the body is the rebind editor. Rebind/Add arm the daemon's
+        // learner; Hold|Toggle and Turbo are real form twins that work
+        // with scripting off; Clear was already real.
         createList(
           () => nBindRows(),
           (r) =>
-            r.function + "|" + r.label + "|" + r.chip + "|" + r.note + "|" + r.cls + "|" + r.slot,
+            [
+              r.function,
+              r.label,
+              r.chip,
+              r.note,
+              r.cls,
+              r.chip_cls,
+              r.clear_cls,
+              r.slot,
+              r.turbo,
+              r.hold_cls,
+              r.tog_cls,
+            ].join("|"),
           (r) =>
             h(
-              "div",
-              { class: r.cls },
-              h("span", { class: "n-bind-dot" }),
+              "details",
+              { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
               h(
-                "span",
-                { class: "n-bind-txt" },
-                h("span", { class: "n-bind-label" }, r.label),
-                h("span", { class: "n-bind-note" }, r.note),
+                "summary",
+                { class: "n-bind-sum" },
+                h("span", { class: "n-bind-dot" }),
+                h(
+                  "span",
+                  { class: "n-bind-txt" },
+                  h("span", { class: "n-bind-label" }, r.label),
+                  h("span", { class: "n-bind-note" }, r.note),
+                ),
+                h("span", { class: r.chip_cls }, r.chip),
               ),
-              h("span", { class: r.chip_cls }, r.chip),
               h(
-                "form",
-                { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                h("input", { type: "hidden", name: "slot", value: r.slot }),
-                h("input", { type: "hidden", name: "function", value: r.function }),
-                h("button", { type: "submit", title: "Clear this binding", class: r.clear_cls }, "✕"),
+                "div",
+                { class: "n-bedit" },
+                h(
+                  "div",
+                  { class: "n-bedit-row" },
+                  h(
+                    "button",
+                    { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                    "Rebind — press a key",
+                  ),
+                  h(
+                    "button",
+                    { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                    "Add another key",
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                      "Clear",
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit-row" },
+                  h("span", { class: "n-bedit-lab" }, "Press"),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h("input", { type: "hidden", name: "mode", value: "hold" }),
+                    h(
+                      "button",
+                      { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                      "Hold",
+                    ),
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        title: "A press holds until the next press",
+                        class: r.tog_cls,
+                      },
+                      "Toggle",
+                    ),
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h("span", { class: "n-bedit-lab" }, "Turbo"),
+                    h("input", {
+                      class: "n-turbo-in",
+                      type: "text",
+                      inputmode: "numeric",
+                      name: "turbo_hz",
+                      placeholder: "Hz",
+                      title: "Presses a second — 0 turns auto-fire off",
+                      value: r.turbo,
+                    }),
+                    h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                  ),
+                ),
               ),
             ),
         ),
@@ -1065,6 +1547,34 @@ export function NocturneIsland() {
                 { class: "nd-actions" },
                 h("button", { class: "nd-btn", type: "button", "data-nx": "dlg-close" }, "Cancel"),
                 h("button", { class: "nd-btn primary", type: "submit" }, "Create controller"),
+              ),
+            ),
+          ),
+        ),
+    ),
+    // ═══ Key-conflict consequence dialog — the learned key already works ════
+    // somewhere else. "Use here too" is a deliberate fan-out that takes
+    // nothing away; Cancel changes nothing. Client-only: capture-time state.
+    createShow(
+      () => nConfOpen(),
+      () =>
+        h(
+          "div",
+          { class: "nd-back", "data-nx": "conf-cancel" },
+          h(
+            "div",
+            { class: "nd", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Key conflict" },
+            h("div", { class: "nd-kick" }, "Key conflict"),
+            h("div", { class: "nd-title" }, () => nConfTitle()),
+            h("div", { class: "nd-lede" }, () => nConfLines()),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h("button", { class: "nd-btn", type: "button", "data-nx": "conf-cancel" }, "Cancel"),
+              h(
+                "button",
+                { class: "nd-btn primary", type: "button", "data-nx": "conf-force" },
+                "Use here too",
               ),
             ),
           ),

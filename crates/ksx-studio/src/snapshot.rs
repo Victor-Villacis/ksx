@@ -3239,6 +3239,12 @@ pub struct WorkspaceBindRow {
     pub clear: String,
     /// The slot number the Clear twin submits.
     pub slot: String,
+    /// The control's delivered auto-fire rate as the turbo box's prefill
+    /// ("12"), or empty for none.
+    pub turbo_hz: String,
+    /// TOGGLE-HOLD: the control latches (press once holds, press again
+    /// releases).
+    pub toggle: bool,
 }
 
 /// Everything the workspace SHOWS that is not verbatim provider data. The
@@ -3635,6 +3641,12 @@ fn workspace_bind_rows(
                     "Clear".to_owned()
                 },
                 slot: slot.number.to_string(),
+                turbo_hz: mapper
+                    .turbo
+                    .get(zone.fn_name)
+                    .map(|hz| hz.to_string())
+                    .unwrap_or_default(),
+                toggle: mapper.toggle.contains(zone.fn_name),
             }
         })
         .collect();
@@ -3814,6 +3826,11 @@ pub struct NocturneBindRow {
     pub chip_cls: String,
     pub clear_cls: String,
     pub slot: String,
+    /// The turbo box's prefill — the delivered rate ("12"), or empty.
+    pub turbo: String,
+    /// The Hold|Toggle pill pair, precomposed: exactly one carries `on`.
+    pub hold_cls: String,
+    pub tog_cls: String,
 }
 
 /// One keycap on the standard board, dressed with its binding short.
@@ -4342,6 +4359,17 @@ impl NocturneDerived {
                         "n-bclear none".to_owned()
                     },
                     slot: row.slot.clone(),
+                    turbo: row.turbo_hz.clone(),
+                    hold_cls: if row.toggle {
+                        "n-bpill".to_owned()
+                    } else {
+                        "n-bpill on".to_owned()
+                    },
+                    tog_cls: if row.toggle {
+                        "n-bpill on".to_owned()
+                    } else {
+                        "n-bpill".to_owned()
+                    },
                 }
             })
             .collect();

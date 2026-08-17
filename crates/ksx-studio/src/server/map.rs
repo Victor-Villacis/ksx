@@ -178,28 +178,12 @@ pub(super) async fn api_map(
         .into_response()
 }
 
-pub(super) async fn api_learn_poll(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_poll()).await
-}
-
-pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_start()).await
-}
-
-#[derive(Deserialize)]
-pub(super) struct LearnCancelBody {
-    generation: u64,
-}
-
-pub(super) async fn api_learn_cancel(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<LearnCancelBody>,
-) -> Response {
-    control_json(state, move |control| {
-        control.learn_cancel_generation(Some(body.generation))
-    })
-    .await
-}
+// The learner's JSON trio (`/api/learn`, `/api/learn/start`,
+// `/api/learn/cancel`) MOVED to `server/nocturne.rs` on 2026-08-17 with the
+// rebind-editor migration: the learner is one daemon-owned surface shared by
+// this page, identify-by-key and the Nocturne rebind flow, and the new page
+// owns it now. The routes are unchanged; this page's island keeps calling
+// them.
 
 pub(super) struct TargetBind<'a> {
     target: Option<&'a str>,

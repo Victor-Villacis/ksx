@@ -178,6 +178,9 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
             SlotValue::Text(row.clear_cls.clone()),
         ),
         ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+        ("turbo".to_owned(), SlotValue::Text(row.turbo.clone())),
+        ("hold_cls".to_owned(), SlotValue::Text(row.hold_cls.clone())),
+        ("tog_cls".to_owned(), SlotValue::Text(row.tog_cls.clone())),
     ])
 }
 
@@ -442,7 +445,7 @@ mod tests {
             "show:nCapPrep",
             "show:nCapRel",
         ];
-        const CLIENT_ONLY_SLOTS: [&str; 13] = [
+        const CLIENT_ONLY_SLOTS: [&str; 20] = [
             "nCapPrep",
             "nCapRel",
             "nMenuOpen",
@@ -456,6 +459,16 @@ mod tests {
             "nIdText",
             "nFlashLine",
             "nFlashCls",
+            // The learn flow's banner and the key-conflict consequence dialog
+            // are capture-time browser state: the server never claims a learn
+            // is armed, so these stay client-only.
+            "nLearnCls",
+            "nLearnText",
+            "nLearnSub",
+            "nConfOpen",
+            "show:nConfOpen",
+            "nConfTitle",
+            "nConfLines",
         ];
         let page = page();
         let named: Vec<String> = page

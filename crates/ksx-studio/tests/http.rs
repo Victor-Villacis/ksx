@@ -6534,3 +6534,253 @@ fn nocturne_serves_the_migrated_keyboard_section_over_http() {
         "{refused}"
     );
 }
+
+/// **The MIGRATED rebind editor, over HTTP.** The learner's JSON trio
+/// answers from its new home with generation-stamped states; the staged bind
+/// verb resolves the slot's preset identity and current key list server-side
+/// (a browser is never trusted with a key list it made up); a cross-slot
+/// duplicate refuses with the typed conflict rows until `force` says yes;
+/// and the turbo/toggle form twins carry every guard in allowlisted words.
+#[test]
+fn nocturne_serves_the_migrated_rebind_editor_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    // A real staged draft, seeded through the same edits the daemon applies:
+    // a board, a dressed first controller, an empty second one.
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        let out = control.stage_edit(&edit);
+        assert!(out.ok, "seed edit refused: {:?}", out.error);
+    }
+
+    // The learner's trio, from its new home.
+    let started: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}")))
+            .expect("learn start");
+    assert_eq!(started["state"], "listening", "{started}");
+    let generation = started["generation"].as_u64().expect("generation");
+    let polled: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).expect("learn poll");
+    assert_eq!(polled["generation"].as_u64(), Some(generation), "{polled}");
+    let cancelled: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/learn/cancel",
+        &format!("{{\"generation\":{generation}}}"),
+    )))
+    .expect("learn cancel");
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+
+    // The rows the page serves are where the test finds its targets — never
+    // hardcoded to a layout's private details.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let rows = api["view"]["bind_rows"].as_array().expect("bind rows");
+    assert!(!rows.is_empty(), "{api}");
+    let bound_fn = rows
+        .iter()
+        .find(|r| r["chip"] != "Unbound")
+        .expect("a bound row")["function"]
+        .as_str()
+        .expect("function")
+        .to_owned();
+    let unbound_fn = rows
+        .iter()
+        .find(|r| r["chip"] == "Unbound")
+        .expect("an unbound row")["function"]
+        .as_str()
+        .expect("function")
+        .to_owned();
+
+    // Replace, resolved server-side: slot number in, preset identity found.
+    let replaced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &format!("{{\"slot\":1,\"function\":\"{unbound_fn}\",\"key\":\"F7\"}}"),
+    )))
+    .expect("bind outcome");
+    assert_eq!(replaced["ok"], true, "{replaced}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["bind_rows"]
+        .as_array()
+        .expect("bind rows")
+        .iter()
+        .find(|r| r["function"] == unbound_fn.as_str())
+        .expect("edited row")
+        .clone();
+    assert_eq!(row["chip"], "F7", "{row}");
+
+    // Adding a key the control already has refuses in words, changes nothing.
+    let dup: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &format!("{{\"slot\":1,\"function\":\"{unbound_fn}\",\"key\":\"F7\",\"mode\":\"add\"}}"),
+    )))
+    .expect("dup outcome");
+    assert_eq!(dup["ok"], false, "{dup}");
+    assert!(
+        dup["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("already has")),
+        "{dup}"
+    );
+
+    // A cross-slot duplicate: Player 2 asking for Player 1's key refuses
+    // with the typed conflict rows…
+    let conflicted: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &format!("{{\"slot\":2,\"function\":\"{unbound_fn}\",\"key\":\"F7\"}}"),
+    )))
+    .expect("conflict outcome");
+    assert_eq!(conflicted["ok"], false, "{conflicted}");
+    assert_eq!(conflicted["code"], "conflict", "{conflicted}");
+    assert!(
+        !conflicted["conflicts"].as_array().expect("rows").is_empty(),
+        "{conflicted}"
+    );
+    // …until force — the dialog's "Use here too" — says yes to the fan-out.
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &format!("{{\"slot\":2,\"function\":\"{unbound_fn}\",\"key\":\"F7\",\"force\":true}}"),
+    )))
+    .expect("forced outcome");
+    assert_eq!(forced["ok"], true, "{forced}");
+
+    // A slot this draft does not have refuses with authored copy.
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":9,\"function\":\"a\",\"key\":\"F8\"}",
+    )))
+    .expect("missing outcome");
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("no longer in this unsaved setup")),
+        "{missing}"
+    );
+
+    // The turbo twin: sets a rate on a bound control…
+    let set = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={bound_fn}&turbo_hz=9"),
+    );
+    assert!(set.contains("Auto-fire%20updated"), "{set}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["bind_rows"]
+        .as_array()
+        .expect("bind rows")
+        .iter()
+        .find(|r| r["function"] == bound_fn.as_str())
+        .expect("turbo row")
+        .clone();
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Turbo")),
+        "{row}"
+    );
+    assert!(!row["turbo"].as_str().unwrap_or("").is_empty(), "{row}");
+    // …refuses a blank or non-numeric rate before any write…
+    let junk = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={bound_fn}&turbo_hz=fast"),
+    );
+    assert!(junk.contains("Type%20a%20number"), "{junk}");
+    // …and refuses an unbound control instead of inventing a write. (The
+    // second slot's rows are all unbound except the forced F7.)
+    let hollow = post_form(addr, "/nocturne/bind/turbo", "slot=2&function=a&turbo_hz=9");
+    assert!(hollow.contains("nothing%20to%20auto-fire"), "{hollow}");
+
+    // The toggle twin: latch on, in allowlisted words, visible in the row…
+    let latched = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=toggle"),
+    );
+    assert!(latched.contains("Press%20behaviour%20updated"), "{latched}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["bind_rows"]
+        .as_array()
+        .expect("bind rows")
+        .iter()
+        .find(|r| r["function"] == bound_fn.as_str())
+        .expect("toggle row")
+        .clone();
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Toggle")),
+        "{row}"
+    );
+    assert_eq!(row["tog_cls"], "n-bpill on", "{row}");
+    assert_eq!(row["hold_cls"], "n-bpill", "{row}");
+    // …back to hold…
+    let held = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=hold"),
+    );
+    assert!(held.contains("Press%20behaviour%20updated"), "{held}");
+    // …an unbound control refuses…
+    let hollow = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        "slot=2&function=b&mode=toggle",
+    );
+    assert!(hollow.contains("nothing%20to%20hold"), "{hollow}");
+    // …and a junk mode refuses without reaching the stage.
+    let blink = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=blink"),
+    );
+    assert!(blink.contains("flash=error"), "{blink}");
+
+    // A rate or latch edit on a key deliberately SHARED across players
+    // re-affirms the existing list, it does not ask for a new fan-out — it
+    // must not re-trip the cross-slot conflict (F7 is on both players now).
+    let shared_turbo = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={unbound_fn}&turbo_hz=5"),
+    );
+    assert!(
+        shared_turbo.contains("Auto-fire%20updated"),
+        "{shared_turbo}"
+    );
+    let shared_latch = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={unbound_fn}&mode=toggle"),
+    );
+    assert!(
+        shared_latch.contains("Press%20behaviour%20updated"),
+        "{shared_latch}"
+    );
+}

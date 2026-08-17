@@ -7,10 +7,14 @@
 //! own routes for them point at these handlers. `/start` keeps rendering its
 //! frames untouched, but pressing its keyboard buttons lands the answer on
 //! `/nocturne` — the old page hollows out one section at a time while the new
-//! one becomes the product surface.
+//! one becomes the product surface. The rack, binding-list, session and
+//! keyboard-diagram passes followed the same pattern, and the rebind pass
+//! moved the learner's JSON trio here from `/map` (same routes; one
+//! daemon-owned listening surface for every door) and added the staged bind
+//! verb plus the turbo/toggle form twins.
 //!
-//! The rest of the page (rack, binding list, session) is still the design
-//! proof's placeholder until its own migration pass.
+//! Still placeholder until their own passes: the configuration menu's
+//! contents and the live input echo — each says so on the page.
 
 use super::*;
 
@@ -108,10 +112,29 @@ pub(super) const N_CAPTURE_PREPARED_STAGE_CHANGED: &str = "error: Windows prepar
 pub(super) const N_CAPTURE_RELEASED_STAGE_CHANGED: &str = "error: Windows released the keyboard, \
      but the selection changed while permission was open. Choose the keyboard again before Play.";
 
+pub(super) const N_TURBO_OK: &str = "Auto-fire updated — the row shows the rate that will \
+     actually be delivered. Nothing has been saved or started.";
+
+pub(super) const N_TURBO_INPUT_ERROR: &str = "error: Type a number of presses a second into the \
+     turbo box (0 turns auto-fire off). Nothing was changed.";
+
+pub(super) const N_TURBO_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
+     nothing to auto-fire. Bind a key first; nothing was changed.";
+
+pub(super) const N_TOGGLE_OK: &str = "Press behaviour updated. Nothing has been saved or started.";
+
+pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
+     nothing to hold. Bind a key first; nothing was changed.";
+
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 30] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 35] = [
+    N_TURBO_OK,
+    N_TURBO_INPUT_ERROR,
+    N_TURBO_UNBOUND_ERROR,
+    N_TOGGLE_OK,
+    N_TOGGLE_UNBOUND_ERROR,
     N_DEVICE_OK,
     N_BLOCKING_OK,
     N_EDIT_OK,
@@ -747,6 +770,254 @@ pub(super) async fn nocturne_form_duplicate(
             });
         }
         N_DUP_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+// ── The learner (moved from /map 2026-08-17, rebind-editor migration) ──────
+// One daemon-owned listening surface for every door: /map's island, the
+// identify-by-key transaction, and this page's rebind flow all speak to the
+// same generation-stamped learner, so no two of them can mistake each
+// other's key press for their own.
+
+pub(super) async fn api_learn_poll(State(state): State<Arc<AppState>>) -> Response {
+    control_json(state, |control| control.learn_poll()).await
+}
+
+pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Response {
+    control_json(state, |control| control.learn_start()).await
+}
+
+#[derive(Deserialize)]
+pub(super) struct LearnCancelBody {
+    generation: u64,
+}
+
+pub(super) async fn api_learn_cancel(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<LearnCancelBody>,
+) -> Response {
+    control_json(state, move |control| {
+        control.learn_cancel_generation(Some(body.generation))
+    })
+    .await
+}
+
+// ── The staged bind verb (JSON) — what a learned key writes ────────────────
+
+/// POST /nocturne/api/bind. The body names a SLOT NUMBER and ONE KEY; the
+/// server resolves the preset identity and the control's current key list
+/// from the staged setup it just read, so a hand-made POST can only address a
+/// slot this draft actually has and no browser is ever trusted with a key
+/// list it made up (the `/map` form twins' rule, kept).
+///
+/// `mode: "add"` joins the control's list (MAME-style OR-chain, a deliberate
+/// fan-out — force is implied, exactly like /map's Add); anything else
+/// replaces it. A cross-slot duplicate on replace comes back as the typed
+/// `conflicts` rows for the consequence dialog; resubmitting with
+/// `force: true` is the dialog's "Use here too".
+#[derive(Deserialize)]
+pub(super) struct NocturneBindBody {
+    slot: u8,
+    function: String,
+    key: String,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+pub(super) async fn nocturne_api_bind(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturneBindBody>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == body.slot) else {
+            return BindOutcome {
+                ok: false,
+                error: Some(format!(
+                    "Player {} is no longer in this unsaved setup. Nothing changed.",
+                    body.slot
+                )),
+                code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
+                ..BindOutcome::default()
+            };
+        };
+        let key = body.key.trim();
+        if key.is_empty() {
+            return BindOutcome {
+                ok: false,
+                error: Some("No key was captured. Nothing changed.".to_owned()),
+                code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
+                ..BindOutcome::default()
+            };
+        }
+        let (keys, force) = if body.mode.as_deref() == Some("add") {
+            let current = nocturne_current_keys(&staged, slot, &body.function);
+            if current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+                return BindOutcome {
+                    ok: false,
+                    error: Some(format!("That control already has {key} — nothing to add.")),
+                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
+                    ..BindOutcome::default()
+                };
+            }
+            let mut next = current;
+            next.push(key.to_owned());
+            (next, true)
+        } else {
+            (vec![key.to_owned()], body.force)
+        };
+        // Only the PROVIDER's outcome crosses the presentation boundary
+        // through `consumerize_bind`; the guards above are this module's own
+        // authored customer copy and pass through untouched.
+        consumerize_bind(state.control.stage_bind(&ksx_api::StagedBindRequest {
+            number: slot.number,
+            preset: slot.preset.clone(),
+            function: body.function,
+            keys,
+            force,
+            turbo_hz: None,
+            toggle: None,
+        }))
+    })
+    .await
+    .unwrap_or_else(|_| BindOutcome {
+        ok: false,
+        error: Some("That control could not be changed. Nothing changed.".to_owned()),
+        code: Some(ksx_api::codes::REFUSED.to_owned()),
+        ..BindOutcome::default()
+    });
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(outcome),
+    )
+        .into_response()
+}
+
+/// The control's current key list, read from the same staged mapper table
+/// the page's rows render — never from anything a browser sent.
+fn nocturne_current_keys(
+    staged: &ksx_api::StagedSetupView,
+    slot: &ksx_api::StagedSlotView,
+    function: &str,
+) -> Vec<String> {
+    let keyboard = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    ksx_api::staged_mapper_slot(slot, keyboard)
+        .ok()
+        .and_then(|mapper| mapper.bindings.get(function).cloned())
+        .unwrap_or_default()
+}
+
+// ── The row editor's form twins: auto-fire and press behaviour ─────────────
+
+#[derive(Deserialize)]
+pub(super) struct NocturneTurboForm {
+    slot: u8,
+    function: String,
+    #[serde(default)]
+    turbo_hz: Option<String>,
+}
+
+/// POST /nocturne/bind/turbo — set (or clear, with `0`) a control's AUTO-FIRE
+/// rate. The same three-state `turbo_hz` the staged bind verb carries, with
+/// the control's CURRENT keys read server-side; a blank box is a refusal,
+/// never a silent clear (docs/INPUT-TRANSFORMS.md §3, /map's rule kept).
+pub(super) async fn nocturne_form_bind_turbo(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneTurboForm>,
+) -> Response {
+    let raw = form.turbo_hz.as_deref().map(str::trim).unwrap_or("");
+    let Ok(hz) = raw.parse::<u32>() else {
+        return nocturne_redirect(N_TURBO_INPUT_ERROR);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
+            return N_EDIT_ERROR;
+        };
+        let current = nocturne_current_keys(&staged, slot, &form.function);
+        if current.is_empty() {
+            // An unbound control has no rate to set OR clear; saying
+            // "updated" would claim a write that never happened.
+            return N_TURBO_UNBOUND_ERROR;
+        }
+        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+            number: slot.number,
+            preset: slot.preset.clone(),
+            function: form.function,
+            keys: current,
+            // The key list is exactly what the control already holds, so no
+            // NEW fan-out is being consented to — without this, a key that
+            // was deliberately shared across players would re-trip the
+            // conflict refusal on every rate edit.
+            force: true,
+            turbo_hz: Some(hz),
+            toggle: None,
+        });
+        if outcome.ok {
+            N_TURBO_OK
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneToggleForm {
+    slot: u8,
+    function: String,
+    mode: String,
+}
+
+/// POST /nocturne/bind/toggle — the Hold|Toggle pill pair's twin. `mode` is
+/// `hold` or `toggle`; anything else refuses. Writes the control's CURRENT
+/// keys back with the three-state `toggle` field set, so the latch is the
+/// only thing that changes (docs/INPUT-TRANSFORMS.md §3b).
+pub(super) async fn nocturne_form_bind_toggle(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneToggleForm>,
+) -> Response {
+    let latch = match form.mode.as_str() {
+        "toggle" => true,
+        "hold" => false,
+        _ => return nocturne_redirect(N_EDIT_ERROR),
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
+            return N_EDIT_ERROR;
+        };
+        let current = nocturne_current_keys(&staged, slot, &form.function);
+        if current.is_empty() {
+            return N_TOGGLE_UNBOUND_ERROR;
+        }
+        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+            number: slot.number,
+            preset: slot.preset.clone(),
+            function: form.function,
+            keys: current,
+            // Unchanged key list — re-affirmed, not newly shared (see the
+            // turbo twin's note).
+            force: true,
+            turbo_hz: None,
+            toggle: Some(latch),
+        });
+        if outcome.ok {
+            N_TOGGLE_OK
+        } else {
+            N_EDIT_ERROR
+        }
     })
     .await
     .unwrap_or(N_EDIT_ERROR);

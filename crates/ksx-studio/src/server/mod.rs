@@ -232,6 +232,9 @@ pub fn serve(
                 post(nocturne_form_duplicate),
             )
             .route("/nocturne/bind/clear", post(nocturne_form_bind_clear))
+            .route("/nocturne/api/bind", post(nocturne_api_bind))
+            .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
+            .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))
             .route("/nocturne/save", post(nocturne_form_save))
             .route("/nocturne/play", post(nocturne_form_play))
             .route("/nocturne/stop", post(nocturne_form_stop))

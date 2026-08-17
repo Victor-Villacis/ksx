@@ -6452,7 +6452,11 @@ fn nocturne_serves_the_migrated_keyboard_section_over_http() {
     let page = rendered_body(&raw);
     assert!(page.contains("I-PAC"), "{page}");
     assert!(page.contains("Freeze this keyboard"), "{page}");
-    assert!(page.contains("16 of 24 inputs bound"), "{page}");
+    // Pass 2: the rack caption and the escape hatch are served facts now,
+    // and the design proof's invented values are gone.
+    assert!(page.contains("XInput"), "{page}");
+    assert!(page.contains("LeftCtrl five times"), "{page}");
+    assert!(!page.contains("16 of 24 inputs bound"), "{page}");
 
     // Only copy this page can emit is reflected back onto it.
     let hostile = rendered_body(&get(

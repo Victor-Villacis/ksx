@@ -16,7 +16,10 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
-use crate::snapshot::{NocturneChoiceRow, NocturneDeviceRow, NocturneOtherRow, NocturnePayload};
+use crate::snapshot::{
+    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneOptionRow,
+    NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+};
 
 /// How many server-injected `createShow` pairs this page has.
 const SHOW_COUNT: usize = 2;
@@ -24,6 +27,12 @@ const SHOW_COUNT: usize = 2;
 const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
+const LIST_SLOT_RACK: &str = "list:nRackRows:array";
+const LIST_SLOT_RACK_EMPTY: &str = "list:nRackEmpty:array";
+const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
+const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
+const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
+const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
 
 /// Scalar slot values, keyed by the signal names in NocturneIsland.ts. Every
 /// value is a [`NocturneDerived`] field except the flash — the one SSR-only
@@ -39,6 +48,20 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nCapSwCls": payload.view.cap_sw_cls,
         "nCapSelector": payload.view.cap_selector,
         "nCapInstance": payload.view.cap_instance,
+        "nVersion": payload.view.version,
+        "nChipText": payload.view.chip_text,
+        "nSaveText": payload.view.save_text,
+        "nEscapeLine": payload.view.escape_line,
+        "nPlayCls": payload.view.play_cls,
+        "nStopCls": payload.view.stop_cls,
+        "nRackCaption": payload.view.rack_caption,
+        "nAddLede": payload.view.add_lede,
+        "nAddPreset": payload.view.add_preset,
+        "nPadBadge": payload.view.pad_badge,
+        "nPadName": payload.view.pad_name,
+        "nPadSub": payload.view.pad_sub,
+        "nBindTitle": payload.view.bind_title,
+        "nBindFoot": payload.view.bind_foot,
         "nFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
         "nFlashCls": match flash {
             None => "n-flash none",
@@ -82,9 +105,83 @@ fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 3] {
+fn rack_row(row: &NocturneRackRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("number".to_owned(), SlotValue::Text(row.number.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn empty_row(row: &NocturneEmptyRow) -> SlotValue {
+    SlotValue::object(vec![(
+        "badge".to_owned(),
+        SlotValue::Text(row.badge.clone()),
+    )])
+}
+
+fn persona_row(row: &NocturnePersonaRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("api".to_owned(), SlotValue::Text(row.api.clone())),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn option_row(row: &NocturneOptionRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("value".to_owned(), SlotValue::Text(row.value.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+    ])
+}
+
+fn bind_row(row: &NocturneBindRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("function".to_owned(), SlotValue::Text(row.function.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("chip".to_owned(), SlotValue::Text(row.chip.clone())),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("chip_cls".to_owned(), SlotValue::Text(row.chip_cls.clone())),
+        (
+            "clear_cls".to_owned(),
+            SlotValue::Text(row.clear_cls.clone()),
+        ),
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+    ])
+}
+
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 9] {
     let view = &payload.view;
     [
+        (
+            LIST_SLOT_RACK,
+            SlotValue::array(view.rack_rows.iter().map(rack_row).collect()),
+        ),
+        (
+            LIST_SLOT_RACK_EMPTY,
+            SlotValue::array(view.rack_empty.iter().map(empty_row).collect()),
+        ),
+        (
+            LIST_SLOT_PERSONAS,
+            SlotValue::array(view.persona_rows.iter().map(persona_row).collect()),
+        ),
+        (
+            LIST_SLOT_LAYOUTS,
+            SlotValue::array(view.layout_opts.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_SOCDS,
+            SlotValue::array(view.socd_opts.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_BINDS,
+            SlotValue::array(view.bind_rows.iter().map(bind_row).collect()),
+        ),
         (
             LIST_SLOT_DEVICES,
             SlotValue::array(view.dev_rows.iter().map(device_row).collect()),
@@ -207,6 +304,14 @@ mod tests {
         NocturnePayload {
             staged,
             scan,
+            session: crate::control::SessionView {
+                reachable: true,
+                running: false,
+                line: "idle".to_owned(),
+                profile: None,
+                origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
+            },
             unavailable: String::new(),
             view: Default::default(),
         }
@@ -222,11 +327,34 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 3] =
-            ["list:nDevRows:", "list:nDevOther:", "list:nModeRows:"];
-        const SERVED_SLOTS: [&str; 13] = [
+        const SERVED_LIST_PREFIXES: [&str; 9] = [
+            "list:nDevRows:",
+            "list:nDevOther:",
+            "list:nModeRows:",
+            "list:nRackRows:",
+            "list:nRackEmpty:",
+            "list:nPersonaRows:",
+            "list:nLayoutOpts:",
+            "list:nSocdOpts:",
+            "list:nBindRows:",
+        ];
+        const SERVED_SLOTS: [&str; 27] = [
             "nDevCount",
             "nModeNote",
+            "nVersion",
+            "nChipText",
+            "nSaveText",
+            "nEscapeLine",
+            "nPlayCls",
+            "nStopCls",
+            "nRackCaption",
+            "nAddLede",
+            "nAddPreset",
+            "nPadBadge",
+            "nPadName",
+            "nPadSub",
+            "nBindTitle",
+            "nBindFoot",
             "nDevNote",
             "nKbTitle",
             "nCapLine",
@@ -239,49 +367,20 @@ mod tests {
             "show:nCapPrep",
             "show:nCapRel",
         ];
-        const CLIENT_ONLY_SLOTS: [&str; 42] = [
+        const CLIENT_ONLY_SLOTS: [&str; 13] = [
             "nCapPrep",
             "nCapRel",
-            "nConflictOpen",
-            "show:nConflictOpen",
-            "nMacroOpen",
-            "show:nMacroOpen",
-            "nPlayCls",
-            "nStatsCls",
-            "nPauseCls",
-            "nStopCls",
-            "nTickCls",
-            "nStageCls",
-            "nRtCls",
-            "nSlotMeta",
-            "nIdLinkCls",
-            "nIdBoxCls",
-            "nIdText",
-            "nSavedText",
             "nMenuOpen",
             "show:nMenuOpen",
-            "nAutoCls",
             "nDlgOpen",
             "show:nDlgOpen",
             "nLeftCls",
             "nRightCls",
-            "nMetaHint",
-            "nKbHint",
-            "nRowUpCls",
-            "nRowLeftCls",
-            "nWedgeUpCls",
-            "nWedgeLeftCls",
-            "nHoldCls",
-            "nTogCls",
-            "nSwCls",
-            "nTogBadgeCls",
-            "nRateBadgeCls",
-            "nRatesCls",
-            "nxExplain",
-            "nxOpenLeft",
-            "nxOpenUp",
-            "show:nxOpenUp",
-            "show:nxOpenLeft",
+            "nIdLinkCls",
+            "nIdBoxCls",
+            "nIdText",
+            "nFlashLine",
+            "nFlashCls",
         ];
         let page = page();
         let named: Vec<String> = page
@@ -311,7 +410,17 @@ mod tests {
                 "pinned slot {name:?} is gone from the IR",
             );
         }
-        for name in [LIST_SLOT_DEVICES, LIST_SLOT_OTHER, LIST_SLOT_MODES] {
+        for name in [
+            LIST_SLOT_DEVICES,
+            LIST_SLOT_OTHER,
+            LIST_SLOT_MODES,
+            LIST_SLOT_RACK,
+            LIST_SLOT_RACK_EMPTY,
+            LIST_SLOT_PERSONAS,
+            LIST_SLOT_LAYOUTS,
+            LIST_SLOT_SOCDS,
+            LIST_SLOT_BINDS,
+        ] {
             assert!(
                 named.iter().any(|n| n == name),
                 "served list slot {name:?} is gone from the IR",
@@ -358,21 +467,32 @@ mod tests {
         assert!(out.html.contains("__ksx-payload"));
     }
 
-    /// The placeholder half still paints from compile-time defaults: the
-    /// design-proof demos survive the migration untouched.
+    /// **No invented values.** The design proof's placeholder data is gone;
+    /// this pins that none of it can quietly return.
     #[test]
-    fn nocturne_keeps_the_placeholder_demos() {
+    fn nocturne_serves_no_invented_values() {
         let out = render_nocturne(&page(), &keyboard_payload(), None);
-        for sentinel in [
-            "Apex Legends — WASD",
-            "16 bound · XInput 1/4",
+        for fiction in [
+            "Apex Legends",
+            "16 bound",
             "16 of 24 inputs bound",
             "Click an input, then a key below",
+            "K70 RGB",
+            "G915",
+            "Huntsman",
+            "Saved 2 days ago",
         ] {
             assert!(
-                out.html.contains(sentinel),
-                "SSR of /nocturne is missing placeholder {sentinel:?}",
+                !out.html.contains(fiction),
+                "invented value {fiction:?} is back in SSR",
             );
+        }
+        // The real replacements paint instead.
+        for real in [
+            concat!("v", env!("CARGO_PKG_VERSION")),
+            "LeftCtrl five times",
+        ] {
+            assert!(out.html.contains(real), "missing served value {real:?}");
         }
     }
 }

@@ -99,41 +99,137 @@ fn seed_macros() -> Vec<MacroView> {
 }
 
 /// The fixture's state: what Save wrote (served back exactly as a real
-/// preset file would), the staged keyboard the migrated /nocturne verbs
-/// edit, and a scripted learner so identify-by-key completes a real
-/// round-trip against this double.
+/// preset file would), a REAL staged setup driven by the REAL staging engine
+/// (`StageEdit::apply` / `StagedSetupView::of` — the ScriptedControl
+/// pattern, so nothing this double serves is hand-written), and a scripted
+/// learner so identify-by-key completes a round-trip.
 #[derive(Clone)]
 struct Store {
     macros: Arc<Mutex<Vec<MacroView>>>,
-    stage: Arc<Mutex<FixtureStage>>,
+    stage: Arc<Mutex<ksx_core::stage::StagedSetup>>,
     /// `Some(generation)` while the scripted learner is "listening"; the next
     /// poll answers with a hit on the fixture I-PAC and clears it.
     listening: Arc<Mutex<Option<u64>>>,
-}
-
-struct FixtureStage {
-    device: ksx_api::StagedDeviceView,
-    blocking: String,
 }
 
 impl Store {
     fn new() -> Self {
         Self {
             macros: Arc::new(Mutex::new(seed_macros())),
-            stage: Arc::new(Mutex::new(FixtureStage {
-                device: ksx_api::StagedDeviceView {
-                    label: "Ultimarc I-PAC 4".into(),
-                    alias: "panel".into(),
-                    selector: "usb:d209:0430:00".into(),
-                    rung: "model".into(),
-                    survives_replug: true,
-                    backend: "interception".into(),
-                },
-                blocking: "bound-keys".into(),
-            })),
+            stage: Arc::new(Mutex::new(seeded_stage())),
             listening: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+/// Seed the fixture's draft THROUGH the real staging engine: a board, two
+/// authored controllers, an order-aware SOCD and the split answer — the same
+/// edits a user's clicks would apply, so every roster, cap and sentence the
+/// view serves is the engine's own.
+fn seeded_stage() -> ksx_core::stage::StagedSetup {
+    let mut setup = ksx_core::stage::StagedSetup::new();
+    let mut apply = |edit: ksx_api::StageEdit| match edit.apply(&setup) {
+        Ok(next) => setup = next,
+        Err(refusal) => panic!("fixture seed edit refused: {}", refusal.message),
+    };
+    apply(ksx_api::StageEdit::ChooseDevice {
+        selector: "usb:d209:0430:00".into(),
+        alias: "panel".into(),
+        label: "Ultimarc I-PAC 4".into(),
+    });
+    apply(ksx_api::StageEdit::AddSlot {
+        number: None,
+        persona: "xbox360".into(),
+        preset: "Player 1".into(),
+        layout: Some("arcade-6button".into()),
+    });
+    apply(ksx_api::StageEdit::SetBindings {
+        number: 1,
+        preset: Box::new(authored_preset("Player 1")),
+    });
+    apply(ksx_api::StageEdit::SetSocd {
+        number: 1,
+        socd: "last-input".into(),
+    });
+    apply(ksx_api::StageEdit::AddSlot {
+        number: None,
+        persona: "playstation".into(),
+        preset: "Player 2".into(),
+        layout: Some("arcade-6button".into()),
+    });
+    apply(ksx_api::StageEdit::SetBindings {
+        number: 2,
+        preset: Box::new(authored_preset("Player 2")),
+    });
+    apply(ksx_api::StageEdit::SetBlocking {
+        blocking: "bound-keys".into(),
+    });
+    if std::env::var("KSX_FIXTURE_FIRST").as_deref() == Ok("ps") {
+        apply(ksx_api::StageEdit::ReorderSlots {
+            numbers: vec![2, 1],
+        });
+    }
+    setup
+}
+
+/// The authored preset both fixture controllers bind — real authoring tables,
+/// so the binding pane shows rows with the interesting notes: a multi-bind
+/// with fan-out, a turbo'd trigger, a latched bumper.
+fn authored_preset(name: &str) -> ksx_config::PresetFile {
+    use ksx_core::preset::Binding;
+    use ksx_core::{Axis, DpadDirection, Key, XButton, AXIS_MAX, AXIS_MIN};
+    let core = ksx_core::Preset {
+        name: name.to_owned(),
+        entries: vec![
+            (Key::G, Binding::Button(XButton::A)),
+            (Key::H, Binding::Button(XButton::A)),
+            (Key::G, Binding::Button(XButton::B)),
+            (Key::J, Binding::Button(XButton::X)),
+            (Key::K, Binding::Button(XButton::Y)),
+            (Key::T, Binding::Trigger(ksx_core::Trigger::Right)),
+            (Key::L, Binding::Button(XButton::LeftBumper)),
+            (
+                Key::W,
+                Binding::Axis {
+                    axis: Axis::Y,
+                    value: AXIS_MAX,
+                },
+            ),
+            (
+                Key::S,
+                Binding::Axis {
+                    axis: Axis::Y,
+                    value: AXIS_MIN,
+                },
+            ),
+            (
+                Key::A,
+                Binding::Axis {
+                    axis: Axis::X,
+                    value: AXIS_MIN,
+                },
+            ),
+            (
+                Key::D,
+                Binding::Axis {
+                    axis: Axis::X,
+                    value: AXIS_MAX,
+                },
+            ),
+            (Key::Up, Binding::Dpad(DpadDirection::Up)),
+            (Key::Down, Binding::Dpad(DpadDirection::Down)),
+            (Key::Enter, Binding::Button(XButton::Start)),
+        ],
+        chords: Vec::new(),
+        macros: Default::default(),
+        turbo: vec![ksx_core::TurboBinding::new(
+            Binding::Trigger(ksx_core::Trigger::Right),
+            12,
+        )],
+        toggle: vec![Binding::Button(XButton::LeftBumper)],
+        protected: false,
+    };
+    ksx_config::PresetFile::from_core(&core)
 }
 
 impl StatusSource for Store {
@@ -220,76 +316,16 @@ fn fixture_session() -> SessionView {
 }
 
 impl ControlSource for Store {
-    /// The migrated /nocturne keyboard verbs, against this double: choosing a
-    /// board, answering split-or-freeze, and following a capture transition
-    /// mutate the fixture's staged keyboard so the page behaves — everything
-    /// else keeps refusing in the trait's honest words.
+    /// EVERY staging verb, through the real engine — `StageEdit::apply` is
+    /// the same code the daemon runs, so the double cannot drift from it.
     fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
-        let ok = |message: &str, setup: ksx_api::StagedSetupView| ksx_api::StageOutcome {
-            ok: true,
-            message: Some(message.to_owned()),
-            error: None,
-            code: None,
-            remedy: None,
-            setup,
-            saved: None,
-            backup: None,
-            playing: false,
-        };
-        let refused = |error: &str, setup: ksx_api::StagedSetupView| ksx_api::StageOutcome {
-            ok: false,
-            message: None,
-            error: Some(error.to_owned()),
-            code: Some("bad-request".to_owned()),
-            remedy: None,
-            setup,
-            saved: None,
-            backup: None,
-            playing: false,
-        };
-        match edit {
-            ksx_api::StageEdit::ChooseDevice {
-                selector,
-                alias,
-                label,
-            } => {
-                self.stage.lock().unwrap().device = ksx_api::StagedDeviceView {
-                    label: label.clone(),
-                    alias: alias.clone(),
-                    selector: selector.clone(),
-                    rung: "model".into(),
-                    survives_replug: true,
-                    backend: "interception".into(),
-                };
-                ok("device staged", self.staged())
+        let mut setup = self.stage.lock().unwrap();
+        match edit.apply(&setup) {
+            Ok(next) => {
+                *setup = next;
+                ksx_api::StageOutcome::ok(&setup, "staged")
             }
-            ksx_api::StageEdit::SetBlocking { blocking } => {
-                let known = ksx_api::BlockingOption::roster()
-                    .iter()
-                    .any(|option| option.name == *blocking);
-                if !known {
-                    return refused("unknown blocking mode", self.staged());
-                }
-                self.stage.lock().unwrap().blocking = blocking.clone();
-                ok("blocking staged", self.staged())
-            }
-            ksx_api::StageEdit::SetDeviceBackend {
-                expected_selector,
-                backend,
-            } => {
-                let mut stage = self.stage.lock().unwrap();
-                if stage.device.selector != *expected_selector {
-                    drop(stage);
-                    return refused("the staged selection changed", self.staged());
-                }
-                stage.device.backend = backend.clone();
-                drop(stage);
-                ok("backend staged", self.staged())
-            }
-            _ => refused(
-                "the fixture stages only the migrated keyboard verbs — a daemon holds the rest",
-                self.staged(),
-            ),
+            Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
         }
     }
 
@@ -362,143 +398,7 @@ impl ControlSource for Store {
     /// how a reviewer screenshots the stage's DualShock schematic (the show
     /// pair follows the first slot's family).
     fn staged(&self) -> ksx_api::StagedSetupView {
-        // One lock, taken before the struct literal: two `.lock()` calls
-        // inside one literal would hold the first guard to the end of the
-        // whole expression and deadlock on the second.
-        let (staged_device, staged_blocking) = {
-            let stage = self.stage.lock().unwrap();
-            (stage.device.clone(), stage.blocking.clone())
-        };
-        let ps_first = std::env::var("KSX_FIXTURE_FIRST").as_deref() == Ok("ps");
-        let persona = |name: &str, label: &str, is_xinput: bool| ksx_api::PersonaOption {
-            name: name.into(),
-            label: label.into(),
-            is_xinput,
-            backend: "vigem".into(),
-            backend_label: "ViGEmBus".into(),
-            instance_limit: None,
-            can_plug: true,
-            gap: None,
-            instead: label.into(),
-            available: true,
-            unavailable_reason: None,
-        };
-        // Real authoring tables, so the binding pane (and its screenshots)
-        // show rows with the interesting notes: a multi-bind with fan-out, a
-        // turbo'd trigger, a latched bumper — the states a reviewer needs to
-        // see rendered.
-        let authored = |name: &str| {
-            use ksx_core::preset::Binding;
-            use ksx_core::{Axis, DpadDirection, Key, XButton, AXIS_MAX, AXIS_MIN};
-            let core = ksx_core::Preset {
-                name: name.to_owned(),
-                entries: vec![
-                    (Key::G, Binding::Button(XButton::A)),
-                    (Key::H, Binding::Button(XButton::A)),
-                    (Key::G, Binding::Button(XButton::B)),
-                    (Key::J, Binding::Button(XButton::X)),
-                    (Key::K, Binding::Button(XButton::Y)),
-                    (Key::T, Binding::Trigger(ksx_core::Trigger::Right)),
-                    (Key::L, Binding::Button(XButton::LeftBumper)),
-                    (
-                        Key::W,
-                        Binding::Axis {
-                            axis: Axis::Y,
-                            value: AXIS_MAX,
-                        },
-                    ),
-                    (
-                        Key::S,
-                        Binding::Axis {
-                            axis: Axis::Y,
-                            value: AXIS_MIN,
-                        },
-                    ),
-                    (
-                        Key::A,
-                        Binding::Axis {
-                            axis: Axis::X,
-                            value: AXIS_MIN,
-                        },
-                    ),
-                    (
-                        Key::D,
-                        Binding::Axis {
-                            axis: Axis::X,
-                            value: AXIS_MAX,
-                        },
-                    ),
-                    (Key::Up, Binding::Dpad(DpadDirection::Up)),
-                    (Key::Down, Binding::Dpad(DpadDirection::Down)),
-                    (Key::Enter, Binding::Button(XButton::Start)),
-                ],
-                chords: Vec::new(),
-                macros: Default::default(),
-                turbo: vec![ksx_core::TurboBinding::new(
-                    Binding::Trigger(ksx_core::Trigger::Right),
-                    12,
-                )],
-                toggle: vec![Binding::Button(XButton::LeftBumper)],
-                protected: false,
-            };
-            let bindings = core.live_bindings();
-            (ksx_config::PresetFile::from_core(&core), bindings)
-        };
-        let (p1_file, p1_bindings) = authored("Player 1");
-        let (p2_file, p2_bindings) = authored("Player 2");
-        let mut slots = vec![
-            ksx_api::StagedSlotView {
-                number: 1,
-                persona: "xbox360".into(),
-                persona_label: "Xbox 360".into(),
-                is_xinput: true,
-                preset: "Player 1".into(),
-                authoring: Some(p1_file),
-                socd: "last-input".into(),
-                socd_label: "Last press wins".into(),
-                bindings: p1_bindings,
-            },
-            ksx_api::StagedSlotView {
-                number: 2,
-                persona: "playstation".into(),
-                persona_label: "PlayStation".into(),
-                is_xinput: false,
-                preset: "Player 2".into(),
-                authoring: Some(p2_file),
-                socd: String::new(),
-                socd_label: String::new(),
-                bindings: p2_bindings,
-            },
-        ];
-        if ps_first {
-            slots.reverse();
-            slots[0].number = 1;
-            slots[1].number = 2;
-        }
-        ksx_api::StagedSetupView {
-            reachable: true,
-            error: None,
-            empty: false,
-            device: Some(staged_device),
-            slots,
-            blocking: Some(staged_blocking),
-            next_slot: Some(3),
-            next_preset: Some("Player 3".into()),
-            xinput_used: 1,
-            max_slots: 16,
-            max_xinput_slots: 4,
-            personas: vec![
-                persona("xbox360", "Xbox 360", true),
-                persona("playstation", "PlayStation", false),
-            ],
-            layouts: ksx_api::TemplateRow::roster(),
-            default_layout: "arcade-6button".into(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            socd_options: ksx_api::SocdOption::roster(),
-            dirty: true,
-            origin: "config".into(),
-            ..ksx_api::StagedSetupView::default()
-        }
+        ksx_api::StagedSetupView::of(&self.stage.lock().unwrap())
     }
 
     fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {

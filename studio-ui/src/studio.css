@@ -8314,3 +8314,142 @@ a.wsrow-title:hover {
   display: flex;
   justify-content: flex-end;
 }
+
+
+/* ── Migration pass 2: rack, bindings, session ── */
+
+/* Inline form wrappers stay invisible to flex layouts. */
+.n-inline {
+  display: contents;
+}
+
+.n-slot-txt {
+  flex: 1;
+  min-width: 0;
+}
+
+.n-slotbtn {
+  width: 100%;
+  border: 1px dashed var(--n-line-2);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.n-hint {
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.n-save {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.nm-pad {
+  padding: 10px 12px;
+  font-size: 11.5px;
+}
+
+/* The binding rows: label + served note, chip, clear. */
+.n-bind-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.n-bind-note {
+  font-size: 10.5px;
+  color: var(--n-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.n-keychip.ghost {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #3f424d;
+  color: var(--n-text-3);
+}
+
+.n-bclear {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-bclear:hover {
+  background: rgba(231, 154, 166, 0.15);
+  color: #e79aa6;
+}
+
+.n-bclear.none {
+  display: none;
+}
+
+/* The create form: persona cards are radio labels; :checked paints the
+   selection ring the design gave the cards. */
+.nd-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.nd-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nd-card {
+  position: relative;
+}
+
+.nd-card.sel {
+  cursor: pointer;
+}
+
+.nd-card:has(.nd-radio:checked) {
+  background: rgba(150, 138, 224, 0.12);
+  box-shadow: inset 0 0 0 1.5px var(--n-accent);
+}
+
+.nd-card:has(.nd-radio:focus-visible) {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.nd-card-t,
+.nd-card-api,
+.nd-card-note {
+  display: block;
+}
+
+.nd-select {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 8px;
+  background: #1d1f2b;
+  color: var(--n-text);
+  font: inherit;
+  font-size: 12.5px;
+}

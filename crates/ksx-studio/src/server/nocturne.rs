@@ -29,6 +29,32 @@ pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved 
 pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
+pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
+
+pub(super) const N_ADD_LAYOUT_ERROR: &str = "error: That starting layout has no key block for this player number, so the controller was not added. Try another layout or Empty; nothing was changed.";
+
+pub(super) const N_DUP_OK: &str =
+    "Controller duplicated — same layout, same rules, next free slot. Nothing has been saved.";
+
+pub(super) const N_DUP_FULL: &str =
+    "error: Every controller slot is staged, so there is nothing free to duplicate into. \
+     Remove one first.";
+
+pub(super) const N_SAVE_OK: &str = "Setup saved for later. Play has not started.";
+
+pub(super) const N_SAVE_ERROR: &str =
+    "error: The setup could not be saved. Check the draft on this screen; nothing was written.";
+
+pub(super) const N_PLAY_OK: &str = "Play started. Use Stop to return the keyboard to normal.";
+
+pub(super) const N_PLAY_ERROR: &str =
+    "error: Play could not start. Check the draft on this screen; nothing was started.";
+
+pub(super) const N_STOP_OK: &str = "Play stopped. Keyboards type normally again.";
+
+pub(super) const N_STOP_ERROR: &str =
+    "error: Play could not be stopped. Try again, or use L-Ctrl five times.";
+
 pub(super) const N_EDIT_ERROR: &str =
     "error: The change could not be made. Reopen ksx and try again; nothing was changed.";
 
@@ -85,9 +111,19 @@ pub(super) const N_CAPTURE_RELEASED_STAGE_CHANGED: &str = "error: Windows releas
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 20] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 30] = [
     N_DEVICE_OK,
     N_BLOCKING_OK,
+    N_EDIT_OK,
+    N_ADD_LAYOUT_ERROR,
+    N_DUP_OK,
+    N_DUP_FULL,
+    N_SAVE_OK,
+    N_SAVE_ERROR,
+    N_PLAY_OK,
+    N_PLAY_ERROR,
+    N_STOP_OK,
+    N_STOP_ERROR,
     N_EDIT_ERROR,
     N_IDENTIFY_OK,
     N_IDENTIFY_TIMEOUT,
@@ -135,6 +171,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
+        let session = state.control.session();
         let (scan, unavailable) = match state.machine.device_scan() {
             Ok(scan) => (scan, String::new()),
             Err(refusal) => (ksx_api::DeviceScanView::default(), flash_of(refusal)),
@@ -142,6 +179,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
         NocturnePayload {
             staged,
             scan,
+            session,
             unavailable,
             view: Default::default(),
         }
@@ -152,6 +190,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
         NocturnePayload {
             staged: ksx_api::StagedSetupView::unreachable("the nocturne collection panicked"),
             scan: ksx_api::DeviceScanView::default(),
+            session: SessionView::unreachable("the nocturne collection panicked"),
             unavailable: "the device scan panicked — nothing below is a reading of this machine"
                 .to_owned(),
             view: Default::default(),
@@ -548,6 +587,231 @@ pub(super) async fn nocturne_form_capture_release(
         CaptureMutation::Release,
         outcome.unwrap_or_else(|failure| failure),
     )
+}
+
+// ── The rack (moved from /workspace) and the session verbs ─────────────────
+
+/// Run one staging edit off the async workers and 303 back with this page's
+/// sentence. One value in the daemon and nothing else — no file, no driver,
+/// no session (`FIRST-RUN.md` §2), which is why there is no confirm step.
+async fn nocturne_stage_edit(state: Arc<AppState>, edit: ksx_api::StageEdit) -> Response {
+    let ok = tokio::task::spawn_blocking(move || state.control.stage_edit(&edit).ok)
+        .await
+        .unwrap_or(false);
+    nocturne_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneSlotForm {
+    number: u8,
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneAddForm {
+    persona: String,
+    /// From `StagedSetupView::next_preset` — served, because it becomes a
+    /// file name.
+    preset: String,
+    /// A `TemplateRow::id` off the served roster.
+    #[serde(default)]
+    layout: Option<String>,
+    /// A `Socd` name off the served roster; absent keeps the engine default.
+    #[serde(default)]
+    socd: Option<String>,
+}
+
+/// POST /nocturne/controller (and /workspace/controller) — add the next
+/// controller, with the create form's opposite-directions answer applied to
+/// the fresh slot in the same request.
+pub(super) async fn nocturne_form_add(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneAddForm>,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: form.persona,
+            preset: form.preset,
+            layout: None,
+        });
+        if !added.ok {
+            return N_EDIT_ERROR;
+        }
+        let Some(number) = added.setup.slots.iter().map(|slot| slot.number).max() else {
+            return N_EDIT_ERROR;
+        };
+        if let Some(layout) = form.layout.filter(|layout| !layout.trim().is_empty()) {
+            // A layout dresses the slot's own player block when it has one;
+            // past the blocks it was authored for, fall back to the player-1
+            // block — the same keys as P1, which the shared-keys accounting
+            // treats as the first-class state it is.
+            let dressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                number,
+                layout: layout.clone(),
+                player: None,
+            });
+            if !dressed.ok {
+                let redressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                    number,
+                    layout,
+                    player: Some(1),
+                });
+                if !redressed.ok {
+                    let _ = state
+                        .control
+                        .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+                    return N_ADD_LAYOUT_ERROR;
+                }
+            }
+        }
+        if let Some(socd) = form.socd.filter(|socd| !socd.trim().is_empty()) {
+            // Best-effort: the controller exists and binds; a refusal here is
+            // an older daemon, and the rule stays editable afterwards.
+            let _ = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::SetSocd { number, socd });
+        }
+        N_EDIT_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+/// POST /nocturne/controller/remove (and /workspace/controller/remove).
+pub(super) async fn nocturne_form_remove(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneSlotForm>,
+) -> Response {
+    nocturne_stage_edit(
+        state,
+        ksx_api::StageEdit::RemoveSlot {
+            number: form.number,
+        },
+    )
+    .await
+}
+
+/// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)
+/// — the same controller again, in the next free slot. A COMPOSITION of
+/// existing staging verbs: add + set-bindings + set-socd, with the fresh slot
+/// removed again if the middle step refuses. Moved from /workspace verbatim.
+pub(super) async fn nocturne_form_duplicate(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneSlotForm>,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(source) = staged.slots.iter().find(|slot| slot.number == form.number) else {
+            return N_EDIT_ERROR;
+        };
+        let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
+        else {
+            return N_DUP_FULL;
+        };
+        let Some(mut authoring) = source.authoring.clone() else {
+            // An older daemon serves no authoring table; there is nothing
+            // honest to copy from.
+            return N_EDIT_ERROR;
+        };
+        let persona = source.persona.clone();
+        let socd = source.socd.clone();
+
+        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: Some(new_number),
+            persona,
+            preset: new_preset.clone(),
+            layout: None,
+        });
+        if !added.ok {
+            return N_EDIT_ERROR;
+        }
+        // The copy keeps everything except the NAME, which must be the served
+        // fresh one — a save writes one preset file per slot, and two slots
+        // pointing at one file would alias their edits forever after.
+        authoring.name = new_preset;
+        let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+            number: new_number,
+            preset: Box::new(authoring),
+        });
+        if !bound.ok {
+            let _ = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
+            return N_EDIT_ERROR;
+        }
+        if !socd.is_empty() && socd != "off" {
+            let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+                number: new_number,
+                socd,
+            });
+        }
+        N_DUP_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneClearForm {
+    slot: u8,
+    function: String,
+}
+
+/// POST /nocturne/bind/clear (and /workspace/bind/clear) — one control back
+/// to unbound on the staged slot, via the daemon's own staged-bind verb with
+/// the canonical clear placeholder. Moved from /workspace verbatim.
+pub(super) async fn nocturne_form_bind_clear(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneClearForm>,
+) -> Response {
+    let ok = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
+            return false;
+        };
+        state
+            .control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: form.slot,
+                preset: slot.preset.clone(),
+                function: form.function,
+                keys: vec!["none".to_owned()],
+                force: false,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    })
+    .await
+    .unwrap_or(false);
+    nocturne_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+/// POST /nocturne/save — the ONE writing verb: stage-commit.
+pub(super) async fn nocturne_form_save(State(state): State<Arc<AppState>>) -> Response {
+    let ok = tokio::task::spawn_blocking(move || state.control.stage_commit().ok)
+        .await
+        .unwrap_or(false);
+    nocturne_redirect(if ok { N_SAVE_OK } else { N_SAVE_ERROR })
+}
+
+/// POST /nocturne/play — start a session from the staged setup, writing
+/// nothing. The daemon gates readiness; a refusal flashes without a start.
+pub(super) async fn nocturne_form_play(State(state): State<Arc<AppState>>) -> Response {
+    let ok = tokio::task::spawn_blocking(move || state.control.stage_play().ok)
+        .await
+        .unwrap_or(false);
+    nocturne_redirect(if ok { N_PLAY_OK } else { N_PLAY_ERROR })
+}
+
+/// POST /nocturne/stop — end the session; keyboards type normally again.
+pub(super) async fn nocturne_form_stop(State(state): State<Arc<AppState>>) -> Response {
+    let ok = tokio::task::spawn_blocking(move || state.control.stop().is_ok())
+        .await
+        .unwrap_or(false);
+    nocturne_redirect(if ok { N_STOP_OK } else { N_STOP_ERROR })
 }
 
 // ── Identify (moved from /start; the one transaction, shared by every door) ─

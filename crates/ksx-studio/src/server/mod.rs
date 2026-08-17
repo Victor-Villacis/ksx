@@ -225,18 +225,28 @@ pub fn serve(
                 post(nocturne_form_capture_release),
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
+            .route("/nocturne/controller", post(nocturne_form_add))
+            .route("/nocturne/controller/remove", post(nocturne_form_remove))
+            .route(
+                "/nocturne/controller/duplicate",
+                post(nocturne_form_duplicate),
+            )
+            .route("/nocturne/bind/clear", post(nocturne_form_bind_clear))
+            .route("/nocturne/save", post(nocturne_form_save))
+            .route("/nocturne/play", post(nocturne_form_play))
+            .route("/nocturne/stop", post(nocturne_form_stop))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
             .route("/workspace/controller/move", post(workspace_form_move))
-            .route("/workspace/controller/remove", post(workspace_form_remove))
+            .route("/workspace/controller/remove", post(nocturne_form_remove))
             .route("/workspace/controller/socd", post(workspace_form_socd))
             .route(
                 "/workspace/controller/duplicate",
-                post(workspace_form_duplicate),
+                post(nocturne_form_duplicate),
             )
-            .route("/workspace/controller", post(workspace_form_add))
+            .route("/workspace/controller", post(nocturne_form_add))
             .route("/workspace/device/identify", post(workspace_form_identify))
-            .route("/workspace/bind/clear", post(workspace_form_bind_clear))
+            .route("/workspace/bind/clear", post(nocturne_form_bind_clear))
             .route("/workspace/adopt", post(workspace_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))

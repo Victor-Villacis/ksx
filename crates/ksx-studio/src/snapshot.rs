@@ -3712,6 +3712,7 @@ fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceCh
 pub struct NocturnePayload {
     pub staged: ksx_api::StagedSetupView,
     pub scan: ksx_api::DeviceScanView,
+    pub session: crate::control::SessionView,
     /// Empty when the scan answered; otherwise the refusal, verbatim.
     #[serde(default)]
     pub unavailable: String,
@@ -3767,6 +3768,54 @@ pub struct NocturneChoiceRow {
     pub cls: String,
 }
 
+/// One staged controller in the rack.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneRackRow {
+    pub number: String,
+    pub badge: String,
+    pub name: String,
+    pub meta: String,
+    pub cls: String,
+}
+
+/// One free slot the rack shows as an invitation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneEmptyRow {
+    pub badge: String,
+}
+
+/// One persona card in the create form. Unavailable personas stay listed —
+/// a menu that silently drops choices teaches a user the product has fewer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturnePersonaRow {
+    pub name: String,
+    pub label: String,
+    pub api: String,
+    pub note: String,
+    pub cls: String,
+}
+
+/// One `<option>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneOptionRow {
+    pub value: String,
+    pub label: String,
+}
+
+/// One binding-list row, composed off the SAME machinery the mapper reads
+/// (via [`workspace_bind_rows`]) and re-dressed for the Nocturne pane.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneBindRow {
+    pub function: String,
+    pub label: String,
+    pub chip: String,
+    pub note: String,
+    pub cls: String,
+    pub chip_cls: String,
+    pub clear_cls: String,
+    pub slot: String,
+}
+
 /// Every sentence `/nocturne` states as a served fact.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneDerived {
@@ -3793,6 +3842,32 @@ pub struct NocturneDerived {
     pub cap_instance: String,
     pub cap_prepare: bool,
     pub cap_release: bool,
+    /// The title bar: real version, the draft's origin + dirty answer, the
+    /// backend-owned escape hatch, and the session verbs' visibility.
+    pub version: String,
+    pub chip_text: String,
+    pub save_text: String,
+    pub escape_line: String,
+    pub play_cls: String,
+    pub stop_cls: String,
+    /// The rack.
+    pub rack_rows: Vec<NocturneRackRow>,
+    pub rack_empty: Vec<NocturneEmptyRow>,
+    pub rack_caption: String,
+    /// The create form: real personas, layouts, SOCD roster, served preset
+    /// name, and the lede naming the player and board.
+    pub add_lede: String,
+    pub add_preset: String,
+    pub persona_rows: Vec<NocturnePersonaRow>,
+    pub layout_opts: Vec<NocturneOptionRow>,
+    pub socd_opts: Vec<NocturneOptionRow>,
+    /// The stage's meta bar and the binding pane, off the first slot.
+    pub pad_badge: String,
+    pub pad_name: String,
+    pub pad_sub: String,
+    pub bind_title: String,
+    pub bind_rows: Vec<NocturneBindRow>,
+    pub bind_foot: String,
 }
 
 impl NocturneDerived {
@@ -3933,7 +4008,195 @@ impl NocturneDerived {
             "n-capsw".to_owned()
         };
 
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let chip_text = if !staged.reachable {
+            "Draft unavailable".to_owned()
+        } else if staged.origin == "config" {
+            "Saved configuration".to_owned()
+        } else {
+            "New draft".to_owned()
+        };
+        let save_text = if !staged.reachable {
+            String::new()
+        } else if staged.dirty {
+            "Unsaved changes".to_owned()
+        } else {
+            "Saved".to_owned()
+        };
+        let escape_line = ksx_api::stage::ESCAPE_HATCH_LINE.to_owned();
+        let running = p.session.reachable && p.session.running;
+        let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
+        let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
+
+        let rack_rows: Vec<NocturneRackRow> = if staged.reachable {
+            staged
+                .slots
+                .iter()
+                .map(|slot| NocturneRackRow {
+                    number: slot.number.to_string(),
+                    badge: format!("P{}", slot.number),
+                    name: slot.persona_label.clone(),
+                    meta: format!(
+                        "\"{}\" · {} bound · SOCD {}",
+                        slot.preset, slot.bindings, slot.socd_label
+                    ),
+                    cls: "n-slot on".to_owned(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let rack_empty: Vec<NocturneEmptyRow> = if !staged.reachable {
+            Vec::new()
+        } else {
+            match staged.next_slot {
+                None => Vec::new(),
+                Some(next) => {
+                    // Fill the rack to four visible rows the way the design
+                    // does; past four, one invitation for the next slot.
+                    let upto = if staged.slots.len() < 4 {
+                        (u8::try_from(staged.slots.len()).unwrap_or(u8::MAX) + 1)..=4
+                    } else {
+                        next..=next
+                    };
+                    upto.map(|n| NocturneEmptyRow {
+                        badge: format!("P{n}"),
+                    })
+                    .collect()
+                }
+            }
+        };
+        let rack_caption = if staged.reachable {
+            format!(
+                "{}/{} XInput · {}/{} slots",
+                staged.xinput_used,
+                staged.max_xinput_slots,
+                staged.slots.len(),
+                staged.max_slots
+            )
+        } else {
+            String::new()
+        };
+
+        let add_lede = match (staged.next_slot, staged.device.as_ref()) {
+            (Some(next), Some(device)) => {
+                format!("Games will see Player {next}, driven by {}.", device.label)
+            }
+            (Some(next), None) => {
+                format!("Games will see Player {next}, driven by the selected keyboard.")
+            }
+            (None, _) => "Every controller slot is staged. Remove one to add another.".to_owned(),
+        };
+        let add_preset = staged.next_preset.clone().unwrap_or_default();
+        let persona_rows: Vec<NocturnePersonaRow> = staged
+            .personas
+            .iter()
+            .map(|persona| {
+                let usable = persona.can_plug && persona.available;
+                NocturnePersonaRow {
+                    name: persona.name.clone(),
+                    label: persona.label.clone(),
+                    api: if persona.is_xinput {
+                        format!("{} · XInput", persona.backend_label)
+                    } else {
+                        persona.backend_label.clone()
+                    },
+                    note: persona
+                        .unavailable_reason
+                        .clone()
+                        .or_else(|| persona.gap.clone())
+                        .unwrap_or_default(),
+                    cls: if usable {
+                        "nd-card sel".to_owned()
+                    } else {
+                        "nd-card off".to_owned()
+                    },
+                }
+            })
+            .collect();
+        let layout_opts: Vec<NocturneOptionRow> = staged
+            .layouts
+            .iter()
+            .map(|layout| NocturneOptionRow {
+                value: layout.id.clone(),
+                label: layout.label.clone(),
+            })
+            .collect();
+        let socd_opts: Vec<NocturneOptionRow> = staged
+            .socd_options
+            .iter()
+            .map(|option| NocturneOptionRow {
+                value: option.name.clone(),
+                label: option.title.clone(),
+            })
+            .collect();
+
+        let selected = staged.slots.first();
+        let (pad_badge, pad_name, pad_sub) = match selected {
+            Some(slot) => (
+                format!("P{}", slot.number),
+                slot.persona_label.clone(),
+                format!("\"{}\" · SOCD {}", slot.preset, slot.socd_label),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
+        let binds = workspace_bind_rows(staged, selected);
+        let bind_rows: Vec<NocturneBindRow> = binds
+            .rows
+            .iter()
+            .map(|row| {
+                // The mapper's own unbound placeholder (`key_tag`).
+                let bound = row.keys != "—";
+                NocturneBindRow {
+                    function: row.function.clone(),
+                    label: row.label.clone(),
+                    chip: if bound {
+                        row.keys.clone()
+                    } else {
+                        "Unbound".to_owned()
+                    },
+                    note: row.notes.clone(),
+                    cls: if bound {
+                        "n-bind on".to_owned()
+                    } else {
+                        "n-bind".to_owned()
+                    },
+                    chip_cls: if bound {
+                        "n-keychip".to_owned()
+                    } else {
+                        "n-keychip ghost".to_owned()
+                    },
+                    clear_cls: if bound {
+                        "n-bclear".to_owned()
+                    } else {
+                        "n-bclear none".to_owned()
+                    },
+                    slot: row.slot.clone(),
+                }
+            })
+            .collect();
+
         Self {
+            version,
+            chip_text,
+            save_text,
+            escape_line,
+            play_cls,
+            stop_cls,
+            rack_rows,
+            rack_empty,
+            rack_caption,
+            add_lede,
+            add_preset,
+            persona_rows,
+            layout_opts,
+            socd_opts,
+            pad_badge,
+            pad_name,
+            pad_sub,
+            bind_title: binds.title,
+            bind_rows,
+            bind_foot: binds.foot,
             dev_count,
             dev_note,
             kb_title,

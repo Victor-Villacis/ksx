@@ -58,6 +58,7 @@ const [nxOpenLeft, setNxOpenLeft] = createSignal(false);
 const [nxOpenUp, setNxOpenUp] = createSignal(false);
 const [nMenuOpen, setNMenuOpen] = createSignal(false);
 const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
+const [nDlgOpen, setNDlgOpen] = createSignal(false);
 
 const ui: {
   sel: "left" | "up" | null;
@@ -65,17 +66,20 @@ const ui: {
   turbo: boolean;
   menu: boolean;
   auto: boolean;
+  dlg: boolean;
 } = {
   sel: null,
   act: "hold",
   turbo: false,
   menu: false,
   auto: false,
+  dlg: false,
 };
 
 function applyNocturneUi(): void {
   setNMenuOpen(ui.menu);
   setNAutoCls(ui.auto ? "nx-sw on" : "nx-sw");
+  setNDlgOpen(ui.dlg);
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
   setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
@@ -132,6 +136,10 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "turbo") ui.turbo = !ui.turbo;
     else if (hit === "menu") ui.menu = !ui.menu;
     else if (hit === "auto") ui.auto = !ui.auto;
+    else if (hit === "slot-new") ui.dlg = true;
+    else if (hit === "dlg-close") ui.dlg = false;
+    // "dlg-noop" (the dialog panel itself) falls through: it exists so panel
+    // clicks stop at the panel instead of reaching the backdrop's dlg-close.
     applyNocturneUi();
   });
 }
@@ -475,7 +483,7 @@ export function NocturneIsland() {
         ...EMPTY_SLOTS.map((s) =>
           h(
             "div",
-            { class: "n-slot empty" },
+            { class: "n-slot empty", "data-nx": "slot-new" },
             h("span", { class: "n-pbadge dim" }, s.p),
             h(
               "div",
@@ -884,6 +892,122 @@ export function NocturneIsland() {
         ),
         h("div", { class: "n-right-foot" }, "16 of 24 inputs bound"),
       ),
+    ),
+    // ═══ Create-controller dialog (shot 07) ═══════════════════════════════
+    // Opened by any empty rack slot; Cancel, Create, or the backdrop close
+    // it. Static content matching the shot: Xbox 360 selected, Numpad player
+    // and Neutral pills active, both future personas blocked.
+    createShow(
+      () => nDlgOpen(),
+      () =>
+        h(
+          "div",
+          { class: "nd-back", "data-nx": "dlg-close" },
+          h(
+            "div",
+            { class: "nd", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Create a virtual controller" },
+            h(
+              "div",
+              null,
+              h("div", { class: "nd-kick" }, "New device"),
+              h("div", { class: "nd-title" }, "Create a virtual controller"),
+              h("div", { class: "nd-lede" }, "Games will see Player 2, driven by Corsair K70 RGB MK.2."),
+            ),
+            h(
+              "div",
+              null,
+              h("div", { class: "nd-lab" }, "Controller persona — what games will see"),
+              h(
+                "div",
+                { class: "nd-grid" },
+                h(
+                  "div",
+                  { class: "nd-card on" },
+                  h("div", { class: "nd-card-t" }, "Xbox 360"),
+                  h("div", { class: "nd-card-api" }, "ViGEmBus · XInput"),
+                ),
+                h(
+                  "div",
+                  { class: "nd-card" },
+                  h("div", { class: "nd-card-t" }, "PlayStation — DualShock 4"),
+                  h("div", { class: "nd-card-api" }, "ViGEmBus"),
+                ),
+                h(
+                  "div",
+                  { class: "nd-card" },
+                  h("div", { class: "nd-card-t" }, "DualSense"),
+                  h("div", { class: "nd-card-api" }, "HIDMaestro · plain USB"),
+                  h("div", { class: "nd-card-note" }, "HIDMaestro — endpoint created on Play"),
+                ),
+                h(
+                  "div",
+                  { class: "nd-card off" },
+                  h("div", { class: "nd-card-t" }, "Switch Pro"),
+                  h("div", { class: "nd-card-api" }, "Future gated capability"),
+                  h("div", { class: "nd-card-note dim" }, "Not selectable in v0.4.1"),
+                ),
+                h(
+                  "div",
+                  { class: "nd-card off" },
+                  h("div", { class: "nd-card-t" }, "Xbox Series"),
+                  h("div", { class: "nd-card-api" }, "Future gated capability"),
+                  h("div", { class: "nd-card-note dim" }, "Not selectable in v0.4.1"),
+                ),
+              ),
+              h(
+                "div",
+                { class: "nd-note" },
+                "Mix personas freely — P1 Xbox, P2 DualSense, and so on. XInput personas cap at 4 in total (Windows); 8 players is a realistic emulator target; 16 slots is the KSX ceiling.",
+              ),
+            ),
+            h(
+              "div",
+              { class: "nd-cols" },
+              h(
+                "div",
+                { class: "nd-col" },
+                h("div", { class: "nd-lab" }, "Starting bindings"),
+                h(
+                  "div",
+                  { class: "nd-pills" },
+                  h("span", { class: "nx-pill" }, "FPS — WASD"),
+                  h("span", { class: "nx-pill" }, "Racing"),
+                  h("span", { class: "nx-pill on" }, "Numpad player"),
+                  h("span", { class: "nx-pill" }, "Empty"),
+                ),
+                h("div", { class: "nd-colnote" }, "Whole pad on the numpad — good for a second player."),
+              ),
+              h(
+                "div",
+                { class: "nd-col" },
+                h("div", { class: "nd-lab" }, "SOCD cleaning"),
+                h(
+                  "div",
+                  { class: "nd-pills" },
+                  h("span", { class: "nx-pill on" }, "Neutral"),
+                  h("span", { class: "nx-pill" }, "Last input"),
+                  h("span", { class: "nx-pill" }, "First input"),
+                  h("span", { class: "nx-pill" }, "Off"),
+                ),
+                h(
+                  "div",
+                  { class: "nd-colnote" },
+                  "Resolves simultaneous opposite directions before the pad sees them.",
+                ),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h("button", { class: "nd-btn", type: "button", "data-nx": "dlg-close" }, "Cancel"),
+              h(
+                "button",
+                { class: "nd-btn primary", type: "button", "data-nx": "dlg-close" },
+                "Create controller",
+              ),
+            ),
+          ),
+        ),
     ),
   );
 }

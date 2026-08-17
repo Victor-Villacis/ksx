@@ -7394,3 +7394,170 @@ a.wsrow-title:hover {
     min-height: 40px;
   }
 }
+
+
+/* ── Create-controller dialog (shot 07) ── */
+
+.nd-back {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(13, 14, 22, 0.55);
+}
+
+.nd {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--n-panel-2);
+  box-shadow:
+    0 0 0 1px #595d6c,
+    0 24px 60px rgba(0, 0, 0, 0.6);
+  animation: noct-rise 0.14s ease-out;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nd {
+    animation: none;
+  }
+}
+
+.nd-kick {
+  margin-bottom: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--n-accent);
+}
+
+.nd-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.nd-lede {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--n-text-2);
+}
+
+.nd-lab {
+  margin-bottom: 7px;
+  font-size: 11px;
+  color: var(--n-text-2);
+}
+
+.nd-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.nd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 11px;
+  border-radius: 8px;
+  background: #1d1f2b;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
+  cursor: pointer;
+}
+
+.nd-card.on {
+  background: rgba(150, 138, 224, 0.12);
+  box-shadow: inset 0 0 0 1.5px var(--n-accent);
+}
+
+.nd-card.off {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nd-card-t {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.nd-card-api {
+  font-size: 11px;
+  color: var(--n-text-3);
+}
+
+.nd-card-note {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: #b5abfc;
+}
+
+.nd-card-note.dim {
+  color: var(--n-text-2);
+}
+
+.nd-note {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+.nd-cols {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.nd-col {
+  flex: 1;
+  min-width: 190px;
+}
+
+.nd-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.nd-colnote {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
+.nd-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.nd-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nd-btn.primary {
+  border-color: var(--n-accent);
+  color: var(--n-accent-2);
+}
+
+.n-slot.empty {
+  cursor: pointer;
+}

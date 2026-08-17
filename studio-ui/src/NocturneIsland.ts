@@ -74,6 +74,13 @@ export interface NocturneKeyCellView {
   title: string;
 }
 
+export interface NocturneGameRowView {
+  title: string;
+  meta: string;
+  cls: string;
+  ico_cls: string;
+}
+
 export interface NocturneBindRowView {
   function: string;
   label: string;
@@ -138,6 +145,21 @@ export interface NocturneView {
   kb_tray_head: string;
   kb_tray_cls: string;
   kb_note: string;
+  cfg_line: string;
+  cfg_meta: string;
+  cfg_cls: string;
+  cfg_check: string;
+  adopt_cls: string;
+  discard_note: string;
+  games_head: string;
+  game_rows: NocturneGameRowView[];
+  games_note: string;
+  auto_line: string;
+  auto_sw_cls: string;
+  auto_dir: string;
+  auto_btn: string;
+  auto_note: string;
+  auto_form_cls: string;
 }
 
 export interface NocturnePayload {
@@ -196,6 +218,21 @@ const [nKbTray, setNKbTray] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
+const [nCfgLine, setNCfgLine] = createSignal("");
+const [nCfgMeta, setNCfgMeta] = createSignal("");
+const [nCfgCls, setNCfgCls] = createSignal("nm-cfg");
+const [nCfgCheck, setNCfgCheck] = createSignal("");
+const [nAdoptCls, setNAdoptCls] = createSignal("nm-item none");
+const [nDiscardNote, setNDiscardNote] = createSignal("");
+const [nGamesHead, setNGamesHead] = createSignal("");
+const [nGameRows, setNGameRows] = createSignal<NocturneGameRowView[]>([]);
+const [nGamesNote, setNGamesNote] = createSignal("");
+const [nAutoLine, setNAutoLine] = createSignal("");
+const [nAutoSwCls, setNAutoSwCls] = createSignal("n-capsw");
+const [nAutoDir, setNAutoDir] = createSignal("");
+const [nAutoBtn, setNAutoBtn] = createSignal("");
+const [nAutoNote, setNAutoNote] = createSignal("");
+const [nAutoFormCls, setNAutoFormCls] = createSignal("n-capform none");
 
 // The action flash. The server fills these from the allowlisted query
 // parameter on a full-page load; the fetch-submit layer applies the same
@@ -255,6 +292,21 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTrayHead(v.kb_tray_head);
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
+  setNCfgLine(v.cfg_line);
+  setNCfgMeta(v.cfg_meta);
+  setNCfgCls(v.cfg_cls);
+  setNCfgCheck(v.cfg_check);
+  setNAdoptCls(v.adopt_cls);
+  setNDiscardNote(v.discard_note);
+  setNGamesHead(v.games_head);
+  setNGameRows(v.game_rows);
+  setNGamesNote(v.games_note);
+  setNAutoLine(v.auto_line);
+  setNAutoSwCls(v.auto_sw_cls);
+  setNAutoDir(v.auto_dir);
+  setNAutoBtn(v.auto_btn);
+  setNAutoNote(v.auto_note);
+  setNAutoFormCls(v.auto_form_cls);
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -267,19 +319,22 @@ export function applyNocturneUnreachable(): void {
  *  settle any in-flight identify banner. */
 export function applyFlash(flash: string | null): void {
   ui.identify = false;
-  // A dialog whose form just answered is done — the flash line and the
-  // refreshed panes are the answer now.
+  // A dialog or menu whose form just answered is done — the flash line and
+  // the refreshed panes are the answer now.
   ui.dlg = false;
   applyNocturneUi();
+  closeMenu();
   if (!flash || !flash.trim()) return;
   const err = flash.startsWith("error");
   setNFlashLine(flash.replace(/^error:\s*/, ""));
   setNFlashCls(err ? "n-flash err" : "n-flash ok");
 }
 
-// ── CLIENT-ONLY UI state: menus, dialogs, rails, the identify banner ───────
+// ── CLIENT-ONLY UI state: dialogs, rails, the identify banner ──────────────
+// The configuration menu is NOT here: it is a native `details` since the
+// menu pass, so its verbs work with scripting off and its served facts paint
+// on the SSR pass. JS only adds outside-click dismissal.
 
-const [nMenuOpen, setNMenuOpen] = createSignal(false);
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
@@ -288,13 +343,11 @@ const [nIdBoxCls, setNIdBoxCls] = createSignal("n-idbox none");
 const [nIdText, setNIdText] = createSignal("Press a key on the keyboard you want to use");
 
 const ui: {
-  menu: boolean;
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
   identify: boolean;
 } = {
-  menu: false,
   dlg: false,
   leftRail: false,
   rightRail: false,
@@ -302,13 +355,17 @@ const ui: {
 };
 
 function applyNocturneUi(): void {
-  setNMenuOpen(ui.menu);
   setNDlgOpen(ui.dlg);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
   setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
   setNIdText("Press a key on the keyboard you want to use");
+}
+
+/** Close the configuration menu (a native details, not signal state). */
+function closeMenu(): void {
+  learnRoot?.querySelector(".n-chipd[open]")?.removeAttribute("open");
 }
 
 // ── The learn flow (ported from map.ts, single-target) ─────────────────────
@@ -695,17 +752,21 @@ export function nocturneWire(root: HTMLElement): void {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
     if (!hit) {
-      // Any un-annotated click closes an open dropdown (menus dismiss on
-      // outside clicks; menu rows carry no data-nx, so they land here via
-      // the chip ancestor).
-      if (ui.menu) {
-        ui.menu = false;
-        applyNocturneUi();
-      }
+      // Any un-annotated click closes the open configuration menu (a
+      // native details; JS only adds outside-click dismissal).
+      closeMenu();
       return;
     }
-    if (hit === "menu") ui.menu = !ui.menu;
-    else if (hit === "slot-new") ui.dlg = true;
+    if (hit === "menu-sum") {
+      // The chip summary: let the native details toggle run.
+      return;
+    }
+    if (hit === "menu-noop") {
+      // A click inside the open menu panel: stays open, and real form
+      // controls in it keep working — never preventDefault here.
+      return;
+    }
+    if (hit === "slot-new") ui.dlg = true;
     else if (hit === "dlg-close") ui.dlg = false;
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
@@ -743,7 +804,7 @@ export function nocturneWire(root: HTMLElement): void {
       // panel contains real form controls.
       return;
     }
-    if (hit === "menu" || hit === "slot-new" || hit === "dlg-close" || hit === "pane-left" || hit === "pane-right" || hit === "filter-reset") {
+    if (hit === "slot-new" || hit === "dlg-close" || hit === "pane-left" || hit === "pane-right" || hit === "filter-reset") {
       ev.preventDefault();
     }
     applyNocturneUi();
@@ -761,24 +822,125 @@ export function NocturneIsland() {
       h("div", { class: "n-logo" }),
       h("span", { class: "n-brand" }, "KSX Studio"),
       h("span", { class: "n-ver" }, () => nVersion()),
+      // The configuration menu: a NATIVE details, so every verb in it works
+      // with scripting off and the served facts paint on the SSR pass. JS
+      // adds only outside-click dismissal (and closes it after an action).
       h(
-        "div",
-        { class: "n-chip", "data-nx": "menu" },
-        h("span", { class: "n-chip-ico" }, "▣"),
-        h("span", null, () => nChipText()),
-        h("span", { class: "n-chip-caret" }, "▾"),
-        createShow(
-          () => nMenuOpen(),
-          () =>
+        "details",
+        { class: "n-chipd" },
+        h(
+          "summary",
+          { class: "n-chip", "data-nx": "menu-sum" },
+          h("span", { class: "n-chip-ico" }, "▣"),
+          h("span", null, () => nChipText()),
+          h("span", { class: "n-chip-caret" }, "▾"),
+        ),
+        h(
+          "div",
+          { class: "nm", "data-nx": "menu-noop" },
+          h("div", { class: "nm-kick" }, "Configuration"),
+          h(
+            "div",
+            { class: () => nCfgCls() },
+            h(
+              "span",
+              { class: "nm-cfg-txt" },
+              h("span", { class: "nm-cfg-t" }, () => nCfgLine()),
+              h("span", { class: "nm-cfg-m" }, () => nCfgMeta()),
+            ),
+            h("span", { class: "nm-check" }, () => nCfgCheck()),
+          ),
+          h(
+            "form",
+            { class: "n-inline", method: "post", action: "/nocturne/adopt" },
+            h(
+              "button",
+              { type: "submit", class: () => nAdoptCls() },
+              "Load the saved configuration into this draft",
+            ),
+          ),
+          // Start over: the dirty-aware sentence sits BEFORE the verb, in a
+          // native fold — consent sized to what is at risk (a memory draft).
+          h(
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Start over…"),
             h(
               "div",
-              { class: "nm" },
+              { class: "nm-subbody" },
+              h("p", { class: "nm-auto-note" }, () => nDiscardNote()),
               h(
-                "div",
-                { class: "nm-auto-note nm-pad" },
-                "Saved configurations, saved games and import/export arrive with the configuration pass. Until then, Save writes this draft to the config and Play runs it.",
+                "form",
+                { class: "n-inline", method: "post", action: "/nocturne/discard" },
+                h("button", { type: "submit", class: "nm-item danger" }, "Discard this draft"),
               ),
             ),
+          ),
+          h("div", { class: "nm-div" }),
+          h("div", { class: "nm-kick games" }, () => nGamesHead()),
+          createList(
+            () => nGameRows(),
+            (r) => r.title + "|" + r.meta + "|" + r.cls + "|" + r.ico_cls,
+            (r) =>
+              h(
+                "form",
+                { class: "n-inline", method: "post", action: "/nocturne/adopt" },
+                h("input", { type: "hidden", name: "profile", value: r.title }),
+                h(
+                  "button",
+                  { type: "submit", title: "Load this game's controllers into the draft — Play stays a separate step", class: r.cls },
+                  h("span", { class: r.ico_cls }, "▣"),
+                  h(
+                    "span",
+                    { class: "nm-cfg-txt" },
+                    h("span", { class: "nm-game-t" }, r.title),
+                    h("span", { class: "nm-cfg-m" }, r.meta),
+                  ),
+                ),
+              ),
+          ),
+          h("p", { class: "nm-auto-note nm-pad" }, () => nGamesNote()),
+          h("div", { class: "nm-div" }),
+          h("div", { class: "nm-kick" }, "Maintenance"),
+          h(
+            "a",
+            { class: "nm-item nm-link", href: "/setup/export.json" },
+            "Export the configuration (download)",
+          ),
+          h(
+            "a",
+            { class: "nm-item nm-link", href: "/setup" },
+            "Import — opens the consent flow on Setup",
+          ),
+          h("div", { class: "nm-div" }),
+          // The sign-in task, off the SAME derivation /start's card uses.
+          h(
+            "details",
+            { class: "nm-sub" },
+            h(
+              "summary",
+              { class: "nm-auto" },
+              h("span", { class: () => nAutoSwCls() }, h("span", { class: "nx-knob" })),
+              h("span", { class: "nm-auto-t" }, () => nAutoLine()),
+            ),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h("p", { class: "nm-auto-note" }, () => nAutoNote()),
+              h(
+                "form",
+                { method: "post", action: "/nocturne/autostart", class: () => nAutoFormCls() },
+                h("input", { type: "hidden", name: "enable", value: () => nAutoDir() }),
+                h(
+                  "label",
+                  { class: "nm-auto-note nm-consent" },
+                  h("input", { type: "checkbox", name: "confirm_autostart", value: "yes" }),
+                  " I understand what happens at sign-in.",
+                ),
+                h("button", { type: "submit", class: "nm-item" }, () => nAutoBtn()),
+              ),
+            ),
+          ),
         ),
       ),
       h(

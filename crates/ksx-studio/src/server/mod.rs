@@ -238,6 +238,9 @@ pub fn serve(
             .route("/nocturne/save", post(nocturne_form_save))
             .route("/nocturne/play", post(nocturne_form_play))
             .route("/nocturne/stop", post(nocturne_form_stop))
+            .route("/nocturne/adopt", post(nocturne_form_adopt))
+            .route("/nocturne/discard", post(nocturne_form_discard))
+            .route("/nocturne/autostart", post(nocturne_form_autostart))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
             .route("/workspace/controller/move", post(workspace_form_move))
@@ -250,7 +253,9 @@ pub fn serve(
             .route("/workspace/controller", post(nocturne_form_add))
             .route("/workspace/device/identify", post(workspace_form_identify))
             .route("/workspace/bind/clear", post(nocturne_form_bind_clear))
-            .route("/workspace/adopt", post(workspace_form_adopt))
+            // MIGRATED (2026-08-17): adopt lives in nocturne.rs now; this
+            // page's button keeps working — the answer lands on /nocturne.
+            .route("/workspace/adopt", post(nocturne_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))
             .route("/config/reload", post(config_reload))
@@ -462,8 +467,11 @@ pub fn serve(
             .route("/start/controller/layout", post(start_form_layout))
             .route("/start/controller/remove", post(start_form_remove))
             .route("/start/blocking", post(nocturne_form_blocking))
-            .route("/start/autostart", post(start_form_autostart))
-            .route("/start/discard", post(start_form_discard))
+            // MIGRATED (2026-08-17): the sign-in task and "Start over" live
+            // in nocturne.rs now; these cards keep working — the answers
+            // land on /nocturne.
+            .route("/start/autostart", post(nocturne_form_autostart))
+            .route("/start/discard", post(nocturne_form_discard))
             .route("/start/save", post(start_form_save))
             .route("/start/play", post(start_form_play))
             // Canon helper: correct no-cache + Service-Worker-Allowed

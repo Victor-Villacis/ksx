@@ -22,12 +22,6 @@ pub(super) const WS_EDIT_ERROR: &str =
 pub(super) const WS_MOVE_AT_END: &str =
     "That controller is already at that end of the order. Nothing changed.";
 
-pub(super) const WS_ADOPT_OK: &str =
-    "Showing the saved setup. Edits stay on this screen until Save or Play.";
-
-pub(super) const WS_ADOPT_BLOCKED: &str =
-    "error: There is already a draft on this screen, so the saved setup was not loaded over it.";
-
 pub(super) const WS_UNKNOWN_FLASH_ERROR: &str =
     "error: The workspace could not finish that request. Reopen ksx and try again.";
 
@@ -40,12 +34,10 @@ pub(super) const WS_IDENTIFY_TIMEOUT: &str =
 pub(super) const WS_IDENTIFY_ERROR: &str = "error: That key press could not be matched to one \
      selectable keyboard. Nothing changed; try again.";
 
-pub(super) const WS_FLASH_ALLOWLIST: [&str; 9] = [
+pub(super) const WS_FLASH_ALLOWLIST: [&str; 7] = [
     WS_EDIT_OK,
     WS_EDIT_ERROR,
     WS_MOVE_AT_END,
-    WS_ADOPT_OK,
-    WS_ADOPT_BLOCKED,
     WS_IDENTIFY_OK,
     WS_IDENTIFY_TIMEOUT,
     WS_IDENTIFY_ERROR,
@@ -161,20 +153,9 @@ pub(super) async fn workspace_form_identify(State(state): State<Arc<AppState>>) 
     workspace_redirect(flash)
 }
 
-/// POST /workspace/adopt — the saved configuration into an EMPTY stage. The
-/// daemon refuses over a proposal (adoption never overwrites edits), and that
-/// refusal gets its own sentence because its remedy is different.
-pub(super) async fn workspace_form_adopt(State(state): State<Arc<AppState>>) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || state.control.stage_adopt(None))
-        .await
-        .ok();
-    let flash = match outcome {
-        Some(outcome) if outcome.ok => WS_ADOPT_OK,
-        Some(outcome) if outcome.code.as_deref() == Some("stage-not-empty") => WS_ADOPT_BLOCKED,
-        _ => WS_EDIT_ERROR,
-    };
-    workspace_redirect(flash)
-}
+// `/workspace/adopt` MOVED to `server/nocturne.rs` on 2026-08-17 with the
+// configuration-menu migration (extended there with the per-game field). The
+// route is unchanged; this page's button lands its answer on `/nocturne`.
 
 /// The workspace page's query: the action flash, and WHICH controller the
 /// page is looking at — selection is a server-resolved link, so it works

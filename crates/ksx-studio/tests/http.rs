@@ -436,6 +436,45 @@ impl ControlSource for ScriptedControl {
         }
     }
 
+    /// Adoption with the daemon's exact refusal discipline (`stage-not-empty`
+    /// over any content), built THROUGH the real staging edits like the
+    /// daemon's own `stage::adopt` — a fake that skipped the engine would let
+    /// the menu pass while the domain refused.
+    fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
+        if self.no_daemon {
+            return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
+        }
+        let mut setup = self.staged.lock().unwrap();
+        if !ksx_api::StagedSetupView::of(&setup).empty {
+            let refusal = ksx_api::Refusal::new(
+                "stage-not-empty",
+                "this draft already has content; discard it before loading",
+            );
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        let mut next = ksx_core::stage::StagedSetup::new();
+        for edit in [
+            ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            },
+            ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: profile.unwrap_or("Panel P1").to_owned(),
+                layout: Some("arcade-6button".into()),
+            },
+        ] {
+            match edit.apply(&next) {
+                Ok(applied) => next = applied,
+                Err(refusal) => return ksx_api::StageOutcome::refused(&setup, &refusal),
+            }
+        }
+        *setup = next;
+        ksx_api::StageOutcome::ok(&setup, "adopted")
+    }
+
     /// Save, gated by `commit()` exactly as the daemon gates it — the fake
     /// must not report a write for a setup ksx-core refuses.
     fn stage_commit(&self) -> ksx_api::StageOutcome {
@@ -1144,6 +1183,37 @@ impl ksx_api::MachineSource for ScriptedMachine {
         })
     }
 
+    fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
+        if self.reads_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "the scheduler could not be asked",
+                "run `ksx doctor`",
+            ));
+        }
+        Ok(ksx_api::AutostartView {
+            registered: false,
+            line: "not registered".into(),
+            ..ksx_api::AutostartView::default()
+        })
+    }
+
+    /// The re-read discipline: the answer is the state AFTER the write.
+    fn set_autostart(
+        &self,
+        spec: &ksx_api::AutostartSpec,
+    ) -> Result<ksx_api::AutostartView, Refusal> {
+        Ok(ksx_api::AutostartView {
+            registered: spec.enable,
+            line: if spec.enable {
+                "registered".into()
+            } else {
+                "not registered".into()
+            },
+            ..ksx_api::AutostartView::default()
+        })
+    }
+
     fn presets(&self) -> Result<ksx_api::PresetsView, Refusal> {
         if self.reads_refuse {
             return Err(Refusal::with_remedy(
@@ -1742,6 +1812,9 @@ fn start_server_with_sources(
         fn stage_play(&self) -> ksx_api::StageOutcome {
             self.0.stage_play()
         }
+        fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
+            self.0.stage_adopt(profile)
+        }
     }
     struct SharedMachine(Arc<dyn ksx_api::MachineSource>);
     impl ksx_api::MachineSource for SharedMachine {
@@ -1813,6 +1886,15 @@ fn start_server_with_sources(
         }
         fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
             self.0.setup_state()
+        }
+        fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
+            self.0.autostart()
+        }
+        fn set_autostart(
+            &self,
+            spec: &ksx_api::AutostartSpec,
+        ) -> Result<ksx_api::AutostartView, Refusal> {
+            self.0.set_autostart(spec)
         }
         fn config_export(
             &self,
@@ -6782,5 +6864,93 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     assert!(
         shared_latch.contains("Press%20behaviour%20updated"),
         "{shared_latch}"
+    );
+}
+
+/// **The MIGRATED configuration menu, over HTTP.** The menu's facts are
+/// served (config identity, games with the broken row's honesty, the
+/// sign-in task in /start's exact vocabulary); adopt refuses over content
+/// and loads into emptiness — never starting anything; discard always
+/// works; and the sign-in twin keeps its consent gate. The re-pointed
+/// `/start` and `/workspace` doors land their answers on `/nocturne`.
+#[test]
+fn nocturne_serves_the_migrated_configuration_menu_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine);
+
+    // The served menu facts, from the machine reads.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["cfg_line"], "Saved configuration", "{api}");
+    assert!(
+        api["view"]["cfg_meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("config.toml")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["games_head"], "Saved games · 2", "{api}");
+    let games = api["view"]["game_rows"].as_array().expect("game rows");
+    assert!(
+        games.iter().any(|game| game["cls"] == "nm-game broken"
+            && game["meta"]
+                .as_str()
+                .is_some_and(|meta| meta.contains("program is missing"))),
+        "the broken game's honesty is gone: {api}"
+    );
+    assert!(
+        api["view"]["auto_line"]
+            .as_str()
+            .is_some_and(|line| line.contains("does not start on its own")),
+        "{api}"
+    );
+
+    // Adopt into an EMPTY draft loads and starts nothing.
+    let adopted = post_form(addr, "/nocturne/adopt", "");
+    assert!(
+        adopted.contains("Loaded%20into%20this%20draft"),
+        "{adopted}"
+    );
+    assert!(!control.staged().slots.is_empty());
+    assert!(
+        !control.played.load(Ordering::SeqCst),
+        "adopt must not Play"
+    );
+
+    // Over content it refuses with the Start-over remedy…
+    let blocked = post_form(addr, "/nocturne/adopt", "profile=Example+Game");
+    assert!(blocked.contains("already%20has%20content"), "{blocked}");
+
+    // …and Start over always works; then a game loads by title.
+    let discarded = post_form(addr, "/nocturne/discard", "");
+    assert!(discarded.contains("Draft%20discarded"), "{discarded}");
+    assert!(control.staged().empty);
+    let game = post_form(addr, "/nocturne/adopt", "profile=Example+Game");
+    assert!(game.contains("Loaded%20into%20this%20draft"), "{game}");
+    assert_eq!(control.staged().slots[0].preset, "Example Game");
+
+    // The sign-in twin: no consent, no write; with consent, the re-read's
+    // own truth answers.
+    let unticked = post_form(addr, "/nocturne/autostart", "enable=yes");
+    assert!(unticked.contains("Tick%20the%20box"), "{unticked}");
+    let on = post_form(
+        addr,
+        "/nocturne/autostart",
+        "enable=yes&confirm_autostart=yes",
+    );
+    assert!(on.contains("start%20when%20you%20sign%20in"), "{on}");
+    let off = post_form(addr, "/nocturne/autostart", "confirm_autostart=yes");
+    assert!(off.contains("no%20longer%20start"), "{off}");
+
+    // The old doors answer on /nocturne now.
+    let via_start = post_form(addr, "/start/discard", "");
+    assert!(
+        via_start.contains("location: /nocturne?flash=Draft%20discarded"),
+        "{via_start}"
+    );
+    let via_workspace = post_form(addr, "/workspace/adopt", "");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
+        "{via_workspace}"
     );
 }

@@ -160,17 +160,18 @@ pub(super) struct StartSlotForm {
     number: u8,
 }
 
+// `Discard` left this enum on 2026-08-17: "Start over" and the sign-in task
+// both MOVED to `server/nocturne.rs` with the configuration-menu migration —
+// `/start/discard` and `/start/autostart` point at the moved handlers and
+// answer on `/nocturne`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StartAction {
     Edit,
-    Discard,
     Save,
     Play,
 }
 
 pub(super) const START_EDIT_OK: &str = "Setup updated. Nothing has been saved or started.";
-
-pub(super) const START_DISCARD_OK: &str = "Setup cleared. Nothing was saved or started.";
 
 pub(super) const START_SAVE_OK: &str = "Setup saved for later. Play has not started.";
 
@@ -191,9 +192,6 @@ pub(super) const START_EDIT_ERROR: &str =
 /// served list on the page that carries the same fact.
 pub(super) const START_EDIT_NO_PLAYER_BLOCK: &str =
     "error: That layout has no keys for this player, so the controller was not added. Pick a layout that covers more players - the list under 'What each layout expects' on this page says how many each one carries. Nothing was changed.";
-
-pub(super) const START_DISCARD_ERROR: &str =
-    "error: Setup could not be cleared. Reopen ksx and try again; nothing was changed.";
 
 pub(super) const START_SAVE_NOT_READY: &str =
     "error: This setup is not ready to save. Complete the highlighted steps, then try again.";
@@ -220,37 +218,12 @@ pub(super) const START_PLAY_ERROR: &str =
 pub(super) const START_UNKNOWN_FLASH_ERROR: &str =
     "error: Setup could not finish that request. Reopen ksx and try again.";
 
-pub(super) const START_AUTOSTART_ON: &str =
-    "ksx will now start when you sign in. Restart once to see it come up on its own.";
-
-pub(super) const START_AUTOSTART_OFF: &str =
-    "ksx will no longer start on its own. Open it yourself after a restart.";
-
-pub(super) const START_AUTOSTART_CONSENT: &str =
-    "error: Nothing was changed. Tick the box first to confirm what happens at sign-in.";
-
-/// Windows accepted the registration and it is STILL pointing somewhere else.
-/// Its own sentence, not folded into the error: the task now exists, so
-/// "nothing was changed" would be false, and so would "done".
-pub(super) const START_AUTOSTART_STILL_STALE: &str =
-    "error: The sign-in task was written, but it is still out of date. Reload this page to see what it says now.";
-
-pub(super) const START_AUTOSTART_ERROR: &str =
-    "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
-
-pub(super) const START_FLASH_ALLOWLIST: [&str; 19] = [
+pub(super) const START_FLASH_ALLOWLIST: [&str; 12] = [
     START_EDIT_OK,
-    START_AUTOSTART_ON,
-    START_AUTOSTART_OFF,
-    START_AUTOSTART_CONSENT,
-    START_AUTOSTART_STILL_STALE,
-    START_AUTOSTART_ERROR,
-    START_DISCARD_OK,
     START_SAVE_OK,
     START_PLAY_OK,
     START_EDIT_ERROR,
     START_EDIT_NO_PLAYER_BLOCK,
-    START_DISCARD_ERROR,
     START_SAVE_NOT_READY,
     START_SAVE_ERROR,
     START_PLAY_NOT_READY,
@@ -287,7 +260,6 @@ pub(super) fn start_action_flash(
     match outcome {
         Ok(_) => match action {
             StartAction::Edit => START_EDIT_OK,
-            StartAction::Discard => START_DISCARD_OK,
             StartAction::Save => START_SAVE_OK,
             StartAction::Play => START_PLAY_OK,
         },
@@ -309,7 +281,6 @@ pub(super) fn start_action_flash(
                 // `TemplateError::NoSuchPlayer` - matched on, never reflected.
                 StartAction::Edit if lower.contains("player block") => START_EDIT_NO_PLAYER_BLOCK,
                 StartAction::Edit => START_EDIT_ERROR,
-                StartAction::Discard => START_DISCARD_ERROR,
                 StartAction::Save if not_ready => START_SAVE_NOT_READY,
                 StartAction::Save => START_SAVE_ERROR,
                 StartAction::Play
@@ -434,62 +405,10 @@ pub(super) async fn start_form_remove(
     .await
 }
 
-/// POST /start/blocking — moment 6's one question (`FIRST-RUN.md` §3).
-/// What POST /start/autostart carries. `enable` is the DIRECTION, served on
-/// the card, never inferred here from the current state: a form submitted
-/// against a page that has since gone stale must do what its user read, or
-/// nothing.
-#[derive(Debug, Deserialize)]
-pub(super) struct StartAutostartForm {
-    #[serde(default)]
-    enable: Option<String>,
-    #[serde(default)]
-    confirm_autostart: Option<String>,
-}
-
-/// POST /start/autostart - the commissioning step, and the only machine
-/// lifecycle write on this page that needs no elevation.
-///
-/// A per-user scheduled task: nothing outside the signed-in account changes,
-/// no driver moves, no keyboard leaves the stack. That is why it takes one
-/// tick box rather than the three-confirmation-plus-UAC ceremony
-/// `/start/capture/prepare` carries - the consent ceremonies here are sized to
-/// what is actually at risk, not applied uniformly.
-pub(super) async fn start_form_autostart(
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<StartAutostartForm>,
-) -> Response {
-    if !checked(form.confirm_autostart.as_deref()) {
-        return start_autostart_redirect(START_AUTOSTART_CONSENT);
-    }
-    let enable = checked(form.enable.as_deref());
-    let flash = tokio::task::spawn_blocking(move || {
-        match state.machine.set_autostart(&ksx_api::AutostartSpec {
-            enable,
-            confirm: true,
-        }) {
-            // Trust the RE-READ, not the request: `set_autostart` returns the
-            // view it read back after the change, so a task that did not
-            // actually land cannot report success.
-            Ok(view) if view.registered && !view.stale => START_AUTOSTART_ON,
-            Ok(view) if view.registered => START_AUTOSTART_STILL_STALE,
-            Ok(_) => START_AUTOSTART_OFF,
-            Err(_) => START_AUTOSTART_ERROR,
-        }
-    })
-    .await
-    .unwrap_or(START_AUTOSTART_ERROR);
-    start_autostart_redirect(flash)
-}
-
-pub(super) fn start_autostart_redirect(flash: &'static str) -> Response {
-    Redirect::to(&format!("/start?flash={}", urlencode(flash))).into_response()
-}
-
-/// POST /start/discard — "Start over". §2 requires that it always works.
-pub(super) async fn start_form_discard(State(state): State<Arc<AppState>>) -> Response {
-    stage_edit(state, ksx_api::StageEdit::Discard, StartAction::Discard).await
-}
+// The sign-in task (`/start/autostart`) and "Start over" (`/start/discard`)
+// MOVED to `server/nocturne.rs` on 2026-08-17 with the configuration-menu
+// migration. The routes are unchanged and this page's cards keep rendering;
+// pressing their buttons lands the answer on `/nocturne`.
 
 /// POST /start/save — moment 7, half one. **One config write.**
 ///

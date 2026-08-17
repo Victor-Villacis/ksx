@@ -8725,3 +8725,90 @@ details.n-bind {
   font-size: 11px;
   color: var(--n-text-3);
 }
+
+/* ── The configuration menu: a native details with real verbs ── */
+
+.n-chipd {
+  position: relative;
+}
+
+.n-chipd > summary {
+  list-style: none;
+}
+
+.n-chipd > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nm .n-inline {
+  display: block;
+}
+
+/* Menu rows that are real controls: strip the button/anchor chrome. */
+.nm button.nm-item,
+.nm button.nm-game {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nm button.nm-game {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+a.nm-link {
+  display: block;
+  text-decoration: none;
+}
+
+.nm-item.danger {
+  color: #e79aa6;
+}
+
+.nm-cfg-txt > span {
+  display: block;
+}
+
+.nm-sub > summary {
+  list-style: none;
+  cursor: pointer;
+  border-radius: 7px;
+}
+
+.nm-sub > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nm-sub > summary:hover {
+  background: rgba(233, 233, 237, 0.06);
+}
+
+.nm-subbody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 9px 8px;
+}
+
+.nm-consent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.nm .n-capform {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nm .n-capform.none {
+  display: none;
+}

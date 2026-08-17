@@ -126,10 +126,48 @@ pub(super) const N_TOGGLE_OK: &str = "Press behaviour updated. Nothing has been 
 pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
      nothing to hold. Bind a key first; nothing was changed.";
 
+pub(super) const N_ADOPT_OK: &str =
+    "Loaded into this draft — review it, then Play. Nothing has been saved or started.";
+
+pub(super) const N_ADOPT_BLOCKED: &str = "error: This draft already has content, and loading \
+     never overwrites edits. Start over first, then load. Nothing was changed.";
+
+pub(super) const N_DISCARD_OK: &str = "Draft discarded. Saved files were not touched.";
+
+// The sign-in task's five sentences, moved VERBATIM from `/start` — they were
+// written for exactly this transaction and the menu does not change what
+// happens at sign-in.
+
+pub(super) const N_AUTOSTART_ON: &str =
+    "ksx will now start when you sign in. Restart once to see it come up on its own.";
+
+pub(super) const N_AUTOSTART_OFF: &str =
+    "ksx will no longer start on its own. Open it yourself after a restart.";
+
+pub(super) const N_AUTOSTART_CONSENT: &str =
+    "error: Nothing was changed. Tick the box first to confirm what happens at sign-in.";
+
+/// Windows accepted the registration and it is STILL pointing somewhere else.
+/// Its own sentence, not folded into the error: the task now exists, so
+/// "nothing was changed" would be false, and so would "done".
+pub(super) const N_AUTOSTART_STILL_STALE: &str =
+    "error: The sign-in task was written, but it is still out of date. Reload this page to see what it says now.";
+
+pub(super) const N_AUTOSTART_ERROR: &str =
+    "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
+
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 35] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 43] = [
+    N_ADOPT_OK,
+    N_ADOPT_BLOCKED,
+    N_DISCARD_OK,
+    N_AUTOSTART_ON,
+    N_AUTOSTART_OFF,
+    N_AUTOSTART_CONSENT,
+    N_AUTOSTART_STILL_STALE,
+    N_AUTOSTART_ERROR,
     N_TURBO_OK,
     N_TURBO_INPUT_ERROR,
     N_TURBO_UNBOUND_ERROR,
@@ -199,11 +237,31 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
             Ok(scan) => (scan, String::new()),
             Err(refusal) => (ksx_api::DeviceScanView::default(), flash_of(refusal)),
         };
+        // The configuration menu's three reads, each degrading to its own
+        // honest sentence rather than an empty pane (SURFACES.md §1b).
+        let (setup, setup_error) = match state.machine.setup_state() {
+            Ok(view) => (Some(view), String::new()),
+            Err(refusal) => (None, flash_of(refusal)),
+        };
+        let (games, games_error) = match state.machine.profiles() {
+            Ok(view) => (Some(view), String::new()),
+            Err(refusal) => (None, flash_of(refusal)),
+        };
+        let (autostart_read, autostart_error) = match state.machine.autostart() {
+            Ok(view) => (Some(view), String::new()),
+            Err(refusal) => (None, flash_of(refusal)),
+        };
         NocturnePayload {
             staged,
             scan,
             session,
             unavailable,
+            setup,
+            setup_error,
+            games,
+            games_error,
+            autostart_read,
+            autostart_error,
             view: Default::default(),
         }
         .derived()
@@ -216,6 +274,12 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
             session: SessionView::unreachable("the nocturne collection panicked"),
             unavailable: "the device scan panicked — nothing below is a reading of this machine"
                 .to_owned(),
+            setup: None,
+            setup_error: "the configuration read panicked".to_owned(),
+            games: None,
+            games_error: "the games read panicked".to_owned(),
+            autostart_read: None,
+            autostart_error: "the sign-in read panicked".to_owned(),
             view: Default::default(),
         }
         .derived()
@@ -1083,6 +1147,101 @@ pub(super) async fn nocturne_form_stop(State(state): State<Arc<AppState>>) -> Re
         .await
         .unwrap_or(false);
     nocturne_redirect(if ok { N_STOP_OK } else { N_STOP_ERROR })
+}
+
+// ── The configuration menu's verbs (moved from /workspace and /start) ──────
+
+/// POST /nocturne/adopt (and /workspace/adopt) — the saved configuration, or
+/// one saved game, into an EMPTY draft. Moved from /workspace and extended
+/// with the per-game form field. The daemon refuses over a non-empty stage
+/// (adoption never overwrites edits) and that refusal is the feature: the
+/// flash names Start over as the deliberate first step. LOAD only — Play is
+/// its own decision, never welded onto this one.
+#[derive(Deserialize)]
+pub(super) struct NocturneAdoptForm {
+    /// A games.toml profile title, or absent for the saved config.toml.
+    /// Trimmed-empty means absent: a form with a blank field is a legal
+    /// thing for a browser to send.
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+pub(super) async fn nocturne_form_adopt(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneAdoptForm>,
+) -> Response {
+    let profile = form
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned);
+    let outcome =
+        tokio::task::spawn_blocking(move || state.control.stage_adopt(profile.as_deref()))
+            .await
+            .ok();
+    let flash = match outcome {
+        Some(outcome) if outcome.ok => N_ADOPT_OK,
+        Some(outcome) if outcome.code.as_deref() == Some("stage-not-empty") => N_ADOPT_BLOCKED,
+        _ => N_EDIT_ERROR,
+    };
+    nocturne_redirect(flash)
+}
+
+/// POST /nocturne/discard (and /start/discard) — "Start over". FIRST-RUN §2
+/// requires that it always works; the menu's fold carries the dirty-aware
+/// warning BEFORE this verb is reachable, and saved files are never touched.
+pub(super) async fn nocturne_form_discard(State(state): State<Arc<AppState>>) -> Response {
+    let ok = tokio::task::spawn_blocking(move || {
+        state.control.stage_edit(&ksx_api::StageEdit::Discard).ok
+    })
+    .await
+    .unwrap_or(false);
+    nocturne_redirect(if ok { N_DISCARD_OK } else { N_EDIT_ERROR })
+}
+
+/// What POST /nocturne/autostart carries. `enable` is the DIRECTION, served
+/// on the fold, never inferred here from the current state: a form submitted
+/// against a page that has since gone stale must do what its user read, or
+/// nothing. Moved from /start with its whole consent shape.
+#[derive(Debug, Deserialize)]
+pub(super) struct NocturneAutostartForm {
+    #[serde(default)]
+    enable: Option<String>,
+    #[serde(default)]
+    confirm_autostart: Option<String>,
+}
+
+/// POST /nocturne/autostart (and /start/autostart) — the sign-in task, the
+/// only machine lifecycle write on this page that needs no elevation. A
+/// per-user scheduled task: nothing outside the signed-in account changes,
+/// which is why it takes one tick box rather than the capture ceremony —
+/// consent is sized to what is actually at risk.
+pub(super) async fn nocturne_form_autostart(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneAutostartForm>,
+) -> Response {
+    if !checked(form.confirm_autostart.as_deref()) {
+        return nocturne_redirect(N_AUTOSTART_CONSENT);
+    }
+    let enable = checked(form.enable.as_deref());
+    let flash = tokio::task::spawn_blocking(move || {
+        match state.machine.set_autostart(&ksx_api::AutostartSpec {
+            enable,
+            confirm: true,
+        }) {
+            // Trust the RE-READ, not the request: `set_autostart` returns the
+            // view it read back after the change, so a task that did not
+            // actually land cannot report success.
+            Ok(view) if view.registered && !view.stale => N_AUTOSTART_ON,
+            Ok(view) if view.registered => N_AUTOSTART_STILL_STALE,
+            Ok(_) => N_AUTOSTART_OFF,
+            Err(_) => N_AUTOSTART_ERROR,
+        }
+    })
+    .await
+    .unwrap_or(N_AUTOSTART_ERROR);
+    nocturne_redirect(flash)
 }
 
 // ── Identify (moved from /start; the one transaction, shared by every door) ─

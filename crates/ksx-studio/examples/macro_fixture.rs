@@ -401,6 +401,35 @@ impl ControlSource for Store {
         ksx_api::StagedSetupView::of(&self.stage.lock().unwrap())
     }
 
+    /// Adoption, with the daemon's exact refusal discipline: never over a
+    /// non-empty draft (`stage-not-empty`), and LOAD only — nothing starts.
+    /// The fixture's "saved configuration" and both of its "saved games"
+    /// adopt back the seeded two-player setup, which makes the whole menu
+    /// loop drivable: Start over → empty → Load → the draft returns.
+    fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
+        let mut setup = self.stage.lock().unwrap();
+        if !ksx_api::StagedSetupView::of(&setup).empty {
+            let refusal = ksx_api::Refusal::new(
+                "stage-not-empty",
+                "this draft already has content; discard it before loading",
+            );
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        if let Some(title) = profile {
+            if !title.eq_ignore_ascii_case("Street Fighter 6")
+                && !title.eq_ignore_ascii_case("MAME cabinet")
+            {
+                let refusal = ksx_api::Refusal::new(
+                    "unknown-profile",
+                    format!("no saved game named \"{title}\""),
+                );
+                return ksx_api::StageOutcome::refused(&setup, &refusal);
+            }
+        }
+        *setup = seeded_stage();
+        ksx_api::StageOutcome::ok(&setup, "adopted")
+    }
+
     fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {
         Ok("running (1 slot(s))".into())
     }
@@ -460,8 +489,98 @@ fn main() {
     // therefore render their refusal states — /pads honestly says it cannot
     // read the bus rather than inventing one — which are real states of those
     // pages and worth being able to look at.
-    struct NoMachine;
+    struct NoMachine {
+        /// The sign-in task's one bit, so the menu's toggle round-trips.
+        autostart: std::sync::atomic::AtomicBool,
+    }
     impl ksx_api::MachineSource for NoMachine {
+        /// The configuration menu's identity row: a config.toml with the two
+        /// seeded controllers.
+        fn setup_state(&self) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
+            Ok(ksx_api::SetupView {
+                config_exists: true,
+                slots: vec![
+                    ksx_api::SetupSlotRow {
+                        number: 1,
+                        device: "panel".into(),
+                        preset: "Player 1".into(),
+                        persona: "Xbox 360 pad".into(),
+                        socd: String::new(),
+                        source: "config.toml".into(),
+                    },
+                    ksx_api::SetupSlotRow {
+                        number: 2,
+                        device: "panel".into(),
+                        preset: "Player 2".into(),
+                        persona: "PlayStation pad".into(),
+                        socd: String::new(),
+                        source: "config.toml".into(),
+                    },
+                ],
+                ..ksx_api::SetupView::default()
+            })
+        }
+
+        /// Two saved games: one ready, one with its program missing — the
+        /// broken row is a real state of the menu and worth looking at.
+        fn profiles(&self) -> Result<ksx_api::ProfilesView, ksx_api::Refusal> {
+            Ok(ksx_api::ProfilesView {
+                generated_at: "fixture".into(),
+                config_root: "C:\\fixture".into(),
+                games_path: "C:\\fixture\\games.toml".into(),
+                profiles: vec![
+                    ksx_api::ProfileDetail {
+                        revision: "fx-sf6".into(),
+                        title: "Street Fighter 6".into(),
+                        path: "C:\\Games\\sf6.exe".into(),
+                        arguments: String::new(),
+                        slots: 2,
+                        presets: vec!["Player 1".into(), "Player 2".into()],
+                        state: "ok".into(),
+                        verdict: "the program is there".into(),
+                        broken_path: None,
+                    },
+                    ksx_api::ProfileDetail {
+                        revision: "fx-mame".into(),
+                        title: "MAME cabinet".into(),
+                        path: "D:\\arcade\\mame.exe".into(),
+                        arguments: "-skip_gameinfo".into(),
+                        slots: 4,
+                        presets: vec!["Player 1".into()],
+                        state: "broken".into(),
+                        verdict: "game profile 'MAME cabinet' points at a program that does \
+                                  not exist"
+                            .into(),
+                        broken_path: Some("D:\\arcade\\mame.exe".into()),
+                    },
+                ],
+                notes: Vec::new(),
+            })
+        }
+
+        fn autostart(&self) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
+            let registered = self.autostart.load(std::sync::atomic::Ordering::SeqCst);
+            Ok(ksx_api::AutostartView {
+                registered,
+                line: if registered {
+                    "registered".into()
+                } else {
+                    "not registered".into()
+                },
+                ..ksx_api::AutostartView::default()
+            })
+        }
+
+        /// The re-read discipline: the answer is the state AFTER the write,
+        /// exactly what the real provider returns.
+        fn set_autostart(
+            &self,
+            spec: &ksx_api::AutostartSpec,
+        ) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
+            self.autostart
+                .store(spec.enable, std::sync::atomic::Ordering::SeqCst);
+            self.autostart()
+        }
         /// Resolve the scripted learner's hit back to a board, completing the
         /// identify round-trip against this double.
         fn device_identify(
@@ -575,7 +694,9 @@ fn main() {
         bind,
         Box::new(store.clone()),
         Box::new(store),
-        Box::new(NoMachine),
+        Box::new(NoMachine {
+            autostart: std::sync::atomic::AtomicBool::new(false),
+        }),
         // The fixture has no daemon behind it, so the live feed refuses in
         // words — which is the state the button check renders when nothing is
         // running, and therefore a state worth being able to look at.

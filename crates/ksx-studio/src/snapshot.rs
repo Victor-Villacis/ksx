@@ -3728,6 +3728,21 @@ pub struct NocturnePayload {
     /// Empty when the scan answered; otherwise the refusal, verbatim.
     #[serde(default)]
     pub unavailable: String,
+    /// The configuration menu's three reads, each with its own honest
+    /// degradation: what config.toml holds, the games.toml profiles, and the
+    /// sign-in task — `None` plus the error sentence when a read refused.
+    #[serde(default)]
+    pub setup: Option<ksx_api::SetupView>,
+    #[serde(default)]
+    pub setup_error: String,
+    #[serde(default)]
+    pub games: Option<ksx_api::ProfilesView>,
+    #[serde(default)]
+    pub games_error: String,
+    #[serde(default)]
+    pub autostart_read: Option<ksx_api::AutostartView>,
+    #[serde(default)]
+    pub autostart_error: String,
     /// Every sentence and row the page renders, composed once, here.
     #[serde(default)]
     pub view: NocturneDerived,
@@ -3833,6 +3848,19 @@ pub struct NocturneBindRow {
     pub tog_cls: String,
 }
 
+/// One saved game in the configuration menu — a LOAD row, never a launcher.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneGameRow {
+    /// The games.toml profile title — the row's label AND the adopt form's
+    /// `profile` value.
+    pub title: String,
+    /// "2 controllers · ready" / the broken verdict, compact.
+    pub meta: String,
+    /// `"nm-game"` (+" broken").
+    pub cls: String,
+    pub ico_cls: String,
+}
+
 /// One keycap on the standard board, dressed with its binding short.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyCell {
@@ -3918,6 +3946,27 @@ pub struct NocturneDerived {
     pub kb_tray_head: String,
     pub kb_tray_cls: String,
     pub kb_note: String,
+    /// The configuration menu, served: the saved-config row, the load/start-
+    /// over affordances, the games list, and the sign-in task's fold.
+    pub cfg_line: String,
+    pub cfg_meta: String,
+    pub cfg_cls: String,
+    pub cfg_check: String,
+    pub adopt_cls: String,
+    pub discard_note: String,
+    pub games_head: String,
+    pub game_rows: Vec<NocturneGameRow>,
+    pub games_note: String,
+    pub auto_line: String,
+    pub auto_sw_cls: String,
+    /// The DIRECTION the autostart form submits ("on" = register, "" =
+    /// unregister) — served, never inferred client-side from a stale page.
+    pub auto_dir: String,
+    pub auto_btn: String,
+    pub auto_note: String,
+    /// Hides the consent form when the sign-in state could not be read — a
+    /// verb whose precondition is unknown is not offered.
+    pub auto_form_cls: String,
 }
 
 impl NocturneDerived {
@@ -4327,6 +4376,133 @@ impl NocturneDerived {
             _ => String::new(),
         };
 
+        // ── The configuration menu, served ────────────────────────────────
+        // The saved-config row: what config.toml holds, and whether THIS
+        // draft came from it (daemon-stamped origin + dirty).
+        let (cfg_line, cfg_meta, cfg_cls, cfg_check, adopt_cls) = match &p.setup {
+            Some(setup) if setup.config_exists => {
+                let config_slots = setup
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.source == "config.toml")
+                    .count();
+                let meta = match config_slots {
+                    0 => "config.toml — no controllers wired yet".to_owned(),
+                    1 => "config.toml — 1 controller".to_owned(),
+                    n => format!("config.toml — {n} controllers"),
+                };
+                let from_config = staged.origin == "config";
+                (
+                    "Saved configuration".to_owned(),
+                    if from_config && staged.dirty {
+                        format!("{meta} · this draft came from it, with unsaved edits")
+                    } else if from_config {
+                        format!("{meta} · this draft came from it")
+                    } else {
+                        meta
+                    },
+                    if from_config { "nm-cfg on" } else { "nm-cfg" }.to_owned(),
+                    if from_config { "✓" } else { "" }.to_owned(),
+                    "nm-item".to_owned(),
+                )
+            }
+            // First run: no config.toml yet, and that is not an error.
+            Some(_) => (
+                "No saved configuration yet".to_owned(),
+                "Save writes this draft as the configuration.".to_owned(),
+                "nm-cfg".to_owned(),
+                String::new(),
+                "nm-item none".to_owned(),
+            ),
+            None => (
+                "Configuration could not be read".to_owned(),
+                p.setup_error.clone(),
+                "nm-cfg".to_owned(),
+                String::new(),
+                "nm-item none".to_owned(),
+            ),
+        };
+        // The dirty-aware sentence the Start-over fold shows BEFORE the verb.
+        let discard_note = if !staged.reachable {
+            "The draft is not readable right now.".to_owned()
+        } else if staged.empty {
+            "This draft is already empty; discarding changes nothing.".to_owned()
+        } else if staged.dirty {
+            "This draft has unsaved edits — discarding loses them. Saved files are not touched."
+                .to_owned()
+        } else {
+            "This draft is cleared from memory. Saved files are not touched.".to_owned()
+        };
+        // Saved games: LOAD rows, never launchers — Play stays its own act.
+        let (games_head, game_rows, games_note) = match &p.games {
+            Some(games) => {
+                let rows: Vec<NocturneGameRow> = games
+                    .profiles
+                    .iter()
+                    .map(|game| {
+                        let broken = game.state == "broken";
+                        let controllers = match game.slots {
+                            1 => "1 controller".to_owned(),
+                            n => format!("{n} controllers"),
+                        };
+                        NocturneGameRow {
+                            title: game.title.clone(),
+                            meta: if broken {
+                                format!(
+                                    "{controllers} · its program is missing — bindings still load"
+                                )
+                            } else {
+                                controllers
+                            },
+                            cls: if broken { "nm-game broken" } else { "nm-game" }.to_owned(),
+                            ico_cls: if broken { "nm-gico broken" } else { "nm-gico" }.to_owned(),
+                        }
+                    })
+                    .collect();
+                let head = format!("Saved games · {}", rows.len());
+                let note = if rows.is_empty() {
+                    "No saved games yet.".to_owned()
+                } else {
+                    games.notes.join(" · ")
+                };
+                (head, rows, note)
+            }
+            None => ("Saved games".to_owned(), Vec::new(), p.games_error.clone()),
+        };
+        // The sign-in task: the SAME derivation /start's card uses, so the
+        // two surfaces cannot word one scheduler two ways.
+        let auto = StartAutostartView::of(&StartPayload {
+            autostart_read: p.autostart_read.clone(),
+            autostart_error: p.autostart_error.clone(),
+            ..StartPayload::default()
+        });
+        let auto_note = if !auto.readable {
+            format!("{} {}", auto.error, auto.detail)
+        } else if auto.stale && !auto.stale_detail.is_empty() {
+            format!("{} {}", auto.stale_detail, auto.detail)
+        } else {
+            auto.detail.clone()
+        };
+        let auto_sw_cls = if auto.registered {
+            "n-capsw on".to_owned()
+        } else {
+            "n-capsw".to_owned()
+        };
+        // The wire value `checked()` accepts — the same spelling the /start
+        // card's form has always sent.
+        let auto_dir = if auto.enable {
+            "yes".to_owned()
+        } else {
+            String::new()
+        };
+        let auto_form_cls = if auto.readable {
+            "n-capform".to_owned()
+        } else {
+            // A verb whose precondition could not be read is not offered;
+            // the next poll retries the read.
+            "n-capform none".to_owned()
+        };
+
         let binds = workspace_bind_rows(staged, selected);
         let bind_rows: Vec<NocturneBindRow> = binds
             .rows
@@ -4405,6 +4581,21 @@ impl NocturneDerived {
             kb_tray_head,
             kb_tray_cls,
             kb_note,
+            cfg_line,
+            cfg_meta,
+            cfg_cls,
+            cfg_check,
+            adopt_cls,
+            discard_note,
+            games_head,
+            game_rows,
+            games_note,
+            auto_line: auto.line,
+            auto_sw_cls,
+            auto_dir,
+            auto_btn: auto.button,
+            auto_note,
+            auto_form_cls,
             dev_count,
             dev_note,
             kb_title,

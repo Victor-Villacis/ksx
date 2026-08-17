@@ -17,8 +17,9 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
-    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneKeyCell,
-    NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneGameRow,
+    NocturneKeyCell, NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow,
+    NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -34,6 +35,7 @@ const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
 const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
 const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
 const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
+const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -79,6 +81,20 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayHead": payload.view.kb_tray_head,
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
+        "nCfgLine": payload.view.cfg_line,
+        "nCfgMeta": payload.view.cfg_meta,
+        "nCfgCls": payload.view.cfg_cls,
+        "nCfgCheck": payload.view.cfg_check,
+        "nAdoptCls": payload.view.adopt_cls,
+        "nDiscardNote": payload.view.discard_note,
+        "nGamesHead": payload.view.games_head,
+        "nGamesNote": payload.view.games_note,
+        "nAutoLine": payload.view.auto_line,
+        "nAutoSwCls": payload.view.auto_sw_cls,
+        "nAutoDir": payload.view.auto_dir,
+        "nAutoBtn": payload.view.auto_btn,
+        "nAutoNote": payload.view.auto_note,
+        "nAutoFormCls": payload.view.auto_form_cls,
         "nFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
         "nFlashCls": match flash {
             None => "n-flash none",
@@ -165,6 +181,15 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
     ])
 }
 
+fn game_row(row: &NocturneGameRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("ico_cls".to_owned(), SlotValue::Text(row.ico_cls.clone())),
+    ])
+}
+
 fn bind_row(row: &NocturneBindRow) -> SlotValue {
     SlotValue::object(vec![
         ("function".to_owned(), SlotValue::Text(row.function.clone())),
@@ -184,9 +209,13 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 17] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 18] {
     let view = &payload.view;
     [
+        (
+            LIST_SLOT_GAMES,
+            SlotValue::array(view.game_rows.iter().map(game_row).collect()),
+        ),
         (
             LIST_SLOT_KB[0],
             SlotValue::array(view.kb_row1.iter().map(key_cell).collect()),
@@ -376,6 +405,39 @@ mod tests {
                 active: None,
             },
             unavailable: String::new(),
+            setup: Some(ksx_api::SetupView {
+                config_exists: true,
+                slots: vec![ksx_api::SetupSlotRow {
+                    number: 1,
+                    device: "panel".to_owned(),
+                    preset: "Panel P1".to_owned(),
+                    persona: "Xbox 360 pad".to_owned(),
+                    socd: String::new(),
+                    source: "config.toml".to_owned(),
+                }],
+                ..ksx_api::SetupView::default()
+            }),
+            setup_error: String::new(),
+            games: Some(ksx_api::ProfilesView {
+                generated_at: "test".to_owned(),
+                config_root: "C:\\cfg".to_owned(),
+                games_path: "C:\\cfg\\games.toml".to_owned(),
+                profiles: vec![ksx_api::ProfileDetail {
+                    revision: "g1".to_owned(),
+                    title: "Example Game".to_owned(),
+                    path: "C:\\Examples\\example.exe".to_owned(),
+                    arguments: String::new(),
+                    slots: 2,
+                    presets: vec!["Arcade".to_owned()],
+                    state: "ok".to_owned(),
+                    verdict: "the program is there".to_owned(),
+                    broken_path: None,
+                }],
+                notes: Vec::new(),
+            }),
+            games_error: String::new(),
+            autostart_read: Some(ksx_api::AutostartView::default()),
+            autostart_error: String::new(),
             view: Default::default(),
         }
         .derived()
@@ -390,9 +452,10 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 17] = [
+        const SERVED_LIST_PREFIXES: [&str; 18] = [
             "list:nDevRows:",
             "list:nDevExp:",
+            "list:nGameRows:",
             "list:nKbRow1:",
             "list:nKbRow2:",
             "list:nKbRow3:",
@@ -409,12 +472,26 @@ mod tests {
             "list:nSocdOpts:",
             "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 34] = [
+        const SERVED_SLOTS: [&str; 48] = [
             "nDevCount",
             "nModeNote",
             "nKbTrayHead",
             "nKbTrayCls",
             "nKbNote",
+            "nCfgLine",
+            "nCfgMeta",
+            "nCfgCls",
+            "nCfgCheck",
+            "nAdoptCls",
+            "nDiscardNote",
+            "nGamesHead",
+            "nGamesNote",
+            "nAutoLine",
+            "nAutoSwCls",
+            "nAutoDir",
+            "nAutoBtn",
+            "nAutoNote",
+            "nAutoFormCls",
             "nExpHead",
             "nExpFoldCls",
             "nOtherHead",
@@ -445,11 +522,11 @@ mod tests {
             "show:nCapPrep",
             "show:nCapRel",
         ];
-        const CLIENT_ONLY_SLOTS: [&str; 20] = [
+        // nMenuOpen left this list with the menu pass: the configuration
+        // menu is a native details now, not signal state.
+        const CLIENT_ONLY_SLOTS: [&str; 18] = [
             "nCapPrep",
             "nCapRel",
-            "nMenuOpen",
-            "show:nMenuOpen",
             "nDlgOpen",
             "show:nDlgOpen",
             "nLeftCls",
@@ -501,6 +578,7 @@ mod tests {
         for name in [
             LIST_SLOT_DEVICES,
             LIST_SLOT_EXP,
+            LIST_SLOT_GAMES,
             LIST_SLOT_OTHER,
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],
@@ -556,6 +634,35 @@ mod tests {
     fn nocturne_embeds_the_payload() {
         let out = render_nocturne(&page(), &keyboard_payload(), None);
         assert!(out.html.contains("__ksx-payload"));
+    }
+
+    /// The configuration menu is a native details, so its SERVED facts paint
+    /// on the SSR pass — the config identity, the games list, and the
+    /// sign-in task in /start's exact vocabulary — and its placeholder
+    /// sentence is gone for good.
+    #[test]
+    fn nocturne_renders_the_served_configuration_menu() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+        for sentinel in [
+            "Saved configuration",
+            "config.toml — 1 controller",
+            "Saved games · 1",
+            "Example Game",
+            "2 controllers",
+            // StartAutostartView's own words — one derivation, two surfaces.
+            "ksx does not start on its own",
+            "Start ksx when I sign in",
+            "/setup/export.json",
+        ] {
+            assert!(
+                out.html.contains(sentinel),
+                "SSR of the configuration menu is missing {sentinel:?}",
+            );
+        }
+        assert!(
+            !out.html.contains("arrive with the configuration pass"),
+            "the menu's placeholder sentence is back",
+        );
     }
 
     /// **No invented values.** The design proof's placeholder data is gone;

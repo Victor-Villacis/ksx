@@ -17,8 +17,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
-    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneOptionRow,
-    NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneKeyCell,
+    NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -34,6 +34,15 @@ const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
 const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
 const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
 const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
+const LIST_SLOT_KB: [&str; 7] = [
+    "list:nKbRow1:array",
+    "list:nKbRow2:array",
+    "list:nKbRow3:array",
+    "list:nKbRow4:array",
+    "list:nKbRow5:array",
+    "list:nKbRow6:array",
+    "list:nKbTray:array",
+];
 
 /// Scalar slot values, keyed by the signal names in NocturneIsland.ts. Every
 /// value is a [`NocturneDerived`] field except the flash — the one SSR-only
@@ -67,6 +76,9 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nPadSub": payload.view.pad_sub,
         "nBindTitle": payload.view.bind_title,
         "nBindFoot": payload.view.bind_foot,
+        "nKbTrayHead": payload.view.kb_tray_head,
+        "nKbTrayCls": payload.view.kb_tray_cls,
+        "nKbNote": payload.view.kb_note,
         "nFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
         "nFlashCls": match flash {
             None => "n-flash none",
@@ -144,6 +156,15 @@ fn option_row(row: &NocturneOptionRow) -> SlotValue {
     ])
 }
 
+fn key_cell(row: &NocturneKeyCell) -> SlotValue {
+    SlotValue::object(vec![
+        ("cap".to_owned(), SlotValue::Text(row.cap.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("short".to_owned(), SlotValue::Text(row.short.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+    ])
+}
+
 fn bind_row(row: &NocturneBindRow) -> SlotValue {
     SlotValue::object(vec![
         ("function".to_owned(), SlotValue::Text(row.function.clone())),
@@ -160,9 +181,37 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 10] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 17] {
     let view = &payload.view;
     [
+        (
+            LIST_SLOT_KB[0],
+            SlotValue::array(view.kb_row1.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[1],
+            SlotValue::array(view.kb_row2.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[2],
+            SlotValue::array(view.kb_row3.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[3],
+            SlotValue::array(view.kb_row4.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[4],
+            SlotValue::array(view.kb_row5.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[5],
+            SlotValue::array(view.kb_row6.iter().map(key_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB[6],
+            SlotValue::array(view.kb_tray.iter().map(key_cell).collect()),
+        ),
         (
             LIST_SLOT_RACK,
             SlotValue::array(view.rack_rows.iter().map(rack_row).collect()),
@@ -338,9 +387,16 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 10] = [
+        const SERVED_LIST_PREFIXES: [&str; 17] = [
             "list:nDevRows:",
             "list:nDevExp:",
+            "list:nKbRow1:",
+            "list:nKbRow2:",
+            "list:nKbRow3:",
+            "list:nKbRow4:",
+            "list:nKbRow5:",
+            "list:nKbRow6:",
+            "list:nKbTray:",
             "list:nDevOther:",
             "list:nModeRows:",
             "list:nRackRows:",
@@ -350,9 +406,12 @@ mod tests {
             "list:nSocdOpts:",
             "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 31] = [
+        const SERVED_SLOTS: [&str; 34] = [
             "nDevCount",
             "nModeNote",
+            "nKbTrayHead",
+            "nKbTrayCls",
+            "nKbNote",
             "nExpHead",
             "nExpFoldCls",
             "nOtherHead",
@@ -430,6 +489,8 @@ mod tests {
             LIST_SLOT_DEVICES,
             LIST_SLOT_EXP,
             LIST_SLOT_OTHER,
+            LIST_SLOT_KB[0],
+            LIST_SLOT_KB[6],
             LIST_SLOT_MODES,
             LIST_SLOT_RACK,
             LIST_SLOT_RACK_EMPTY,

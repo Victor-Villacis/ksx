@@ -67,6 +67,13 @@ export interface NocturneOptionRowView {
   label: string;
 }
 
+export interface NocturneKeyCellView {
+  cap: string;
+  cls: string;
+  short: string;
+  title: string;
+}
+
 export interface NocturneBindRowView {
   function: string;
   label: string;
@@ -118,6 +125,16 @@ export interface NocturneView {
   bind_title: string;
   bind_rows: NocturneBindRowView[];
   bind_foot: string;
+  kb_row1: NocturneKeyCellView[];
+  kb_row2: NocturneKeyCellView[];
+  kb_row3: NocturneKeyCellView[];
+  kb_row4: NocturneKeyCellView[];
+  kb_row5: NocturneKeyCellView[];
+  kb_row6: NocturneKeyCellView[];
+  kb_tray: NocturneKeyCellView[];
+  kb_tray_head: string;
+  kb_tray_cls: string;
+  kb_note: string;
 }
 
 export interface NocturnePayload {
@@ -166,6 +183,16 @@ const [nPadSub, setNPadSub] = createSignal("");
 const [nBindTitle, setNBindTitle] = createSignal("");
 const [nBindRows, setNBindRows] = createSignal<NocturneBindRowView[]>([]);
 const [nBindFoot, setNBindFoot] = createSignal("");
+const [nKbRow1, setNKbRow1] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbRow2, setNKbRow2] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbRow3, setNKbRow3] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbRow4, setNKbRow4] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbRow5, setNKbRow5] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbRow6, setNKbRow6] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbTray, setNKbTray] = createSignal<NocturneKeyCellView[]>([]);
+const [nKbTrayHead, setNKbTrayHead] = createSignal("");
+const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
+const [nKbNote, setNKbNote] = createSignal("");
 
 // The action flash. The server fills these from the allowlisted query
 // parameter on a full-page load; the fetch-submit layer applies the same
@@ -215,6 +242,16 @@ export function applyNocturne(p: NocturnePayload): void {
   setNBindTitle(v.bind_title);
   setNBindRows(v.bind_rows);
   setNBindFoot(v.bind_foot);
+  setNKbRow1(v.kb_row1);
+  setNKbRow2(v.kb_row2);
+  setNKbRow3(v.kb_row3);
+  setNKbRow4(v.kb_row4);
+  setNKbRow5(v.kb_row5);
+  setNKbRow6(v.kb_row6);
+  setNKbTray(v.kb_tray);
+  setNKbTrayHead(v.kb_tray_head);
+  setNKbTrayCls(v.kb_tray_cls);
+  setNKbNote(v.kb_note);
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -336,88 +373,6 @@ export function nocturneWire(root: HTMLElement): void {
     applyNocturneUi();
   });
 }
-
-// ── The keyboard grid: the physical caps of a standard board ───────────────
-//
-// Caps only, deliberately: per-key BINDING shorts arrive with the keyboard
-// layout pass (a canonical cap→Key table, unit-tested against Key::ALL) —
-// until then the grid draws the board and claims nothing about mappings.
-// `sp` opens a cluster gap; `ghost` cells keep the nav column aligned.
-
-const KB_ROW1 = [
-  { cls: "n-key", cap: "Esc" },
-  { cls: "n-key sp", cap: "F1" }, { cls: "n-key", cap: "F2" },
-  { cls: "n-key", cap: "F3" }, { cls: "n-key", cap: "F4" },
-  { cls: "n-key sp", cap: "F5" }, { cls: "n-key", cap: "F6" },
-  { cls: "n-key", cap: "F7" }, { cls: "n-key", cap: "F8" },
-  { cls: "n-key sp", cap: "F9" }, { cls: "n-key", cap: "F10" },
-  { cls: "n-key", cap: "F11" }, { cls: "n-key", cap: "F12" },
-  { cls: "n-key sp", cap: "Prt" }, { cls: "n-key", cap: "Scr" },
-  { cls: "n-key", cap: "Pse" },
-];
-const KB_ROW2 = [
-  { cls: "n-key", cap: "`" }, { cls: "n-key", cap: "1" },
-  { cls: "n-key", cap: "2" }, { cls: "n-key", cap: "3" },
-  { cls: "n-key", cap: "4" }, { cls: "n-key", cap: "5" },
-  { cls: "n-key", cap: "6" }, { cls: "n-key", cap: "7" },
-  { cls: "n-key", cap: "8" }, { cls: "n-key", cap: "9" },
-  { cls: "n-key", cap: "0" }, { cls: "n-key", cap: "−" },
-  { cls: "n-key", cap: "=" }, { cls: "n-key u2", cap: "⌫" },
-  { cls: "n-key sp", cap: "Ins" }, { cls: "n-key", cap: "Hm" },
-  { cls: "n-key", cap: "PgU" },
-  { cls: "n-key sp", cap: "Num" }, { cls: "n-key", cap: "/" },
-  { cls: "n-key", cap: "*" }, { cls: "n-key", cap: "−" },
-];
-const KB_ROW3 = [
-  { cls: "n-key u1_5", cap: "Tab" },
-  { cls: "n-key", cap: "Q" }, { cls: "n-key", cap: "W" },
-  { cls: "n-key", cap: "E" }, { cls: "n-key", cap: "R" },
-  { cls: "n-key", cap: "T" }, { cls: "n-key", cap: "Y" },
-  { cls: "n-key", cap: "U" }, { cls: "n-key", cap: "I" },
-  { cls: "n-key", cap: "O" }, { cls: "n-key", cap: "P" },
-  { cls: "n-key", cap: "[" }, { cls: "n-key", cap: "]" },
-  { cls: "n-key u1_5", cap: "\\" },
-  { cls: "n-key sp", cap: "Del" }, { cls: "n-key", cap: "End" },
-  { cls: "n-key", cap: "PgD" },
-  { cls: "n-key sp", cap: "7" }, { cls: "n-key", cap: "8" },
-  { cls: "n-key", cap: "9" }, { cls: "n-key", cap: "+" },
-];
-const KB_ROW4 = [
-  { cls: "n-key u1_75", cap: "Caps" },
-  { cls: "n-key", cap: "A" }, { cls: "n-key", cap: "S" },
-  { cls: "n-key", cap: "D" }, { cls: "n-key", cap: "F" },
-  { cls: "n-key", cap: "G" }, { cls: "n-key", cap: "H" },
-  { cls: "n-key", cap: "J" }, { cls: "n-key", cap: "K" },
-  { cls: "n-key", cap: "L" }, { cls: "n-key", cap: ";" },
-  { cls: "n-key", cap: "'" }, { cls: "n-key u2_25", cap: "Enter" },
-  { cls: "n-key sp ghost", cap: "" }, { cls: "n-key ghost", cap: "" },
-  { cls: "n-key ghost", cap: "" },
-  { cls: "n-key sp", cap: "4" }, { cls: "n-key", cap: "5" },
-  { cls: "n-key", cap: "6" },
-];
-const KB_ROW5 = [
-  { cls: "n-key u2_25", cap: "Shift" },
-  { cls: "n-key", cap: "Z" }, { cls: "n-key", cap: "X" },
-  { cls: "n-key", cap: "C" }, { cls: "n-key", cap: "V" },
-  { cls: "n-key", cap: "B" }, { cls: "n-key", cap: "N" },
-  { cls: "n-key", cap: "M" }, { cls: "n-key", cap: "," },
-  { cls: "n-key", cap: "." }, { cls: "n-key", cap: "/" },
-  { cls: "n-key u2_75", cap: "Shift" },
-  { cls: "n-key sp ghost", cap: "" }, { cls: "n-key", cap: "↑" },
-  { cls: "n-key ghost", cap: "" },
-  { cls: "n-key sp", cap: "1" }, { cls: "n-key", cap: "2" },
-  { cls: "n-key", cap: "3" },
-];
-const KB_ROW6 = [
-  { cls: "n-key u1_25", cap: "Ctrl" }, { cls: "n-key u1_25", cap: "Win" },
-  { cls: "n-key u1_25", cap: "Alt" },
-  { cls: "n-key u6_25", cap: "Space" },
-  { cls: "n-key u1_25", cap: "Alt" }, { cls: "n-key u1_25", cap: "Win" },
-  { cls: "n-key u1_25", cap: "Menu" }, { cls: "n-key u1_25", cap: "Ctrl" },
-  { cls: "n-key sp", cap: "←" }, { cls: "n-key", cap: "↓" },
-  { cls: "n-key", cap: "→" },
-  { cls: "n-key sp u2", cap: "0" }, { cls: "n-key", cap: "." },
-];
 
 export function NocturneIsland() {
   return h(
@@ -855,46 +810,117 @@ export function NocturneIsland() {
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW1.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow1(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW2.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow2(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW3.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow3(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW4.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow4(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW5.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow5(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
           h(
             "div",
             { class: "n-kbrow" },
-            ...KB_ROW6.map((k) =>
-              h("div", { class: k.cls }, h("span", { class: "n-key-cap" }, k.cap)),
+            createList(
+              () => nKbRow6(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
             ),
           ),
         ),
+        // Bound keys that are not on the standard board — honest, never
+        // silently dropped.
+        h(
+          "div",
+          { class: () => nKbTrayCls() },
+          h("span", { class: "n-kbtray-head" }, () => nKbTrayHead()),
+          h(
+            "div",
+            { class: "n-kbtray-row" },
+            createList(
+              () => nKbTray(),
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.title, class: r.cls },
+                  h("span", { class: "n-key-cap" }, r.cap),
+                  h("span", { class: "n-key-short" }, r.short),
+                ),
+            ),
+          ),
+        ),
+        h("p", { class: "n-devnote" }, () => nKbNote()),
       ),
       // ── Right pane: the binding list, off the mapper's own machinery ─────
       h(

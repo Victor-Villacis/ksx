@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nocturne Design Specification — KSX Studio v0.5</title>
+<style>
+  :root {
+    --ink: #1c1e26; --ink-2: #4a4e5c; --ink-3: #7a7e8c;
+    --paper: #fbfbfd; --card: #ffffff; --line: #e3e4ea;
+    --acc: #5d5294; --acc-bg: #f0eefb;
+    --warn-bg: #fdf6e7; --warn-line: #e8d9ae;
+    --ok-bg: #eaf6ef;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font: 15px/1.6 "Segoe UI", system-ui, sans-serif;
+    max-width: 1080px; margin: 0 auto; padding: 48px 32px 120px;
+  }
+  h1 { font-size: 34px; line-height: 1.15; letter-spacing: -0.015em; margin-bottom: 8px; }
+  h2 { font-size: 24px; margin: 56px 0 12px; padding-top: 24px; border-top: 1px solid var(--line); letter-spacing: -0.01em; }
+  h3 { font-size: 18px; margin: 32px 0 8px; }
+  h4 { font-size: 15px; margin: 20px 0 6px; }
+  p { margin: 0 0 12px; max-width: 76ch; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 80ch; }
+  .kicker { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--acc); font-weight: 600; margin-bottom: 6px; }
+  .meta { color: var(--ink-3); font-size: 13px; margin-bottom: 40px; }
+  figure { margin: 20px 0 28px; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 10px; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-3); margin-top: 8px; max-width: 86ch; }
+  figcaption b { color: var(--ink-2); }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; font-size: 14px; }
+  th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 8px 12px; border-bottom: 2px solid var(--line); }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  code { background: #f1f1f5; padding: 1px 6px; border-radius: 4px; }
+  .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); vertical-align: -2px; margin-right: 6px; }
+  .callout { border-left: 3px solid var(--acc); background: var(--acc-bg); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 16px 0 24px; max-width: 86ch; }
+  .callout.warn { border-color: #c9a227; background: var(--warn-bg); }
+  .callout.ok { border-color: #3f8f5f; background: var(--ok-bg); }
+  .callout p:last-child { margin-bottom: 0; }
+  .flow-step { display: flex; gap: 14px; margin: 10px 0; max-width: 86ch; }
+  .flow-step .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--acc); color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+  .quote { font-style: italic; color: var(--ink-2); }
+  .toc { columns: 2; font-size: 14px; margin: 16px 0 8px; }
+  .toc a { color: var(--acc); text-decoration: none; display: block; padding: 2px 0; }
+  .toc a:hover { text-decoration: underline; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+  .tag { display: inline-block; font-size: 11px; letter-spacing: .04em; padding: 2px 10px; border-radius: 999px; background: var(--acc-bg); color: var(--acc); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+</style>
+</head>
+<body>
+
+<div class="kicker">KSX Studio · v0.5 Redesign · Reference Specification</div>
+<h1>Nocturne — Interaction &amp; Design Specification</h1>
+<p class="lede">Reverse-engineered from the interactive Claude Design prototype (“Xbox Controller
+Keyboard Mapper”, artifact <span class="mono">58371700</span>) by driving every flow with an
+automated browser, screenshotting each state, and reading the design-token source. This document
+is the ground truth for what the prototype <em>does</em>, in the format the implementation team
+builds and reviews against.</p>
+<p class="meta">Captured 2026-08-16 · 36 screenshots in <span class="mono">./shots/</span> ·
+journals in <span class="mono">walkthrough-journal*.json</span> · reproduction scripts in
+<span class="mono">./tools/</span> · sources: the artifact bundle + <span class="mono">design_handoff_ksx_mapper/</span>
+(<span class="mono">nocturne-tokens.css</span>, <span class="mono">README.md</span>)</p>
+
+<div class="toc">
+  <a href="#frame">1 · The product frame</a>
+  <a href="#anatomy">2 · Layout anatomy</a>
+  <a href="#tokens">3 · Design language &amp; tokens</a>
+  <a href="#states">4 · The four screen states</a>
+  <a href="#components">5 · Component inventory</a>
+  <a href="#flows">6 · User flows</a>
+  <a href="#copy">7 · Copy inventory</a>
+  <a href="#discrepancies">8 · Observed vs. spec &amp; prototype bugs</a>
+  <a href="#mapping">9 · Mapping to the KSX implementation</a>
+</div>
+
+<h2 id="frame">1 · The product frame</h2>
+<p>One window, three panes, four states. The design collapses configuration, mapping, and play
+into a single always-visible surface: <b>hardware and players on the left, the truth of the pad
+in the center, the bindings on the right</b>. Nothing navigates away — dialogs handle the two
+genuinely modal moments (creating a controller, editing a macro), a dropdown handles config
+management, and everything else edits in place.</p>
+<p>Three principles are visible in every screen of the walkthrough:</p>
+<table>
+  <tr><th>Principle</th><th>Where it shows</th></tr>
+  <tr><td><b>Every option carries its consequence.</b></td><td>Radio detail lines (“Mapped keys drive the pad; every other key keeps typing normally”), dialog explainers (“Finishing lets it run out — tap the trigger and the quarter-circle comes out whole”), capacity captions (“XInput personas cap at 4 in total (Windows) · 8 players is a realistic emulator target · 16 slots is the KSX ceiling”).</td></tr>
+  <tr><td><b>The three readers agree.</b></td><td>The binding list, the pad diagram, and the keyboard diagram are three views of one model. Selecting an input highlights its pad zone and re-labels the keyboard hint; binding a key updates all three in the same beat.</td></tr>
+  <tr><td><b>State is ambient, not announced.</b></td><td>Live mode changes the whole page’s temperature (glow, ticker, stats, row prefixes) rather than posting notifications. The dirty state is one dot on the config chip plus “Unsaved changes”.</td></tr>
+</table>
+
+<figure>
+  <img src="shots/01-overview-idle.png" alt="Idle overview">
+  <figcaption><b>01 — Idle.</b> The complete frame: title bar (product mark + version, config chip
+  with save state, capture-escape hint, Play), left pane (keyboard list, behaviour radios, player
+  rack), center (pad meta line, controller schematic, keyboard diagram), right pane (filter,
+  grouped binding list, bound-count footer).</figcaption>
+</figure>
+
+<h2 id="anatomy">2 · Layout anatomy</h2>
+<table>
+  <tr><th>Region</th><th>Geometry</th><th>Contents (top→bottom)</th></tr>
+  <tr><td>Title bar</td><td>52&nbsp;px, full width</td><td>Logo + “KSX Studio” + version tag · config chip (name ▾, dirty dot) · Save + saved-ago/“Unsaved changes” · <i>spring</i> · session stats (live only: <span class="mono">0:02 · 1.4 ms · 4 ev</span>) · “L-Ctrl ×5 pauses capture” · Play / Pause &amp; edit + Stop</td></tr>
+  <tr><td>Left pane</td><td>272&nbsp;px, collapsible → 52&nbsp;px rail (‹)</td><td>KEYBOARD n found + rows · Rescan · Identify by key · identify-result line · KEYBOARD BEHAVIOUR radios ×3 · VIRTUAL CONTROLLERS caption (<span class="mono">2/4 XInput · 3/16 slots</span>) + player rows + empty-slot rows (P2–P4 always visible, dashed) · capacity explainer paragraph</td></tr>
+  <tr><td>Center</td><td>flexible</td><td>Meta line: P-chip · persona name · <span class="mono">ViGEmBus · XInput · SOCD Neutral</span> · right-aligned context hint (“Click an input, then a key below” / “<i>input</i> selected” / “Live — lit inputs are firing”) · ticker chip strip (live only) · pad schematic · keyboard header (<span class="mono">CORSAIR K70 RGB MK.2 · USB · 104 KEYS</span> + hint) · keyboard diagram</td></tr>
+  <tr><td>Right pane</td><td>clamp(300–368&nbsp;px), collapsible (›)</td><td>Filter inputs + Reset · grouped rows: LEFT STICK ·  FACE BUTTONS · SHOULDERS &amp; TRIGGERS · RIGHT STICK · D-PAD · SYSTEM, each with an n/m count · footer “16 of 24 inputs bound”</td></tr>
+</table>
+
+<h2 id="tokens">3 · Design language &amp; tokens</h2>
+<p>From <span class="mono">nocturne-tokens.css</span> (the handoff’s source of truth). The KSX
+implementation keeps its own palette <em>values</em> and adopts these <em>roles</em> — see §9.</p>
+<table>
+  <tr><th>Token</th><th>Value</th><th>Role</th></tr>
+  <tr><td class="mono">--color-bg</td><td><span class="swatch" style="background:#161826"></span><span class="mono">#161826</span></td><td>Window ground</td></tr>
+  <tr><td class="mono">--color-surface</td><td><span class="swatch" style="background:#232532"></span><span class="mono">#232532</span></td><td>Cards, dialogs, inputs</td></tr>
+  <tr><td class="mono">--color-text</td><td><span class="swatch" style="background:#e9e9ed"></span><span class="mono">#e9e9ed</span></td><td>Primary text</td></tr>
+  <tr><td class="mono">--color-accent</td><td><span class="swatch" style="background:#9184d9"></span><span class="mono">#9184d9</span></td><td>THE interaction color — deliberately re-derived from the app’s own Pro accent hue (OKLCH H 289.2, L 0.660, C 0.125); the token comment documents the derivation</td></tr>
+  <tr><td class="mono">--color-accent-2</td><td><span class="swatch" style="background:#a7a1db"></span><span class="mono">#a7a1db</span></td><td>Secondary accent (same hue, L 0.734)</td></tr>
+  <tr><td class="mono">--color-neutral-100…900</td><td>9-step ramp <span class="mono">#f3f5fe → #292b31</span></td><td>OKLCH-generated on one shared lightness scale with the accent ramps, “so the same step of any role matches the others in visual value”</td></tr>
+  <tr><td class="mono">--space-1…8</td><td class="mono">2.8 / 5.6 / 8.4 / 11.2 / 16.8 / 22.4 px</td><td>2.8-px base unit</td></tr>
+  <tr><td class="mono">--radius-sm/md/lg</td><td class="mono">4 / 8 / 14 px</td><td>Chips / controls-cards / dialogs</td></tr>
+  <tr><td class="mono">--shadow-sm/md/lg</td><td>hairline ring → ring + ambient black</td><td>Elevation = “a hairline edge + ambient darkness on a dark theme”</td></tr>
+  <tr><td>Type</td><td>Inter; body 15/1.55; headings −0.015em</td><td>H6 = uppercase +0.08em kicker — the section-header idiom everywhere</td></tr>
+</table>
+<h4>Signature details</h4>
+<p><b>Fading rules:</b> horizontal dividers fade to transparent over 48&nbsp;px at both ends — a
+Nocturne signature (visible under every section kicker). Box outlines and in-control separators
+stay solid. <b>Motion:</b> two keyframes only — <span class="mono">noct-pulse</span> (opacity
+.32↔1, status dots) and <span class="mono">noct-rise</span> (4-px rise + fade, menus/dialogs).
+<b>Focus:</b> 2-px accent outline, offset 2. <b>Selection states</b> are box-shadow insets of
+the accent, never fills.</p>
+
+<h2 id="states">4 · The four screen states</h2>
+<div class="cols">
+<figure>
+  <img src="shots/12-capture-armed.png" alt="Capture state">
+  <figcaption><b>Capture</b> (12) — an input armed. The row expands in place with the editor
+  (see §5); the “Press or click a key” chip pulses; the pad highlights the target zone (LS-Up
+  wedge, lavender); the keyboard hint flips to “Click a key to bind it to Left stick — Up”.
+  Note the center meta’s right side reads “Left stick — Up selected”.</figcaption>
+</figure>
+<figure>
+  <img src="shots/23-live-pressing.png" alt="Live state">
+  <figcaption><b>Live</b> (23) — W+A held. Title bar grows stats (<span class="mono">0:02 ·
+  1.4 ms · 4 ev</span>) and swaps Play → Pause &amp; edit + Stop (the page’s only danger-styled
+  control). A ticker strip of event chips (<span class="mono">• P1 L← · • P3 L← · • P1 RT · •
+  P3 RT</span>) shows cross-pad fan-out live. The pad lights pressed zones with glow; the
+  keyboard lights the pressed keys; rack rows prefix “live ·”; keyboard hint becomes “Bound keys
+  drive pads · other keys type”. The right pane still honors the active filter (“stick”).</figcaption>
+</figure>
+</div>
+<p><b>Idle</b> is figure 01. <b>Paused</b> (“Pause &amp; edit”) is specified by the handoff README
+as pads-disconnected-editing-reenabled; the automated pass did not capture a distinct paused
+chrome (see §8), and the shipped product’s daemon truth is that pause is a full session teardown
+— the implementation words its paused state from that truth, not from the prototype.</p>
+
+<h2 id="components">5 · Component inventory</h2>
+
+<h3>5.1 Title bar + config dropdown</h3>
+<figure>
+  <img src="shots/02-config-menu.png" alt="Config dropdown">
+  <figcaption><b>02 — The config dropdown</b> (360&nbsp;px, from the chip). Sections: SAVED
+  CONFIGURATIONS (rows with name, “Updated <i>ago</i>”, ✓ on active) · actions: “Start over —
+  discard draft”, “Save as new…”, “Import from file…”, “Export “Apex Legends — WASD”…” · SAVED
+  GAMES (row = ▶ icon, title, “2P · Couch co-op — 2 players”; broken entry = ! icon + “launch
+  path missing” in warn color) · “Save current setup as a game…” · autostart toggle with the
+  full-consequence caption: “KSX never starts itself — after a restart someone must open it
+  before the pads work. On, the cabinet comes up ready on its own.”</figcaption>
+</figure>
+
+<h3>5.2 Device rows &amp; identify</h3>
+<p>Row = icon tile · name · <span class="mono">transport · n keys</span> meta · presence dot on
+the selected row. Offline devices stay listed, dimmed, with “Offline · last seen 3 days ago” —
+dimmed-but-explains-why, never hidden. After Identify resolves, a persistent result line appears
+under the actions: <span class="quote">“Resolved to Corsair K70 RGB MK.2”</span> (visible in 07).</p>
+
+<h3>5.3 Behaviour radios</h3>
+<p>True radio dots (16&nbsp;px, accent fill + bg-inset when checked). Three options, each title +
+consequence: <b>Whole keyboard — Freeze</b> / <b>Bound keys only — Split</b> /
+<b>Capture off</b>. The selected row carries a soft accent-tint card behind it.</p>
+
+<h3>5.4 The player rack</h3>
+<p>Row = P-badge (player color) · persona name · <span class="mono">“16 bound · XInput 1/4”</span>
+(live: <span class="mono">“live · 16 bound · …”</span>) · ⧉ duplicate · ✕ remove. <b>Empty slots
+P2–P4 are permanently visible</b> as dashed rows (“empty slot / any persona”) — the rack shows
+capacity as space, not as a button. Below: the capacity paragraph in full sentences. A “+ New
+virtual controller” button exists as well. Drag to reorder (spec’d; not automatable). Removal
+shows a 6-second undo chip (spec’d in README; not captured — §8).</p>
+
+<h3>5.5 Create-controller dialog</h3>
+<figure>
+  <img src="shots/07-create-dialog.png" alt="Create controller dialog">
+  <figcaption><b>07 — “NEW DEVICE / Create a virtual controller.”</b> Lede states the outcome
+  (“Games will see Player 2, driven by Corsair K70 RGB MK.2.”). Persona grid: Xbox 360
+  (<span class="mono">ViGEmBus · XInput</span>), PlayStation — DualShock 4
+  (<span class="mono">ViGEmBus</span>), DualSense (<span class="mono">HIDMaestro · plain USB</span>,
+  sub-line “HIDMaestro — endpoint created on Play”), Switch Pro + Xbox Series greyed with
+  “Future gated capability / Not selectable in v0.4.1”. Mixing note under the grid. STARTER
+  BINDINGS pills: FPS — WASD · Racing · Numpad player · Empty, with a consequence line for the
+  selection (“Whole pad on the numpad — good for a second player.”). SOCD CLEANING pills:
+  Neutral · Last input · First input · Off + “Resolves simultaneous opposite directions before
+  the pad sees them.” Cancel / Create controller.</figcaption>
+</figure>
+
+<h3>5.6 Binding rows + the inline editor</h3>
+<p>Row = status dot · input label (“Left stick — Up”) · right-aligned key chip (bound: filled
+mono chip “<span class="mono">Space</span>”; multi-badge possible) or an <b>Assign</b> button.
+Group headers carry n/m counts that update live (LEFT STICK 2/5 → 3/5 after a bind). Selecting a
+row expands it <b>in place</b> into the editor:</p>
+<table>
+  <tr><th>Field</th><th>Control</th><th>Notes</th></tr>
+  <tr><td>Key</td><td>“Press or click a key” armed chip → “Rebind — W” + Clear</td><td>Arming re-targets the pad + keyboard readers</td></tr>
+  <tr><td>Activation</td><td>Hold | Toggle segmented pair</td><td></td></tr>
+  <tr><td>Turbo</td><td>switch (+ rate control when on)</td><td></td></tr>
+  <tr><td>Macro</td><td>• Record · Steps…</td><td>Steps… opens the macro editor (5.7)</td></tr>
+  <tr><td>Footer</td><td colspan="2">Explainer line, state-aware: “Fires while the key is held. Analog input — a key drives it to full travel.” → with a macro attached: “…Macro plays 1 step per press.”</td></tr>
+</table>
+
+<h3>5.7 Macro editor</h3>
+<figure>
+  <img src="shots/31-macro-steps-editor.png" alt="Macro editor">
+  <figcaption><b>31 — The macro editor dialog.</b> Title carries full context (“Left stick — Left
+  — Xbox 360 · P1”). Lede teaches the model: <span class="quote">“Each step holds everything
+  ticked in it at once, for its duration, before the next begins — a diagonal is ONE step holding
+  two directions, so ¼→ is three steps: ↓, then ↘, then →.”</span> WRITE A MOTION: target pills
+  (D-pad | Left stick | Right stick) + fighting-game motions in numpad notation (¼→ 236 · ¼← 214
+  · ½→ 41236 · ½← 63214 · DP→ 623 · DP← 421 · 360→). “+ Add step”. ON RELEASE: Finish the
+  sequence | Stop at once (“Finishing lets it run out — tap the trigger and the quarter-circle
+  comes out whole.”). AFTER IT ENDS: Run once per press | Repeat while held. SHORT STEPS toggle:
+  “60 Hz — steps under 33 ms (2 frames) show red and are raised to land, unless allowed to run as
+  written.” Trigger note ties it to the binding: “Trigger — A starts this macro… rebind the key
+  there and the macro follows it.” Actions: ▶ Test on the pad · Done.</figcaption>
+</figure>
+<div class="callout ok"><p><b>Alignment note:</b> this dialog matches the shipped ksx macro model
+almost 1:1 — on-release Finish/Abort, repeat once/while-held/turbo, the 33&nbsp;ms sampling rule
+with an allow-short escape, per-step holds. The numpad-notation motion writer and the “show red
+and raised to land” presentation are the parts still to build.</p></div>
+
+<h3>5.8 The two diagrams</h3>
+<p><b>Pad schematic:</b> flat outline, per-control hit zones, states = selected (lavender fill on
+the target wedge/button), live-lit (accent glow), dimmed when idle. The persona changes the
+schematic’s <em>vocabulary</em>, not its geometry, in the prototype. <b>Keyboard diagram:</b>
+generated key grid with cap labels top-left and bound-input shorts bottom-right
+(<span class="mono">W</span>/<span class="mono">RT</span>), player-tinted per owner (P2’s numpad
+binds render in the second player color — visible in 12), auto-fit to the pane. It is also an
+input surface: click a key while armed to bind it; click a bound key otherwise to jump to its
+owner (§6, F5).</p>
+
+<h2 id="flows">6 · User flows</h2>
+
+<h3>F1 · Pick or identify the keyboard</h3>
+<div class="flow-step"><div class="n">1</div><p>Click a device row → selection dot moves; the keyboard diagram re-labels to that device (03).</p></div>
+<div class="flow-step"><div class="n">2</div><p>Or click <b>Identify by key</b> → listening state (04) → press any key on the physical board → the matching row selects, and the persistent “Resolved to …” line appears (visible in 07).</p></div>
+
+<h3>F2 · Capture behaviour</h3>
+<div class="flow-step"><div class="n">1</div><p>Click a radio row (06). Immediate; the consequence line is the explanation. No confirm — it’s a draft.</p></div>
+
+<h3>F3 · Create a controller</h3>
+<div class="flow-step"><div class="n">1</div><p>Click an empty slot row (or “+ New virtual controller”) → dialog (07).</p></div>
+<div class="flow-step"><div class="n">2</div><p>Pick persona (capacity pre-blocks: unavailable personas are greyed <em>with the reason on the card</em>), starter bindings, SOCD → Create (08, 09). The rack, capacity caption, keyboard tints, and binding pane all update.</p></div>
+
+<h3>F4 · Bind a key</h3>
+<div class="flow-step"><div class="n">1</div><p>Click Assign (or the row, or a pad zone) → armed: expander opens, chip pulses, pad zone highlights, keyboard hint retargets (12).</p></div>
+<div class="flow-step"><div class="n">2</div><p>Press a key (or click one on the keyboard diagram) → bound: chip shows the key, group count increments, keyboard gains the short (13). Esc cancels; Backspace clears (spec).</p></div>
+
+<h3>F5 · The owned-key rule (conflicts)</h3>
+<figure>
+  <img src="shots/30-conflict-cross-player.png" alt="Owner jump cross-player">
+  <figcaption><b>30 — Pressing a key another pad owns while arming jumps to the owner.</b>
+  Assigning on P1 and pressing Numpad 4 (P2’s Left-stick-Left) switched the whole view to P2 and
+  expanded the owning row with “Rebind — Num 4”. Note the entire right pane re-vocabularized for
+  the PlayStation persona: <b>Cross ✕ · Circle ○ · Square □ · Triangle △ · L1 bumper · R2
+  trigger</b>, and the meta line dropped “XInput” (DirectInput persona).</figcaption>
+</figure>
+<div class="callout warn"><p><b>Observed ≠ README.</b> The handoff README specifies a conflict
+dialog (Swap / Move here / Keep both with cross-player framing). The prototype as built never
+opened it in either the same-pad case (14: pressing RT’s W while assigning A jumped to the RT
+row) or the cross-pad case (30). The <em>navigate-to-owner</em> behavior is itself coherent —
+show me who owns it, offer Rebind/Clear there — and the implementation may prefer it for the
+common case, with the dialog reserved for a deliberate “take this key” act. Decide explicitly
+at M3b; don’t inherit the ambiguity.</p></div>
+
+<h3>F6 · Input options (Hold/Toggle · Turbo · Macro)</h3>
+<div class="flow-step"><div class="n">1</div><p>Expand a bound row (15) → Hold|Toggle pills (16), Turbo switch, Macro Record/Steps….</p></div>
+<div class="flow-step"><div class="n">2</div><p>Steps… → the macro editor (31, §5.7). After Done, the row’s explainer records the attachment: “Macro plays 1 step per press.” (33).</p></div>
+
+<h3>F7 · Filter</h3>
+<div class="flow-step"><div class="n">1</div><p>Type in “Filter inputs” → groups narrow live (21; “stick” leaves only LEFT STICK + RIGHT STICK — still active later in live mode, 23). Reset clears.</p></div>
+
+<h3>F8 · Play / live session</h3>
+<div class="flow-step"><div class="n">1</div><p>Play → live chrome: stats counter, Pause &amp; edit + Stop, stage glow, rack rows prefix “live”, keyboard hint changes (22).</p></div>
+<div class="flow-step"><div class="n">2</div><p>Press bound keys → pad zones + keys light, ticker chips stream per-pad events — one physical key fans out to every pad that binds it (23: W lights P1 RT and P3 RT).</p></div>
+<div class="flow-step"><div class="n">3</div><p>Stop → idle chrome returns (26). Turbo inputs strobe while live (24) — <b>the implementation caps the strobe at 3 Hz</b> (photosensitivity; the prototype’s ~14 Hz is overridden by decision).</p></div>
+
+<h3>F9 · Config management</h3>
+<div class="flow-step"><div class="n">1</div><p>Chip ▾ → dropdown (02). Load another config, Start over, Save as new, Import/Export, launch or save Saved Games, autostart.</p></div>
+<div class="callout warn"><p>Prototype bugs already logged for this menu (do not reproduce):
+saved-game ▶ = load+start in one click (violates the shipped three-state model — load must land
+on review, Play is its own act); loading a config during a live session kills the session
+silently; Reset skips the dirty check.</p></div>
+
+<h3>F10 · Rack management</h3>
+<div class="flow-step"><div class="n">1</div><p>⧉ duplicates into the next slot (10). ✕ removes with a 6-second undo (spec; not captured — §8). Drag reorders with renumbering (spec).</p></div>
+
+<h3>F11 · Panel collapse</h3>
+<div class="flow-step"><div class="n">1</div><p>‹ / › collapse either side pane to a rail (27, 36) — the center absorbs the space; state persists per side.</p></div>
+
+<h2 id="copy">7 · Copy inventory (verbatim, worth keeping)</h2>
+<table>
+  <tr><th>Context</th><th>String</th></tr>
+  <tr><td>Escape hint</td><td class="quote">L-Ctrl ×5 pauses capture</td></tr>
+  <tr><td>Split radio</td><td class="quote">Mapped keys drive the pad; every other key keeps typing normally.</td></tr>
+  <tr><td>Freeze radio</td><td class="quote">This keyboard is devoted to play. All input captured; typing suppressed.</td></tr>
+  <tr><td>Capacity</td><td class="quote">Drag rows to reorder players. Any persona can sit in any slot — XInput personas cap at 4 in total (Windows) · 8 players is a realistic emulator target · 16 slots is the KSX ceiling.</td></tr>
+  <tr><td>Create lede</td><td class="quote">Games will see Player 2, driven by Corsair K70 RGB MK.2.</td></tr>
+  <tr><td>DualSense card</td><td class="quote">HIDMaestro — endpoint created on Play</td></tr>
+  <tr><td>SOCD</td><td class="quote">Resolves simultaneous opposite directions before the pad sees them.</td></tr>
+  <tr><td>Macro lede</td><td class="quote">Each step holds everything ticked in it at once, for its duration, before the next begins — a diagonal is ONE step holding two directions, so ¼→ is three steps: ↓, then ↘, then →.</td></tr>
+  <tr><td>On-release</td><td class="quote">Finishing lets it run out — tap the trigger and the quarter-circle comes out whole.</td></tr>
+  <tr><td>Short steps</td><td class="quote">60 Hz — steps under 33 ms (2 frames) show red and are raised to land, unless allowed to run as written.</td></tr>
+  <tr><td>Macro trigger</td><td class="quote">Trigger — A starts this macro. It is the ordinary binding on Left stick — Left; rebind the key there and the macro follows it.</td></tr>
+  <tr><td>Autostart</td><td class="quote">KSX never starts itself — after a restart someone must open it before the pads work. On, the cabinet comes up ready on its own.</td></tr>
+  <tr><td>Live keyboard hint</td><td class="quote">Bound keys drive pads · other keys type</td></tr>
+  <tr><td>Row explainer</td><td class="quote">Fires while the key is held. Analog input — a key drives it to full travel.</td></tr>
+</table>
+
+<h2 id="discrepancies">8 · Observed vs. spec &amp; prototype bugs</h2>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>Conflict dialog (Swap/Move/Keep-both)</td><td><b>Never observed</b>; prototype navigates to the owning row instead (14, 30). Decide the model at M3b.</td></tr>
+  <tr><td>6-second undo chip on remove</td><td>Spec’d in README; not reproduced by the automated pass (empty-slot ✕ is inert; a real removal path needs manual verification).</td></tr>
+  <tr><td>Paused chrome</td><td>Pause &amp; edit did not produce a visibly distinct state in the pass; README claims pads-disconnected + editing-reenabled. The implementation words pause from daemon truth (teardown) regardless.</td></tr>
+  <tr><td>Turbo strobe ~14 Hz</td><td>Overridden: implementation caps at ≤3 Hz (WCAG 2.3.1).</td></tr>
+  <tr><td>Latency stat “1.4 ms”</td><td>Hard-coded in the prototype; the implementation shows no invented numbers (uptime · events · “60 Hz loop” until a measured latency is served).</td></tr>
+  <tr><td>Known prototype bugs (from the plan’s exploration)</td><td>Global keydown binds while typing in the filter; Reset skips dirty; saved-game ▶ = load+start; config load kills a live session; dup/create fail silently at capacity; DualSense solo not enforced; conflict counter counts active pad only; shared keycap color = last pad wins; drag-reorder skips capacity revalidation. None are to be reproduced.</td></tr>
+</table>
+
+<h2 id="mapping">9 · Mapping to the KSX implementation (v0.5 branch)</h2>
+<p>The shipped workspace (branch <span class="mono">codex/studio-nocturne-workspace</span>)
+realizes this design on the KSX architecture: Forma SSR + no-JS twins, the existing token
+values with Nocturne’s roles (teal = the accent role; lavender = identity), three contexts and
+both themes. Status at the time of writing:</p>
+<table>
+  <tr><th>Prototype element</th><th>Implementation status</th></tr>
+  <tr><td>Three-pane frame, collapse rails</td><td>Frame shipped (M2); rails pending polish backlog</td></tr>
+  <tr><td>Rack: reorder / duplicate / remove / SOCD</td><td>Shipped as no-JS twins (Move up/down = whole-order; Duplicate composed server-side). Visible empty-slot rows + drag + undo chip: pending</td></tr>
+  <tr><td>Behaviour radios, capacity captions, add form</td><td>Shipped (M2a/b); create-<i>dialog</i> form factor pending</td></tr>
+  <tr><td>Persona-aware pad schematic</td><td>Shipped better-than-prototype: real Xbox and DualShock silhouettes (M2c); zone interactivity = M4</td></tr>
+  <tr><td>Binding list, grouped, Sony vocabulary</td><td>List + persona vocabulary shipped (M3a) via the mapper’s own zone tables; group headers with n/m counts pending</td></tr>
+  <tr><td>Inline editor (Hold|Toggle, Turbo, capture)</td><td>Engine + wire shipped end-to-end (M1b); UI = M3b</td></tr>
+  <tr><td>SOCD Last/First input pills</td><td>Engine shipped (M1b); served 5-mode roster already feeds the workspace select</td></tr>
+  <tr><td>Macro editor</td><td>Shipped model matches; Nocturne reskin = M4</td></tr>
+  <tr><td>Live layer (ticker, lighting, stats), title bar, config menu</td><td>M4</td></tr>
+  <tr><td>Keyboard diagram</td><td>M4 (<span class="mono">keyboard_layout.rs</span> table planned)</td></tr>
+</table>
+<p class="meta">Companion documents: the execution ledger in the plan file (“REMAINING WORK —
+comprehensive capture”), <span class="mono">docs/STUDIO-EXPERIENCE.md</span> (rewritten at M9),
+and the handoff’s own <span class="mono">README.md</span>.</p>
+
+</body>
+</html>

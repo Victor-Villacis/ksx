@@ -64,6 +64,7 @@ const [nxOpenUp, setNxOpenUp] = createSignal(false);
 const [nMenuOpen, setNMenuOpen] = createSignal(false);
 const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
+const [nConflictOpen, setNConflictOpen] = createSignal(false);
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
 const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
@@ -81,6 +82,7 @@ const ui: {
   menu: boolean;
   auto: boolean;
   dlg: boolean;
+  conflict: boolean;
   leftRail: boolean;
   rightRail: boolean;
   dev: 1 | 2 | 3;
@@ -92,6 +94,7 @@ const ui: {
   menu: false,
   auto: false,
   dlg: false,
+  conflict: false,
   leftRail: false,
   rightRail: false,
   dev: 1,
@@ -102,6 +105,7 @@ function applyNocturneUi(): void {
   setNMenuOpen(ui.menu);
   setNAutoCls(ui.auto ? "nx-sw on" : "nx-sw");
   setNDlgOpen(ui.dlg);
+  setNConflictOpen(ui.conflict);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
   setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
@@ -194,8 +198,18 @@ export function nocturneWire(root: HTMLElement): void {
     }
   });
   root.addEventListener("click", (ev) => {
-    const hit = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+    const target = ev.target as HTMLElement | null;
+    const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
     if (!hit) {
+      // The conflict demo: with a control armed, clicking the bound W keycap
+      // is the taken-key case — the dialog the walkthrough could never
+      // screenshot because the prototype resolved it under the driver.
+      const key = target?.closest<HTMLElement>(".n-key.bound");
+      if (key && ui.sel && key.querySelector(".n-key-cap")?.textContent === "W") {
+        ui.conflict = true;
+        applyNocturneUi();
+        return;
+      }
       // Any un-annotated click closes an open dropdown (menus dismiss on
       // outside clicks; menu rows are placeholder actions that also close —
       // they carry no data-nx, so they land here via the chip ancestor).
@@ -215,6 +229,7 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "auto") ui.auto = !ui.auto;
     else if (hit === "slot-new") ui.dlg = true;
     else if (hit === "dlg-close") ui.dlg = false;
+    else if (hit === "conflict-close") ui.conflict = false;
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
     else if (hit === "dev-1") ui.dev = 1;
@@ -1042,6 +1057,56 @@ export function NocturneIsland() {
         ),
         h("div", { class: "n-right-foot" }, "16 of 24 inputs bound"),
       ),
+    ),
+    // ═══ Key-conflict dialog (bundle template; the shots never caught it —
+    // the prototype resolved conflicts before the walkthrough's screenshot).
+    // Same-pad variant with all three consequence cards; every action is a
+    // placeholder that just dismisses.
+    createShow(
+      () => nConflictOpen(),
+      () =>
+        h(
+          "div",
+          { class: "nd-back", "data-nx": "conflict-close" },
+          h(
+            "div",
+            { class: "nd nd-conflict", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Key conflict" },
+            h(
+              "div",
+              null,
+              h("div", { class: "nd-kick" }, "Key conflict"),
+              h("div", { class: "nd-title sm" }, "W is already bound"),
+              h("div", { class: "nd-body" }, "W currently drives Right trigger (RT)."),
+            ),
+            h(
+              "div",
+              { class: "nc-cards" },
+              h(
+                "div",
+                { class: "nc-card", "data-nx": "conflict-close" },
+                h("div", { class: "nc-name" }, "Swap keys"),
+                h("div", { class: "nc-desc" }, "Left stick — Left takes W · Right trigger (RT) takes A"),
+              ),
+              h(
+                "div",
+                { class: "nc-card", "data-nx": "conflict-close" },
+                h("div", { class: "nc-name" }, "Move here"),
+                h("div", { class: "nc-desc" }, "Unbind Right trigger (RT) and give W to Left stick — Left"),
+              ),
+              h(
+                "div",
+                { class: "nc-card", "data-nx": "conflict-close" },
+                h("div", { class: "nc-name" }, "Keep both"),
+                h("div", { class: "nc-desc" }, "One key fires both inputs on this pad"),
+              ),
+            ),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h("button", { class: "nd-btn", type: "button", "data-nx": "conflict-close" }, "Cancel"),
+            ),
+          ),
+        ),
     ),
     // ═══ Create-controller dialog (shot 07) ═══════════════════════════════
     // Opened by any empty rack slot; Cancel, Create, or the backdrop close

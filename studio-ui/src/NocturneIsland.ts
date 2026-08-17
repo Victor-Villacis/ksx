@@ -66,6 +66,13 @@ const [nAutoCls, setNAutoCls] = createSignal("nx-sw");
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
+const [nDev1Cls, setNDev1Cls] = createSignal("n-dev on");
+const [nDev2Cls, setNDev2Cls] = createSignal("n-dev");
+const [nDev3Cls, setNDev3Cls] = createSignal("n-dev");
+const [nKbTitle, setNKbTitle] = createSignal("Corsair K70 RGB MK.2 · USB · 104 keys");
+const [nMode1Cls, setNMode1Cls] = createSignal("n-radio");
+const [nMode2Cls, setNMode2Cls] = createSignal("n-radio on");
+const [nMode3Cls, setNMode3Cls] = createSignal("n-radio");
 
 const ui: {
   sel: "left" | "up" | null;
@@ -76,6 +83,8 @@ const ui: {
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
+  dev: 1 | 2 | 3;
+  mode: "freeze" | "split" | "off";
 } = {
   sel: null,
   act: "hold",
@@ -85,6 +94,8 @@ const ui: {
   dlg: false,
   leftRail: false,
   rightRail: false,
+  dev: 1,
+  mode: "split",
 };
 
 function applyNocturneUi(): void {
@@ -93,6 +104,19 @@ function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
+  setNDev1Cls(ui.dev === 1 ? "n-dev on" : "n-dev");
+  setNDev2Cls(ui.dev === 2 ? "n-dev on" : "n-dev");
+  setNDev3Cls(ui.dev === 3 ? "n-dev on" : "n-dev");
+  setNKbTitle(
+    ui.dev === 2
+      ? "Logitech G915 TKL · Wireless · 87 keys"
+      : ui.dev === 3
+        ? "Apple Magic Keyboard · Bluetooth · 78 keys"
+        : "Corsair K70 RGB MK.2 · USB · 104 keys",
+  );
+  setNMode1Cls(ui.mode === "freeze" ? "n-radio on" : "n-radio");
+  setNMode2Cls(ui.mode === "split" ? "n-radio on" : "n-radio");
+  setNMode3Cls(ui.mode === "off" ? "n-radio on" : "n-radio");
   setNRowLeftCls(ui.sel === "left" ? "n-bind on sel" : "n-bind on");
   setNRowUpCls(ui.sel === "up" ? "n-bind sel" : "n-bind");
   setNWedgeLeftCls(ui.sel === "left" ? "np-zone lit" : "np-zone");
@@ -126,9 +150,49 @@ function applyNocturneUi(): void {
   );
 }
 
+/** The filter demo (shot 21): IMPERATIVE hide/show over the static rows —
+ *  the map.ts live-lighting idiom, legitimate for client-only chrome that no
+ *  slot carries. A row matches on its own label or its group name; a group
+ *  head survives while any of its rows do; an open expander follows its row. */
+function applyNocturneFilter(root: HTMLElement, q: string): void {
+  const pane = root.querySelector(".n-right");
+  if (!pane) return;
+  const query = q.trim().toLowerCase();
+  let head: HTMLElement | null = null;
+  let groupName = "";
+  let groupAny = false;
+  let lastRowHidden = false;
+  const settleHead = () => {
+    if (head) head.classList.toggle("hide", query !== "" && !groupAny);
+  };
+  for (const el of Array.from(pane.children) as HTMLElement[]) {
+    if (el.classList.contains("n-group-head")) {
+      settleHead();
+      head = el;
+      groupAny = false;
+      groupName = (el.querySelector(".n-kick")?.textContent ?? "").toLowerCase();
+    } else if (el.classList.contains("n-bind")) {
+      const label = (el.querySelector(".n-bind-label")?.textContent ?? "").toLowerCase();
+      const show = query === "" || label.includes(query) || groupName.includes(query);
+      el.classList.toggle("hide", !show);
+      lastRowHidden = !show;
+      if (show) groupAny = true;
+    } else if (el.classList.contains("nx-x")) {
+      el.classList.toggle("hide", lastRowHidden);
+    }
+  }
+  settleHead();
+}
+
 /** Delegated clicks on the island root (the map.ts idiom): every interactive
  *  placeholder carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
+  root.addEventListener("input", (ev) => {
+    const t = ev.target as HTMLElement | null;
+    if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
+      applyNocturneFilter(root, t.value);
+    }
+  });
   root.addEventListener("click", (ev) => {
     const hit = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
     if (!hit) {
@@ -153,6 +217,17 @@ export function nocturneWire(root: HTMLElement): void {
     else if (hit === "dlg-close") ui.dlg = false;
     else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
     else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
+    else if (hit === "dev-1") ui.dev = 1;
+    else if (hit === "dev-2") ui.dev = 2;
+    else if (hit === "dev-3") ui.dev = 3;
+    else if (hit === "mode-freeze") ui.mode = "freeze";
+    else if (hit === "mode-split") ui.mode = "split";
+    else if (hit === "mode-off") ui.mode = "off";
+    else if (hit === "filter-reset") {
+      const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
+      if (inp) inp.value = "";
+      applyNocturneFilter(root, "");
+    }
     // "dlg-noop" (the dialog panel itself) falls through: it exists so panel
     // clicks stop at the panel instead of reaching the backdrop's dlg-close.
     applyNocturneUi();
@@ -160,31 +235,6 @@ export function nocturneWire(root: HTMLElement): void {
 }
 
 // ── Placeholder data — the walkthrough's exact idle state ──────────────────
-
-const DEVICES = [
-  { name: "K70 RGB MK.2", meta: "USB · 104 keys", cls: "n-dev on" },
-  { name: "G915 TKL", meta: "Wireless · 87 keys", cls: "n-dev" },
-  { name: "Magic Keyboard", meta: "Bluetooth · 78 keys", cls: "n-dev" },
-  { name: "Huntsman Mini", meta: "Offline · last seen 3 days ago", cls: "n-dev off" },
-];
-
-const BEHAVIOURS = [
-  {
-    cls: "n-radio",
-    title: "Whole keyboard — Freeze",
-    detail: "This keyboard is devoted to play. All input captured; typing suppressed.",
-  },
-  {
-    cls: "n-radio on",
-    title: "Bound keys only — Split",
-    detail: "Mapped keys drive the pad; every other key keeps typing normally.",
-  },
-  {
-    cls: "n-radio",
-    title: "Capture off",
-    detail: "Keyboard behaves normally; mapped keys also drive the pad.",
-  },
-];
 
 const EMPTY_SLOTS = [{ p: "P2" }, { p: "P3" }, { p: "P4" }];
 
@@ -450,19 +500,55 @@ export function NocturneIsland() {
           h("span", { class: "n-kick-n" }, "4 found"),
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "‹"),
         ),
-        ...DEVICES.map((d) =>
+        // Device rows (shot 03): the three online boards select; the offline
+        // Huntsman stays dimmed and inert, exactly as the prototype guards it.
+        h(
+          "div",
+          { "data-nx": "dev-1", class: () => nDev1Cls() },
+          h("span", { class: "n-dev-ico" }, "⌨"),
           h(
             "div",
-            { class: d.cls },
-            h("span", { class: "n-dev-ico" }, "⌨"),
-            h(
-              "div",
-              { class: "n-dev-txt" },
-              h("div", { class: "n-dev-name" }, d.name),
-              h("div", { class: "n-dev-meta" }, d.meta),
-            ),
-            h("span", { class: "n-dev-dot" }),
+            { class: "n-dev-txt" },
+            h("div", { class: "n-dev-name" }, "K70 RGB MK.2"),
+            h("div", { class: "n-dev-meta" }, "USB · 104 keys"),
           ),
+          h("span", { class: "n-dev-dot" }),
+        ),
+        h(
+          "div",
+          { "data-nx": "dev-2", class: () => nDev2Cls() },
+          h("span", { class: "n-dev-ico" }, "⌨"),
+          h(
+            "div",
+            { class: "n-dev-txt" },
+            h("div", { class: "n-dev-name" }, "G915 TKL"),
+            h("div", { class: "n-dev-meta" }, "Wireless · 87 keys"),
+          ),
+          h("span", { class: "n-dev-dot" }),
+        ),
+        h(
+          "div",
+          { "data-nx": "dev-3", class: () => nDev3Cls() },
+          h("span", { class: "n-dev-ico" }, "⌨"),
+          h(
+            "div",
+            { class: "n-dev-txt" },
+            h("div", { class: "n-dev-name" }, "Magic Keyboard"),
+            h("div", { class: "n-dev-meta" }, "Bluetooth · 78 keys"),
+          ),
+          h("span", { class: "n-dev-dot" }),
+        ),
+        h(
+          "div",
+          { class: "n-dev off" },
+          h("span", { class: "n-dev-ico" }, "⌨"),
+          h(
+            "div",
+            { class: "n-dev-txt" },
+            h("div", { class: "n-dev-name" }, "Huntsman Mini"),
+            h("div", { class: "n-dev-meta" }, "Offline · last seen 3 days ago"),
+          ),
+          h("span", { class: "n-dev-dot" }),
         ),
         h(
           "div",
@@ -471,16 +557,49 @@ export function NocturneIsland() {
           h("button", { class: "n-link", type: "button" }, "Identify by key"),
         ),
         h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "Keyboard behaviour")),
-        ...BEHAVIOURS.map((b) =>
+        // Behaviour radios (shot 06): selection moves the dot and the wash.
+        h(
+          "div",
+          { "data-nx": "mode-freeze", class: () => nMode1Cls() },
+          h("span", { class: "n-radio-dot" }),
           h(
             "div",
-            { class: b.cls },
-            h("span", { class: "n-radio-dot" }),
+            { class: "n-radio-txt" },
+            h("div", { class: "n-radio-title" }, "Whole keyboard — Freeze"),
             h(
               "div",
-              { class: "n-radio-txt" },
-              h("div", { class: "n-radio-title" }, b.title),
-              h("div", { class: "n-radio-detail" }, b.detail),
+              { class: "n-radio-detail" },
+              "This keyboard is devoted to play. All input captured; typing suppressed.",
+            ),
+          ),
+        ),
+        h(
+          "div",
+          { "data-nx": "mode-split", class: () => nMode2Cls() },
+          h("span", { class: "n-radio-dot" }),
+          h(
+            "div",
+            { class: "n-radio-txt" },
+            h("div", { class: "n-radio-title" }, "Bound keys only — Split"),
+            h(
+              "div",
+              { class: "n-radio-detail" },
+              "Mapped keys drive the pad; every other key keeps typing normally.",
+            ),
+          ),
+        ),
+        h(
+          "div",
+          { "data-nx": "mode-off", class: () => nMode3Cls() },
+          h("span", { class: "n-radio-dot" }),
+          h(
+            "div",
+            { class: "n-radio-txt" },
+            h("div", { class: "n-radio-title" }, "Capture off"),
+            h(
+              "div",
+              { class: "n-radio-detail" },
+              "Keyboard behaves normally; mapped keys also drive the pad.",
             ),
           ),
         ),
@@ -589,7 +708,7 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-kbhead" },
-          h("span", { class: "n-kick" }, "Corsair K70 RGB MK.2 · USB · 104 keys"),
+          h("span", { class: "n-kick" }, () => nKbTitle()),
           h("div", { class: "n-spring" }),
           h("span", { class: "n-meta-hint" }, () => nKbHint()),
         ),
@@ -692,7 +811,7 @@ export function NocturneIsland() {
             h("span", { class: "n-filter-ico" }, "⌕"),
             h("input", { class: "n-filter-in", type: "text", placeholder: "Filter inputs" }),
           ),
-          h("button", { class: "n-reset", type: "button" }, "Reset"),
+          h("button", { class: "n-reset", type: "button", "data-nx": "filter-reset" }, "Reset"),
         ),
         h(
           "div",

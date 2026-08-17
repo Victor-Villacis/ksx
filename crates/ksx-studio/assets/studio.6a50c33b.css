@@ -7622,3 +7622,15 @@ a.wsrow-title:hover {
   font-size: 11px;
   color: var(--n-text-2);
 }
+
+
+/* Filter demo + selectable rows */
+
+.n-right .hide {
+  display: none;
+}
+
+.n-dev[data-nx],
+.n-radio[data-nx] {
+  cursor: pointer;
+}

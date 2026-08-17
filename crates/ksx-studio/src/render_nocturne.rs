@@ -56,7 +56,14 @@ mod tests {
     /// stay a placeholder page.
     #[test]
     fn nocturne_named_slots_are_exactly_the_ui_demos() {
-        const CLIENT_ONLY_SLOTS: [&str; 24] = [
+        const CLIENT_ONLY_SLOTS: [&str; 31] = [
+            "nDev1Cls",
+            "nDev2Cls",
+            "nDev3Cls",
+            "nKbTitle",
+            "nMode1Cls",
+            "nMode2Cls",
+            "nMode3Cls",
             "nMenuOpen",
             "show:nMenuOpen",
             "nAutoCls",

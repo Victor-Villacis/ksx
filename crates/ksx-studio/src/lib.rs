@@ -100,6 +100,7 @@ mod render;
 mod render_check;
 mod render_devices;
 mod render_map;
+mod render_nocturne;
 mod render_pads;
 mod render_profiles;
 mod render_setup;

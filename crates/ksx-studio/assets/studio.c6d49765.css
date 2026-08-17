@@ -6243,3 +6243,762 @@ a.wsrow-title:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ═══ §9 SCREEN — /NOCTURNE, THE DESIGN PROOF ═════════════════════════════
+   The prototype (docs/design/nocturne-prototype/) rebuilt verbatim: this
+   section is scoped under `.nocturne` and carries the PROTOTYPE'S OWN palette
+   in `--n-*` custom properties — deliberately NOT the KSX tokens, because the
+   route exists to prove the design as designed. Nothing outside `.nocturne`
+   may reference a `--n-*` property; the section dies wholesale when the
+   proof has served its purpose. Dark-only by design (the prototype has no
+   light theme); the route still passes the 390px and coarse gates below. */
+
+.nocturne {
+  --n-bg: #161826;
+  --n-panel: #1a1c28;
+  --n-panel-2: #232532;
+  --n-line: #2b2d3a;
+  --n-line-2: #3f424d;
+  --n-text: #e9e9ed;
+  --n-text-2: #9397ab;
+  --n-text-3: #75798c;
+  --n-accent: #968ae0;
+  --n-accent-2: #a7a1db;
+  --n-accent-tint: rgba(150, 138, 224, 0.14);
+  --n-accent-line: rgba(150, 138, 224, 0.45);
+  /* A fixed-viewport app frame, like the prototype: the panes scroll
+     INTERNALLY and the stage absorbs the leftover height. Without the hard
+     height the right pane's content stretches the page and pushes the
+     keyboard below the fold. The stacked (≤68rem) mode reverts to flow. */
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--n-bg);
+  color: var(--n-text);
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.nocturne :focus-visible {
+  outline-color: var(--n-accent);
+}
+
+.nocturne button {
+  font-family: inherit;
+}
+
+.none {
+  display: none;
+}
+
+/* ── Title bar ── */
+
+.n-tbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--n-panel-2);
+  flex-wrap: wrap;
+}
+
+.n-spring {
+  flex: 1;
+}
+
+.n-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #4c4373, #2c2f42);
+}
+
+.n-brand {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.n-ver {
+  font-size: 11px;
+  color: var(--n-text-3);
+}
+
+.n-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: var(--n-panel);
+  font-size: 12.5px;
+}
+
+.n-chip-ico,
+.n-chip-caret {
+  color: var(--n-text-3);
+  font-size: 11px;
+}
+
+.n-save {
+  margin-left: 8px;
+  color: var(--n-text-2);
+  font-size: 12.5px;
+}
+
+.n-saved {
+  color: var(--n-text-3);
+  font-size: 12px;
+}
+
+.n-hint {
+  color: var(--n-text-3);
+  font-size: 12px;
+}
+
+.n-play {
+  padding: 6px 14px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 9px;
+  background: rgba(150, 138, 224, 0.08);
+  color: var(--n-accent-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* ── Frame ── */
+
+.n-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.n-left {
+  width: 272px;
+  flex: none;
+  padding: 10px 12px 16px;
+  border-right: 1px solid var(--n-panel-2);
+  overflow-y: auto;
+}
+
+.n-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 18px 10px;
+}
+
+.n-right {
+  width: clamp(300px, 24vw, 368px);
+  flex: none;
+  padding: 10px 14px 16px;
+  border-left: 1px solid var(--n-panel-2);
+  overflow-y: auto;
+}
+
+/* ── Kickers (section headers) ── */
+
+.n-kick-row,
+.n-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 2px 8px;
+}
+
+.n-kick-row:first-child {
+  margin-top: 6px;
+}
+
+.n-kick {
+  order: 1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--n-text-3);
+  white-space: nowrap;
+}
+
+.n-kick-row::after,
+.n-group-head::after {
+  content: "";
+  order: 2;
+  flex: 1;
+  border-top: 1px solid var(--n-panel-2);
+}
+
+.n-kick-n {
+  order: 3;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--n-text-3);
+  text-align: right;
+  max-width: 46%;
+}
+
+.n-collapse {
+  order: 4;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--n-line);
+  border-radius: 50%;
+  background: var(--n-panel);
+  color: var(--n-text-2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The device kicker reads KEYBOARD + count adjacent, no divider line. */
+.n-kick-row:has(.n-collapse)::after {
+  display: none;
+}
+
+.n-kick-row:has(.n-collapse) .n-kick-n {
+  margin-right: auto;
+}
+
+/* ── Device rows ── */
+
+.n-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
+
+.n-dev.on {
+  background: var(--n-panel-2);
+  border-color: rgba(150, 138, 224, 0.22);
+}
+
+.n-dev.off {
+  opacity: 0.55;
+}
+
+.n-dev-ico {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel);
+  color: var(--n-text-2);
+  font-size: 14px;
+}
+
+.n-dev-txt {
+  min-width: 0;
+}
+
+.n-dev-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.n-dev-meta {
+  font-size: 11px;
+  color: var(--n-text-3);
+}
+
+.n-dev-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin-left: auto;
+  border-radius: 50%;
+}
+
+.n-dev.on .n-dev-dot {
+  background: var(--n-accent);
+}
+
+.n-linkrow {
+  display: flex;
+  gap: 18px;
+  margin: 8px 4px 2px;
+}
+
+.n-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--n-accent-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* ── Behaviour radios ── */
+
+.n-radio {
+  display: flex;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
+
+.n-radio.on {
+  background: var(--n-panel-2);
+}
+
+.n-radio-dot {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 2px;
+  border: 1.5px solid var(--n-line-2);
+  border-radius: 50%;
+}
+
+.n-radio.on .n-radio-dot {
+  border-color: var(--n-accent);
+  background: radial-gradient(circle, var(--n-accent) 0 3.5px, transparent 4px);
+}
+
+.n-radio-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.n-radio-detail {
+  font-size: 11.5px;
+  color: var(--n-text-3);
+  line-height: 1.35;
+}
+
+/* ── Player rack ── */
+
+.n-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+
+.n-slot.on {
+  background: var(--n-panel-2);
+  border-color: rgba(150, 138, 224, 0.25);
+}
+
+.n-slot.empty {
+  border: 1px dashed var(--n-line-2);
+}
+
+.n-pbadge {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--n-accent);
+  color: #14151f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.n-pbadge.dim {
+  background: var(--n-panel-2);
+  color: var(--n-text-3);
+}
+
+.n-slot-txt {
+  min-width: 0;
+}
+
+.n-slot-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.n-slot.empty .n-slot-name {
+  color: var(--n-text-2);
+  font-weight: 400;
+}
+
+.n-slot-meta {
+  font-size: 11px;
+  color: var(--n-text-3);
+}
+
+.n-slot-act {
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.n-slot-act:first-of-type {
+  margin-left: auto;
+}
+
+.n-foot {
+  margin-top: 10px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--n-text-3);
+  line-height: 1.45;
+}
+
+/* ── Center: meta bar, stage, keyboard ── */
+
+.n-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+}
+
+.n-meta-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.n-meta-sub,
+.n-meta-hint {
+  font-size: 12px;
+  color: var(--n-text-3);
+}
+
+.n-stage {
+  flex: 1;
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  border: 1px solid var(--n-panel-2);
+  border-radius: 14px;
+  background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
+}
+
+.n-pad {
+  width: min(520px, 100%);
+  height: auto;
+}
+
+.np-zone {
+  fill: #1d1f2b;
+  stroke: #3f424d;
+  stroke-width: 1;
+}
+
+.np-body {
+  fill: #20222f;
+  stroke: #33364a;
+  stroke-width: 1;
+}
+
+.np-well {
+  fill: #191b26;
+  stroke: #2e3142;
+  stroke-width: 1;
+}
+
+.np-stick {
+  fill: #2a2d3d;
+  stroke: #4a4e63;
+  stroke-width: 1;
+}
+
+.np-hub {
+  fill: #1d1f2b;
+  stroke: #3f424d;
+  stroke-width: 1;
+}
+
+.np-guide {
+  fill: #2e3142;
+}
+
+.np-lab {
+  fill: #9397ab;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.np-face {
+  fill: #cfd3e5;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.np-sys {
+  fill: #75798c;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.n-kbhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 4px 8px;
+}
+
+/* The kicker leads here (the shared .n-kick rule's order: 1 would sort it
+   after the hint); the hint sits right. */
+.n-kbhead .n-kick {
+  order: 0;
+}
+
+.n-kb {
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.n-kbrow {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+  width: max-content;
+}
+
+.n-key {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 1px solid var(--n-line);
+  border-radius: 5px;
+  background: var(--n-panel);
+}
+
+.n-key.bound {
+  background: var(--n-accent-tint);
+  border-color: rgba(150, 138, 224, 0.5);
+}
+
+.n-key.ghost {
+  visibility: hidden;
+}
+
+.n-key.sp {
+  margin-left: 21px;
+}
+
+/* The F-row cluster gaps absorb the width difference so Prt aligns over Ins:
+   (506px main-block width - 438px of F-row keys and gaps) / 3 gaps. */
+.n-kbrow:first-child .n-key.sp {
+  margin-left: 22.66px;
+}
+
+.n-key.u1_25 {
+  width: 38.5px;
+}
+
+.n-key.u1_5 {
+  width: 47px;
+}
+
+.n-key.u1_75 {
+  width: 55.5px;
+}
+
+.n-key.u2 {
+  width: 64px;
+}
+
+.n-key.u2_25 {
+  width: 72.5px;
+}
+
+.n-key.u2_75 {
+  width: 89.5px;
+}
+
+.n-key.u6_25 {
+  width: 208.5px;
+}
+
+.n-key-cap {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 9.5px;
+  color: var(--n-text-2);
+}
+
+.n-key.bound .n-key-cap {
+  color: var(--n-text);
+}
+
+.n-key-short {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 8.5px;
+  font-weight: 600;
+  color: var(--n-accent-2);
+}
+
+/* ── Right pane: filter + binding list ── */
+
+.n-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 4px;
+}
+
+/* The pane's collapse button sits LEFT of the filter (the shared .n-collapse
+   rule carries order: 4 for the kicker rows; undo it here). */
+.n-filter-row .n-collapse {
+  order: 0;
+  flex: none;
+}
+
+.n-filter {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: var(--n-panel);
+}
+
+.n-filter-ico {
+  color: var(--n-text-3);
+  font-size: 13px;
+}
+
+.n-filter-in {
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--n-text);
+  font: inherit;
+  outline: none;
+}
+
+.n-filter-in::placeholder {
+  color: var(--n-text-3);
+}
+
+.n-reset {
+  padding: 6px 12px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: #20222f;
+  color: #c6c9d6;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.n-bind {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border-radius: 8px;
+}
+
+.n-bind-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #2e3142;
+}
+
+.n-bind.on .n-bind-dot {
+  background: var(--n-accent);
+}
+
+.n-bind-label {
+  font-size: 13px;
+  color: #c6c9d6;
+}
+
+.n-bind.on .n-bind-label {
+  color: var(--n-text);
+}
+
+.n-keychip {
+  margin-left: auto;
+  min-width: 34px;
+  padding: 4px 10px;
+  border: 1px solid rgba(150, 138, 224, 0.35);
+  border-radius: 7px;
+  background: var(--n-accent-tint);
+  color: #cfc9f2;
+  font-size: 12px;
+  text-align: center;
+}
+
+.n-assign {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid var(--n-line);
+  border-radius: 7px;
+  background: #20222f;
+  color: var(--n-text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.n-assign.none,
+.n-keychip.none {
+  display: none;
+}
+
+.n-right-foot {
+  margin-top: 14px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--n-panel-2);
+  font-size: 12px;
+  color: var(--n-text-2);
+}
+
+/* ── The gates the proof still honors: 390px stacks, coarse gets 40px ── */
+
+@media (max-width: 68rem) {
+  .nocturne {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .n-main {
+    flex-direction: column;
+  }
+
+  .n-left,
+  .n-right {
+    width: auto;
+    border-right: none;
+    border-left: none;
+  }
+
+  .n-stage {
+    min-height: 220px;
+  }
+}
+
+@media (pointer: coarse) {
+  .nocturne button,
+  .nocturne .n-filter-in {
+    min-height: 40px;
+  }
+}

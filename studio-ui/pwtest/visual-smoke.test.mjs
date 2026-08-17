@@ -37,6 +37,7 @@ const screenshotDir = path.resolve(
 const ROUTES = [
   { path: "/start", name: "start" },
   { path: "/workspace", name: "workspace" },
+  { path: "/nocturne", name: "nocturne" },
   { path: "/", name: "status" },
   { path: "/map", name: "map" },
   { path: "/check", name: "check" },

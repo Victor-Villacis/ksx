@@ -74,6 +74,7 @@ const exe = path.join(
 const ROUTES = [
   "/start",
   "/workspace",
+  "/nocturne",
   "/",
   "/map",
   "/map?slot=1",

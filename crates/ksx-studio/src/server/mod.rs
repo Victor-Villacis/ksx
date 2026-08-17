@@ -40,6 +40,7 @@
 mod check;
 mod devices;
 mod map;
+mod nocturne;
 mod pads;
 mod profiles;
 mod session;
@@ -51,6 +52,7 @@ mod workspace;
 use check::*;
 use devices::*;
 use map::*;
+use nocturne::*;
 use pads::*;
 use profiles::*;
 use session::*;
@@ -101,6 +103,9 @@ use crate::snapshot::{
 struct AppState {
     page: EmbeddedPage,
     workspace_page: EmbeddedPage,
+    /// The static design-proof route (see `render_nocturne.rs`): loaded like
+    /// every page, rendered from defaults, backed by nothing.
+    nocturne_page: EmbeddedPage,
     map_page: EmbeddedPage,
     check_page: EmbeddedPage,
     pads_page: EmbeddedPage,
@@ -159,6 +164,7 @@ pub fn serve(
     }
     let page = EmbeddedPage::load("/")?;
     let workspace = EmbeddedPage::load("/workspace")?;
+    let nocturne = EmbeddedPage::load("/nocturne")?;
     let mapper = EmbeddedPage::load("/map")?;
     let check = EmbeddedPage::load("/check")?;
     let pads = EmbeddedPage::load("/pads")?;
@@ -169,6 +175,7 @@ pub fn serve(
     let state = Arc::new(AppState {
         page,
         workspace_page: workspace,
+        nocturne_page: nocturne,
         map_page: mapper,
         check_page: check,
         pads_page: pads,
@@ -202,6 +209,9 @@ pub fn serve(
             // verb, 303 → /workspace?flash=. The center and right panes'
             // verbs arrive with M3–M4.
             .route("/workspace", get(workspace_page))
+            // ── /nocturne — the design proof (render_nocturne.rs): the
+            // whole prototype as static placeholder SSR, no reads, no verbs.
+            .route("/nocturne", get(nocturne_page_handler))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
             .route("/workspace/controller/move", post(workspace_form_move))

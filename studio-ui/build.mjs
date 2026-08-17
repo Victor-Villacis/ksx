@@ -90,6 +90,7 @@ try {
     entryPoints: [
       { entry: "src/start.ts", outfile: "start.js" },
       { entry: "src/workspace.ts", outfile: "workspace.js" },
+      { entry: "src/nocturne.ts", outfile: "nocturne.js" },
       { entry: "src/status.ts", outfile: "status.js" },
       { entry: "src/map.ts", outfile: "map.js" },
       { entry: "src/check.ts", outfile: "check.js" },
@@ -102,6 +103,7 @@ try {
     routes: {
       "/start": { js: ["start"], css: ["studio"] },
       "/workspace": { js: ["workspace"], css: ["studio"] },
+      "/nocturne": { js: ["nocturne"], css: ["studio"] },
       "/": { js: ["status"], css: ["studio"] },
       "/map": { js: ["map"], css: ["studio"] },
       "/check": { js: ["check"], css: ["studio"] },
@@ -115,6 +117,7 @@ try {
     ssrEntryPoints: {
       start: "src/start.ts",
       workspace: "src/workspace.ts",
+      nocturne: "src/nocturne.ts",
       status: "src/status.ts",
       map: "src/map.ts",
       check: "src/check.ts",

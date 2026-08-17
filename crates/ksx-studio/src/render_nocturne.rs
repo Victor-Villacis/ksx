@@ -175,6 +175,7 @@ fn option_row(row: &NocturneOptionRow) -> SlotValue {
 fn key_cell(row: &NocturneKeyCell) -> SlotValue {
     SlotValue::object(vec![
         ("cap".to_owned(), SlotValue::Text(row.cap.clone())),
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),

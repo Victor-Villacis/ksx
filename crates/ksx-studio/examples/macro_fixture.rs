@@ -295,13 +295,21 @@ impl StatusSource for Store {
 /// could visibly disagree with what the client renders a moment later.
 fn fixture_session() -> SessionView {
     match std::env::var("KSX_FIXTURE_SESSION").as_deref() {
+        // The running fixture session is STAGED-origin: it "runs" the seeded
+        // draft this fixture holds, which is what licenses the live echo to
+        // paint onto the staged rows (the fail-closed origin rule).
         Ok("running") => SessionView {
             reachable: true,
             running: true,
-            line: "running — Fixture — 1 pad(s)".into(),
-            profile: Some("Fixture".into()),
-            origin: ksx_api::SessionOrigin::Config,
-            active: None,
+            line: "running — Fixture — 2 pad(s)".into(),
+            profile: None,
+            origin: ksx_api::SessionOrigin::Staged,
+            active: Some(ksx_api::ActiveSessionView {
+                elapsed: "2m 07s".into(),
+                input: "one keyboard captured (fixture)".into(),
+                outputs: "2 virtual pads (fixture)".into(),
+                escape_hatch: ksx_api::stage::ESCAPE_HATCH_LINE.into(),
+            }),
         },
         Ok("down") => SessionView::unreachable("no daemon control channel"),
         _ => SessionView {
@@ -472,6 +480,82 @@ impl ControlSource for Store {
             reloaded: request.reload,
             ..MacroOutcome::default()
         }
+    }
+}
+
+/// The live fan-out's double. Open refuses while the fixture is "idle";
+/// running, each stream loops the same four-beat choreography at a gentle
+/// rate (the real feed is consumer-coalesced ~60 Hz; a demo does not need
+/// to be).
+struct ScriptedLive;
+
+impl ksx_api::LiveSource for ScriptedLive {
+    fn open(&self) -> Result<Box<dyn ksx_api::LiveStream>, ksx_api::Refusal> {
+        // Its OWN opt-in, deliberately separate from KSX_FIXTURE_SESSION:
+        // the parity gate captures the running session's first paint, and a
+        // frame arriving inside that capture window is a legitimate
+        // post-load dynamic the gate would (rightly) flag as a flash.
+        let opted_in = std::env::var("KSX_FIXTURE_LIVE").as_deref() == Ok("1")
+            && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running");
+        if !opted_in {
+            return Err(ksx_api::Refusal::not_here(
+                "the live echo — nothing is running on this fixture",
+                "restart the fixture with KSX_FIXTURE_SESSION=running and KSX_FIXTURE_LIVE=1",
+            ));
+        }
+        Ok(Box::new(ScriptedLiveStream { step: 0 }))
+    }
+}
+
+struct ScriptedLiveStream {
+    step: usize,
+}
+
+impl ksx_api::LiveStream for ScriptedLiveStream {
+    fn next_frame(&mut self) -> Result<ksx_api::LiveEnvelope, ksx_api::Refusal> {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let phase = self.step % 4;
+        self.step += 1;
+        // The seeded preset's own vocabulary: W holds the stick up (ly.max),
+        // G is the shared key driving A and B, T is the turbo'd RT.
+        let (down, hit, keys): (Vec<&str>, Vec<&str>, Vec<(&str, bool)>) = match phase {
+            0 => (vec!["ly.max"], vec!["ly.max"], vec![("W", true)]),
+            1 => (vec!["ly.max", "a", "b"], vec!["a", "b"], vec![("G", true)]),
+            2 => (
+                vec!["rt"],
+                vec!["rt"],
+                vec![("W", false), ("G", false), ("T", true)],
+            ),
+            _ => (
+                vec![],
+                vec!["x"],
+                vec![("T", false), ("J", true), ("J", false)],
+            ),
+        };
+        Ok(ksx_api::LiveEnvelope {
+            frame: ksx_api::LiveFrame {
+                running: true,
+                slots: vec![ksx_api::SlotLive {
+                    slot: 1,
+                    down: down.iter().map(|s| s.to_string()).collect(),
+                    hit: hit.iter().map(|s| s.to_string()).collect(),
+                    rt: if phase == 2 { 255 } else { 0 },
+                    ly: if phase <= 1 { 32767 } else { 0 },
+                    ..Default::default()
+                }],
+                keys: keys
+                    .iter()
+                    .map(|(key, down)| ksx_api::KeyHit {
+                        key: (*key).to_string(),
+                        device: "HID\\VID_D209&PID_0430\\FIXTURE".into(),
+                        alias: "panel".into(),
+                        down: *down,
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            unavailable: None,
+        })
     }
 }
 
@@ -697,12 +781,12 @@ fn main() {
         Box::new(NoMachine {
             autostart: std::sync::atomic::AtomicBool::new(false),
         }),
-        // The fixture has no daemon behind it, so the live feed refuses in
-        // words — which is the state the button check renders when nothing is
-        // running, and therefore a state worth being able to look at.
-        std::sync::Arc::new(ksx_api::NoLiveSource::new(
-            "this is the macro fixture — there is no daemon behind it, so there is no live feed",
-        )),
+        // A SCRIPTED live source: refuses in words while the fixture session
+        // is idle (the state the button check renders when nothing runs), and
+        // under KSX_FIXTURE_SESSION=running loops a small choreography — a
+        // held stick, a shared-key tap, a turbo'd trigger — so the live echo
+        // can be driven end to end against this double.
+        std::sync::Arc::new(ScriptedLive),
     ) {
         eprintln!("fixture failed: {err}");
         std::process::exit(1);

@@ -69,6 +69,7 @@ export interface NocturneOptionRowView {
 
 export interface NocturneKeyCellView {
   cap: string;
+  key: string;
   cls: string;
   short: string;
   title: string;
@@ -165,6 +166,15 @@ export interface NocturneView {
 export interface NocturnePayload {
   unavailable: string;
   view: NocturneView;
+  /// The raw session fact the payload carries beside the derived view — the
+  /// live echo's license (fail-closed origin rule) and its uptime clock.
+  session?: {
+    reachable: boolean;
+    running: boolean;
+    origin: string;
+    profile: string | null;
+    active?: { elapsed: string } | null;
+  };
 }
 
 // ── SERVED signals — copiers, never derivers ───────────────────────────────
@@ -307,6 +317,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNAutoBtn(v.auto_btn);
   setNAutoNote(v.auto_note);
   setNAutoFormCls(v.auto_form_cls);
+  // The live echo's license rides the same payload (fail-closed origin).
+  reconcileLiveSession(p);
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -714,6 +726,205 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     // server module's own guard sentences, or its consumerized fallback.
     applyFlash(`error: ${outcome.error ?? "That control could not be changed. Nothing changed."}`);
   }
+}
+
+// ── The live echo (SSE) ────────────────────────────────────────────────────
+// One read-only EventSource on /api/live; EventSource owns reconnection. ALL
+// paint is IMPERATIVE classList/textContent against data-key / data-fn —
+// never a list re-render at frame rate. The fail-closed origin rule is
+// ported from map.ts: frames paint only while the CURRENT polled session
+// says a session is running FROM THIS PAGE'S DRAFT (origin "staged"); any
+// session transition clears every lit element and the ledger, so a frame
+// from one setup can never light another. The turbo strobe stays capped at
+// ≤3 Hz by construction: lit fills are steady and the only motion is the
+// 1.3 s noct-pulse (photosensitivity — non-negotiable).
+
+interface NocturneLiveFrame {
+  running: boolean;
+  slots: {
+    slot: number;
+    down: string[];
+    hit: string[];
+    lt: number;
+    rt: number;
+    lx: number;
+    ly: number;
+    rx: number;
+    ry: number;
+  }[];
+  keys: { key: string; device: string; alias: string; down: boolean }[];
+  dropped: number;
+  off_panel: number;
+}
+
+interface NocturneLiveEnvelope {
+  frame: NocturneLiveFrame;
+  unavailable?: string | null;
+}
+
+/** The session fact the last payload carried — the paint license. */
+let liveSession: {
+  reachable: boolean;
+  running: boolean;
+  origin: string;
+  profile: string | null;
+  elapsed: string;
+} | null = null;
+let liveConfirmed = false;
+let liveAccepted: string | null = null;
+/** Client accumulators, reset at every session boundary. */
+let liveEvents = 0;
+let liveDropped = 0;
+const liveKeysDown = new Set<string>();
+const liveFnsDown = new Set<string>();
+const liveTicker: string[] = [];
+
+function liveFingerprint(): string {
+  const s = liveSession;
+  return s ? JSON.stringify([s.reachable, s.running, s.origin, s.profile]) : "no-payload";
+}
+
+function liveLicensed(): boolean {
+  return (
+    liveConfirmed &&
+    liveSession !== null &&
+    liveSession.running &&
+    liveSession.origin === "staged"
+  );
+}
+
+function clearLivePaint(): void {
+  if (!learnRoot) return;
+  for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".live"))) {
+    el.classList.remove("live");
+  }
+  const stats = learnRoot.querySelector<HTMLElement>(".n-livestats");
+  if (stats) stats.textContent = "";
+  const ticker = learnRoot.querySelector<HTMLElement>(".n-ticker");
+  if (ticker) ticker.textContent = "";
+}
+
+function resetLiveLedger(): void {
+  liveAccepted = null;
+  liveEvents = 0;
+  liveDropped = 0;
+  liveKeysDown.clear();
+  liveFnsDown.clear();
+  liveTicker.length = 0;
+  clearLivePaint();
+}
+
+/** Announce ONLY transitions — the stats strip itself is aria-hidden so the
+ *  uptime clock cannot spam a screen reader every other second. */
+function liveAnnounce(text: string): void {
+  const sr = learnRoot?.querySelector<HTMLElement>(".n-live-sr");
+  if (sr && sr.textContent !== text) sr.textContent = text;
+}
+
+/** Every poll re-reads the license. Called from applyNocturne with the
+ *  payload's own session fact, so a confirmation can only ever be issued by
+ *  the truth it will be checked against. */
+function reconcileLiveSession(p: NocturnePayload): void {
+  const s = p.session;
+  const before = liveFingerprint();
+  liveSession = s
+    ? {
+        reachable: s.reachable,
+        running: s.running,
+        origin: s.origin,
+        profile: s.profile,
+        elapsed: s.active?.elapsed ?? "",
+      }
+    : null;
+  if (liveFingerprint() !== before) resetLiveLedger();
+  liveConfirmed = true;
+  if (!liveLicensed()) {
+    clearLivePaint();
+    liveAnnounce(
+      liveSession?.running
+        ? "Live input is unavailable: Play is using a different setup."
+        : "Live input is inactive.",
+    );
+  }
+}
+
+function invalidateLive(): void {
+  // The ordinary 2 s poll re-confirms from fresh session truth; forcing one
+  // here would turn EventSource's reconnect cadence into poll spam.
+  liveConfirmed = false;
+  resetLiveLedger();
+}
+
+function normalizedFn(control: string): string {
+  return control.trim().toLowerCase();
+}
+
+function paintLive(envelope: NocturneLiveEnvelope): void {
+  if (!envelope.frame.running) {
+    resetLiveLedger();
+    liveAnnounce("Live input is inactive.");
+    return;
+  }
+  if (!liveLicensed()) return;
+  const root = learnRoot;
+  if (!root) return;
+  const session = liveFingerprint();
+  if (liveAccepted !== session) {
+    resetLiveLedger();
+    liveAccepted = session;
+    liveAnnounce("Live input is active.");
+  }
+
+  // The FIRST slot is this page's selected slot (its rows, its board).
+  const slot = envelope.frame.slots.find((s) => s.slot === 1) ?? envelope.frame.slots[0];
+  liveFnsDown.clear();
+  if (slot) {
+    for (const control of slot.down) liveFnsDown.add(normalizedFn(control));
+    for (const control of slot.hit) liveFnsDown.add(normalizedFn(control));
+  }
+  for (const hit of envelope.frame.keys) {
+    const key = hit.key.trim();
+    if (key === "") continue;
+    if (hit.down) liveKeysDown.add(key);
+    else liveKeysDown.delete(key);
+    liveEvents += 1;
+    liveTicker.push(`${key}${hit.down ? "↓" : "↑"}`);
+    if (liveTicker.length > 10) liveTicker.shift();
+  }
+  liveDropped += envelope.frame.dropped;
+
+  // Paint: one sweep, class toggles only.
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-key]"))) {
+    el.classList.toggle("live", liveKeysDown.has(el.dataset.key ?? ""));
+  }
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-fn]"))) {
+    el.classList.toggle("live", liveFnsDown.has(normalizedFn(el.dataset.fn ?? "")));
+  }
+  const stats = root.querySelector<HTMLElement>(".n-livestats");
+  if (stats) {
+    const parts = ["Live"];
+    if (liveSession?.elapsed) parts.push(liveSession.elapsed);
+    parts.push(`${liveEvents} events`);
+    parts.push("60 Hz loop");
+    if (liveDropped > 0) parts.push(`${liveDropped} frames dropped`);
+    stats.textContent = parts.join(" · ");
+  }
+  const ticker = root.querySelector<HTMLElement>(".n-ticker");
+  if (ticker) ticker.textContent = liveTicker.join("  ");
+}
+
+/** Open the stream. Called once at activation; EventSource reconnects. */
+export function nocturneLiveConnect(): void {
+  const source = new EventSource("/api/live");
+  source.addEventListener("frame", (event) => {
+    try {
+      paintLive(JSON.parse((event as MessageEvent<string>).data) as NocturneLiveEnvelope);
+    } catch {
+      invalidateLive();
+    }
+  });
+  source.addEventListener("unavailable", () => invalidateLive());
+  source.addEventListener("error", () => invalidateLive());
 }
 
 /** The filter (client chrome over served rows): IMPERATIVE hide/show — the
@@ -1189,6 +1400,12 @@ export function NocturneIsland() {
           h("span", { class: "n-meta-name" }, () => nPadName()),
           h("span", { class: "n-meta-sub" }, () => nPadSub()),
           h("div", { class: "n-spring" }),
+          // The live echo's readouts: written IMPERATIVELY at frame rate,
+          // both hidden from assistive tech (the sr twin below announces
+          // transitions only, so the uptime clock cannot spam a reader).
+          h("span", { "aria-hidden": "true", class: "n-ticker" }),
+          h("span", { "aria-hidden": "true", class: "n-livestats" }),
+          h("span", { role: "status", class: "n-live-sr" }),
         ),
         h(
           "div",
@@ -1196,46 +1413,49 @@ export function NocturneIsland() {
           h(
             "svg",
             { class: "n-pad", viewBox: "0 0 640 400", "aria-hidden": "true", focusable: "false" },
-            h("rect", { class: "np-zone", x: "150", y: "18", width: "80", height: "27", rx: "11" }),
-            h("rect", { class: "np-zone", x: "410", y: "18", width: "80", height: "27", rx: "11" }),
+            // Every control element carries its canonical mapper function as
+            // data-fn, so live lighting is a class toggle by lookup — the
+            // same vocabulary the binding rows and the live feed speak.
+            h("rect", { "data-fn": "lt", class: "np-zone", x: "150", y: "18", width: "80", height: "27", rx: "11" }),
+            h("rect", { "data-fn": "rt", class: "np-zone", x: "410", y: "18", width: "80", height: "27", rx: "11" }),
             h("text", { class: "np-lab", x: "190", y: "36", "text-anchor": "middle" }, "LT"),
             h("text", { class: "np-lab", x: "450", y: "36", "text-anchor": "middle" }, "RT"),
-            h("rect", { class: "np-zone", x: "130", y: "54", width: "112", height: "24", rx: "12" }),
-            h("rect", { class: "np-zone", x: "398", y: "54", width: "112", height: "24", rx: "12" }),
+            h("rect", { "data-fn": "lb", class: "np-zone", x: "130", y: "54", width: "112", height: "24", rx: "12" }),
+            h("rect", { "data-fn": "rb", class: "np-zone", x: "398", y: "54", width: "112", height: "24", rx: "12" }),
             h("text", { class: "np-lab", x: "186", y: "70", "text-anchor": "middle" }, "LB"),
             h("text", { class: "np-lab", x: "454", y: "70", "text-anchor": "middle" }, "RB"),
             h("rect", { class: "np-body", x: "110", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(19 159 284)" }),
             h("rect", { class: "np-body", x: "432", y: "196", width: "98", height: "176", rx: "49", transform: "rotate(-19 481 284)" }),
             h("rect", { class: "np-body", x: "95", y: "85", width: "450", height: "176", rx: "74" }),
             h("circle", { class: "np-well", cx: "175", cy: "141", r: "40" }),
-            h("path", { class: "np-zone", d: "M175 93 l9 13 h-18 z" }),
-            h("path", { class: "np-zone", d: "M175 189 l9 -13 h-18 z" }),
-            h("path", { class: "np-zone", d: "M127 141 l13 -9 v18 z" }),
-            h("path", { class: "np-zone", d: "M223 141 l-13 -9 v18 z" }),
-            h("circle", { class: "np-stick", cx: "175", cy: "141", r: "25" }),
+            h("path", { "data-fn": "ly.max", class: "np-zone", d: "M175 93 l9 13 h-18 z" }),
+            h("path", { "data-fn": "ly.min", class: "np-zone", d: "M175 189 l9 -13 h-18 z" }),
+            h("path", { "data-fn": "lx.min", class: "np-zone", d: "M127 141 l13 -9 v18 z" }),
+            h("path", { "data-fn": "lx.max", class: "np-zone", d: "M223 141 l-13 -9 v18 z" }),
+            h("circle", { "data-fn": "lthumb", class: "np-stick", cx: "175", cy: "141", r: "25" }),
             h("circle", { class: "np-well", cx: "390", cy: "213", r: "40" }),
-            h("path", { class: "np-zone", d: "M390 165 l9 13 h-18 z" }),
-            h("path", { class: "np-zone", d: "M390 261 l9 -13 h-18 z" }),
-            h("path", { class: "np-zone", d: "M342 213 l13 -9 v18 z" }),
-            h("path", { class: "np-zone", d: "M438 213 l-13 -9 v18 z" }),
-            h("circle", { class: "np-stick", cx: "390", cy: "213", r: "25" }),
-            h("rect", { class: "np-zone", x: "244", y: "177", width: "24", height: "30", rx: "6" }),
-            h("rect", { class: "np-zone", x: "244", y: "223", width: "24", height: "30", rx: "6" }),
-            h("rect", { class: "np-zone", x: "211", y: "203", width: "30", height: "24", rx: "6" }),
-            h("rect", { class: "np-zone", x: "271", y: "203", width: "30", height: "24", rx: "6" }),
+            h("path", { "data-fn": "ry.max", class: "np-zone", d: "M390 165 l9 13 h-18 z" }),
+            h("path", { "data-fn": "ry.min", class: "np-zone", d: "M390 261 l9 -13 h-18 z" }),
+            h("path", { "data-fn": "rx.min", class: "np-zone", d: "M342 213 l13 -9 v18 z" }),
+            h("path", { "data-fn": "rx.max", class: "np-zone", d: "M438 213 l-13 -9 v18 z" }),
+            h("circle", { "data-fn": "rthumb", class: "np-stick", cx: "390", cy: "213", r: "25" }),
+            h("rect", { "data-fn": "dpad.up", class: "np-zone", x: "244", y: "177", width: "24", height: "30", rx: "6" }),
+            h("rect", { "data-fn": "dpad.down", class: "np-zone", x: "244", y: "223", width: "24", height: "30", rx: "6" }),
+            h("rect", { "data-fn": "dpad.left", class: "np-zone", x: "211", y: "203", width: "30", height: "24", rx: "6" }),
+            h("rect", { "data-fn": "dpad.right", class: "np-zone", x: "271", y: "203", width: "30", height: "24", rx: "6" }),
             h("circle", { class: "np-hub", cx: "256", cy: "215", r: "9" }),
-            h("circle", { class: "np-zone", cx: "465", cy: "106", r: "20" }),
-            h("circle", { class: "np-zone", cx: "501", cy: "142", r: "20" }),
-            h("circle", { class: "np-zone", cx: "465", cy: "178", r: "20" }),
-            h("circle", { class: "np-zone", cx: "429", cy: "142", r: "20" }),
+            h("circle", { "data-fn": "y", class: "np-zone", cx: "465", cy: "106", r: "20" }),
+            h("circle", { "data-fn": "b", class: "np-zone", cx: "501", cy: "142", r: "20" }),
+            h("circle", { "data-fn": "a", class: "np-zone", cx: "465", cy: "178", r: "20" }),
+            h("circle", { "data-fn": "x", class: "np-zone", cx: "429", cy: "142", r: "20" }),
             h("text", { class: "np-face", x: "465", y: "111", "text-anchor": "middle" }, "Y"),
             h("text", { class: "np-face", x: "501", y: "147", "text-anchor": "middle" }, "B"),
             h("text", { class: "np-face", x: "465", y: "183", "text-anchor": "middle" }, "A"),
             h("text", { class: "np-face", x: "429", y: "147", "text-anchor": "middle" }, "X"),
-            h("rect", { class: "np-zone", x: "286", y: "132", width: "26", height: "18", rx: "7" }),
-            h("rect", { class: "np-zone", x: "328", y: "132", width: "26", height: "18", rx: "7" }),
+            h("rect", { "data-fn": "back", class: "np-zone", x: "286", y: "132", width: "26", height: "18", rx: "7" }),
+            h("rect", { "data-fn": "start", class: "np-zone", x: "328", y: "132", width: "26", height: "18", rx: "7" }),
             h("circle", { class: "np-hub", cx: "320", cy: "103", r: "17" }),
-            h("circle", { class: "np-guide", cx: "320", cy: "103", r: "7" }),
+            h("circle", { "data-fn": "guide", class: "np-guide", cx: "320", cy: "103", r: "7" }),
             h("text", { class: "np-sys", x: "299", y: "168", "text-anchor": "middle" }, "View"),
             h("text", { class: "np-sys", x: "341", y: "168", "text-anchor": "middle" }, "Menu"),
           ),
@@ -1354,7 +1574,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1369,7 +1589,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1384,7 +1604,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1399,7 +1619,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1414,7 +1634,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1429,7 +1649,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -1451,7 +1671,7 @@ export function NocturneIsland() {
               (r) =>
                 h(
                   "div",
-                  { title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),

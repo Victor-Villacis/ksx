@@ -11,6 +11,7 @@ import {
   applyNocturne,
   applyNocturneUnreachable,
   NocturneIsland,
+  nocturneLiveConnect,
   nocturneWire,
   setNocturnePoll,
   type NocturnePayload,
@@ -117,6 +118,7 @@ activateIslands({
     nocturneWire(el);
     wireForms(el);
     setNocturnePoll(() => void poll());
+    nocturneLiveConnect();
     window.setInterval(() => void poll(), POLL_MS);
     // A no-JS POST landed us on ?flash=…: the server already painted the
     // line; strip the query so a manual reload does not replay feedback for

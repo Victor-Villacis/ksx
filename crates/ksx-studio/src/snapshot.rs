@@ -3865,6 +3865,9 @@ pub struct NocturneGameRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyCell {
     pub cap: String,
+    /// The canonical `ksx_core::Key` name — the live feed's `KeyHit.key`
+    /// vocabulary, carried as `data-key` so live lighting is a lookup.
+    pub key: String,
     pub cls: String,
     pub short: String,
     /// The full sentence for hover/aria: which controls this key drives.
@@ -4319,6 +4322,7 @@ impl NocturneDerived {
             };
             NocturneKeyCell {
                 cap: cell.cap.to_owned(),
+                key: cell.key.to_owned(),
                 cls,
                 short,
                 title,
@@ -4352,6 +4356,7 @@ impl NocturneDerived {
                     .collect();
                 NocturneKeyCell {
                     cap: (*key).to_owned(),
+                    key: (*key).to_owned(),
                     cls: if fns.len() > 1 {
                         "n-key tray bound shared".to_owned()
                     } else {

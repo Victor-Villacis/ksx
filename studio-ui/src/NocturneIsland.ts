@@ -819,6 +819,7 @@ function syncExpandLabel(): void {
 
 // The stage's assign cue — pure interaction state, like the learn banner.
 const [nLearnSkipCls, setNLearnSkipCls] = createSignal("n-bbtn sm none");
+const [nChainCls, setNChainCls] = createSignal("n-chain");
 // The keyboard's learn cue — the mirror: a control is waiting for a key.
 const [nKeyCueCls, setNKeyCueCls] = createSignal("n-key-cue none");
 const [nKeyCueText, setNKeyCueText] = createSignal("");
@@ -942,6 +943,18 @@ function markArmedRow(fnName: string | null): void {
  *  like a hand-armed one. */
 let autoMap: { steps: { fn: string; label: string }[]; idx: number; bound: number } | null = null;
 
+/** The toast's "Bind several" box: while checked, an armed session
+ *  survives each bind and waits for the next target, until Esc, Cancel or
+ *  the timeout ends it. Shift-clicking is its one-off twin. */
+function chainWanted(): boolean {
+  return learnRoot?.querySelector<HTMLInputElement>(".n-chain-box")?.checked ?? false;
+}
+
+function setChainBox(on: boolean): void {
+  const box = learnRoot?.querySelector<HTMLInputElement>(".n-chain-box");
+  if (box) box.checked = on;
+}
+
 /** With a pane rolled away, the armed state still needs a face: the
  *  collapsed rail glows while a capture or assign waits inside. */
 function setRailGlow(on: boolean): void {
@@ -954,6 +967,7 @@ function armLearnUi(row: LearnTarget): void {
   setNLearnText(`Press the panel key for P${row.slot} · ${row.label}${step}`);
   setNLearnSub(`${learnSentence(row.mode)} ${autoMap ? "Esc skips this one." : "Esc cancels."}`);
   setNLearnSkipCls(autoMap ? "n-bbtn sm" : "n-bbtn sm none");
+  setNChainCls(autoMap ? "n-chain none" : "n-chain");
   setNKeyCueCls("n-key-cue");
   setNKeyCueText(`Waiting — press a key for ${row.label}, or click one below`);
   markArmedRow(row.fn);
@@ -963,6 +977,7 @@ function armLearnUi(row: LearnTarget): void {
 function disarmLearnUi(): void {
   setNLearnCls("n-learnbar none");
   setNLearnSkipCls("n-bbtn sm none");
+  setChainBox(false);
   setNKeyCueCls("n-key-cue none");
   markArmedRow(null);
   setRailGlow(false);
@@ -1077,13 +1092,23 @@ async function pollLearn(): Promise<void> {
       setNLearnSub(`${learnSentence(row.mode)} ${secs}s left · ${esc}`);
       break;
     }
-    case "hit":
+    case "hit": {
       // Retire before the asynchronous write: the 33 ms timer and the
       // fast-hit poll may overlap, and only the first terminal response may
       // reach the bind verb.
+      const chain = chainWanted();
       retireLearn();
-      if (learn.key) void writeLearnedKey(row, learn.key, false);
+      if (learn.key) {
+        void writeLearnedKey(row, learn.key, false).then((ok) => {
+          // "Bind several": the control keeps listening; further keys ADD.
+          if (ok && chain && !autoMap) {
+            void startLearn({ ...row, mode: "add" });
+            setChainBox(true);
+          }
+        });
+      }
       break;
+    }
     case "timeout":
       retireLearn();
       if (autoMap) {
@@ -1169,7 +1194,7 @@ function autoMapAdvance(didBind: boolean): void {
 /** One learned key onto one staged control, through the server-resolved bind
  *  verb. The server reads the slot's preset identity and current key list
  *  itself; this browser is never trusted with a key list it made up. */
-async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): Promise<void> {
+async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): Promise<boolean> {
   let outcome: NocturneBindOutcome;
   try {
     outcome = await fetchJSON<NocturneBindOutcome>("/nocturne/api/bind", {
@@ -1186,7 +1211,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
   } catch {
     autoMap = null;
     applyFlash("error: The bind request failed — is ksx studio still running?");
-    return;
+    return false;
   }
   if (outcome.ok) {
     pendingConflict = null;
@@ -1201,6 +1226,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     applyFlash(line);
     nocturnePollFn();
     autoMapAdvance(true);
+    return true;
   } else if (outcome.code === "conflict" && outcome.conflicts.length > 0) {
     // Cross-slot (or a second macro trigger): fan-out is the product, but it
     // is asked about, never assumed. "Use here too" takes nothing away.
@@ -1229,6 +1255,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     // server module's own guard sentences, or its consumerized fallback.
     applyFlash(`error: ${outcome.error ?? "That control could not be changed. Nothing changed."}`);
   }
+  return false;
 }
 
 // ── The live echo (SSE) ────────────────────────────────────────────────────
@@ -1598,6 +1625,7 @@ function locateKeyRow(root: HTMLElement, key: string): void {
  *  picker. Rides writeLearnedKey wholesale, so refusals and the conflict
  *  dialog behave exactly like a learned key. */
 let assignKey: string | null = null;
+let assignMode: "replace" | "add" = "replace";
 
 /** Light the armed key everywhere it appears (board cap, tray, available
  *  chip) — a glow that WAITS, cleared only by resolution or Esc. */
@@ -1623,11 +1651,17 @@ function markAssignTargets(key: string | null): void {
 const ASSIGN_WINDOW_MS = 12000;
 let assignTimer: number | undefined;
 
-function armAssign(key: string): void {
+function armAssign(key: string, mode: "replace" | "add" = "replace"): void {
   assignKey = key;
+  assignMode = mode;
   const deadline = Date.now() + ASSIGN_WINDOW_MS;
   setNLearnCls("n-learnbar listen");
-  setNLearnText(`Click a control on the pad to add ${key}`);
+  setNLearnText(
+    mode === "add"
+      ? `Click a control on the pad to add ${key}`
+      : `Click a control on the pad — ${key} replaces its binding`,
+  );
+  setNChainCls("n-chain");
   setNLearnSub(`${Math.ceil(ASSIGN_WINDOW_MS / 1000)}s left · Esc cancels.`);
   setNLearnSkipCls("n-bbtn sm none");
   markAssignTargets(key);
@@ -1646,6 +1680,7 @@ function armAssign(key: string): void {
 
 function cancelAssign(): void {
   assignKey = null;
+  setChainBox(false);
   if (assignTimer !== undefined) {
     window.clearInterval(assignTimer);
     assignTimer = undefined;
@@ -1808,6 +1843,8 @@ export function nocturneWire(root: HTMLElement): void {
       if (assignKey && fnName) {
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
+        const mode = assignMode;
+        const chain = ev.shiftKey || chainWanted();
         cancelAssign();
         // A FREE control has no row — its group chip carries the name.
         const chipLabel = Array.from(
@@ -1821,10 +1858,15 @@ export function nocturneWire(root: HTMLElement): void {
             ?.textContent?.trim() ||
           chipLabel ||
           fnName;
-        void writeLearnedKey(
-          { fn: fnName, label, slot: nSlotVal(), mode: "add" },
-          held,
-          false,
+        void writeLearnedKey({ fn: fnName, label, slot: nSlotVal(), mode }, held, false).then(
+          (ok) => {
+            // "Bind several": the key stays in your hand for the next
+            // control; the box survives the re-arm.
+            if (ok && chain) {
+              armAssign(held, mode);
+              setChainBox(true);
+            }
+          },
         );
         return;
       }
@@ -1868,12 +1910,19 @@ export function nocturneWire(root: HTMLElement): void {
       if (learnRow && key) {
         // A control is waiting: clicking a cap IS pressing the key.
         const row = learnRow;
+        const chain = ev.shiftKey || chainWanted();
         void cancelLearn();
-        void writeLearnedKey(row, key, false);
+        void writeLearnedKey(row, key, false).then((ok) => {
+          // "Bind several": the control keeps listening; further keys ADD.
+          if (ok && chain && !autoMap) {
+            void startLearn({ ...row, mode: "add" });
+            setChainBox(true);
+          }
+        });
         return;
       }
       // With the pane rolled away, a cap click goes straight to mapping:
-      // arm the key (bound keys can add another control), the pad picks —
+      // the pad picks the control (plain click replaces its binding) —
       // the pane stays closed and its rail glows instead.
       if (ui.rightRail) {
         if (key && !autoMap) armAssign(key);
@@ -1883,9 +1932,10 @@ export function nocturneWire(root: HTMLElement): void {
       saveUiPrefs();
       applyNocturneUi();
       locateKeyRow(root, key);
-      // An UNBOUND cap goes straight to work: the pad is the picker.
-      const bound = root.querySelector(`.n-krows .n-krow[data-key="${CSS.escape(key)}"]`);
-      if (!bound && key) armAssign(key);
+      // EVERY cap click puts the key in your hand: the next pad click
+      // gives that control this key (its old key is replaced — the row's
+      // + is the add gesture).
+      if (key && !autoMap) armAssign(key);
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -2001,7 +2051,10 @@ export function nocturneWire(root: HTMLElement): void {
       applyNocturneUi();
     } else if (hit === "key-assign") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
-      if (key) armAssign(key);
+      // The row's + means ADD (the key keeps its other controls); a free
+      // chip is a plain bind.
+      const mode: "replace" | "add" = target?.closest(".n-krow") ? "add" : "replace";
+      if (key) armAssign(key, mode);
     } else if (hit === "bind-expand") {
       const rows = Array.from(
         root.querySelectorAll<HTMLDetailsElement>(".n-right details[data-fn]"),
@@ -2539,6 +2592,15 @@ export function NocturneIsland() {
             { class: "n-learn-txt" },
             h("span", { class: "n-learn-line" }, () => nLearnText()),
             h("span", { class: "n-learn-sub" }, () => nLearnSub()),
+          ),
+          // The armed session's "keep going" switch — Victor's multi-bind,
+          // scoped to the moment: it exists only while something is armed
+          // and dies with the arm.
+          h(
+            "label",
+            { class: () => nChainCls() },
+            h("input", { type: "checkbox", class: "n-chain-box" }),
+            "Bind several",
           ),
           h("button", { type: "button", "data-nx": "learn-skip", class: () => nLearnSkipCls() }, "Skip"),
           h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
@@ -3284,6 +3346,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -3513,6 +3576,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -3742,6 +3806,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -3971,6 +4036,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -4200,6 +4266,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -4429,6 +4496,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-bind-verb" }, "driven by"),
                   h(
                     "button",
                     {
@@ -4807,6 +4875,7 @@ export function NocturneIsland() {
                   h("span", { class: "n-bind-label" }, r.name),
                   h("span", { class: "n-bind-note" }, r.meta),
                 ),
+                h("span", { class: "n-bind-verb" }, "started by"),
                 h(
                   "button",
                   {

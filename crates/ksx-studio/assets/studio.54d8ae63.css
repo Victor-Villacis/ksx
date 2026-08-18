@@ -9406,6 +9406,34 @@ button.n-keychip:hover {
   pointer-events: none;
 }
 
+/* The relation's other voice: "driven by" before the chip, the mirror of
+   the By-key rows' "drives". */
+.n-bind-verb {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--n-text-3);
+}
+
+/* The toast's "Bind several" switch. */
+.n-chain {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--n-text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n-chain-box {
+  accent-color: var(--n-accent);
+}
+
+.n-chain.none {
+  display: none;
+}
+
 /* The control row's own Clear: quiet until the row is under the pointer. */
 .n-rowclear {
   width: 22px;

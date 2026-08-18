@@ -766,11 +766,13 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 26] = [
+        const CLIENT_ONLY_SLOTS: [&str; 27] = [
             // The auto-map toast's Skip button exists only while a walk runs
             // — SSR paints it hidden. (The auto-map button itself is static
             // markup revealed by the wire's js marker class.)
             "nLearnSkipCls",
+            // ...as does the toast's "Bind several" switch.
+            "nChainCls",
             // ...and the keyboard's learn cue is its mirror.
             "nKeyCueCls",
             "nKeyCueText",

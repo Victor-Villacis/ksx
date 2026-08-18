@@ -3887,7 +3887,7 @@ pub struct NocturneBindRow {
     /// The turbo box's prefill — the delivered rate ("12"), or empty.
     pub turbo: String,
     /// The chip's hover sentence: the RELATION, stated from the game's side
-    /// ("Pressed by G or H — …"), because the chip lives on a control row.
+    /// ("Driven by G or H — …"), because the chip lives on a control row.
     pub chip_title: String,
 
     /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
@@ -5020,7 +5020,7 @@ impl NocturneDerived {
                 note: row.share_note.clone(),
                 chip_title: if bound {
                     format!(
-                        "Pressed by {} — click, then press a new key to replace",
+                        "Driven by {} — click, then press a new key to replace",
                         row.keys.replace(" · ", " or ")
                     )
                 } else {
@@ -5204,7 +5204,7 @@ impl NocturneDerived {
                                 },
                                 chip_title: if triggered {
                                     format!(
-                                        "Pressed by {} — click, then press a new trigger key",
+                                        "Started by {} — click, then press a new trigger key",
                                         mac.triggers.join(" or ")
                                     )
                                 } else {

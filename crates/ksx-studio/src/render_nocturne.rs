@@ -35,7 +35,12 @@ const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
 const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
 const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
 const LIST_SLOT_SOCD_EDIT: &str = "list:nSocdEditOpts:array";
-const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
+const LIST_SLOT_BIND_FACE: &str = "list:nBindFace:array";
+const LIST_SLOT_BIND_DPAD: &str = "list:nBindDpad:array";
+const LIST_SLOT_BIND_SHL: &str = "list:nBindShl:array";
+const LIST_SLOT_BIND_LS: &str = "list:nBindLs:array";
+const LIST_SLOT_BIND_RS: &str = "list:nBindRs:array";
+const LIST_SLOT_BIND_SYS: &str = "list:nBindSys:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
 const LIST_SLOT_KB: [&str; 7] = [
@@ -82,6 +87,13 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nPadName": payload.view.pad_name,
         "nPadSub": payload.view.pad_sub,
         "nBindTitle": payload.view.bind_title,
+        "nBindFaceN": payload.view.bind_face_n,
+        "nBindDpadN": payload.view.bind_dpad_n,
+        "nBindShlN": payload.view.bind_shoulders_n,
+        "nBindLsN": payload.view.bind_lstick_n,
+        "nBindRsN": payload.view.bind_rstick_n,
+        "nBindSysN": payload.view.bind_system_n,
+        "nBindGCls": payload.view.bind_g_cls,
         "nBindFoot": payload.view.bind_foot,
         "nMacrosHead": payload.view.macros_head,
         "nMacrosNote": payload.view.macros_note,
@@ -249,7 +261,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 20] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 25] {
     let view = &payload.view;
     [
         (
@@ -313,8 +325,28 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 20] {
             SlotValue::array(view.socd_edit_opts.iter().map(option_row).collect()),
         ),
         (
-            LIST_SLOT_BINDS,
-            SlotValue::array(view.bind_rows.iter().map(bind_row).collect()),
+            LIST_SLOT_BIND_FACE,
+            SlotValue::array(view.bind_face.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_BIND_DPAD,
+            SlotValue::array(view.bind_dpad.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_BIND_SHL,
+            SlotValue::array(view.bind_shoulders.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_BIND_LS,
+            SlotValue::array(view.bind_lstick.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_BIND_RS,
+            SlotValue::array(view.bind_rstick.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_BIND_SYS,
+            SlotValue::array(view.bind_system.iter().map(bind_row).collect()),
         ),
         (
             LIST_SLOT_DEVICES,
@@ -501,8 +533,14 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 20] = [
+        const SERVED_LIST_PREFIXES: [&str; 25] = [
             "list:nSocdEditOpts:",
+            "list:nBindFace:",
+            "list:nBindDpad:",
+            "list:nBindShl:",
+            "list:nBindLs:",
+            "list:nBindRs:",
+            "list:nBindSys:",
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
@@ -521,9 +559,15 @@ mod tests {
             "list:nPersonaRows:",
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
-            "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 55] = [
+        const SERVED_SLOTS: [&str; 62] = [
+            "nBindFaceN",
+            "nBindDpadN",
+            "nBindShlN",
+            "nBindLsN",
+            "nBindRsN",
+            "nBindSysN",
+            "nBindGCls",
             "nSocdCls",
             "nSocdNum",
             "nSocdLab",
@@ -648,7 +692,13 @@ mod tests {
             LIST_SLOT_PERSONAS,
             LIST_SLOT_LAYOUTS,
             LIST_SLOT_SOCDS,
-            LIST_SLOT_BINDS,
+            LIST_SLOT_SOCD_EDIT,
+            LIST_SLOT_BIND_FACE,
+            LIST_SLOT_BIND_DPAD,
+            LIST_SLOT_BIND_SHL,
+            LIST_SLOT_BIND_LS,
+            LIST_SLOT_BIND_RS,
+            LIST_SLOT_BIND_SYS,
         ] {
             assert!(
                 named.iter().any(|n| n == name),

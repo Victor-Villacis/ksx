@@ -7574,6 +7574,50 @@ a.wsrow-title:hover {
 }
 
 /* The lit schematic wedge: the selected control's zone, accent-filled. */
+/* ── The binding list's controller groups: face, D-pad, shoulders &
+   triggers, sticks, system. Sticky micro-kickers over the pane's own
+   scroll; a filtered-empty group hides whole. ── */
+.n-bindgroups {
+  display: contents;
+}
+
+.n-bindgroups.none {
+  display: none;
+}
+
+.n-bindg {
+  margin: 0 0 10px;
+}
+
+.n-bindg.empty {
+  display: none;
+}
+
+.n-bindg-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 2px 5px;
+  background: var(--n-bg);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--n-text-3);
+}
+
+.n-bindg-n {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--n-text-3);
+  opacity: 0.75;
+}
+
 .n-right-foot {
   margin-top: 14px;
   padding: 8px 4px 0;

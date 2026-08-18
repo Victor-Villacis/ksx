@@ -3986,7 +3986,25 @@ pub struct NocturneDerived {
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
     pub bind_title: String,
-    pub bind_rows: Vec<NocturneBindRow>,
+    /// The binding list, grouped the way the physical controller is
+    /// organised: face cluster, D-pad, shoulders & triggers, each stick,
+    /// and the system row. Six served lists because a list body is one
+    /// flat template — the group headers live in the island markup, each
+    /// with its served "N of M bound" count beside it.
+    pub bind_face: Vec<NocturneBindRow>,
+    pub bind_dpad: Vec<NocturneBindRow>,
+    pub bind_shoulders: Vec<NocturneBindRow>,
+    pub bind_lstick: Vec<NocturneBindRow>,
+    pub bind_rstick: Vec<NocturneBindRow>,
+    pub bind_system: Vec<NocturneBindRow>,
+    pub bind_face_n: String,
+    pub bind_dpad_n: String,
+    pub bind_shoulders_n: String,
+    pub bind_lstick_n: String,
+    pub bind_rstick_n: String,
+    pub bind_system_n: String,
+    /// Hides the six group frames when no slot serves rows.
+    pub bind_g_cls: String,
     pub bind_foot: String,
     /// The selected slot's macros: lifecycle rows + the honest state line.
     pub macros_head: String,
@@ -4026,6 +4044,25 @@ pub struct NocturneDerived {
     /// Hides the consent form when the sign-in state could not be read — a
     /// verb whose precondition is unknown is not offered.
     pub auto_form_cls: String,
+}
+
+/// Which of the right pane's six controller clusters a mapper function
+/// belongs to — the order a hand finds them: face buttons, D-pad,
+/// shoulders & triggers, left stick, right stick, system. The rows carry
+/// the MAPPER's spelling, which writes the face buttons UPPERCASE while the
+/// zone vocabulary is lowercase (the live-echo lesson) — match both.
+/// Anything unrecognised lands in the system group rather than disappearing.
+fn nocturne_bind_group(function: &str) -> usize {
+    match function {
+        "a" | "b" | "x" | "y" | "A" | "B" | "X" | "Y" => 0,
+        f if f.starts_with("dpad.") => 1,
+        "lb" | "rb" | "lt" | "rt" => 2,
+        "lthumb" => 3,
+        f if f.starts_with("lx.") || f.starts_with("ly.") => 3,
+        "rthumb" => 4,
+        f if f.starts_with("rx.") || f.starts_with("ry.") => 4,
+        _ => 5,
+    }
 }
 
 impl NocturneDerived {
@@ -4664,51 +4701,94 @@ impl NocturneDerived {
         };
 
         let binds = workspace_bind_rows(staged, selected);
-        let bind_rows: Vec<NocturneBindRow> = binds
-            .rows
+        // The pane groups its rows the way the physical controller is
+        // organised — face cluster, D-pad, shoulders & triggers, each
+        // stick, system — so a row is found where a hand would find the
+        // control. Six served lists (a list body is one flat template; the
+        // group headers live in the island markup over these).
+        let mut bind_groups: [Vec<NocturneBindRow>; 6] = Default::default();
+        let mut bind_bound = [0usize; 6];
+        for row in &binds.rows {
+            // The mapper's own unbound placeholder (`key_tag`).
+            let bound = row.keys != "—";
+            let group = nocturne_bind_group(&row.function);
+            if bound {
+                bind_bound[group] += 1;
+            }
+            bind_groups[group].push(NocturneBindRow {
+                function: row.function.clone(),
+                label: row.label.clone(),
+                chip: if bound {
+                    row.keys.clone()
+                } else {
+                    "Unbound".to_owned()
+                },
+                note: row.notes.clone(),
+                cls: if bound {
+                    "n-bind on".to_owned()
+                } else {
+                    "n-bind".to_owned()
+                },
+                chip_cls: if bound {
+                    "n-keychip".to_owned()
+                } else {
+                    "n-keychip ghost".to_owned()
+                },
+                clear_cls: if bound {
+                    "n-bclear".to_owned()
+                } else {
+                    "n-bclear none".to_owned()
+                },
+                slot: row.slot.clone(),
+                turbo: row.turbo_hz.clone(),
+                hold_cls: if row.toggle {
+                    "n-bpill".to_owned()
+                } else {
+                    "n-bpill on".to_owned()
+                },
+                tog_cls: if row.toggle {
+                    "n-bpill on".to_owned()
+                } else {
+                    "n-bpill".to_owned()
+                },
+            });
+        }
+        // Within a group the rows read in the canonical spoken order (A B X
+        // Y; LB RB LT RT) rather than the zone table's diamond geometry — a
+        // LIST is scanned by name, not by position on the pad.
+        for (group, order) in [
+            (0usize, ["a", "b", "x", "y"]),
+            (2, ["lb", "rb", "lt", "rt"]),
+        ] {
+            bind_groups[group].sort_by_key(|row| {
+                order
+                    .iter()
+                    .position(|f| row.function.eq_ignore_ascii_case(f))
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        let bind_heads: Vec<String> = bind_groups
             .iter()
-            .map(|row| {
-                // The mapper's own unbound placeholder (`key_tag`).
-                let bound = row.keys != "—";
-                NocturneBindRow {
-                    function: row.function.clone(),
-                    label: row.label.clone(),
-                    chip: if bound {
-                        row.keys.clone()
-                    } else {
-                        "Unbound".to_owned()
-                    },
-                    note: row.notes.clone(),
-                    cls: if bound {
-                        "n-bind on".to_owned()
-                    } else {
-                        "n-bind".to_owned()
-                    },
-                    chip_cls: if bound {
-                        "n-keychip".to_owned()
-                    } else {
-                        "n-keychip ghost".to_owned()
-                    },
-                    clear_cls: if bound {
-                        "n-bclear".to_owned()
-                    } else {
-                        "n-bclear none".to_owned()
-                    },
-                    slot: row.slot.clone(),
-                    turbo: row.turbo_hz.clone(),
-                    hold_cls: if row.toggle {
-                        "n-bpill".to_owned()
-                    } else {
-                        "n-bpill on".to_owned()
-                    },
-                    tog_cls: if row.toggle {
-                        "n-bpill on".to_owned()
-                    } else {
-                        "n-bpill".to_owned()
-                    },
+            .zip(bind_bound)
+            .map(|(rows, bound)| {
+                if rows.is_empty() {
+                    String::new()
+                } else if bound == 0 {
+                    "none bound".to_owned()
+                } else {
+                    format!("{bound} of {} bound", rows.len())
                 }
             })
             .collect();
+        let bind_g_cls = if binds.rows.is_empty() {
+            "n-bindgroups none".to_owned()
+        } else {
+            "n-bindgroups".to_owned()
+        };
+        let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
+            bind_groups;
+        let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
+            bind_heads.try_into().expect("six groups");
 
         // ── The selected slot's macros: lifecycle rows off the SAME staged
         // authoring the mapper reads. Step editing stays on Controls until
@@ -4818,7 +4898,19 @@ impl NocturneDerived {
             pad_xbox_cls,
             pad_ps_cls,
             bind_title: binds.title,
-            bind_rows,
+            bind_face,
+            bind_dpad,
+            bind_shoulders,
+            bind_lstick,
+            bind_rstick,
+            bind_system,
+            bind_face_n,
+            bind_dpad_n,
+            bind_shoulders_n,
+            bind_lstick_n,
+            bind_rstick_n,
+            bind_system_n,
+            bind_g_cls,
             bind_foot: binds.foot,
             macros_head,
             macro_rows,

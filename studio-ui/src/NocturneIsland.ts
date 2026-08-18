@@ -158,7 +158,19 @@ export interface NocturneView {
   pad_xbox_cls: string;
   pad_ps_cls: string;
   bind_title: string;
-  bind_rows: NocturneBindRowView[];
+  bind_face: NocturneBindRowView[];
+  bind_dpad: NocturneBindRowView[];
+  bind_shoulders: NocturneBindRowView[];
+  bind_lstick: NocturneBindRowView[];
+  bind_rstick: NocturneBindRowView[];
+  bind_system: NocturneBindRowView[];
+  bind_face_n: string;
+  bind_dpad_n: string;
+  bind_shoulders_n: string;
+  bind_lstick_n: string;
+  bind_rstick_n: string;
+  bind_system_n: string;
+  bind_g_cls: string;
   bind_foot: string;
   macros_head: string;
   macro_rows: NocturneMacroRowView[];
@@ -252,7 +264,23 @@ const [nPadSub, setNPadSub] = createSignal("");
 const [nPadXboxCls, setNPadXboxCls] = createSignal("n-padwrap");
 const [nPadPsCls, setNPadPsCls] = createSignal("n-padwrap none");
 const [nBindTitle, setNBindTitle] = createSignal("");
-const [nBindRows, setNBindRows] = createSignal<NocturneBindRowView[]>([]);
+// The binding list, grouped the way the physical controller is organised.
+// Six lists (a list body is one flat template); the headers carry served
+// "N of M bound" counts, and one served class hides the frames when no
+// slot serves rows.
+const [nBindFace, setNBindFace] = createSignal<NocturneBindRowView[]>([]);
+const [nBindDpad, setNBindDpad] = createSignal<NocturneBindRowView[]>([]);
+const [nBindShl, setNBindShl] = createSignal<NocturneBindRowView[]>([]);
+const [nBindLs, setNBindLs] = createSignal<NocturneBindRowView[]>([]);
+const [nBindRs, setNBindRs] = createSignal<NocturneBindRowView[]>([]);
+const [nBindSys, setNBindSys] = createSignal<NocturneBindRowView[]>([]);
+const [nBindFaceN, setNBindFaceN] = createSignal("");
+const [nBindDpadN, setNBindDpadN] = createSignal("");
+const [nBindShlN, setNBindShlN] = createSignal("");
+const [nBindLsN, setNBindLsN] = createSignal("");
+const [nBindRsN, setNBindRsN] = createSignal("");
+const [nBindSysN, setNBindSysN] = createSignal("");
+const [nBindGCls, setNBindGCls] = createSignal("n-bindgroups none");
 const [nBindFoot, setNBindFoot] = createSignal("");
 const [nMacrosHead, setNMacrosHead] = createSignal("");
 const [nMacroRows, setNMacroRows] = createSignal<NocturneMacroRowView[]>([]);
@@ -335,7 +363,19 @@ export function applyNocturne(p: NocturnePayload): void {
   setNPadXboxCls(v.pad_xbox_cls);
   setNPadPsCls(v.pad_ps_cls);
   setNBindTitle(v.bind_title);
-  setNBindRows(v.bind_rows);
+  setNBindFace(v.bind_face);
+  setNBindDpad(v.bind_dpad);
+  setNBindShl(v.bind_shoulders);
+  setNBindLs(v.bind_lstick);
+  setNBindRs(v.bind_rstick);
+  setNBindSys(v.bind_system);
+  setNBindFaceN(v.bind_face_n);
+  setNBindDpadN(v.bind_dpad_n);
+  setNBindShlN(v.bind_shoulders_n);
+  setNBindLsN(v.bind_lstick_n);
+  setNBindRsN(v.bind_rstick_n);
+  setNBindSysN(v.bind_system_n);
+  setNBindGCls(v.bind_g_cls);
   setNBindFoot(v.bind_foot);
   setNMacrosHead(v.macros_head);
   setNMacroRows(v.macro_rows);
@@ -1115,9 +1155,19 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
   const pane = root.querySelector(".n-right");
   if (!pane) return;
   const query = q.trim().toLowerCase();
-  for (const el of Array.from(pane.querySelectorAll<HTMLElement>(".n-bind"))) {
-    const label = (el.querySelector(".n-bind-label")?.textContent ?? "").toLowerCase();
-    el.classList.toggle("hide", query !== "" && !label.includes(query));
+  // A row matches on its own label OR its group's ("stick" finds both
+  // stick clusters even though the rows are spelled L3/←/→); a group whose
+  // rows are ALL hidden hides its header too. Only under an active filter,
+  // so the initial paint stays byte-equal to SSR.
+  for (const group of Array.from(pane.querySelectorAll<HTMLElement>(".n-bindg"))) {
+    const glabel = (group.querySelector(".n-bindg-lab")?.textContent ?? "").toLowerCase();
+    const gmatch = query !== "" && glabel.includes(query);
+    for (const el of Array.from(group.querySelectorAll<HTMLElement>(".n-bind"))) {
+      const label = (el.querySelector(".n-bind-label")?.textContent ?? "").toLowerCase();
+      el.classList.toggle("hide", query !== "" && !gmatch && !label.includes(query));
+    }
+    const visible = group.querySelector(".n-bind:not(.hide)") !== null;
+    group.classList.toggle("empty", query !== "" && !visible);
   }
 }
 
@@ -2251,118 +2301,751 @@ export function NocturneIsland() {
         // the body is the rebind editor. Rebind/Add arm the daemon's
         // learner; Hold|Toggle and Turbo are real form twins that work
         // with scripting off; Clear was already real.
-        createList(
-          () => nBindRows(),
-          (r) =>
-            [
-              r.function,
-              r.label,
-              r.chip,
-              r.note,
-              r.cls,
-              r.chip_cls,
-              r.clear_cls,
-              r.slot,
-              r.turbo,
-              r.hold_cls,
-              r.tog_cls,
-            ].join("|"),
-          (r) =>
-            h(
-              "details",
-              { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+        // Grouped the way the controller is organised: the headers
+        // carry served counts, and the filter hides a group whose rows
+        // are all hidden. One served class hides every frame when no
+        // slot serves rows.
+        h(
+          "div",
+          { class: () => nBindGCls() },
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "Face buttons"),
+            h("span", { class: "n-bindg-n" }, () => nBindFaceN()),
+          ),
+          createList(
+            () => nBindFace(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
               h(
-                "summary",
-                { class: "n-bind-sum" },
-                h("span", { class: "n-bind-dot" }),
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
                 h(
-                  "span",
-                  { class: "n-bind-txt" },
-                  h("span", { class: "n-bind-label" }, r.label),
-                  h("span", { class: "n-bind-note" }, r.note),
-                ),
-                h("span", { class: r.chip_cls }, r.chip),
-              ),
-              h(
-                "div",
-                { class: "n-bedit" },
-                h(
-                  "div",
-                  { class: "n-bedit-row" },
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
                   h(
-                    "button",
-                    { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                    "Rebind — press a key",
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h(
-                    "button",
-                    { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                    "Add another key",
-                  ),
-                  h(
-                    "form",
-                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                    h("input", { type: "hidden", name: "slot", value: r.slot }),
-                    h("input", { type: "hidden", name: "function", value: r.function }),
-                    h(
-                      "button",
-                      { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                      "Clear",
-                    ),
-                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
                 ),
                 h(
                   "div",
-                  { class: "n-bedit-row" },
-                  h("span", { class: "n-bedit-lab" }, "Press"),
+                  { class: "n-bedit" },
                   h(
-                    "form",
-                    { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
-                    h("input", { type: "hidden", name: "slot", value: r.slot }),
-                    h("input", { type: "hidden", name: "function", value: r.function }),
-                    h("input", { type: "hidden", name: "mode", value: "hold" }),
+                    "div",
+                    { class: "n-bedit-row" },
                     h(
                       "button",
-                      { type: "submit", title: "Held while the key is down", class: r.hold_cls },
-                      "Hold",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
                     ),
                   ),
                   h(
-                    "form",
-                    { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
-                    h("input", { type: "hidden", name: "slot", value: r.slot }),
-                    h("input", { type: "hidden", name: "function", value: r.function }),
-                    h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
-                      "button",
-                      {
-                        type: "submit",
-                        title: "A press holds until the next press",
-                        class: r.tog_cls,
-                      },
-                      "Toggle",
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
                     ),
-                  ),
-                  h(
-                    "form",
-                    { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
-                    h("input", { type: "hidden", name: "slot", value: r.slot }),
-                    h("input", { type: "hidden", name: "function", value: r.function }),
-                    h("span", { class: "n-bedit-lab" }, "Turbo"),
-                    h("input", {
-                      class: "n-turbo-in",
-                      type: "text",
-                      inputmode: "numeric",
-                      name: "turbo_hz",
-                      placeholder: "Hz",
-                      title: "Presses a second — 0 turns auto-fire off",
-                      value: r.turbo,
-                    }),
-                    h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
                   ),
                 ),
               ),
-            ),
+          ),
+        ),
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "D-pad"),
+            h("span", { class: "n-bindg-n" }, () => nBindDpadN()),
+          ),
+          createList(
+            () => nBindDpad(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
+              h(
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+                h(
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
+                  h(
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
+                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit" },
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "Shoulders & triggers"),
+            h("span", { class: "n-bindg-n" }, () => nBindShlN()),
+          ),
+          createList(
+            () => nBindShl(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
+              h(
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+                h(
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
+                  h(
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
+                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit" },
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "Left stick"),
+            h("span", { class: "n-bindg-n" }, () => nBindLsN()),
+          ),
+          createList(
+            () => nBindLs(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
+              h(
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+                h(
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
+                  h(
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
+                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit" },
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "Right stick"),
+            h("span", { class: "n-bindg-n" }, () => nBindRsN()),
+          ),
+          createList(
+            () => nBindRs(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
+              h(
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+                h(
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
+                  h(
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
+                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit" },
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
+        h(
+          "section",
+          { class: "n-bindg" },
+          h(
+            "div",
+            { class: "n-bindg-head" },
+            h("span", { class: "n-bindg-lab" }, "System"),
+            h("span", { class: "n-bindg-n" }, () => nBindSysN()),
+          ),
+          createList(
+            () => nBindSys(),
+            (r) =>
+              [
+                r.function,
+                r.label,
+                r.chip,
+                r.note,
+                r.cls,
+                r.chip_cls,
+                r.clear_cls,
+                r.slot,
+                r.turbo,
+                r.hold_cls,
+                r.tog_cls,
+              ].join("|"),
+            (r) =>
+              h(
+                "details",
+                { class: r.cls, "data-fn": r.function, "data-slot": r.slot },
+                h(
+                  "summary",
+                  { class: "n-bind-sum" },
+                  h("span", { class: "n-bind-dot" }),
+                  h(
+                    "span",
+                    { class: "n-bind-txt" },
+                    h("span", { class: "n-bind-label" }, r.label),
+                    h("span", { class: "n-bind-note" }, r.note),
+                  ),
+                  h("span", { class: r.chip_cls }, r.chip),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit" },
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                      "Rebind — press a key",
+                    ),
+                    h(
+                      "button",
+                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                      "Add another key",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
+                      ),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h("span", { class: "n-bedit-lab" }, "Press"),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "hold" }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Held while the key is down", class: r.hold_cls },
+                        "Hold",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/toggle" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "mode", value: "toggle" }),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          title: "A press holds until the next press",
+                          class: r.tog_cls,
+                        },
+                        "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("span", { class: "n-bedit-lab" }, "Turbo"),
+                      h("input", {
+                        class: "n-turbo-in",
+                        type: "text",
+                        inputmode: "numeric",
+                        name: "turbo_hz",
+                        placeholder: "Hz",
+                        title: "Presses a second — 0 turns auto-fire off",
+                        value: r.turbo,
+                      }),
+                      h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
         ),
         // ── Macros: lifecycle rows off the same staged authoring. The
         // trigger keys rebind through the SAME learn flow as any control

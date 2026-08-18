@@ -6617,6 +6617,22 @@ fn nocturne_serves_the_migrated_keyboard_section_over_http() {
     );
 }
 
+/// The nocturne pane's six controller groups, flattened back into one row
+/// list for tests that search across the whole pane.
+fn nocturne_bind_rows(api: &serde_json::Value) -> Vec<serde_json::Value> {
+    [
+        "bind_face",
+        "bind_dpad",
+        "bind_shoulders",
+        "bind_lstick",
+        "bind_rstick",
+        "bind_system",
+    ]
+    .iter()
+    .flat_map(|k| api["view"][k].as_array().cloned().unwrap_or_default())
+    .collect()
+}
+
 /// **The MIGRATED rebind editor, over HTTP.** The learner's JSON trio
 /// answers from its new home with generation-stamped states; the staged bind
 /// verb resolves the slot's preset identity and current key list server-side
@@ -6674,8 +6690,33 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     // hardcoded to a layout's private details.
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
-    let rows = api["view"]["bind_rows"].as_array().expect("bind rows");
+    let rows = nocturne_bind_rows(&api);
     assert!(!rows.is_empty(), "{api}");
+    // The six controller groups carry every zone exactly once: face 4,
+    // D-pad 4, shoulders & triggers 4, each stick 5 (hub + four
+    // directions), system 3 — and each header's count is served.
+    for (group, count) in [
+        ("bind_face", 4),
+        ("bind_dpad", 4),
+        ("bind_shoulders", 4),
+        ("bind_lstick", 5),
+        ("bind_rstick", 5),
+        ("bind_system", 3),
+    ] {
+        assert_eq!(
+            api["view"][group].as_array().expect(group).len(),
+            count,
+            "{api}"
+        );
+    }
+    assert_eq!(rows.len(), 25, "{api}");
+    assert!(
+        api["view"]["bind_face_n"]
+            .as_str()
+            .is_some_and(|n| n.ends_with("bound")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["bind_g_cls"], "n-bindgroups", "{api}");
     let bound_fn = rows
         .iter()
         .find(|r| r["chip"] != "Unbound")
@@ -6701,13 +6742,10 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     assert_eq!(replaced["ok"], true, "{replaced}");
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
-    let row = api["view"]["bind_rows"]
-        .as_array()
-        .expect("bind rows")
-        .iter()
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
         .find(|r| r["function"] == unbound_fn.as_str())
-        .expect("edited row")
-        .clone();
+        .expect("edited row");
     assert_eq!(row["chip"], "F7", "{row}");
 
     // Adding a key the control already has refuses in words, changes nothing.
@@ -6772,13 +6810,10 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     assert!(set.contains("Auto-fire%20updated"), "{set}");
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
-    let row = api["view"]["bind_rows"]
-        .as_array()
-        .expect("bind rows")
-        .iter()
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
         .find(|r| r["function"] == bound_fn.as_str())
-        .expect("turbo row")
-        .clone();
+        .expect("turbo row");
     assert!(
         row["note"]
             .as_str()
@@ -6807,13 +6842,10 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     assert!(latched.contains("Press%20behaviour%20updated"), "{latched}");
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
-    let row = api["view"]["bind_rows"]
-        .as_array()
-        .expect("bind rows")
-        .iter()
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
         .find(|r| r["function"] == bound_fn.as_str())
-        .expect("toggle row")
-        .clone();
+        .expect("toggle row");
     assert!(
         row["note"]
             .as_str()

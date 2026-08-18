@@ -179,6 +179,13 @@ export interface NocturneView {
   bind_rstick_n: string;
   bind_system_n: string;
   bind_g_cls: string;
+  bind_face_cls: string;
+  bind_dpad_cls: string;
+  bind_shoulders_cls: string;
+  bind_lstick_cls: string;
+  bind_rstick_cls: string;
+  bind_system_cls: string;
+  slot_val: string;
   bind_foot: string;
   macros_head: string;
   macro_rows: NocturneMacroRowView[];
@@ -295,6 +302,16 @@ const [nBindLsN, setNBindLsN] = createSignal("");
 const [nBindRsN, setNBindRsN] = createSignal("");
 const [nBindSysN, setNBindSysN] = createSignal("");
 const [nBindGCls, setNBindGCls] = createSignal("n-bindgroups none");
+// Per-group section classes: the server hides a group whose rows are ALL
+// filtered by ?q= (the no-JS filter), and the client sweep mirrors it.
+const [nBindFaceCls, setNBindFaceCls] = createSignal("n-bindg");
+const [nBindDpadCls, setNBindDpadCls] = createSignal("n-bindg");
+const [nBindShlCls, setNBindShlCls] = createSignal("n-bindg");
+const [nBindLsCls, setNBindLsCls] = createSignal("n-bindg");
+const [nBindRsCls, setNBindRsCls] = createSignal("n-bindg");
+const [nBindSysCls, setNBindSysCls] = createSignal("n-bindg");
+// The current slot number, for the filter form's hidden field.
+const [nSlotVal, setNSlotVal] = createSignal("");
 const [nBindFoot, setNBindFoot] = createSignal("");
 const [nMacrosHead, setNMacrosHead] = createSignal("");
 const [nMacroRows, setNMacroRows] = createSignal<NocturneMacroRowView[]>([]);
@@ -396,6 +413,13 @@ export function applyNocturne(p: NocturnePayload): void {
   setNBindRsN(v.bind_rstick_n);
   setNBindSysN(v.bind_system_n);
   setNBindGCls(v.bind_g_cls);
+  setNBindFaceCls(v.bind_face_cls);
+  setNBindDpadCls(v.bind_dpad_cls);
+  setNBindShlCls(v.bind_shoulders_cls);
+  setNBindLsCls(v.bind_lstick_cls);
+  setNBindRsCls(v.bind_rstick_cls);
+  setNBindSysCls(v.bind_system_cls);
+  setNSlotVal(v.slot_val);
   setNBindFoot(v.bind_foot);
   setNMacrosHead(v.macros_head);
   setNMacroRows(v.macro_rows);
@@ -943,6 +967,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
       `${lines.join("; ")}. "Use here too" shares the key — the other control keeps it as well; nothing is taken away.`,
     );
     setNConfOpen(true);
+  focusDialog();
   } else {
     pendingConflict = null;
     setNConfOpen(false);
@@ -1255,6 +1280,7 @@ async function applyDraftViaJson(): Promise<void> {
     if (!out.done && out.code === "needs-restart") {
       setNApplyMsg(out.message || "The draft differs from the running session's structure.");
       setNApplyOpen(true);
+      focusDialog();
     } else {
       applyFlash(out.flash ?? null);
     }
@@ -1266,6 +1292,64 @@ async function applyDraftViaJson(): Promise<void> {
   nocturnePollFn();
 }
 
+/** The dialog keyboard contract: Escape closes the open dialog, Tab stays
+ *  inside it, and focus lands on the panel when one opens — returning to
+ *  the opener on close. (The learn guard's capture listener still owns
+ *  Escape while a capture is armed.) */
+let dialogReturnFocus: HTMLElement | null = null;
+
+function anyDialogOpen(): boolean {
+  return ui.dlg || nConfOpen() || nApplyOpen();
+}
+
+function closeOpenDialog(): void {
+  if (nApplyOpen()) setNApplyOpen(false);
+  else if (nConfOpen()) {
+    pendingConflict = null;
+    setNConfOpen(false);
+  } else if (ui.dlg) {
+    ui.dlg = false;
+    applyNocturneUi();
+  }
+  restoreDialogFocus();
+}
+
+function focusDialog(): void {
+  dialogReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  // The createShow branch attaches on the next microtask; focus one frame on.
+  window.requestAnimationFrame(() => {
+    learnRoot?.querySelector<HTMLElement>(".nd")?.focus();
+  });
+}
+
+function restoreDialogFocus(): void {
+  const back = dialogReturnFocus;
+  dialogReturnFocus = null;
+  if (back && back.isConnected) back.focus();
+}
+
+function trapDialogTab(ev: KeyboardEvent): void {
+  const dlg = learnRoot?.querySelector<HTMLElement>(".nd");
+  if (!dlg) return;
+  const focusables = Array.from(
+    dlg.querySelectorAll<HTMLElement>("button, input, select, a[href], [tabindex]"),
+  ).filter((el) => !el.hasAttribute("disabled"));
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  if (ev.shiftKey && (active === first || active === dlg)) {
+    ev.preventDefault();
+    last.focus();
+  } else if (!ev.shiftKey && active === last) {
+    ev.preventDefault();
+    first.focus();
+  } else if (!dlg.contains(active)) {
+    ev.preventDefault();
+    first.focus();
+  }
+}
+
 /** Delegated events on the island root (the map.ts idiom): every interactive
  *  control carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
@@ -1275,6 +1359,15 @@ export function nocturneWire(root: HTMLElement): void {
   loadUiPrefs();
   applyNocturneUi();
   window.addEventListener("resize", scheduleKbFit);
+  window.addEventListener("keydown", (ev) => {
+    if (!anyDialogOpen()) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeOpenDialog();
+    } else if (ev.key === "Tab") {
+      trapDialogTab(ev);
+    }
+  });
   // Identify-by-key is a REAL verb: the form posts and the server listens
   // for one keypress (up to 11 s). The submit hook only shows the listening
   // banner while the round-trip is in flight; applyFlash settles it.
@@ -1343,8 +1436,13 @@ export function nocturneWire(root: HTMLElement): void {
       // controls in it keep working — never preventDefault here.
       return;
     }
-    if (hit === "slot-new") ui.dlg = true;
-    else if (hit === "dlg-close") ui.dlg = false;
+    if (hit === "slot-new") {
+      ui.dlg = true;
+      focusDialog();
+    } else if (hit === "dlg-close") {
+      ui.dlg = false;
+      restoreDialogFocus();
+    }
     else if (hit === "pane-left") {
       ui.leftRail = !ui.leftRail;
       saveUiPrefs();
@@ -1379,12 +1477,15 @@ export function nocturneWire(root: HTMLElement): void {
       const pend = pendingConflict;
       pendingConflict = null;
       setNConfOpen(false);
+      restoreDialogFocus();
       if (pend) void writeLearnedKey(pend.row, pend.key, true);
     } else if (hit === "conf-cancel") {
       pendingConflict = null;
       setNConfOpen(false);
+      restoreDialogFocus();
     } else if (hit === "apply-cancel") {
       setNApplyOpen(false);
+      restoreDialogFocus();
     } else if (hit === "apply-replace") {
       // The remedy the daemon named: stage-play replaces the session. The
       // hidden Play twin carries the verb; the generic fetch path flashes
@@ -1810,6 +1911,17 @@ export function NocturneIsland() {
                 h("span", { class: "n-slot-meta" }, "any persona"),
               ),
             ),
+        ),
+        // With scripting off the create dialog cannot open; the absence
+        // explains itself instead of leaving dead chrome.
+        h(
+          "noscript",
+          null,
+          h(
+            "p",
+            { class: "n-foot" },
+            "Adding a controller here needs JavaScript — the Start page's add form works without it.",
+          ),
         ),
         // The short undo window after a removal: the SERVER holds the
         // controller's resurrection material and serves this chip while it
@@ -2415,10 +2527,11 @@ export function NocturneIsland() {
           { class: "n-filter-row" },
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-right" }, "›"),
           h(
-            "div",
-            { class: "n-filter" },
+            "form",
+            { class: "n-filter", method: "get", action: "/nocturne" },
             h("span", { class: "n-filter-ico" }, "⌕"),
-            h("input", { class: "n-filter-in", type: "text", placeholder: "Filter inputs" }),
+            h("input", { type: "hidden", name: "slot", value: () => nSlotVal() }),
+            h("input", { class: "n-filter-in", type: "text", name: "q", placeholder: "Filter inputs" }),
           ),
           h("button", { class: "n-reset", type: "button", "data-nx": "filter-reset" }, "Reset"),
         ),
@@ -2457,7 +2570,7 @@ export function NocturneIsland() {
           { class: () => nBindGCls() },
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindFaceCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -2580,7 +2693,7 @@ export function NocturneIsland() {
         ),
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindDpadCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -2703,7 +2816,7 @@ export function NocturneIsland() {
         ),
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindShlCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -2826,7 +2939,7 @@ export function NocturneIsland() {
         ),
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindLsCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -2949,7 +3062,7 @@ export function NocturneIsland() {
         ),
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindRsCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -3072,7 +3185,7 @@ export function NocturneIsland() {
         ),
         h(
           "section",
-          { class: "n-bindg" },
+          { class: () => nBindSysCls() },
           h(
             "div",
             { class: "n-bindg-head" },
@@ -3313,7 +3426,7 @@ export function NocturneIsland() {
           { class: "nd-back", "data-nx": "dlg-close" },
           h(
             "div",
-            { class: "nd", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Create a virtual controller" },
+            { class: "nd", "data-nx": "dlg-noop", role: "dialog", tabindex: "-1", "aria-label": "Create a virtual controller" },
             h(
               "form",
               { class: "nd-form", method: "post", action: "/nocturne/controller" },
@@ -3405,7 +3518,7 @@ export function NocturneIsland() {
           { class: "nd-back", "data-nx": "conf-cancel" },
           h(
             "div",
-            { class: "nd", "data-nx": "dlg-noop", role: "dialog", "aria-label": "Key conflict" },
+            { class: "nd", "data-nx": "dlg-noop", role: "dialog", tabindex: "-1", "aria-label": "Key conflict" },
             h("div", { class: "nd-kick" }, "Key conflict"),
             h("div", { class: "nd-title" }, () => nConfTitle()),
             h("div", { class: "nd-lede" }, () => nConfLines()),
@@ -3437,6 +3550,7 @@ export function NocturneIsland() {
               class: "nd",
               "data-nx": "dlg-noop",
               role: "dialog",
+              tabindex: "-1",
               "aria-label": "Session restart needed",
             },
             h("div", { class: "nd-kick" }, "Session restart needed"),

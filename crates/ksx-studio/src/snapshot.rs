@@ -3749,6 +3749,9 @@ pub struct NocturnePayload {
     /// reload.
     #[serde(default)]
     pub selected: Option<u8>,
+    /// The binding filter (`?q=`), server-resolved like the selection.
+    #[serde(default)]
+    pub q: Option<String>,
     /// The undo chip's sentence while the server still holds a removed
     /// controller's resurrection material (`server/nocturne.rs` stash).
     #[serde(default)]
@@ -4019,6 +4022,16 @@ pub struct NocturneDerived {
     pub bind_lstick_n: String,
     pub bind_rstick_n: String,
     pub bind_system_n: String,
+    /// Per-group section classes: `n-bindg empty` when `?q=` hides every
+    /// row of a group — the island's sweep mirrors the same rule.
+    pub bind_face_cls: String,
+    pub bind_dpad_cls: String,
+    pub bind_shoulders_cls: String,
+    pub bind_lstick_cls: String,
+    pub bind_rstick_cls: String,
+    pub bind_system_cls: String,
+    /// The current slot number for the filter form's hidden field.
+    pub slot_val: String,
     /// Hides the six group frames when no slot serves rows; otherwise
     /// carries the selected slot's ramp digit so the dots wear its shade.
     pub bind_g_cls: String,
@@ -4077,6 +4090,17 @@ pub struct NocturneDerived {
 /// the MAPPER's spelling, which writes the face buttons UPPERCASE while the
 /// zone vocabulary is lowercase (the live-echo lesson) — match both.
 /// Anything unrecognised lands in the system group rather than disappearing.
+/// The six group names, exactly as the island's markup spells them — the
+/// server-side filter and the client sweep both match against these.
+const NOCTURNE_BIND_GROUP_LABELS: [&str; 6] = [
+    "Face buttons",
+    "D-pad",
+    "Shoulders & triggers",
+    "Left stick",
+    "Right stick",
+    "System",
+];
+
 fn nocturne_bind_group(function: &str) -> usize {
     match function {
         "a" | "b" | "x" | "y" | "A" | "B" | "X" | "Y" => 0,
@@ -4480,6 +4504,7 @@ impl NocturneDerived {
             Some(digit) => format!("n-kb np{digit}"),
             None => "n-kb".to_owned(),
         };
+        let slot_val = selected_number.map(|n| n.to_string()).unwrap_or_default();
         let (undo_cls, undo_label) = match p.undo_label.as_ref() {
             Some(label) => ("n-undochip".to_owned(), label.clone()),
             None => ("n-undochip none".to_owned(), String::new()),
@@ -4852,6 +4877,37 @@ impl NocturneDerived {
                     .unwrap_or(usize::MAX)
             });
         }
+        // The `?q=` filter, SERVER-resolved: a row matches on its own label
+        // or its group's ("stick" keeps both stick clusters), and a group
+        // whose rows are all hidden hides whole. The island's sweep applies
+        // the SAME rule imperatively — the two must not drift, which is why
+        // both read these exact labels.
+        let query =
+            p.q.as_deref()
+                .map(str::trim)
+                .filter(|q| !q.is_empty())
+                .map(str::to_lowercase);
+        let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
+        if let Some(query) = query.as_deref() {
+            for (group, rows) in bind_groups.iter_mut().enumerate() {
+                let gmatch = NOCTURNE_BIND_GROUP_LABELS[group]
+                    .to_lowercase()
+                    .contains(query);
+                let mut visible = 0usize;
+                for row in rows.iter_mut() {
+                    if gmatch || row.label.to_lowercase().contains(query) {
+                        visible += 1;
+                    } else {
+                        row.cls.push_str(" hide");
+                    }
+                }
+                if visible == 0 && !rows.is_empty() {
+                    bind_group_cls[group] = "n-bindg empty".to_owned();
+                }
+            }
+        }
+        let [bind_face_cls, bind_dpad_cls, bind_shoulders_cls, bind_lstick_cls, bind_rstick_cls, bind_system_cls] =
+            bind_group_cls;
         let bind_heads: Vec<String> = bind_groups
             .iter()
             .zip(bind_bound)
@@ -5004,6 +5060,13 @@ impl NocturneDerived {
             bind_lstick_n,
             bind_rstick_n,
             bind_system_n,
+            bind_face_cls,
+            bind_dpad_cls,
+            bind_shoulders_cls,
+            bind_lstick_cls,
+            bind_rstick_cls,
+            bind_system_cls,
+            slot_val,
             bind_g_cls,
             bind_foot: binds.foot,
             macros_head,

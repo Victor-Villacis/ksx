@@ -7219,6 +7219,62 @@ fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
     );
 }
 
+/// **The `?q=` filter, SERVER-resolved**: rows and whole groups hide in
+/// the SSR answer itself — the no-JS filter is real, not dead chrome —
+/// with the same row-or-group-label rule the island sweep applies.
+#[test]
+fn nocturne_resolves_the_filter_server_side() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?q=stick"))).expect("payload");
+    // "stick" matches both stick GROUPS: their rows stay visible.
+    assert_eq!(api["view"]["bind_lstick_cls"], "n-bindg", "{api}");
+    assert_eq!(api["view"]["bind_rstick_cls"], "n-bindg", "{api}");
+    assert!(
+        api["view"]["bind_lstick"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .all(|row| !row["cls"].as_str().unwrap_or("").contains("hide")),
+        "{api}"
+    );
+    // The face group matches nothing: every row hidden, the group empty.
+    assert_eq!(api["view"]["bind_face_cls"], "n-bindg empty", "{api}");
+    assert!(
+        api["view"]["bind_face"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .all(|row| row["cls"].as_str().unwrap_or("").contains("hide")),
+        "{api}"
+    );
+    // And the SSR page paints the same truth for a no-JS reader.
+    let page = rendered_body(&get(addr, "/nocturne?q=stick"));
+    assert!(page.contains("n-bindg empty"), "{page}");
+
+    // No query: nothing hides.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["bind_face_cls"], "n-bindg", "{api}");
+}
+
 /// **The undo chip over HTTP**: removing a controller stashes its whole
 /// slot view SERVER-side; the chip is served while the window holds; Undo
 /// replays add + bindings + socd and consumes the stash — a second Undo

@@ -100,6 +100,13 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nBindRsN": payload.view.bind_rstick_n,
         "nBindSysN": payload.view.bind_system_n,
         "nBindGCls": payload.view.bind_g_cls,
+        "nBindFaceCls": payload.view.bind_face_cls,
+        "nBindDpadCls": payload.view.bind_dpad_cls,
+        "nBindShlCls": payload.view.bind_shoulders_cls,
+        "nBindLsCls": payload.view.bind_lstick_cls,
+        "nBindRsCls": payload.view.bind_rstick_cls,
+        "nBindSysCls": payload.view.bind_system_cls,
+        "nSlotVal": payload.view.slot_val,
         "nBindFoot": payload.view.bind_foot,
         "nMacrosHead": payload.view.macros_head,
         "nMacrosNote": payload.view.macros_note,
@@ -530,6 +537,7 @@ mod tests {
             autostart_read: Some(ksx_api::AutostartView::default()),
             autostart_error: String::new(),
             selected: None,
+            q: None,
             undo_label: None,
             view: Default::default(),
         }
@@ -572,7 +580,14 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 68] = [
+        const SERVED_SLOTS: [&str; 75] = [
+            "nBindFaceCls",
+            "nBindDpadCls",
+            "nBindShlCls",
+            "nBindLsCls",
+            "nBindRsCls",
+            "nBindSysCls",
+            "nSlotVal",
             "nUndoCls",
             "nUndoLabel",
             "nKbCls",

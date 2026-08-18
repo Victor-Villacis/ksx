@@ -261,7 +261,11 @@ fn nocturne_redirect(flash: &str) -> Response {
 /// One fresh payload: the staged setup and the device enumeration, each
 /// degrading to its own honest value (`SURFACES.md` §1b). Never cached — a
 /// keyboard plugged in while the page is open appears at the next poll.
-pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) -> NocturnePayload {
+pub(super) async fn collect_nocturne(
+    state: &Arc<AppState>,
+    slot: Option<u8>,
+    q: Option<String>,
+) -> NocturnePayload {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
@@ -308,6 +312,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) ->
             session,
             unavailable,
             selected: slot,
+            q,
             undo_label,
             setup,
             setup_error,
@@ -334,6 +339,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) ->
             autostart_read: None,
             autostart_error: "the sign-in read panicked".to_owned(),
             selected: None,
+            q: None,
             undo_label: None,
             view: Default::default(),
         }
@@ -349,13 +355,16 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) ->
 pub(super) struct NocturneQuery {
     flash: Option<String>,
     slot: Option<u8>,
+    /// The binding filter — SERVER-resolved like the selection, so the
+    /// pane's rows filter with no JavaScript and survive a reload.
+    q: Option<String>,
 }
 
 pub(super) async fn nocturne_page_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<NocturneQuery>,
 ) -> Response {
-    let payload = collect_nocturne(&state, query.slot).await;
+    let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
     let flash = nocturne_flash_from_query(query.flash.as_deref());
     let out = render_nocturne(&state.nocturne_page, &payload, flash.as_deref());
     (
@@ -381,7 +390,7 @@ pub(super) async fn api_nocturne(
     State(state): State<Arc<AppState>>,
     Query(query): Query<NocturneQuery>,
 ) -> Response {
-    let payload = collect_nocturne(&state, query.slot).await;
+    let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),

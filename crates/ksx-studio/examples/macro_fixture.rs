@@ -108,6 +108,10 @@ fn seed_macros() -> Vec<MacroView> {
 struct Store {
     macros: Arc<Mutex<Vec<MacroView>>>,
     stage: Arc<Mutex<ksx_core::stage::StagedSetup>>,
+    /// The session, STATEFUL: `KSX_FIXTURE_SESSION=running` seeds only the
+    /// boot state; Play and Stop flip it, so a drive can watch the stage
+    /// word, the title bar and the live license settle like the product's.
+    session_on: Arc<AtomicBool>,
     /// Set by any HTTP-driven staging edit (the seed does not count), the
     /// way the daemon's StageMeta stamps `dirty` — so the Apply button's
     /// running+dirty visibility is drivable on this double.
@@ -121,6 +125,9 @@ impl Store {
     fn new() -> Self {
         Self {
             dirty: Arc::new(AtomicBool::new(false)),
+            session_on: Arc::new(AtomicBool::new(
+                std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
+            )),
             macros: Arc::new(Mutex::new(seed_macros())),
             stage: Arc::new(Mutex::new(seeded_stage())),
             listening: Arc::new(Mutex::new(None)),
@@ -333,12 +340,17 @@ impl StatusSource for Store {
 /// pillRunning/canStop/rowsPlain/sessionRunning/readOnly, and `down` flips the
 /// whole no-daemon surface. Those are the only states where a first paint
 /// could visibly disagree with what the client renders a moment later.
-fn fixture_session() -> SessionView {
-    match std::env::var("KSX_FIXTURE_SESSION").as_deref() {
+fn fixture_session(running: bool) -> SessionView {
+    // `KSX_FIXTURE_SESSION=down` stays a boot-wide override (the dead-pipe
+    // state has no verbs to flip it with).
+    if std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("down") {
+        return SessionView::unreachable("no daemon control channel");
+    }
+    match running {
         // The running fixture session is STAGED-origin: it "runs" the seeded
         // draft this fixture holds, which is what licenses the live echo to
         // paint onto the staged rows (the fail-closed origin rule).
-        Ok("running") => SessionView {
+        true => SessionView {
             reachable: true,
             running: true,
             line: "running — Fixture — 2 pad(s)".into(),
@@ -351,8 +363,7 @@ fn fixture_session() -> SessionView {
                 escape_hatch: ksx_api::stage::ESCAPE_HATCH_LINE.into(),
             }),
         },
-        Ok("down") => SessionView::unreachable("no daemon control channel"),
-        _ => SessionView {
+        false => SessionView {
             reachable: true,
             running: false,
             line: "idle".into(),
@@ -434,7 +445,24 @@ impl ControlSource for Store {
     }
 
     fn session(&self) -> SessionView {
-        fixture_session()
+        fixture_session(self.session_on.load(Ordering::SeqCst))
+    }
+
+    /// Save, scripted like Play: the engine's readiness answers, and a
+    /// committed draft settles the dirty stamp the way the daemon's
+    /// StageMeta does.
+    fn stage_commit(&self) -> ksx_api::StageOutcome {
+        let setup = self.stage.lock().unwrap();
+        match setup.commit() {
+            Ok(_) => {
+                self.dirty.store(false, Ordering::SeqCst);
+                ksx_api::StageOutcome::ok(&setup, "saved")
+            }
+            Err(err) => {
+                let refusal = ksx_api::Refusal::new("not-ready", err.to_string());
+                ksx_api::StageOutcome::refused(&setup, &refusal)
+            }
+        }
     }
 
     /// The staged draft the workspace panes render — a board, two controllers
@@ -459,7 +487,10 @@ impl ControlSource for Store {
     fn stage_play(&self) -> ksx_api::StageOutcome {
         let setup = self.stage.lock().unwrap();
         match setup.commit() {
-            Ok(_) => ksx_api::StageOutcome::ok(&setup, "started"),
+            Ok(_) => {
+                self.session_on.store(true, Ordering::SeqCst);
+                ksx_api::StageOutcome::ok(&setup, "started")
+            }
             Err(err) => {
                 let refusal = ksx_api::Refusal::new("not-ready", err.to_string());
                 ksx_api::StageOutcome::refused(&setup, &refusal)
@@ -471,7 +502,7 @@ impl ControlSource for Store {
     /// (and the dirty bit settles) when the fixture session is running.
     fn stage_apply(&self) -> ksx_api::StageOutcome {
         let setup = self.stage.lock().unwrap();
-        if !fixture_session().running {
+        if !self.session_on.load(Ordering::SeqCst) {
             let refusal =
                 ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
             return ksx_api::StageOutcome::refused(&setup, &refusal);
@@ -519,10 +550,12 @@ impl ControlSource for Store {
     }
 
     fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {
+        self.session_on.store(true, Ordering::SeqCst);
         Ok("running (1 slot(s))".into())
     }
 
     fn stop(&self) -> Result<String, ksx_api::Refusal> {
+        self.session_on.store(false, Ordering::SeqCst);
         Ok("stopped".into())
     }
 

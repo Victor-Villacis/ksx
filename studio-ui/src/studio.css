@@ -9533,14 +9533,31 @@ details.n-bind {
   display: none;
 }
 
+/* An OPEN row is a card: its own ground, a thin ring, and breathing room
+   from its neighbours — so a stack of open editors reads as separate
+   editors, and any highlight wraps the WHOLE editor, not just its top. */
 .n-bind[open] {
-  border-radius: 7px;
-  background: rgba(150, 138, 224, 0.06);
+  margin: 6px 0;
+  border-radius: 9px;
+  background: rgba(150, 138, 224, 0.05);
+  box-shadow: inset 0 0 0 1px var(--n-line);
 }
 
 .n-bind.arm .n-bind-sum {
   background: rgba(150, 138, 224, 0.14);
   box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+}
+
+/* Armed while OPEN: the whole card wears the wash and ring; the summary
+   stops double-painting inside it. */
+details.n-bind.arm[open] {
+  background: rgba(150, 138, 224, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+}
+
+details.n-bind.arm[open] .n-bind-sum {
+  background: none;
+  box-shadow: none;
 }
 
 .n-bedit {

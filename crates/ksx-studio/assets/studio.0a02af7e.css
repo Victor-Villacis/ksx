@@ -9100,3 +9100,9 @@ a.nm-link {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+
+/* Scenario A: the CC0 art's own coordinate space is 6.68x ours. */
+.n-stage .x360a-sys {
+  font-size: 23px;
+}

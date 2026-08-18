@@ -29,17 +29,33 @@ const POLL_MS = 2000;
  *  list's key walk — the cheapest work is the work not done. */
 let lastBody = "";
 
-async function poll(): Promise<void> {
+/** The last answer's ETag, echoed back as If-None-Match EXPLICITLY — the
+ *  server then answers an idle poll with a bodiless 304 (and skips the
+ *  render). Manual rather than trusting the browser's cache heuristics,
+ *  which do not reliably revalidate a polled fetch. */
+let lastEtag = "";
+
+async function poll(fresh = false): Promise<void> {
   // A hidden tab does not need fresh paint; visibilitychange below polls
   // the moment it returns.
   if (document.hidden) return;
   // The poller echoes the page's own selection, so the payload it copies is
-  // the one this URL's SSR would paint (the workspace's rule).
+  // the one this URL's SSR would paint (the workspace's rule). Rescan asks
+  // with fresh=1, which drops the server's machine-read cache first — a
+  // fresh read IS that button's promise.
+  const params = new URLSearchParams();
   const slot = new URLSearchParams(window.location.search).get("slot");
-  const url = slot ? `/api/nocturne?slot=${encodeURIComponent(slot)}` : "/api/nocturne";
+  if (slot) params.set("slot", slot);
+  if (fresh) params.set("fresh", "1");
+  const qs = params.toString();
+  const url = qs ? `/api/nocturne?${qs}` : "/api/nocturne";
   try {
-    const res = await fetch(url, { headers: { accept: "application/json" } });
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (lastEtag && !fresh) headers["if-none-match"] = lastEtag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) return; // nothing changed, nothing to do
     if (!res.ok) throw new Error(String(res.status));
+    lastEtag = res.headers.get("etag") ?? "";
     const body = await res.text();
     if (body === lastBody) return;
     lastBody = body;
@@ -47,6 +63,7 @@ async function poll(): Promise<void> {
   } catch {
     // Recovery must re-apply even an identical payload.
     lastBody = "";
+    lastEtag = "";
     applyNocturneUnreachable();
   }
 }
@@ -63,9 +80,14 @@ function wireForms(root: HTMLElement): void {
     const form = ev.target as HTMLFormElement | null;
     if (!form) return;
     if (form.method.toLowerCase() === "get") {
-      // The one GET form is Rescan: a fresh read IS the poll.
       ev.preventDefault();
-      void poll();
+      if (form.classList.contains("n-filter")) {
+        // The filter's GET form exists for the no-JS reader; with scripting
+        // on the input already filters live, so Enter changes nothing.
+        return;
+      }
+      // The Rescan form: a fresh read IS the poll — cache-busted.
+      void poll(true);
       return;
     }
     if (form.method.toLowerCase() !== "post") return;

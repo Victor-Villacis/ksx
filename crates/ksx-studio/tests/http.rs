@@ -670,6 +670,9 @@ impl ControlSource for ScriptedControl {
 /// no keyboard interface at all, and one configured entry whose id is
 /// PORT-PINNED.
 struct ScriptedMachine {
+    /// How many times the ROUTE layer actually asked for a device scan —
+    /// the machine-cache tests count real enumerations, not requests.
+    scans: AtomicUsize,
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
     /// Raw daemon learner identities presented for safe inventory resolution.
@@ -717,6 +720,7 @@ struct ScriptedMachine {
 impl Default for ScriptedMachine {
     fn default() -> Self {
         Self {
+            scans: AtomicUsize::new(0),
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             identified_from: Mutex::new(Vec::new()),
@@ -901,6 +905,7 @@ impl ksx_api::MachineSource for ScriptedMachine {
     }
 
     fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
         if self.refuse {
             return Err(Refusal::not_here("listing devices", "run `ksx devices`"));
         }
@@ -1997,6 +2002,15 @@ fn get(addr: SocketAddr, path: &str) -> String {
     http(
         addr,
         &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+fn get_if_none_match(addr: SocketAddr, path: &str, etag: &str) -> String {
+    http(
+        addr,
+        &format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nIf-None-Match: {etag}\r\n\r\n"
+        ),
     )
 }
 
@@ -7217,6 +7231,67 @@ fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
         via_workspace.contains("location: /nocturne?flash="),
         "{via_workspace}"
     );
+}
+
+/// **The machine-read cache + ETag**: the 2-second poll must not cost a
+/// USB enumeration per tick — reads inside the TTL are served from the
+/// cache; every MUTATING request and Rescan's `fresh=1` drop it; and an
+/// unchanged payload answers `304 Not Modified` to `If-None-Match`.
+#[test]
+fn nocturne_caches_machine_reads_and_answers_304() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(
+        Arc::clone(&control),
+        Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
+    );
+
+    // Two polls inside the TTL: ONE enumeration.
+    let first = get(addr, "/api/nocturne");
+    let _second = get(addr, "/api/nocturne");
+    assert!(first.contains(" 200 "), "{first}");
+    assert_eq!(machine.scans.load(Ordering::SeqCst), 1, "cache missed");
+
+    // The unchanged answer carries an ETag and honours If-None-Match.
+    let etag = first
+        .lines()
+        .find_map(|line| line.strip_prefix("etag: "))
+        .expect("an etag header")
+        .trim()
+        .to_owned();
+    let not_modified = get_if_none_match(addr, "/api/nocturne", &etag);
+    assert!(not_modified.contains(" 304 "), "{not_modified}");
+    assert!(!not_modified.contains("staged"), "a 304 carries no body");
+
+    // A mutating request drops the cache: the next poll enumerates again.
+    let _ = post_form(addr, "/nocturne/blocking", "blocking=whole");
+    let _ = get(addr, "/api/nocturne");
+    assert_eq!(
+        machine.scans.load(Ordering::SeqCst),
+        2,
+        "a POST must invalidate"
+    );
+
+    // And so does Rescan's fresh=1, explicitly.
+    let _ = get(addr, "/api/nocturne?fresh=1");
+    assert_eq!(
+        machine.scans.load(Ordering::SeqCst),
+        3,
+        "fresh=1 must invalidate"
+    );
+
+    // A changed draft changes the ETag (the 304 can never mask an edit).
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    let after = get_if_none_match(addr, "/api/nocturne", &etag);
+    assert!(after.contains(" 200 "), "{after}");
 }
 
 /// **The `?q=` filter, SERVER-resolved**: rows and whole groups hide in

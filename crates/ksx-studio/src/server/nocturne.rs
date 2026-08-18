@@ -270,21 +270,22 @@ pub(super) async fn collect_nocturne(
     tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let session = state.control.session();
-        let (scan, unavailable) = match state.machine.device_scan() {
+        let (scan, unavailable) = match state.machine_cache.device_scan(&*state.machine) {
             Ok(scan) => (scan, String::new()),
             Err(refusal) => (ksx_api::DeviceScanView::default(), flash_of(refusal)),
         };
         // The configuration menu's three reads, each degrading to its own
         // honest sentence rather than an empty pane (SURFACES.md §1b).
-        let (setup, setup_error) = match state.machine.setup_state() {
+        let (setup, setup_error) = match state.machine_cache.setup_state(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
             Err(refusal) => (None, flash_of(refusal)),
         };
-        let (games, games_error) = match state.machine.profiles() {
+        let (games, games_error) = match state.machine_cache.profiles(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
             Err(refusal) => (None, flash_of(refusal)),
         };
-        let (autostart_read, autostart_error) = match state.machine.autostart() {
+        let (autostart_read, autostart_error) = match state.machine_cache.autostart(&*state.machine)
+        {
             Ok(view) => (Some(view), String::new()),
             Err(refusal) => (None, flash_of(refusal)),
         };
@@ -358,12 +359,18 @@ pub(super) struct NocturneQuery {
     /// The binding filter — SERVER-resolved like the selection, so the
     /// pane's rows filter with no JavaScript and survive a reload.
     q: Option<String>,
+    /// Rescan's cache-bust: a fresh read IS the promise, so the machine
+    /// cache is dropped before this request collects.
+    fresh: Option<String>,
 }
 
 pub(super) async fn nocturne_page_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<NocturneQuery>,
 ) -> Response {
+    if query.fresh.is_some() {
+        state.machine_cache.invalidate();
+    }
     let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
     let flash = nocturne_flash_from_query(query.flash.as_deref());
     let out = render_nocturne(&state.nocturne_page, &payload, flash.as_deref());
@@ -389,11 +396,46 @@ pub(super) async fn nocturne_page_handler(
 pub(super) async fn api_nocturne(
     State(state): State<Arc<AppState>>,
     Query(query): Query<NocturneQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
+    if query.fresh.is_some() {
+        state.machine_cache.invalidate();
+    }
     let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
+    // ETag over the serialized payload: an unchanged answer costs a header
+    // comparison instead of a body — `no-cache` (NOT no-store) so the
+    // browser revalidates with If-None-Match and reuses its held copy.
+    let body = serde_json::to_string(&payload).unwrap_or_default();
+    let etag = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        body.hash(&mut hasher);
+        format!("\"{:x}\"", hasher.finish())
+    };
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+                (header::ETAG, HeaderValue::from_str(&etag).unwrap()),
+            ],
+        )
+            .into_response();
+    }
     (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(payload),
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+            (header::ETAG, HeaderValue::from_str(&etag).unwrap()),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+        ],
+        body,
     )
         .into_response()
 }

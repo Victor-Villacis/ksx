@@ -145,6 +145,111 @@ struct AppState {
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
     nocturne_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    /// The machine-read cache: the poller asks every 2 s, but a USB tree
+    /// enumeration and three TOML parses per poll is work the machine did
+    /// not ask for. TTL-bounded, invalidated by every mutating request and
+    /// by Rescan's `fresh=1` — so nothing the studio itself changed can
+    /// ever be served stale.
+    machine_cache: MachineCache,
+}
+
+/// A TTL cache over the FOUR machine reads the 2-second poll repeats
+/// (`collect_nocturne`): the device scan (a Config-Manager walk of the USB
+/// tree) and the three disk reads. NOT a `MachineSource` wrapper on
+/// purpose — a trait impl would let a forgotten forward silently answer
+/// with a trait default (the SharedControl lesson); collectors opt in per
+/// call instead.
+struct MachineCache {
+    scan: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::DeviceScanView, ksx_api::Refusal>,
+        )>,
+    >,
+    setup: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::SetupView, ksx_api::Refusal>,
+        )>,
+    >,
+    games: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::ProfilesView, ksx_api::Refusal>,
+        )>,
+    >,
+    auto: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::AutostartView, ksx_api::Refusal>,
+        )>,
+    >,
+}
+
+/// Long enough to skip most polls, short enough that an EXTERNAL change
+/// (a device plugged, a file edited by hand) paints within a breath — and
+/// Rescan busts it outright.
+const MACHINE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl MachineCache {
+    fn new() -> Self {
+        Self {
+            scan: std::sync::Mutex::new(None),
+            setup: std::sync::Mutex::new(None),
+            games: std::sync::Mutex::new(None),
+            auto: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn invalidate(&self) {
+        *self.scan.lock().unwrap() = None;
+        *self.setup.lock().unwrap() = None;
+        *self.games.lock().unwrap() = None;
+        *self.auto.lock().unwrap() = None;
+    }
+
+    fn fetch<T: Clone>(
+        slot: &std::sync::Mutex<Option<(std::time::Instant, Result<T, ksx_api::Refusal>)>>,
+        read: impl FnOnce() -> Result<T, ksx_api::Refusal>,
+    ) -> Result<T, ksx_api::Refusal> {
+        let mut held = slot.lock().unwrap();
+        if let Some((at, value)) = held.as_ref() {
+            if at.elapsed() < MACHINE_CACHE_TTL {
+                return value.clone();
+            }
+        }
+        let fresh = read();
+        *held = Some((std::time::Instant::now(), fresh.clone()));
+        fresh
+    }
+
+    fn device_scan(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::DeviceScanView, ksx_api::Refusal> {
+        Self::fetch(&self.scan, || machine.device_scan())
+    }
+
+    fn setup_state(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
+        Self::fetch(&self.setup, || machine.setup_state())
+    }
+
+    fn profiles(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::ProfilesView, ksx_api::Refusal> {
+        Self::fetch(&self.games, || machine.profiles())
+    }
+
+    fn autostart(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
+        Self::fetch(&self.auto, || machine.autostart())
+    }
 }
 
 /// Serve the page until the process is killed (Ctrl+C included — no
@@ -192,6 +297,7 @@ pub fn serve(
         machine,
         live,
         nocturne_undo: std::sync::Mutex::new(None),
+        machine_cache: MachineCache::new(),
     });
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -510,6 +616,21 @@ pub fn serve(
             // absent `Origin` is deliberately allowed through.
             .layer(axum::middleware::from_fn(move |req, next| {
                 crate::guard::same_origin(bind, req, next)
+            }))
+            // Every mutating request drops the machine-read cache BEFORE the
+            // handler runs — one layer, not a call per handler (the guard's
+            // own rule), so nothing the studio changes is ever served stale.
+            .layer(axum::middleware::from_fn({
+                let state = Arc::clone(&state);
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    let state = Arc::clone(&state);
+                    async move {
+                        if req.method() != axum::http::Method::GET {
+                            state.machine_cache.invalidate();
+                        }
+                        next.run(req).await
+                    }
+                }
             }))
             .with_state(state);
         tracing::info!(%bind, "ksx Studio listening");

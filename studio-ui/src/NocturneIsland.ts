@@ -1785,6 +1785,7 @@ export function NocturneIsland() {
           h(
             "form",
             { method: "get", action: "/nocturne" },
+            h("input", { type: "hidden", name: "fresh", value: "1" }),
             h("button", { class: "n-link", type: "submit" }, "Rescan"),
           ),
           h(

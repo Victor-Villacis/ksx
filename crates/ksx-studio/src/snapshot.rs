@@ -4011,8 +4011,13 @@ pub struct NocturneDerived {
     pub bind_lstick_n: String,
     pub bind_rstick_n: String,
     pub bind_system_n: String,
-    /// Hides the six group frames when no slot serves rows.
+    /// Hides the six group frames when no slot serves rows; otherwise
+    /// carries the selected slot's ramp digit so the dots wear its shade.
     pub bind_g_cls: String,
+    /// The board wrapper's class — the ramp digit tints the bound caps.
+    pub kb_cls: String,
+    /// The stage's quiet across-the-room state word ("Running" or empty).
+    pub stage_word: String,
     pub bind_foot: String,
     /// The selected slot's macros: lifecycle rows + the honest state line.
     pub macros_head: String,
@@ -4451,9 +4456,24 @@ impl NocturneDerived {
             Vec::new()
         };
 
-        let pad_badge_cls = match selected {
-            Some(slot) => format!("n-pbadge np{}", (slot.number - 1) % 4 + 1),
+        // The selected slot's ramp digit, worn by every surface that speaks
+        // for it: the meta badge, the board's bound-cap tint, and the
+        // binding pane's dots.
+        let ramp = selected.map(|slot| (slot.number - 1) % 4 + 1);
+        let pad_badge_cls = match ramp {
+            Some(digit) => format!("n-pbadge np{digit}"),
             None => "n-pbadge".to_owned(),
+        };
+        let kb_cls = match ramp {
+            Some(digit) => format!("n-kb np{digit}"),
+            None => "n-kb".to_owned(),
+        };
+        // The quiet across-the-room state word inside the stage — from the
+        // polled session, never invented.
+        let stage_word = if running {
+            "Running".to_owned()
+        } else {
+            String::new()
         };
         let (pad_badge, pad_name, pad_sub) = match selected {
             Some(slot) => (
@@ -4803,7 +4823,10 @@ impl NocturneDerived {
         let bind_g_cls = if binds.rows.is_empty() {
             "n-bindgroups none".to_owned()
         } else {
-            "n-bindgroups".to_owned()
+            match selected.map(|slot| (slot.number - 1) % 4 + 1) {
+                Some(digit) => format!("n-bindgroups np{digit}"),
+                None => "n-bindgroups".to_owned(),
+            }
         };
         let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
             bind_groups;
@@ -4915,6 +4938,8 @@ impl NocturneDerived {
             socd_edit_opts,
             pad_badge,
             pad_badge_cls,
+            kb_cls,
+            stage_word,
             pad_name,
             pad_sub,
             pad_xbox_cls,

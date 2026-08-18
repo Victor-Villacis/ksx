@@ -6919,7 +6919,25 @@ a.wsrow-title:hover {
   color: var(--n-text-3);
 }
 
+/* The across-the-room read: a quiet word in the stage's corner while a
+   session runs. Behind the art, invisible to assistive tech (the sr status
+   line speaks), still there from the sofa. */
+.n-stageword {
+  position: absolute;
+  top: 12px;
+  right: 18px;
+  z-index: 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(150, 138, 224, 0.18);
+  pointer-events: none;
+  user-select: none;
+}
+
 .n-stage {
+  position: relative;
   flex: 1;
   min-height: 260px;
   display: flex;
@@ -7186,18 +7204,40 @@ a.wsrow-title:hover {
   }
 }
 
+/* Bound caps wear the SELECTED player's ramp shade (--kbt, served on the
+   board wrapper as np1..np4); without a selection the accent stands in. */
+.n-kb {
+  --kbt: var(--n-accent);
+}
+
+.n-kb.np1 {
+  --kbt: var(--np1);
+}
+
+.n-kb.np2 {
+  --kbt: var(--np2);
+}
+
+.n-kb.np3 {
+  --kbt: var(--np3);
+}
+
+.n-kb.np4 {
+  --kbt: var(--np4);
+}
+
 .n-key.bound::before {
   background:
     linear-gradient(
       180deg,
-      rgba(150, 138, 224, 0.34),
-      rgba(150, 138, 224, 0.2) 65%,
-      rgba(150, 138, 224, 0.16)
+      color-mix(in srgb, var(--kbt) 34%, transparent),
+      color-mix(in srgb, var(--kbt) 20%, transparent) 65%,
+      color-mix(in srgb, var(--kbt) 16%, transparent)
     ),
     linear-gradient(180deg, #2e3142, #242737);
   box-shadow:
     inset 0 1px 0 rgba(233, 233, 237, 0.14),
-    inset 0 0 0 1px rgba(150, 138, 224, 0.35);
+    inset 0 0 0 1px color-mix(in srgb, var(--kbt) 35%, transparent);
 }
 
 .n-key.ghost {
@@ -7355,6 +7395,22 @@ a.wsrow-title:hover {
 
 .n-bind.on .n-bind-dot {
   background: var(--n-accent);
+}
+
+.n-bindgroups.np1 .n-bind.on .n-bind-dot {
+  background: var(--np1);
+}
+
+.n-bindgroups.np2 .n-bind.on .n-bind-dot {
+  background: var(--np2);
+}
+
+.n-bindgroups.np3 .n-bind.on .n-bind-dot {
+  background: var(--np3);
+}
+
+.n-bindgroups.np4 .n-bind.on .n-bind-dot {
+  background: var(--np4);
 }
 
 .n-bind-label {

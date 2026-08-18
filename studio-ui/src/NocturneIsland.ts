@@ -157,6 +157,8 @@ export interface NocturneView {
   socd_edit_opts: NocturneOptionRowView[];
   pad_badge: string;
   pad_badge_cls: string;
+  kb_cls: string;
+  stage_word: string;
   pad_name: string;
   pad_sub: string;
   pad_xbox_cls: string;
@@ -265,6 +267,8 @@ const [nSocdLab, setNSocdLab] = createSignal("");
 const [nSocdEditOpts, setNSocdEditOpts] = createSignal<NocturneOptionRowView[]>([]);
 const [nPadBadge, setNPadBadge] = createSignal("");
 const [nPadBadgeCls, setNPadBadgeCls] = createSignal("n-pbadge");
+const [nKbCls, setNKbCls] = createSignal("n-kb");
+const [nStageWord, setNStageWord] = createSignal("");
 const [nPadName, setNPadName] = createSignal("");
 const [nPadSub, setNPadSub] = createSignal("");
 const [nPadXboxCls, setNPadXboxCls] = createSignal("n-padwrap");
@@ -366,6 +370,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNSocdEditOpts(v.socd_edit_opts);
   setNPadBadge(v.pad_badge);
   setNPadBadgeCls(v.pad_badge_cls);
+  setNKbCls(v.kb_cls);
+  setNStageWord(v.stage_word);
   setNPadName(v.pad_name);
   setNPadSub(v.pad_sub);
   setNPadXboxCls(v.pad_xbox_cls);
@@ -1804,6 +1810,9 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-stage" },
+          // The across-the-room read: one quiet word from the polled
+          // session, visual only (the sr status line announces transitions).
+          h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.
@@ -2196,7 +2205,7 @@ export function NocturneIsland() {
         ),
         h(
           "div",
-          { class: "n-kb", "data-client-fit": "" },
+          { "data-client-fit": "", class: () => nKbCls() },
           h(
             "div",
             { class: "n-kbcase", "data-client-fit": "" },

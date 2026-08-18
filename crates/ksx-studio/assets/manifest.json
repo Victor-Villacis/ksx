@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "6fe535152173f0e3823fb79037bdee084d408dc26db38e4789af1ecd8974a040",
+  "build_hash": "4f089a301e03c25dbbbb9a689ba95a4086048526813d34c9c05fc0e2b828574b",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -8,8 +8,8 @@
     "devices.js": "devices.263a38f8.js",
     "map.ir": "map.eb1d7603.ir",
     "map.js": "map.c744fd4d.js",
-    "nocturne.ir": "nocturne.566bb94b.ir",
-    "nocturne.js": "nocturne.5f61c82e.js",
+    "nocturne.ir": "nocturne.05fe6b72.ir",
+    "nocturne.js": "nocturne.38c160ac.js",
     "pads.ir": "pads.69bd275e.ir",
     "pads.js": "pads.be7a85f6.js",
     "profiles.ir": "profiles.d349949d.ir",
@@ -20,7 +20,7 @@
     "start.js": "start.a5f93f92.js",
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
-    "studio.css": "studio.0380c8bb.css",
+    "studio.css": "studio.df61cb01.css",
     "workspace.ir": "workspace.a7e0bee7.ir",
     "workspace.js": "workspace.c5857a02.js"
   },
@@ -30,10 +30,10 @@
         "start.a5f93f92.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 55914,
+      "total_size_br": 56149,
       "budget_warn_threshold": 200000,
       "ir": "start.b0a4715d.ir"
     },
@@ -42,34 +42,34 @@
         "workspace.c5857a02.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 54544,
+      "total_size_br": 54779,
       "budget_warn_threshold": 200000,
       "ir": "workspace.a7e0bee7.ir"
     },
     "/nocturne": {
       "js": [
-        "nocturne.5f61c82e.js"
+        "nocturne.38c160ac.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 65639,
+      "total_size_br": 65868,
       "budget_warn_threshold": 200000,
-      "ir": "nocturne.566bb94b.ir"
+      "ir": "nocturne.05fe6b72.ir"
     },
     "/": {
       "js": [
         "status.fa50ec52.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 53413,
+      "total_size_br": 53648,
       "budget_warn_threshold": 200000,
       "ir": "status.cee9d0b7.ir"
     },
@@ -78,10 +78,10 @@
         "map.c744fd4d.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 80943,
+      "total_size_br": 81178,
       "budget_warn_threshold": 200000,
       "ir": "map.eb1d7603.ir"
     },
@@ -90,10 +90,10 @@
         "check.462901ec.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 52993,
+      "total_size_br": 53228,
       "budget_warn_threshold": 200000,
       "ir": "check.33266fab.ir"
     },
@@ -102,10 +102,10 @@
         "pads.be7a85f6.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 53107,
+      "total_size_br": 53342,
       "budget_warn_threshold": 200000,
       "ir": "pads.69bd275e.ir"
     },
@@ -114,10 +114,10 @@
         "devices.263a38f8.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 54586,
+      "total_size_br": 54821,
       "budget_warn_threshold": 200000,
       "ir": "devices.ba76544a.ir"
     },
@@ -126,10 +126,10 @@
         "profiles.fcb79b2f.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 54076,
+      "total_size_br": 54311,
       "budget_warn_threshold": 200000,
       "ir": "profiles.d349949d.ir"
     },
@@ -138,10 +138,10 @@
         "setup.aa677118.js"
       ],
       "css": [
-        "studio.0380c8bb.css"
+        "studio.df61cb01.css"
       ],
       "fonts": [],
-      "total_size_br": 53969,
+      "total_size_br": 54204,
       "budget_warn_threshold": 200000,
       "ir": "setup.69a0eb9c.ir"
     }

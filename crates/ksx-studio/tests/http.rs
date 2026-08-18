@@ -6750,7 +6750,12 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
             .is_some_and(|n| n.ends_with("bound")),
         "{api}"
     );
-    assert_eq!(api["view"]["bind_g_cls"], "n-bindgroups", "{api}");
+    // The groups wrapper carries the selected slot's ramp digit (the
+    // dots wear its shade), and the board wrapper tints with it too.
+    assert_eq!(api["view"]["bind_g_cls"], "n-bindgroups np1", "{api}");
+    assert_eq!(api["view"]["kb_cls"], "n-kb np1", "{api}");
+    // Idle: no across-the-room word.
+    assert_eq!(api["view"]["stage_word"], "", "{api}");
     let bound_fn = rows
         .iter()
         .find(|r| r["chip"] != "Unbound")
@@ -7094,8 +7099,11 @@ fn nocturne_resolves_the_selected_slot_server_side() {
     let rack = api["view"]["rack_rows"].as_array().expect("rack");
     assert_eq!(rack[0]["cls"], "n-slot", "{api}");
     assert_eq!(rack[1]["cls"], "n-slot on", "{api}");
-    // The second slot is the PlayStation draft: the stage follows its family.
+    // The second slot is the PlayStation draft: the stage follows its family,
+    // and every ramp surface wears P2's shade.
     assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_badge_cls"], "n-pbadge np2", "{api}");
+    assert_eq!(api["view"]["kb_cls"], "n-kb np2", "{api}");
 
     // A slot this draft does not have falls back to the first.
     let api: serde_json::Value =

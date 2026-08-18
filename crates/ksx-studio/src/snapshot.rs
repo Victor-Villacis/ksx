@@ -3806,6 +3806,9 @@ pub struct NocturneChoiceRow {
 pub struct NocturneRackRow {
     pub number: String,
     pub badge: String,
+    /// The player-identity ramp: `n-pbadge np1..np4` by `(number-1)%4+1` —
+    /// slot 5 wears P1's shade again, the way the design's ramp wraps.
+    pub badge_cls: String,
     pub name: String,
     pub meta: String,
     pub cls: String,
@@ -3979,6 +3982,8 @@ pub struct NocturneDerived {
     pub socd_edit_opts: Vec<NocturneOptionRow>,
     /// The stage's meta bar and the binding pane, off the first slot.
     pub pad_badge: String,
+    /// The meta bar's badge wears the selected slot's ramp shade too.
+    pub pad_badge_cls: String,
     pub pad_name: String,
     pub pad_sub: String,
     /// The stage's silhouette pair: exactly one visible, by the selected
@@ -4270,6 +4275,7 @@ impl NocturneDerived {
                 .map(|(at, slot)| NocturneRackRow {
                     number: slot.number.to_string(),
                     badge: format!("P{}", slot.number),
+                    badge_cls: format!("n-pbadge np{}", (slot.number - 1) % 4 + 1),
                     name: slot.persona_label.clone(),
                     meta: format!(
                         "\"{}\" · {} bound · SOCD {}",
@@ -4435,6 +4441,10 @@ impl NocturneDerived {
             Vec::new()
         };
 
+        let pad_badge_cls = match selected {
+            Some(slot) => format!("n-pbadge np{}", (slot.number - 1) % 4 + 1),
+            None => "n-pbadge".to_owned(),
+        };
         let (pad_badge, pad_name, pad_sub) = match selected {
             Some(slot) => (
                 format!("P{}", slot.number),
@@ -4893,6 +4903,7 @@ impl NocturneDerived {
             socd_lab,
             socd_edit_opts,
             pad_badge,
+            pad_badge_cls,
             pad_name,
             pad_sub,
             pad_xbox_cls,

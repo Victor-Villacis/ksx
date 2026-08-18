@@ -84,6 +84,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nSocdNum": payload.view.socd_num,
         "nSocdLab": payload.view.socd_lab,
         "nPadBadge": payload.view.pad_badge,
+        "nPadBadgeCls": payload.view.pad_badge_cls,
         "nPadName": payload.view.pad_name,
         "nPadSub": payload.view.pad_sub,
         "nBindTitle": payload.view.bind_title,
@@ -163,6 +164,10 @@ fn rack_row(row: &NocturneRackRow) -> SlotValue {
     SlotValue::object(vec![
         ("number".to_owned(), SlotValue::Text(row.number.clone())),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        (
+            "badge_cls".to_owned(),
+            SlotValue::Text(row.badge_cls.clone()),
+        ),
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
@@ -560,7 +565,8 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 62] = [
+        const SERVED_SLOTS: [&str; 63] = [
+            "nPadBadgeCls",
             "nBindFaceN",
             "nBindDpadN",
             "nBindShlN",

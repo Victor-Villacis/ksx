@@ -45,6 +45,8 @@ export interface NocturneChoiceRowView {
 export interface NocturneRackRowView {
   number: string;
   badge: string;
+  /** The player-identity ramp shade (`n-pbadge np1..np4`, wrapping). */
+  badge_cls: string;
   name: string;
   meta: string;
   cls: string;
@@ -153,6 +155,7 @@ export interface NocturneView {
   socd_lab: string;
   socd_edit_opts: NocturneOptionRowView[];
   pad_badge: string;
+  pad_badge_cls: string;
   pad_name: string;
   pad_sub: string;
   pad_xbox_cls: string;
@@ -259,6 +262,7 @@ const [nSocdNum, setNSocdNum] = createSignal("");
 const [nSocdLab, setNSocdLab] = createSignal("");
 const [nSocdEditOpts, setNSocdEditOpts] = createSignal<NocturneOptionRowView[]>([]);
 const [nPadBadge, setNPadBadge] = createSignal("");
+const [nPadBadgeCls, setNPadBadgeCls] = createSignal("n-pbadge");
 const [nPadName, setNPadName] = createSignal("");
 const [nPadSub, setNPadSub] = createSignal("");
 const [nPadXboxCls, setNPadXboxCls] = createSignal("n-padwrap");
@@ -358,6 +362,7 @@ export function applyNocturne(p: NocturnePayload): void {
   setNSocdLab(v.socd_lab);
   setNSocdEditOpts(v.socd_edit_opts);
   setNPadBadge(v.pad_badge);
+  setNPadBadgeCls(v.pad_badge_cls);
   setNPadName(v.pad_name);
   setNPadSub(v.pad_sub);
   setNPadXboxCls(v.pad_xbox_cls);
@@ -1654,6 +1659,8 @@ export function NocturneIsland() {
             "|" +
             r.badge +
             "|" +
+            r.badge_cls +
+            "|" +
             r.name +
             "|" +
             r.meta +
@@ -1675,7 +1682,7 @@ export function NocturneIsland() {
               h(
                 "a",
                 { class: "n-slot-sel", href: r.href },
-                h("span", { class: "n-pbadge" }, r.badge),
+                h("span", { class: r.badge_cls }, r.badge),
                 h(
                   "span",
                   { class: "n-slot-txt" },
@@ -1764,7 +1771,7 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-meta" },
-          h("span", { class: "n-pbadge" }, () => nPadBadge()),
+          h("span", { class: () => nPadBadgeCls() }, () => nPadBadge()),
           h("span", { class: "n-meta-name" }, () => nPadName()),
           h("span", { class: "n-meta-sub" }, () => nPadSub()),
           h("div", { class: "n-spring" }),

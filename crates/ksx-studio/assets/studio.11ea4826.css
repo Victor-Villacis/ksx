@@ -6254,6 +6254,13 @@ a.wsrow-title:hover {
    light theme); the route still passes the 390px and coarse gates below. */
 
 .nocturne {
+  /* The player-identity ramp (design translation's measured lavender
+     family; dark badge text stays >=6:1 on every shade). Slot 5 wraps to
+     P1's shade. */
+  --np1: #a98ae0;
+  --np2: #c7b1f0;
+  --np3: #9a86c9;
+  --np4: #e4d9f6;
   --n-bg: #161826;
   --n-panel: #1a1c28;
   --n-panel-2: #232532;
@@ -6781,6 +6788,22 @@ a.wsrow-title:hover {
   color: #14151f;
   font-size: 11px;
   font-weight: 700;
+}
+
+.n-pbadge.np1 {
+  background: var(--np1);
+}
+
+.n-pbadge.np2 {
+  background: var(--np2);
+}
+
+.n-pbadge.np3 {
+  background: var(--np3);
+}
+
+.n-pbadge.np4 {
+  background: var(--np4);
 }
 
 .n-pbadge.dim {

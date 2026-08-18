@@ -7471,6 +7471,94 @@ fn nocturne_clears_one_key_everywhere_it_drives() {
     assert!(none.contains("not%20driving%20anything"), "{none}");
 }
 
+/// **The ⊖ over HTTP**: mode "remove" on the bind verb takes ONE key off ONE
+/// control — its other keys stay, and removing the last key leaves the
+/// control honestly unbound. A key the control never had refuses in words.
+#[test]
+fn nocturne_removes_one_key_from_one_control() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                preset: preset.clone(),
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let removed: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":1,\"function\":\"A\",\"key\":\"H\",\"mode\":\"remove\"}",
+    )))
+    .expect("remove outcome");
+    assert_eq!(removed["ok"], true, "{removed}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert_eq!(
+        mapper.bindings.get("A").cloned().unwrap_or_default(),
+        vec!["G".to_owned()],
+        "the other key stays"
+    );
+
+    // Removing a key the control never had refuses in words.
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":1,\"function\":\"A\",\"key\":\"F9\",\"mode\":\"remove\"}",
+    )))
+    .expect("missing outcome");
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not driven by")),
+        "{missing}"
+    );
+
+    // Removing the LAST key leaves the control honestly unbound.
+    let last: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":1,\"function\":\"A\",\"key\":\"G\",\"mode\":\"remove\"}",
+    )))
+    .expect("last outcome");
+    assert_eq!(last["ok"], true, "{last}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert!(
+        mapper
+            .bindings
+            .get("A")
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "unbound after the last removal"
+    );
+}
+
 /// **The undo chip over HTTP**: removing a controller stashes its whole
 /// slot view SERVER-side; the chip is served while the window holds; Undo
 /// replays add + bindings + socd and consumes the stash — a second Undo

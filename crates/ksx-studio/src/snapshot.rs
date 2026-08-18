@@ -3882,6 +3882,9 @@ pub struct NocturneBindRow {
     pub note: String,
     pub cls: String,
     pub chip_cls: String,
+    /// `n-minus` when the chip carries several keys (a pair to choose),
+    /// `n-minus none` otherwise — the ⊖ only shows where it can act.
+    pub minus_cls: String,
     pub clear_cls: String,
     pub slot: String,
     /// The turbo box's prefill — the delivered rate ("12"), or empty.
@@ -5056,6 +5059,11 @@ impl NocturneDerived {
                     // The ONE shared-key signal, the board's dashed ring.
                     (true, false) => "n-keychip shared".to_owned(),
                     (false, _) => "n-keychip ghost".to_owned(),
+                },
+                minus_cls: if bound && row.keys.contains(" · ") {
+                    "n-minus".to_owned()
+                } else {
+                    "n-minus none".to_owned()
                 },
                 clear_cls: if bound {
                     "n-rowclear".to_owned()

@@ -1361,6 +1361,30 @@ pub(super) async fn nocturne_api_bind(
             let mut next = current;
             next.push(key.to_owned());
             (next, true)
+        } else if body.mode.as_deref() == Some("remove") {
+            // Take ONE key off this control's list; the rest stay.
+            // Shrinking a key list consents to nothing new, so it forces.
+            let current = nocturne_current_keys(&staged, slot, &body.function);
+            if !current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+                return BindOutcome {
+                    ok: false,
+                    error: Some(format!(
+                        "That control is not driven by {key} — nothing to remove."
+                    )),
+                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
+                    ..BindOutcome::default()
+                };
+            }
+            let rest: Vec<String> = current
+                .into_iter()
+                .filter(|k| !k.eq_ignore_ascii_case(key))
+                .collect();
+            let keys = if rest.is_empty() {
+                vec!["none".to_owned()]
+            } else {
+                rest
+            };
+            (keys, true)
         } else {
             (vec![key.to_owned()], body.force)
         };
@@ -1405,7 +1429,18 @@ fn nocturne_current_keys(
         .unwrap_or("(none)");
     ksx_api::staged_mapper_slot(slot, keyboard)
         .ok()
-        .and_then(|mapper| mapper.bindings.get(function).cloned())
+        .and_then(|mapper| {
+            // Case-bridged: the mapper spells face buttons UPPERCASE while
+            // the stage art's tokens are lowercase — a lookup must match
+            // the function whichever spelling the caller learned it from.
+            mapper.bindings.get(function).cloned().or_else(|| {
+                mapper
+                    .bindings
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(function))
+                    .map(|(_, keys)| keys.clone())
+            })
+        })
         .unwrap_or_default()
 }
 

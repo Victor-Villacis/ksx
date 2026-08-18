@@ -309,6 +309,10 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("chip_cls".to_owned(), SlotValue::Text(row.chip_cls.clone())),
         (
+            "minus_cls".to_owned(),
+            SlotValue::Text(row.minus_cls.clone()),
+        ),
+        (
             "clear_cls".to_owned(),
             SlotValue::Text(row.clear_cls.clone()),
         ),

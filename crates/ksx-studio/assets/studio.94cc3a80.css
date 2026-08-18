@@ -9414,6 +9414,32 @@ button.n-keychip:hover {
   color: var(--n-text-3);
 }
 
+/* The ⊖: remove one key from one control. Ghost like the +, danger on
+   hover; shown only where a pair choice exists. */
+.n-minus {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--n-line-2);
+  border-radius: 50%;
+  background: none;
+  color: var(--n-text-3);
+  cursor: pointer;
+}
+
+.n-minus:hover {
+  border-color: rgba(231, 154, 166, 0.5);
+  color: #e79aa6;
+}
+
+/* A key driving ONE control has no pair to choose — its ✕ already says it. */
+.n-krow:not(.shared) .n-minus {
+  display: none;
+}
+
 /* The toast's "Bind several" switch. */
 .n-chain {
   flex: none;

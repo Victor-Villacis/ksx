@@ -796,7 +796,7 @@ interface LearnTarget {
   fn: string;
   label: string;
   slot: string;
-  mode: "replace" | "add";
+  mode: "replace" | "add" | "remove";
 }
 
 /** PadForge's recorder tick — snappy but far under the daemon's own rate. */
@@ -851,7 +851,10 @@ export function setNocturnePoll(fn: () => void): void {
   nocturnePollFn = fn;
 }
 
-function learnSentence(mode: "replace" | "add"): string {
+function learnSentence(mode: "replace" | "add" | "remove"): string {
+  if (mode === "remove") {
+    return "The key you press is taken off this control's list; its other keys stay.";
+  }
   return mode === "add"
     ? "The key joins this control's list — any one of them presses it."
     : "The key replaces this control's binding.";
@@ -969,7 +972,11 @@ function armLearnUi(row: LearnTarget): void {
   setNLearnSkipCls(autoMap ? "n-bbtn sm" : "n-bbtn sm none");
   setNChainCls(autoMap ? "n-chain none" : "n-chain");
   setNKeyCueCls("n-key-cue");
-  setNKeyCueText(`Waiting — press a key for ${row.label}, or click one below`);
+  setNKeyCueText(
+    row.mode === "remove"
+      ? `Waiting — press the key to remove from ${row.label}, or click it below`
+      : `Waiting — press a key for ${row.label}, or click one below`,
+  );
   markArmedRow(row.fn);
   setRailGlow(true);
 }
@@ -1219,7 +1226,9 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     let line =
       row.mode === "add"
         ? `${key} added to ${row.label} — any of its keys presses it.`
-        : `${row.label} is now ${key}.`;
+        : row.mode === "remove"
+          ? `${key} no longer drives ${row.label}.`
+          : `${row.label} is now ${key}.`;
     if (outcome.also_drives.length > 0) {
       line += ` That key also drives ${outcome.also_drives.join(" · ")}.`;
     }
@@ -1625,7 +1634,7 @@ function locateKeyRow(root: HTMLElement, key: string): void {
  *  picker. Rides writeLearnedKey wholesale, so refusals and the conflict
  *  dialog behave exactly like a learned key. */
 let assignKey: string | null = null;
-let assignMode: "replace" | "add" = "replace";
+let assignMode: "replace" | "add" | "remove" = "replace";
 
 /** Light the armed key everywhere it appears (board cap, tray, available
  *  chip) — a glow that WAITS, cleared only by resolution or Esc. */
@@ -1651,7 +1660,7 @@ function markAssignTargets(key: string | null): void {
 const ASSIGN_WINDOW_MS = 12000;
 let assignTimer: number | undefined;
 
-function armAssign(key: string, mode: "replace" | "add" = "replace"): void {
+function armAssign(key: string, mode: "replace" | "add" | "remove" = "replace"): void {
   assignKey = key;
   assignMode = mode;
   const deadline = Date.now() + ASSIGN_WINDOW_MS;
@@ -1659,7 +1668,9 @@ function armAssign(key: string, mode: "replace" | "add" = "replace"): void {
   setNLearnText(
     mode === "add"
       ? `Click a control on the pad to add ${key}`
-      : `Click a control on the pad — ${key} replaces its binding`,
+      : mode === "remove"
+        ? `Click a control on the pad — ${key} is removed from it`
+        : `Click a control on the pad — ${key} replaces its binding`,
   );
   setNChainCls("n-chain");
   setNLearnSub(`${Math.ceil(ASSIGN_WINDOW_MS / 1000)}s left · Esc cancels.`);
@@ -1846,19 +1857,19 @@ export function nocturneWire(root: HTMLElement): void {
         const mode = assignMode;
         const chain = ev.shiftKey || chainWanted();
         cancelAssign();
-        // A FREE control has no row — its group chip carries the name.
-        const chipLabel = Array.from(
-          root.querySelectorAll<HTMLElement>(".n-ctlchip[data-fn]"),
-        )
-          .find((c) => (c.getAttribute("data-fn") ?? "").toLowerCase() === fnName.toLowerCase())
-          ?.textContent?.trim();
+        // The pane's row (or the FREE control's group chip) carries the
+        // CANONICAL fn spelling and the label — the art's token is
+        // lowercase while face buttons are uppercase in the mapper, and
+        // the current-keys reads (add/remove) must speak the mapper's own.
+        const owner = Array.from(
+          root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
+        ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName.toLowerCase());
+        const canonical = owner?.getAttribute("data-fn") ?? fnName;
         const label =
-          root
-            .querySelector(`details.n-bind[data-fn="${CSS.escape(fnName)}" i] .n-bind-label`)
-            ?.textContent?.trim() ||
-          chipLabel ||
+          owner?.querySelector(".n-bind-label")?.textContent?.trim() ||
+          (owner?.classList.contains("n-ctlchip") ? owner.textContent?.trim() : "") ||
           fnName;
-        void writeLearnedKey({ fn: fnName, label, slot: nSlotVal(), mode }, held, false).then(
+        void writeLearnedKey({ fn: canonical, label, slot: nSlotVal(), mode }, held, false).then(
           (ok) => {
             // "Bind several": the key stays in your hand for the next
             // control; the box survives the re-arm.
@@ -1975,7 +1986,7 @@ export function nocturneWire(root: HTMLElement): void {
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
       mergeQuery({ q: null });
-    } else if (hit === "chip-learn" || hit === "chip-add") {
+    } else if (hit === "chip-learn" || hit === "chip-add" || hit === "chip-remove") {
       // The row's own facts travel on its element, never re-derived here.
       // The chip click must not also toggle the fold it sits in.
       ev.preventDefault();
@@ -1990,7 +2001,7 @@ export function nocturneWire(root: HTMLElement): void {
           fn: fnName,
           label,
           slot,
-          mode: hit.endsWith("add") ? "add" : "replace",
+          mode: hit.endsWith("add") ? "add" : hit.endsWith("remove") ? "remove" : "replace",
         });
       }
     } else if (hit === "row-clear") {
@@ -2049,6 +2060,9 @@ export function nocturneWire(root: HTMLElement): void {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
       applyNocturneUi();
+    } else if (hit === "key-remove") {
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) armAssign(key, "remove");
     } else if (hit === "key-assign") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
       // The row's + means ADD (the key keeps its other controls); a free
@@ -3372,6 +3386,21 @@ export function NocturneIsland() {
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
                   // The control's own Clear: a real form twin riding the
                   // hover, so unbinding is one click from the row itself.
                   h(
@@ -3600,6 +3629,21 @@ export function NocturneIsland() {
                       "svg",
                       { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
                   // The control's own Clear: a real form twin riding the
@@ -3832,6 +3876,21 @@ export function NocturneIsland() {
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
                   // The control's own Clear: a real form twin riding the
                   // hover, so unbinding is one click from the row itself.
                   h(
@@ -4060,6 +4119,21 @@ export function NocturneIsland() {
                       "svg",
                       { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
                   // The control's own Clear: a real form twin riding the
@@ -4292,6 +4366,21 @@ export function NocturneIsland() {
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
                   // The control's own Clear: a real form twin riding the
                   // hover, so unbinding is one click from the row itself.
                   h(
@@ -4522,6 +4611,21 @@ export function NocturneIsland() {
                       h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
                     ),
                   ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-remove",
+                      title: "Remove one key from this control — press it when asked",
+                      "aria-label": "Remove one key from this control",
+                      class: r.minus_cls,
+                    },
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
                   // The control's own Clear: a real form twin riding the
                   // hover, so unbinding is one click from the row itself.
                   h(
@@ -4728,6 +4832,21 @@ export function NocturneIsland() {
                     "svg",
                     { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
                     h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                  ),
+                ),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "key-remove",
+                    title: "Remove this key from one control — click that control on the pad",
+                    "aria-label": "Remove this key from one control",
+                    class: "n-minus",
+                  },
+                  h(
+                    "svg",
+                    { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                    h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
                   ),
                 ),
                 // The key's own Clear: takes it away from EVERYTHING it

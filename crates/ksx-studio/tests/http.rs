@@ -7350,6 +7350,45 @@ fn nocturne_resolves_the_filter_server_side() {
     assert_eq!(api["view"]["bind_face_cls"], "n-bindg", "{api}");
 }
 
+/// **Clear-all over HTTP**: one write empties the slot's whole key table —
+/// macro TRIGGER keys included, because triggers are bindings — while the
+/// macros keep their steps. A junk slot changes nothing.
+#[test]
+fn nocturne_clears_every_binding_in_one_write() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    assert!(control.staged().slots[0].bindings > 0);
+
+    let response = post_form(addr, "/nocturne/bind/clear-all", "number=1");
+    assert!(response.contains("Every%20key%20unbound"), "{response}");
+    let slot = control.staged().slots[0].clone();
+    assert_eq!(slot.bindings, 0, "{slot:?}");
+    assert!(
+        slot.authoring
+            .as_ref()
+            .is_some_and(|preset| preset.bindings.is_empty()),
+        "{slot:?}"
+    );
+
+    let junk = post_form(addr, "/nocturne/bind/clear-all", "number=9");
+    assert!(junk.contains("could%20not%20be%20made"), "{junk}");
+}
+
 /// **The undo chip over HTTP**: removing a controller stashes its whole
 /// slot view SERVER-side; the chip is served while the window holds; Undo
 /// replays add + bindings + socd and consumes the stash — a second Undo

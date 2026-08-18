@@ -123,8 +123,11 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
     });
     applyFlash(new URL(res.url).searchParams.get("flash"));
     // A consent fold that just acted closes itself: the outcome line above
-    // and the refreshed switch state are the answer now.
-    form.closest("details")?.removeAttribute("open");
+    // and the refreshed switch state are the answer now. The bind and macro
+    // EDITORS (data-fn rows) stay open — the user is iterating in them and
+    // closes them by hand.
+    const fold = form.closest("details");
+    if (fold && !fold.hasAttribute("data-fn")) fold.removeAttribute("open");
   } catch {
     applyFlash("error: request failed — is ksx studio still running?");
   } finally {

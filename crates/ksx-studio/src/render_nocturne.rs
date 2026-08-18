@@ -659,7 +659,10 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 22] = [
+        const CLIENT_ONLY_SLOTS: [&str; 23] = [
+            // The expand/collapse-all toggle's label follows which editors
+            // the BROWSER is holding open — state no server request carries.
+            "nExpandLbl",
             // Apply's needs-restart dialog is a fetch answer, never server
             // state.
             "nApplyOpen",

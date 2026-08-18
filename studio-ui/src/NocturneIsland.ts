@@ -462,6 +462,13 @@ export function applyNocturne(p: NocturnePayload): void {
   if (root) {
     const query = root.querySelector<HTMLInputElement>(".n-filter-in")?.value ?? "";
     if (query.trim() !== "") applyNocturneFilter(root, query);
+    // Fresh rows arrive closed; the user's open editors come back.
+    for (const el of Array.from(
+      root.querySelectorAll<HTMLDetailsElement>(".n-right details[data-fn]"),
+    )) {
+      el.open = openRows.has(el.getAttribute("data-fn") ?? "");
+    }
+    syncExpandLabel();
   }
 }
 
@@ -670,6 +677,16 @@ const [nLearnText, setNLearnText] = createSignal("");
 const [nLearnSub, setNLearnSub] = createSignal("");
 // The Apply verb's needs-restart dialog: client-only (a fetch answer),
 // quoting the daemon's own difference sentence.
+// Rows the user is holding open (bind + macro editors, keyed by data-fn):
+// reconciliation rebuilds a row CLOSED, so the wire remembers and
+// applyNocturne puts them back — an edit no longer slams the editor shut.
+const openRows = new Set<string>();
+const [nExpandLbl, setNExpandLbl] = createSignal("Expand all");
+
+function syncExpandLabel(): void {
+  setNExpandLbl(openRows.size > 0 ? "Collapse all" : "Expand all");
+}
+
 const [nApplyOpen, setNApplyOpen] = createSignal(false);
 const [nApplyMsg, setNApplyMsg] = createSignal("");
 const [nConfOpen, setNConfOpen] = createSignal(false);
@@ -1359,6 +1376,20 @@ export function nocturneWire(root: HTMLElement): void {
   loadUiPrefs();
   applyNocturneUi();
   window.addEventListener("resize", scheduleKbFit);
+  root.addEventListener(
+    "toggle",
+    (ev) => {
+      const el = ev.target;
+      if (!(el instanceof HTMLDetailsElement)) return;
+      if (!el.closest(".n-right")) return;
+      const fn = el.getAttribute("data-fn");
+      if (!fn) return;
+      if (el.open) openRows.add(fn);
+      else openRows.delete(fn);
+      syncExpandLabel();
+    },
+    true,
+  );
   window.addEventListener("keydown", (ev) => {
     if (!anyDialogOpen()) return;
     if (ev.key === "Escape") {
@@ -1483,6 +1514,13 @@ export function nocturneWire(root: HTMLElement): void {
       pendingConflict = null;
       setNConfOpen(false);
       restoreDialogFocus();
+    } else if (hit === "bind-expand") {
+      const rows = Array.from(
+        root.querySelectorAll<HTMLDetailsElement>(".n-right details[data-fn]"),
+      );
+      const openAll = openRows.size === 0;
+      for (const el of rows) el.open = openAll;
+      syncExpandLabel();
     } else if (hit === "apply-cancel") {
       setNApplyOpen(false);
       restoreDialogFocus();
@@ -2541,6 +2579,37 @@ export function NocturneIsland() {
           { class: "n-group-head" },
           h("span", { class: "n-kick" }, () => nBindTitle()),
         ),
+        // Bulk hands on the whole list: one toggle holds every editor open
+        // or shut, and Clear all sits behind its consequence fold.
+        h(
+          "div",
+          { class: "n-bindtools" },
+          h(
+            "button",
+            { type: "button", class: "n-bbtn sm", "data-nx": "bind-expand" },
+            () => nExpandLbl(),
+          ),
+          h(
+            "details",
+            { class: "n-clearall" },
+            h("summary", { class: "n-clearall-sum" }, "Clear all…"),
+            h(
+              "div",
+              { class: "n-clearall-body" },
+              h(
+                "p",
+                { class: "n-foot" },
+                "Every key on this controller is unbound in the draft — macro trigger keys too. The macros keep their steps; nothing saved changes.",
+              ),
+              h(
+                "form",
+                { class: "n-inline", method: "post", action: "/nocturne/bind/clear-all" },
+                h("input", { type: "hidden", name: "number", value: () => nSlotVal() }),
+                h("button", { type: "submit", class: "n-bbtn sm danger" }, "Unbind every key"),
+              ),
+            ),
+          ),
+        ),
         // The capture banner: INLINE, role=status — a deliberate a11y
         // contract change from /map's dialog, documented at M9. It says
         // which control is armed and that Esc cancels; the countdown ticks
@@ -2670,19 +2739,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
@@ -2793,19 +2922,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
@@ -2916,19 +3105,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
@@ -3039,19 +3288,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
@@ -3162,19 +3471,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),
@@ -3285,19 +3654,79 @@ export function NocturneIsland() {
                         "Toggle",
                       ),
                     ),
+                  ),
+                  h(
+                    "div",
+                    { class: "n-bedit-row" },
+                    h(
+                      "span",
+                      {
+                        class: "n-bedit-lab",
+                        title:
+                          "Auto-fire: while the key is held, the button repeats its press automatically. Pick a rate, or type your own (presses a second).",
+                      },
+                      "Turbo",
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "0" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Turn auto-fire off" },
+                        "Off",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "5" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Gentle — 5 presses a second" },
+                        "5/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "10" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Standard — 10 presses a second" },
+                        "10/s",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/turbo" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h("input", { type: "hidden", name: "turbo_hz", value: "15" }),
+                      h(
+                        "button",
+                        { type: "submit", class: "n-tpre", title: "Fast — 15 presses a second" },
+                        "15/s",
+                      ),
+                    ),
                     h(
                       "form",
                       { class: "n-inline n-turbo-form", method: "post", action: "/nocturne/bind/turbo" },
                       h("input", { type: "hidden", name: "slot", value: r.slot }),
                       h("input", { type: "hidden", name: "function", value: r.function }),
-                      h("span", { class: "n-bedit-lab" }, "Turbo"),
                       h("input", {
                         class: "n-turbo-in",
                         type: "text",
                         inputmode: "numeric",
                         name: "turbo_hz",
                         placeholder: "Hz",
-                        title: "Presses a second — 0 turns auto-fire off",
+                        title: "Your own rate — presses a second; 0 turns auto-fire off",
                         value: r.turbo,
                       }),
                       h("button", { type: "submit", class: "n-bbtn sm" }, "Set"),

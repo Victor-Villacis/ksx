@@ -7733,6 +7733,76 @@ a.wsrow-title:hover {
   opacity: 0.75;
 }
 
+/* Bulk hands over the binding list: expand/collapse-all + clear-all. */
+.n-bindtools {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+
+.n-clearall {
+  margin-left: auto;
+}
+
+.n-clearall-sum {
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 7px;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.n-clearall-sum::-webkit-details-marker {
+  display: none;
+}
+
+.n-clearall[open] .n-clearall-sum,
+.n-clearall-sum:hover {
+  border-color: rgba(231, 154, 166, 0.45);
+  color: #e79aa6;
+}
+
+.n-clearall-body {
+  max-width: 240px;
+  padding: 6px 2px;
+  text-align: right;
+}
+
+.n-clearall-body .n-foot {
+  margin: 0 0 6px;
+  text-align: left;
+}
+
+/* Turbo preset pills: one honest rate per click; the input stays for
+   people who know the number they want. */
+.n-tpre {
+  padding: 2px 7px;
+  border: 1px solid var(--n-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--n-text-2);
+  font-size: 10.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.n-tpre:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.n-bedit-row {
+  flex-wrap: wrap;
+}
+
+.n-bbtn {
+  white-space: nowrap;
+}
+
 /* Stage art is clickable: any control jumps to its binding row. */
 .n-stage [data-fn] {
   cursor: pointer;
@@ -8790,11 +8860,12 @@ a.wsrow-title:hover {
 }
 
 .n-bclear {
-  width: 22px;
   height: 22px;
+  padding: 0 8px;
   flex: none;
   display: grid;
   place-items: center;
+  white-space: nowrap;
   border: none;
   border-radius: 5px;
   background: none;

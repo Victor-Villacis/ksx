@@ -47,6 +47,9 @@ pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bin
 pub(super) const N_APPLY_ERROR: &str = "error: The changes could not be applied. The running \
      session was not changed; reopen ksx and try again.";
 
+pub(super) const N_CLEAR_ALL_OK: &str = "Every key unbound on this controller — its macros \
+     kept their steps. Nothing has been saved.";
+
 pub(super) const N_UNDO_OK: &str =
     "Controller restored with its bindings. Nothing has been saved or started.";
 
@@ -183,8 +186,9 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 52] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 53] = [
     N_MOVE_AT_END,
+    N_CLEAR_ALL_OK,
     N_UNDO_OK,
     N_UNDO_GONE,
     N_UNDO_FULL,
@@ -1084,6 +1088,38 @@ pub(super) async fn nocturne_api_apply(State(state): State<Arc<AppState>>) -> Re
         _ => serde_json::json!({ "done": false, "flash": N_APPLY_ERROR }),
     };
     axum::Json(json).into_response()
+}
+
+/// POST /nocturne/bind/clear-all — unbind EVERY key of one slot's draft in
+/// a single write: the slot's authoring table with its bindings emptied
+/// (macro trigger keys are bindings, so they unbind too; the macros keep
+/// their steps). One SetBindings, so a refusal changes nothing.
+pub(super) async fn nocturne_form_clear_all(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneSlotForm>,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|slot| slot.number == form.number) else {
+            return N_EDIT_ERROR;
+        };
+        let Some(mut authoring) = slot.authoring.clone() else {
+            return N_EDIT_ERROR;
+        };
+        authoring.bindings.clear();
+        let cleared = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+            number: form.number,
+            preset: Box::new(authoring),
+        });
+        if cleared.ok {
+            N_CLEAR_ALL_OK
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
 }
 
 /// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)

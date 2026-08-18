@@ -6828,6 +6828,54 @@ a.wsrow-title:hover {
   line-height: 1.45;
 }
 
+/* The selected slot's opposite-directions editor, under the rack. */
+.n-socdform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+
+.n-socdform.none {
+  display: none;
+}
+
+.n-socd-lab {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--n-text-3);
+  white-space: nowrap;
+}
+
+.n-socd-sel {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 7px;
+  background: #1d1f2b;
+  color: var(--n-text);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.n-socd-set {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 7px;
+  background: none;
+  color: var(--n-text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.n-socd-set:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
 /* ── Center: meta bar, stage, keyboard ── */
 
 .n-meta {

@@ -227,6 +227,8 @@ pub fn serve(
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/controller", post(nocturne_form_add))
             .route("/nocturne/controller/remove", post(nocturne_form_remove))
+            .route("/nocturne/controller/move", post(nocturne_form_move))
+            .route("/nocturne/controller/socd", post(nocturne_form_socd))
             .route(
                 "/nocturne/controller/duplicate",
                 post(nocturne_form_duplicate),
@@ -245,9 +247,9 @@ pub fn serve(
             .route("/nocturne/autostart", post(nocturne_form_autostart))
             .route("/api/workspace", get(api_workspace))
             .route("/workspace/blocking", post(workspace_form_blocking))
-            .route("/workspace/controller/move", post(workspace_form_move))
+            .route("/workspace/controller/move", post(nocturne_form_move))
             .route("/workspace/controller/remove", post(nocturne_form_remove))
-            .route("/workspace/controller/socd", post(workspace_form_socd))
+            .route("/workspace/controller/socd", post(nocturne_form_socd))
             .route(
                 "/workspace/controller/duplicate",
                 post(nocturne_form_duplicate),

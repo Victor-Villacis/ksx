@@ -19,9 +19,6 @@ pub(super) const WS_EDIT_OK: &str = "Draft updated. Nothing has been saved or st
 pub(super) const WS_EDIT_ERROR: &str =
     "error: The draft could not be updated. Reopen ksx and try again; nothing was changed.";
 
-pub(super) const WS_MOVE_AT_END: &str =
-    "That controller is already at that end of the order. Nothing changed.";
-
 pub(super) const WS_UNKNOWN_FLASH_ERROR: &str =
     "error: The workspace could not finish that request. Reopen ksx and try again.";
 
@@ -34,10 +31,9 @@ pub(super) const WS_IDENTIFY_TIMEOUT: &str =
 pub(super) const WS_IDENTIFY_ERROR: &str = "error: That key press could not be matched to one \
      selectable keyboard. Nothing changed; try again.";
 
-pub(super) const WS_FLASH_ALLOWLIST: [&str; 7] = [
+pub(super) const WS_FLASH_ALLOWLIST: [&str; 6] = [
     WS_EDIT_OK,
     WS_EDIT_ERROR,
-    WS_MOVE_AT_END,
     WS_IDENTIFY_OK,
     WS_IDENTIFY_TIMEOUT,
     WS_IDENTIFY_ERROR,
@@ -93,54 +89,9 @@ pub(super) async fn workspace_form_blocking(
     .await
 }
 
-#[derive(Deserialize)]
-pub(super) struct WorkspaceMoveForm {
-    /// Kept for the honest already-there sentence; the ORDER is what moves.
-    #[allow(dead_code)]
-    number: u8,
-    /// The whole new order, space-separated — PRECOMPOSED by the server into
-    /// the row's hidden field (snapshot.rs `WorkspaceSlotRow`), so the page
-    /// never derives slot order. Empty means the row was already at that end.
-    order: String,
-}
-
-/// POST /workspace/controller/move — one whole-order reorder per click.
-pub(super) async fn workspace_form_move(
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<WorkspaceMoveForm>,
-) -> Response {
-    let numbers: Vec<u8> = form
-        .order
-        .split_whitespace()
-        .filter_map(|n| n.parse().ok())
-        .collect();
-    if numbers.is_empty() {
-        // The first row's "Move up": not an error, and not a write either.
-        return workspace_redirect(WS_MOVE_AT_END);
-    }
-    workspace_stage_edit(state, ksx_api::StageEdit::ReorderSlots { numbers }).await
-}
-
-#[derive(Deserialize)]
-pub(super) struct WorkspaceSocdForm {
-    number: u8,
-    socd: String,
-}
-
-/// POST /workspace/controller/socd — the shared opposite-directions form.
-pub(super) async fn workspace_form_socd(
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<WorkspaceSocdForm>,
-) -> Response {
-    workspace_stage_edit(
-        state,
-        ksx_api::StageEdit::SetSocd {
-            number: form.number,
-            socd: form.socd,
-        },
-    )
-    .await
-}
+// `/workspace/controller/move` and `/workspace/controller/socd` MOVED to
+// `server/nocturne.rs` on 2026-08-17 with the rack-ordering migration. The
+// routes are unchanged; this page's forms land their answers on `/nocturne`.
 
 /// POST /workspace/device/identify — the shared identify transaction
 /// (`server/start.rs::identify_and_stage`), flashed in this page's words.

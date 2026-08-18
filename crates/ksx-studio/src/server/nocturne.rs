@@ -13,8 +13,7 @@
 //! `/api/live` client-side.
 //!
 //! What deliberately remains elsewhere: macro STEP editing (the Controls
-//! grid, linked from each macro row until its own pass) and the workspace's
-//! move/socd forms.
+//! grid, linked from each macro row until its own pass).
 
 use super::*;
 
@@ -34,6 +33,9 @@ pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
 pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
+
+pub(super) const N_MOVE_AT_END: &str =
+    "That controller is already at that end of the order. Nothing changed.";
 
 pub(super) const N_ADD_LAYOUT_ERROR: &str = "error: That starting layout has no key block for this player number, so the controller was not added. Try another layout or Empty; nothing was changed.";
 
@@ -164,7 +166,8 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 45] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 46] = [
+    N_MOVE_AT_END,
     N_MACRO_OK,
     N_MACRO_DELETED,
     N_ADOPT_OK,
@@ -795,6 +798,55 @@ pub(super) async fn nocturne_form_remove(
         state,
         ksx_api::StageEdit::RemoveSlot {
             number: form.number,
+        },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneMoveForm {
+    order: String,
+}
+
+/// POST /nocturne/controller/move (and /workspace/controller/move) — one
+/// whole-order reorder per click; the renumbering is the daemon's. The end
+/// rows precompose an EMPTY order, which is not an error and not a write
+/// either — just the honest sentence. Moved from /workspace on 2026-08-17
+/// with the rack-ordering migration; the old route posts here and its answer
+/// lands on /nocturne.
+pub(super) async fn nocturne_form_move(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneMoveForm>,
+) -> Response {
+    let numbers: Vec<u8> = form
+        .order
+        .split_whitespace()
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    if numbers.is_empty() {
+        return nocturne_redirect(N_MOVE_AT_END);
+    }
+    nocturne_stage_edit(state, ksx_api::StageEdit::ReorderSlots { numbers }).await
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneSocdForm {
+    number: u8,
+    socd: String,
+}
+
+/// POST /nocturne/controller/socd (and /workspace/controller/socd) — the
+/// selected slot's opposite-directions rule, a name off the served roster.
+/// Moved from /workspace with the move verb above.
+pub(super) async fn nocturne_form_socd(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneSocdForm>,
+) -> Response {
+    nocturne_stage_edit(
+        state,
+        ksx_api::StageEdit::SetSocd {
+            number: form.number,
+            socd: form.socd,
         },
     )
     .await

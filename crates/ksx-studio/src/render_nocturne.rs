@@ -34,6 +34,7 @@ const LIST_SLOT_RACK_EMPTY: &str = "list:nRackEmpty:array";
 const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
 const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
 const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
+const LIST_SLOT_SOCD_EDIT: &str = "list:nSocdEditOpts:array";
 const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
@@ -74,6 +75,9 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nRackCaption": payload.view.rack_caption,
         "nAddLede": payload.view.add_lede,
         "nAddPreset": payload.view.add_preset,
+        "nSocdCls": payload.view.socd_cls,
+        "nSocdNum": payload.view.socd_num,
+        "nSocdLab": payload.view.socd_lab,
         "nPadBadge": payload.view.pad_badge,
         "nPadName": payload.view.pad_name,
         "nPadSub": payload.view.pad_sub,
@@ -151,6 +155,11 @@ fn rack_row(row: &NocturneRackRow) -> SlotValue {
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("href".to_owned(), SlotValue::Text(row.href.clone())),
+        ("up_order".to_owned(), SlotValue::Text(row.up_order.clone())),
+        (
+            "down_order".to_owned(),
+            SlotValue::Text(row.down_order.clone()),
+        ),
     ])
 }
 
@@ -240,7 +249,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 19] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 20] {
     let view = &payload.view;
     [
         (
@@ -298,6 +307,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 19] {
         (
             LIST_SLOT_SOCDS,
             SlotValue::array(view.socd_opts.iter().map(option_row).collect()),
+        ),
+        (
+            LIST_SLOT_SOCD_EDIT,
+            SlotValue::array(view.socd_edit_opts.iter().map(option_row).collect()),
         ),
         (
             LIST_SLOT_BINDS,
@@ -488,7 +501,8 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 19] = [
+        const SERVED_LIST_PREFIXES: [&str; 20] = [
+            "list:nSocdEditOpts:",
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
@@ -509,7 +523,10 @@ mod tests {
             "list:nSocdOpts:",
             "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 52] = [
+        const SERVED_SLOTS: [&str; 55] = [
+            "nSocdCls",
+            "nSocdNum",
+            "nSocdLab",
             "nDevCount",
             "nModeNote",
             "nMacrosHead",
@@ -735,5 +752,68 @@ mod tests {
         ] {
             assert!(out.html.contains(real), "missing served value {real:?}");
         }
+    }
+
+    fn two_staged_slots() -> Vec<ksx_api::StagedSlotView> {
+        vec![
+            ksx_api::StagedSlotView {
+                number: 1,
+                persona_label: "Xbox 360".to_owned(),
+                is_xinput: true,
+                preset: "Player 1".to_owned(),
+                ..Default::default()
+            },
+            ksx_api::StagedSlotView {
+                number: 2,
+                persona_label: "PlayStation".to_owned(),
+                preset: "Player 2".to_owned(),
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// An older daemon serves the roster fields it predates as EMPTY (serde
+    /// default) — and an empty `<select>` renders as a dead blank box. The
+    /// seam degrades each roster to one honest option whose empty value
+    /// posts nothing, and hides the rack's SOCD editor outright, because a
+    /// policy select with no served names would be an invented value.
+    #[test]
+    fn nocturne_degrades_missing_rosters_honestly() {
+        let mut payload = keyboard_payload();
+        payload.staged.slots = two_staged_slots();
+        payload.staged.socd_options = Vec::new();
+        payload.staged.layouts = Vec::new();
+        let payload = payload.derived();
+        let out = render_nocturne(&page(), &payload, None);
+        for honest in [
+            "Daemon default — update ksx to choose a policy",
+            "Empty worksheet — this ksx build serves no starting layouts",
+            "n-socdform none",
+        ] {
+            assert!(
+                out.html.contains(honest),
+                "degraded roster is missing {honest:?}",
+            );
+        }
+    }
+
+    /// With the real policy roster the editor is live for the selected slot,
+    /// and every rack row precomposes its one-swap whole orders (empty at
+    /// the ends — the handler's honest at-that-end answer, not a write).
+    #[test]
+    fn nocturne_orders_the_rack_and_offers_the_socd_editor() {
+        let mut payload = keyboard_payload();
+        payload.staged.slots = two_staged_slots();
+        payload.staged.socd_options = ksx_api::SocdOption::roster();
+        let payload = payload.derived();
+        let out = render_nocturne(&page(), &payload, None);
+        assert!(out.html.contains("Opposites — P1"), "{}", out.html);
+        assert!(
+            !out.html.contains("n-socdform none"),
+            "the SOCD editor should be live when the roster is served",
+        );
+        // Row 1's move-down and row 2's move-up both precompose "2 1"; the
+        // end directions precompose empty orders.
+        assert!(out.html.contains(r#"value="2 1""#), "{}", out.html);
     }
 }

@@ -3812,6 +3812,12 @@ pub struct NocturneRackRow {
     /// The selection link (`/nocturne?slot=N`) — served whole, because a
     /// list body must be bare member reads (the compiler contract).
     pub href: String,
+    /// The whole slot order with this row swapped one place up/down — one
+    /// reorder per click, precomposed server-side (the workspace's rule).
+    /// Empty at that end of the order; the handler answers with the honest
+    /// at-that-end sentence instead of a write.
+    pub up_order: String,
+    pub down_order: String,
 }
 
 /// One free slot the rack shows as an invitation.
@@ -3963,6 +3969,14 @@ pub struct NocturneDerived {
     pub persona_rows: Vec<NocturnePersonaRow>,
     pub layout_opts: Vec<NocturneOptionRow>,
     pub socd_opts: Vec<NocturneOptionRow>,
+    /// The selected slot's opposite-directions editor under the rack:
+    /// visibility class, the slot number the form names, its label, and the
+    /// served policy roster (its own list — the create dialog's `socd_opts`
+    /// already mints a list slot, and one signal cannot feed two lists).
+    pub socd_cls: String,
+    pub socd_num: String,
+    pub socd_lab: String,
+    pub socd_edit_opts: Vec<NocturneOptionRow>,
     /// The stage's meta bar and the binding pane, off the first slot.
     pub pad_badge: String,
     pub pad_name: String,
@@ -4205,11 +4219,18 @@ impl NocturneDerived {
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
         let selected_number = selected.map(|slot| slot.number);
+        let rack_order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
+        let rack_swapped = |a: usize, b: usize| -> String {
+            let mut next = rack_order.clone();
+            next.swap(a, b);
+            next.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
+        };
         let rack_rows: Vec<NocturneRackRow> = if staged.reachable {
             staged
                 .slots
                 .iter()
-                .map(|slot| NocturneRackRow {
+                .enumerate()
+                .map(|(at, slot)| NocturneRackRow {
                     number: slot.number.to_string(),
                     badge: format!("P{}", slot.number),
                     name: slot.persona_label.clone(),
@@ -4223,6 +4244,16 @@ impl NocturneDerived {
                         "n-slot".to_owned()
                     },
                     href: format!("/nocturne?slot={}", slot.number),
+                    up_order: if at == 0 {
+                        String::new()
+                    } else {
+                        rack_swapped(at - 1, at)
+                    },
+                    down_order: if at + 1 == rack_order.len() {
+                        String::new()
+                    } else {
+                        rack_swapped(at, at + 1)
+                    },
                 })
                 .collect()
         } else {
@@ -4296,22 +4327,76 @@ impl NocturneDerived {
                 }
             })
             .collect();
-        let layout_opts: Vec<NocturneOptionRow> = staged
-            .layouts
-            .iter()
-            .map(|layout| NocturneOptionRow {
-                value: layout.id.clone(),
-                label: layout.label.clone(),
-            })
-            .collect();
-        let socd_opts: Vec<NocturneOptionRow> = staged
-            .socd_options
-            .iter()
-            .map(|option| NocturneOptionRow {
-                value: option.name.clone(),
-                label: option.title.clone(),
-            })
-            .collect();
+        // A daemon built before a roster field serves it EMPTY (serde
+        // default) — and an empty `<select>` renders as a dead blank box.
+        // Degrade honestly: one option that says why, whose empty value the
+        // add handler skips, so the daemon's own default applies.
+        let layout_opts: Vec<NocturneOptionRow> = if staged.reachable && staged.layouts.is_empty() {
+            vec![NocturneOptionRow {
+                value: String::new(),
+                label: "Empty worksheet — this ksx build serves no starting layouts".to_owned(),
+            }]
+        } else {
+            staged
+                .layouts
+                .iter()
+                .map(|layout| NocturneOptionRow {
+                    value: layout.id.clone(),
+                    label: layout.label.clone(),
+                })
+                .collect()
+        };
+        let socd_opts: Vec<NocturneOptionRow> =
+            if staged.reachable && staged.socd_options.is_empty() {
+                vec![NocturneOptionRow {
+                    value: String::new(),
+                    label: "Daemon default — update ksx to choose a policy".to_owned(),
+                }]
+            } else {
+                staged
+                    .socd_options
+                    .iter()
+                    .map(|option| NocturneOptionRow {
+                        value: option.name.clone(),
+                        label: option.title.clone(),
+                    })
+                    .collect()
+            };
+        // The selected slot's opposite-directions editor, under the rack.
+        // Hidden when nothing is staged — and when the daemon serves no
+        // policy roster, because a select of names the engine never listed
+        // would be an invented value.
+        let socd_editable =
+            staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
+        let socd_cls = if socd_editable {
+            "n-socdform".to_owned()
+        } else {
+            "n-socdform none".to_owned()
+        };
+        let socd_num = if socd_editable {
+            selected_number.map(|n| n.to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let socd_lab = if socd_editable {
+            selected
+                .map(|slot| format!("Opposites — P{}", slot.number))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let socd_edit_opts: Vec<NocturneOptionRow> = if socd_editable {
+            staged
+                .socd_options
+                .iter()
+                .map(|option| NocturneOptionRow {
+                    value: option.name.clone(),
+                    label: option.title.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let (pad_badge, pad_name, pad_sub) = match selected {
             Some(slot) => (
@@ -4723,6 +4808,10 @@ impl NocturneDerived {
             persona_rows,
             layout_opts,
             socd_opts,
+            socd_cls,
+            socd_num,
+            socd_lab,
+            socd_edit_opts,
             pad_badge,
             pad_name,
             pad_sub,

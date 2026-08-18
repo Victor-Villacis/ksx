@@ -7047,6 +7047,104 @@ fn nocturne_resolves_the_selected_slot_server_side() {
     assert!(page.contains("P2"), "{page}");
 }
 
+/// **The MIGRATED rack ordering + opposite-directions verbs, over HTTP.**
+/// One whole-order reorder per click with the daemon's own renumbering; an
+/// end row's empty order gets the honest at-that-end sentence, not a write;
+/// the SOCD verb renames the selected slot's policy in the served roster's
+/// words; and the re-pointed `/workspace` doors land their answers on
+/// `/nocturne`.
+#[test]
+fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // Every rack row precomposes its one-swap whole orders, empty at the
+    // ends, and the SOCD editor is live for the selected (first) slot.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let rack = api["view"]["rack_rows"].as_array().expect("rack");
+    assert_eq!(rack[0]["up_order"], "", "{api}");
+    assert_eq!(rack[0]["down_order"], "2 1", "{api}");
+    assert_eq!(rack[1]["up_order"], "2 1", "{api}");
+    assert_eq!(rack[1]["down_order"], "", "{api}");
+    assert_eq!(api["view"]["socd_cls"], "n-socdform", "{api}");
+    assert_eq!(api["view"]["socd_num"], "1", "{api}");
+    assert_eq!(api["view"]["socd_lab"], "Opposites — P1", "{api}");
+    assert!(
+        !api["view"]["socd_edit_opts"]
+            .as_array()
+            .expect("roster")
+            .is_empty(),
+        "{api}"
+    );
+
+    // Reorder: one whole-order write; the renumbering is the daemon's.
+    let response = post_form(addr, "/nocturne/controller/move", "order=2+1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /nocturne?flash="),
+        "{response}"
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["rack_rows"][0]["name"], "PlayStation", "{api}");
+    assert_eq!(api["view"]["rack_rows"][1]["name"], "Xbox 360", "{api}");
+
+    // An end row's order is empty: no write, and the honest sentence.
+    let response = post_form(addr, "/nocturne/controller/move", "order=");
+    assert!(response.contains("already%20at%20that%20end"), "{response}");
+
+    // The slot's opposite-directions rule, in the served roster's words.
+    let response = post_form(
+        addr,
+        "/nocturne/controller/socd",
+        "number=1&socd=last-input",
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["rack_rows"][0]["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("SOCD Last press wins")),
+        "{api}"
+    );
+
+    // The old /workspace doors answer on /nocturne now.
+    let via_workspace = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash="),
+        "{via_workspace}"
+    );
+    let via_workspace = post_form(addr, "/workspace/controller/socd", "number=1&socd=off");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash="),
+        "{via_workspace}"
+    );
+}
+
 /// **The MIGRATED configuration menu, over HTTP.** The menu's facts are
 /// served (config identity, games with the broken row's honesty, the
 /// sign-in task in /start's exact vocabulary); adopt refuses over content

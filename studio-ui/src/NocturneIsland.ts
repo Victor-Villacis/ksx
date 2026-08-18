@@ -49,6 +49,10 @@ export interface NocturneRackRowView {
   meta: string;
   cls: string;
   href: string;
+  /** The whole slot order with this row swapped one place — precomposed
+   *  server-side; empty at that end of the order. */
+  up_order: string;
+  down_order: string;
 }
 
 export interface NocturneEmptyRowView {
@@ -144,6 +148,10 @@ export interface NocturneView {
   persona_rows: NocturnePersonaRowView[];
   layout_opts: NocturneOptionRowView[];
   socd_opts: NocturneOptionRowView[];
+  socd_cls: string;
+  socd_num: string;
+  socd_lab: string;
+  socd_edit_opts: NocturneOptionRowView[];
   pad_badge: string;
   pad_name: string;
   pad_sub: string;
@@ -231,6 +239,13 @@ const [nAddPreset, setNAddPreset] = createSignal("");
 const [nPersonaRows, setNPersonaRows] = createSignal<NocturnePersonaRowView[]>([]);
 const [nLayoutOpts, setNLayoutOpts] = createSignal<NocturneOptionRowView[]>([]);
 const [nSocdOpts, setNSocdOpts] = createSignal<NocturneOptionRowView[]>([]);
+// The rack's opposite-directions editor for the SELECTED slot. Its roster is
+// a SEPARATE served list from the dialog's `nSocdOpts` — one signal cannot
+// feed two createLists (the slot names would collide).
+const [nSocdCls, setNSocdCls] = createSignal("n-socdform none");
+const [nSocdNum, setNSocdNum] = createSignal("");
+const [nSocdLab, setNSocdLab] = createSignal("");
+const [nSocdEditOpts, setNSocdEditOpts] = createSignal<NocturneOptionRowView[]>([]);
 const [nPadBadge, setNPadBadge] = createSignal("");
 const [nPadName, setNPadName] = createSignal("");
 const [nPadSub, setNPadSub] = createSignal("");
@@ -310,6 +325,10 @@ export function applyNocturne(p: NocturnePayload): void {
   setNPersonaRows(v.persona_rows);
   setNLayoutOpts(v.layout_opts);
   setNSocdOpts(v.socd_opts);
+  setNSocdCls(v.socd_cls);
+  setNSocdNum(v.socd_num);
+  setNSocdLab(v.socd_lab);
+  setNSocdEditOpts(v.socd_edit_opts);
   setNPadBadge(v.pad_badge);
   setNPadName(v.pad_name);
   setNPadSub(v.pad_sub);
@@ -1534,7 +1553,22 @@ export function NocturneIsland() {
         // The rack: each staged controller with its duplicate/remove verbs.
         createList(
           () => nRackRows(),
-          (r) => r.number + "|" + r.badge + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.href,
+          (r) =>
+            r.number +
+            "|" +
+            r.badge +
+            "|" +
+            r.name +
+            "|" +
+            r.meta +
+            "|" +
+            r.cls +
+            "|" +
+            r.href +
+            "|" +
+            r.up_order +
+            "|" +
+            r.down_order,
           (r) =>
             h(
               "div",
@@ -1553,9 +1587,23 @@ export function NocturneIsland() {
                   h("span", { class: "n-slot-meta" }, r.meta),
                 ),
               ),
+              // One whole-order reorder per click; an end row's order is
+              // empty and the server answers with the honest sentence.
               h(
                 "form",
-                { class: "n-inline first", method: "post", action: "/nocturne/controller/duplicate" },
+                { class: "n-inline first", method: "post", action: "/nocturne/controller/move" },
+                h("input", { type: "hidden", name: "order", value: r.up_order }),
+                h("button", { class: "n-slot-act", type: "submit", title: "Move up" }, "▴"),
+              ),
+              h(
+                "form",
+                { class: "n-inline", method: "post", action: "/nocturne/controller/move" },
+                h("input", { type: "hidden", name: "order", value: r.down_order }),
+                h("button", { class: "n-slot-act", type: "submit", title: "Move down" }, "▾"),
+              ),
+              h(
+                "form",
+                { class: "n-inline", method: "post", action: "/nocturne/controller/duplicate" },
                 h("input", { type: "hidden", name: "number", value: r.number }),
                 h("button", { class: "n-slot-act", type: "submit", title: "Duplicate" }, "⧉"),
               ),
@@ -1583,6 +1631,29 @@ export function NocturneIsland() {
                 h("span", { class: "n-slot-meta" }, "any persona"),
               ),
             ),
+        ),
+        // The selected slot's opposite-directions rule — the create dialog
+        // sets it at birth; this changes it afterwards. Hidden when nothing
+        // is staged or the daemon serves no policy roster (an older build).
+        h(
+          "form",
+          {
+            method: "post",
+            action: "/nocturne/controller/socd",
+            class: () => nSocdCls(),
+          },
+          h("span", { class: "n-socd-lab" }, () => nSocdLab()),
+          h("input", { type: "hidden", name: "number", value: () => nSocdNum() }),
+          h(
+            "select",
+            { class: "n-socd-sel", name: "socd" },
+            createList(
+              () => nSocdEditOpts(),
+              (o) => o.value + "|" + o.label,
+              (o) => h("option", { value: o.value }, o.label),
+            ),
+          ),
+          h("button", { class: "n-socd-set", type: "submit" }, "Set"),
         ),
         h(
           "p",

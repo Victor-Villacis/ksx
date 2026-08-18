@@ -3743,6 +3743,12 @@ pub struct NocturnePayload {
     pub autostart_read: Option<ksx_api::AutostartView>,
     #[serde(default)]
     pub autostart_error: String,
+    /// The `?slot=N` the request asked for — SERVER-resolved against the
+    /// staged roster (a number the draft does not have falls back to the
+    /// first slot), so selection works with no JavaScript and survives a
+    /// reload.
+    #[serde(default)]
+    pub selected: Option<u8>,
     /// Every sentence and row the page renders, composed once, here.
     #[serde(default)]
     pub view: NocturneDerived,
@@ -3803,6 +3809,9 @@ pub struct NocturneRackRow {
     pub name: String,
     pub meta: String,
     pub cls: String,
+    /// The selection link (`/nocturne?slot=N`) — served whole, because a
+    /// list body must be bare member reads (the compiler contract).
+    pub href: String,
 }
 
 /// One free slot the rack shows as an invitation.
@@ -4158,6 +4167,15 @@ impl NocturneDerived {
         let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
         let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
 
+        // The selected slot: the `?slot=N` the request asked for when the
+        // draft still has it, else the first — resolved HERE so every pane
+        // (rack mark, binding rows, board shorts, stage family) follows one
+        // answer.
+        let selected = p
+            .selected
+            .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
+            .or_else(|| staged.slots.first());
+        let selected_number = selected.map(|slot| slot.number);
         let rack_rows: Vec<NocturneRackRow> = if staged.reachable {
             staged
                 .slots
@@ -4170,7 +4188,12 @@ impl NocturneDerived {
                         "\"{}\" · {} bound · SOCD {}",
                         slot.preset, slot.bindings, slot.socd_label
                     ),
-                    cls: "n-slot on".to_owned(),
+                    cls: if selected_number == Some(slot.number) {
+                        "n-slot on".to_owned()
+                    } else {
+                        "n-slot".to_owned()
+                    },
+                    href: format!("/nocturne?slot={}", slot.number),
                 })
                 .collect()
         } else {
@@ -4261,7 +4284,6 @@ impl NocturneDerived {
             })
             .collect();
 
-        let selected = staged.slots.first();
         let (pad_badge, pad_name, pad_sub) = match selected {
             Some(slot) => (
                 format!("P{}", slot.number),

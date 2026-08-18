@@ -147,6 +147,7 @@ fn rack_row(row: &NocturneRackRow) -> SlotValue {
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("href".to_owned(), SlotValue::Text(row.href.clone())),
     ])
 }
 
@@ -441,6 +442,7 @@ mod tests {
             games_error: String::new(),
             autostart_read: Some(ksx_api::AutostartView::default()),
             autostart_error: String::new(),
+            selected: None,
             view: Default::default(),
         }
         .derived()

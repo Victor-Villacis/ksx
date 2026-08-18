@@ -6867,6 +6867,66 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     );
 }
 
+/// **Slot selection is server-resolved.** `?slot=N` picks which controller
+/// every pane follows — the rack mark, the binding title, the stage family —
+/// and a number the draft does not have falls back to the first slot instead
+/// of a dead page.
+#[test]
+fn nocturne_resolves_the_selected_slot_server_side() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2"))).expect("payload");
+    assert!(
+        api["view"]["bind_title"]
+            .as_str()
+            .is_some_and(|title| title.contains("P2")),
+        "{api}"
+    );
+    let rack = api["view"]["rack_rows"].as_array().expect("rack");
+    assert_eq!(rack[0]["cls"], "n-slot", "{api}");
+    assert_eq!(rack[1]["cls"], "n-slot on", "{api}");
+    // The second slot is the PlayStation draft: the stage follows its family.
+    assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap", "{api}");
+
+    // A slot this draft does not have falls back to the first.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=9"))).expect("payload");
+    assert!(
+        api["view"]["bind_title"]
+            .as_str()
+            .is_some_and(|title| title.contains("P1")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["rack_rows"][0]["cls"], "n-slot on", "{api}");
+
+    // The page itself resolves the same way (SSR paints the selection).
+    let page = rendered_body(&get(addr, "/nocturne?slot=2"));
+    assert!(page.contains("P2"), "{page}");
+}
+
 /// **The MIGRATED configuration menu, over HTTP.** The menu's facts are
 /// served (config identity, games with the broken row's honesty, the
 /// sign-in task in /start's exact vocabulary); adopt refuses over content

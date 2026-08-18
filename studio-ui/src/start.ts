@@ -126,7 +126,7 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
       // A successful capture transition replaces the whole show branch. Do
       // not touch a detached button; the newly rendered branch owns its own
       // enabled state.
-      if (control.isConnected) control.disabled = false;
+      control.disabled = false;
     });
     if (identifyButton?.isConnected) identifyButton.textContent = identifyButtonText;
     if (identifyHelp?.isConnected) identifyHelp.textContent = identifyHelpText;

@@ -24,8 +24,12 @@ void NocturnePage; // compile-time anchor only (see above)
 const POLL_MS = 2000;
 
 async function poll(): Promise<void> {
+  // The poller echoes the page's own selection, so the payload it copies is
+  // the one this URL's SSR would paint (the workspace's rule).
+  const slot = new URLSearchParams(window.location.search).get("slot");
+  const url = slot ? `/api/nocturne?slot=${encodeURIComponent(slot)}` : "/api/nocturne";
   try {
-    applyNocturne(await fetchJSON<NocturnePayload>("/api/nocturne"));
+    applyNocturne(await fetchJSON<NocturnePayload>(url));
   } catch {
     applyNocturneUnreachable();
   }
@@ -87,8 +91,13 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
     applyFlash("error: request failed — is ksx studio still running?");
   } finally {
     pendingForms.delete(form);
+    // Unconditionally: a createShow'd dialog UNMOUNTS when applyFlash closes
+    // it, but its tree is CACHED and returns on the next open — a button
+    // skipped here because it was disconnected came back permanently
+    // disabled (the second Create-a-controller silently did nothing until a
+    // full reload). Setting `disabled` on a detached node is harmless.
     submits.forEach((control) => {
-      if (control.isConnected) control.disabled = false;
+      control.disabled = false;
     });
   }
   void poll();

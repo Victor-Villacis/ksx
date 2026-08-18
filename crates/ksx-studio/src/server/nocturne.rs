@@ -228,7 +228,7 @@ fn nocturne_redirect(flash: &str) -> Response {
 /// One fresh payload: the staged setup and the device enumeration, each
 /// degrading to its own honest value (`SURFACES.md` §1b). Never cached — a
 /// keyboard plugged in while the page is open appears at the next poll.
-pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
+pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) -> NocturnePayload {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
@@ -256,6 +256,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
             scan,
             session,
             unavailable,
+            selected: slot,
             setup,
             setup_error,
             games,
@@ -280,6 +281,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
             games_error: "the games read panicked".to_owned(),
             autostart_read: None,
             autostart_error: "the sign-in read panicked".to_owned(),
+            selected: None,
             view: Default::default(),
         }
         .derived()
@@ -287,11 +289,20 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>) -> NocturnePayload {
 }
 
 /// `GET /nocturne` — the page, server-rendered from the real keyboard facts.
+/// The page's query: the action flash, and WHICH controller the page is
+/// looking at — selection is a server-resolved link (the workspace's rule),
+/// so it works with no JavaScript and survives a reload.
+#[derive(Deserialize)]
+pub(super) struct NocturneQuery {
+    flash: Option<String>,
+    slot: Option<u8>,
+}
+
 pub(super) async fn nocturne_page_handler(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<NocturneQuery>,
 ) -> Response {
-    let payload = collect_nocturne(&state).await;
+    let payload = collect_nocturne(&state, query.slot).await;
     let flash = nocturne_flash_from_query(query.flash.as_deref());
     let out = render_nocturne(&state.nocturne_page, &payload, flash.as_deref());
     (
@@ -313,8 +324,11 @@ pub(super) async fn nocturne_page_handler(
 }
 
 /// The 2 s poller's endpoint — the SAME payload the page embeds.
-pub(super) async fn api_nocturne(State(state): State<Arc<AppState>>) -> Response {
-    let payload = collect_nocturne(&state).await;
+pub(super) async fn api_nocturne(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<NocturneQuery>,
+) -> Response {
+    let payload = collect_nocturne(&state, query.slot).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),

@@ -48,6 +48,7 @@ export interface NocturneRackRowView {
   name: string;
   meta: string;
   cls: string;
+  href: string;
 }
 
 export interface NocturneEmptyRowView {
@@ -974,6 +975,15 @@ export function nocturneWire(root: HTMLElement): void {
   });
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
+    // Slot selection: enhance the server-resolved ?slot=N link into an
+    // in-place URL swap + immediate poll — no full reload, same truth.
+    const sel = target?.closest<HTMLAnchorElement>("a.n-slot-sel");
+    if (sel) {
+      ev.preventDefault();
+      window.history.pushState(null, "", sel.getAttribute("href") ?? "/nocturne");
+      nocturnePollFn();
+      return;
+    }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
     if (!hit) {
       // Any un-annotated click closes the open configuration menu (a
@@ -1353,17 +1363,24 @@ export function NocturneIsland() {
         // The rack: each staged controller with its duplicate/remove verbs.
         createList(
           () => nRackRows(),
-          (r) => r.number + "|" + r.badge + "|" + r.name + "|" + r.meta + "|" + r.cls,
+          (r) => r.number + "|" + r.badge + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.href,
           (r) =>
             h(
               "div",
               { class: r.cls },
-              h("span", { class: "n-pbadge" }, r.badge),
+              // Clicking the row's identity SELECTS it: a server-resolved
+              // link (?slot=N), so every pane follows with no JavaScript;
+              // with it, the wire swaps the URL and polls in place.
               h(
-                "div",
-                { class: "n-slot-txt" },
-                h("div", { class: "n-slot-name" }, r.name),
-                h("div", { class: "n-slot-meta" }, r.meta),
+                "a",
+                { class: "n-slot-sel", href: r.href },
+                h("span", { class: "n-pbadge" }, r.badge),
+                h(
+                  "span",
+                  { class: "n-slot-txt" },
+                  h("span", { class: "n-slot-name" }, r.name),
+                  h("span", { class: "n-slot-meta" }, r.meta),
+                ),
               ),
               h(
                 "form",

@@ -47,6 +47,13 @@ pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bin
 pub(super) const N_APPLY_ERROR: &str = "error: The changes could not be applied. The running \
      session was not changed; reopen ksx and try again.";
 
+pub(super) const N_UNDO_OK: &str =
+    "Controller restored with its bindings. Nothing has been saved or started.";
+
+pub(super) const N_UNDO_GONE: &str = "error: That removal can no longer be undone — the short      undo window has passed. Nothing was changed.";
+
+pub(super) const N_UNDO_FULL: &str = "error: Every controller slot is staged again, so the      removed controller has nowhere to return. Nothing was changed.";
+
 pub(super) const N_ADD_LAYOUT_ERROR: &str = "error: That starting layout has no key block for this player number, so the controller was not added. Try another layout or Empty; nothing was changed.";
 
 pub(super) const N_DUP_OK: &str =
@@ -176,8 +183,11 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 49] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 52] = [
     N_MOVE_AT_END,
+    N_UNDO_OK,
+    N_UNDO_GONE,
+    N_UNDO_FULL,
     N_APPLY_OK,
     N_APPLY_RESTART,
     N_APPLY_ERROR,
@@ -274,12 +284,31 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) ->
             Ok(view) => (Some(view), String::new()),
             Err(refusal) => (None, flash_of(refusal)),
         };
+        // The undo chip: composed from the SERVER-held stash while its
+        // window is open; an expired stash is dropped here so a late click
+        // cannot find it either.
+        let undo_label = {
+            let mut held = state.nocturne_undo.lock().unwrap();
+            if held
+                .as_ref()
+                .is_some_and(|stash| stash.at.elapsed() > NOCTURNE_UNDO_WINDOW)
+            {
+                *held = None;
+            }
+            held.as_ref().map(|stash| {
+                format!(
+                    "P{} ({}) removed — its bindings are held for a moment",
+                    stash.slot.number, stash.slot.persona_label
+                )
+            })
+        };
         NocturnePayload {
             staged,
             scan,
             session,
             unavailable,
             selected: slot,
+            undo_label,
             setup,
             setup_error,
             games,
@@ -305,6 +334,7 @@ pub(super) async fn collect_nocturne(state: &Arc<AppState>, slot: Option<u8>) ->
             autostart_read: None,
             autostart_error: "the sign-in read panicked".to_owned(),
             selected: None,
+            undo_label: None,
             view: Default::default(),
         }
         .derived()
@@ -715,6 +745,20 @@ pub(super) async fn nocturne_form_capture_release(
 
 // ── The rack (moved from /workspace) and the session verbs ─────────────────
 
+/// Everything needed to put a removed controller back: held in
+/// `AppState.nocturne_undo` for [`NOCTURNE_UNDO_WINDOW`], SERVER-side —
+/// the design's 6-second undo chip, without ever handing the browser an
+/// authoring table it could edit.
+pub(super) struct NocturneUndoStash {
+    /// The removed slot's whole served view — this crate deliberately knows
+    /// nothing about the preset vocabulary at runtime (`ksx-config` is
+    /// test-only here), so the stash speaks `ksx_api` types wholesale.
+    pub slot: ksx_api::StagedSlotView,
+    pub at: std::time::Instant,
+}
+
+pub(super) const NOCTURNE_UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(6);
+
 /// Run one staging edit off the async workers and 303 back with this page's
 /// sentence. One value in the daemon and nothing else — no file, no driver,
 /// no session (`FIRST-RUN.md` §2), which is why there is no confirm step.
@@ -802,18 +846,98 @@ pub(super) async fn nocturne_form_add(
     nocturne_redirect(flash)
 }
 
-/// POST /nocturne/controller/remove (and /workspace/controller/remove).
+/// POST /nocturne/controller/remove (and /workspace/controller/remove) —
+/// the slot's resurrection material is stashed BEFORE the removal, so the
+/// rack can offer the short undo window. An older daemon serves no
+/// authoring table; then nothing is stashed and no chip makes a promise
+/// the server cannot keep.
 pub(super) async fn nocturne_form_remove(
     State(state): State<Arc<AppState>>,
     Form(form): Form<NocturneSlotForm>,
 ) -> Response {
-    nocturne_stage_edit(
-        state,
-        ksx_api::StageEdit::RemoveSlot {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let stash = staged
+            .slots
+            .iter()
+            .find(|slot| slot.number == form.number && slot.authoring.is_some())
+            .map(|slot| NocturneUndoStash {
+                slot: slot.clone(),
+                at: std::time::Instant::now(),
+            });
+        let removed = state.control.stage_edit(&ksx_api::StageEdit::RemoveSlot {
             number: form.number,
-        },
-    )
+        });
+        if removed.ok {
+            *state.nocturne_undo.lock().unwrap() = stash;
+            N_EDIT_OK
+        } else {
+            N_EDIT_ERROR
+        }
+    })
     .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+/// POST /nocturne/controller/undo — put the last removed controller back:
+/// add + set-bindings + set-socd from the SERVER-held stash (the
+/// duplicate's composition), at its own number when that is still free.
+/// One shot: the stash is consumed whatever happens next.
+pub(super) async fn nocturne_form_undo(State(state): State<Arc<AppState>>) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let Some(stash) = state.nocturne_undo.lock().unwrap().take() else {
+            return N_UNDO_GONE;
+        };
+        if stash.at.elapsed() > NOCTURNE_UNDO_WINDOW {
+            return N_UNDO_GONE;
+        }
+        let Some(authoring) = stash.slot.authoring else {
+            return N_UNDO_GONE;
+        };
+        let staged = state.control.staged();
+        let number = if staged
+            .slots
+            .iter()
+            .any(|slot| slot.number == stash.slot.number)
+        {
+            match staged.next_slot {
+                Some(next) => next,
+                None => return N_UNDO_FULL,
+            }
+        } else {
+            stash.slot.number
+        };
+        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: Some(number),
+            persona: stash.slot.persona,
+            preset: stash.slot.preset,
+            layout: None,
+        });
+        if !added.ok {
+            return N_EDIT_ERROR;
+        }
+        let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+            number,
+            preset: Box::new(authoring),
+        });
+        if !bound.ok {
+            let _ = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+            return N_EDIT_ERROR;
+        }
+        if !stash.slot.socd.is_empty() && stash.slot.socd != "off" {
+            let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+                number,
+                socd: stash.slot.socd,
+            });
+        }
+        N_UNDO_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
 }
 
 #[derive(Deserialize)]

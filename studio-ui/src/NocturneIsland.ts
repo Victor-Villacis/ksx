@@ -158,6 +158,8 @@ export interface NocturneView {
   pad_badge: string;
   pad_badge_cls: string;
   kb_cls: string;
+  undo_cls: string;
+  undo_label: string;
   stage_word: string;
   pad_name: string;
   pad_sub: string;
@@ -268,6 +270,8 @@ const [nSocdEditOpts, setNSocdEditOpts] = createSignal<NocturneOptionRowView[]>(
 const [nPadBadge, setNPadBadge] = createSignal("");
 const [nPadBadgeCls, setNPadBadgeCls] = createSignal("n-pbadge");
 const [nKbCls, setNKbCls] = createSignal("n-kb");
+const [nUndoCls, setNUndoCls] = createSignal("n-undochip none");
+const [nUndoLabel, setNUndoLabel] = createSignal("");
 const [nStageWord, setNStageWord] = createSignal("");
 const [nPadName, setNPadName] = createSignal("");
 const [nPadSub, setNPadSub] = createSignal("");
@@ -371,6 +375,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNPadBadge(v.pad_badge);
   setNPadBadgeCls(v.pad_badge_cls);
   setNKbCls(v.kb_cls);
+  setNUndoCls(v.undo_cls);
+  setNUndoLabel(v.undo_label);
   setNStageWord(v.stage_word);
   setNPadName(v.pad_name);
   setNPadSub(v.pad_sub);
@@ -1804,6 +1810,21 @@ export function NocturneIsland() {
                 h("span", { class: "n-slot-meta" }, "any persona"),
               ),
             ),
+        ),
+        // The short undo window after a removal: the SERVER holds the
+        // controller's resurrection material and serves this chip while it
+        // does; the verb replays it. No JavaScript state — a reload keeps
+        // the chip as long as the window lasts.
+        h(
+          "form",
+          {
+            role: "status",
+            method: "post",
+            action: "/nocturne/controller/undo",
+            class: () => nUndoCls(),
+          },
+          h("span", { class: "n-undo-lab" }, () => nUndoLabel()),
+          h("button", { class: "n-undo-btn", type: "submit" }, "Undo"),
         ),
         // The selected slot's opposite-directions rule — the create dialog
         // sets it at birth; this changes it afterwards. Hidden when nothing

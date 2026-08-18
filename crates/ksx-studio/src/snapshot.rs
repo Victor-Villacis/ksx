@@ -3749,6 +3749,10 @@ pub struct NocturnePayload {
     /// reload.
     #[serde(default)]
     pub selected: Option<u8>,
+    /// The undo chip's sentence while the server still holds a removed
+    /// controller's resurrection material (`server/nocturne.rs` stash).
+    #[serde(default)]
+    pub undo_label: Option<String>,
     /// Every sentence and row the page renders, composed once, here.
     #[serde(default)]
     pub view: NocturneDerived,
@@ -4016,6 +4020,10 @@ pub struct NocturneDerived {
     pub bind_g_cls: String,
     /// The board wrapper's class — the ramp digit tints the bound caps.
     pub kb_cls: String,
+    /// The rack's undo chip: visible while the server holds a removed
+    /// controller, with the sentence naming it.
+    pub undo_cls: String,
+    pub undo_label: String,
     /// The stage's quiet across-the-room state word ("Running" or empty).
     pub stage_word: String,
     pub bind_foot: String,
@@ -4467,6 +4475,10 @@ impl NocturneDerived {
         let kb_cls = match ramp {
             Some(digit) => format!("n-kb np{digit}"),
             None => "n-kb".to_owned(),
+        };
+        let (undo_cls, undo_label) = match p.undo_label.as_ref() {
+            Some(label) => ("n-undochip".to_owned(), label.clone()),
+            None => ("n-undochip none".to_owned(), String::new()),
         };
         // The quiet across-the-room state word inside the stage — from the
         // polled session, never invented.
@@ -4939,6 +4951,8 @@ impl NocturneDerived {
             pad_badge,
             pad_badge_cls,
             kb_cls,
+            undo_cls,
+            undo_label,
             stage_word,
             pad_name,
             pad_sub,

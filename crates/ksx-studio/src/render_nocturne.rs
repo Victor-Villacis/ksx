@@ -87,6 +87,8 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nPadBadge": payload.view.pad_badge,
         "nPadBadgeCls": payload.view.pad_badge_cls,
         "nKbCls": payload.view.kb_cls,
+        "nUndoCls": payload.view.undo_cls,
+        "nUndoLabel": payload.view.undo_label,
         "nStageWord": payload.view.stage_word,
         "nPadName": payload.view.pad_name,
         "nPadSub": payload.view.pad_sub,
@@ -527,6 +529,7 @@ mod tests {
             autostart_read: Some(ksx_api::AutostartView::default()),
             autostart_error: String::new(),
             selected: None,
+            undo_label: None,
             view: Default::default(),
         }
         .derived()
@@ -568,7 +571,9 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 66] = [
+        const SERVED_SLOTS: [&str; 68] = [
+            "nUndoCls",
+            "nUndoLabel",
             "nKbCls",
             "nStageWord",
             "nApplyCls",

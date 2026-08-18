@@ -6851,6 +6851,42 @@ a.wsrow-title:hover {
   line-height: 1.45;
 }
 
+/* The short undo window after a removal (role=status chip). */
+.n-undochip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 9px;
+  background: var(--n-accent-tint);
+}
+
+.n-undochip.none {
+  display: none;
+}
+
+.n-undo-lab {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--n-text-2);
+}
+
+.n-undo-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: none;
+  background: none;
+  color: var(--n-accent-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* The selected slot's opposite-directions editor, under the rack. */
 .n-socdform {
   display: flex;

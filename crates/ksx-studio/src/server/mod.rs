@@ -141,6 +141,10 @@ struct AppState {
     /// `Arc`, not `Box`, because every SSE connection hands a handle to its own
     /// blocking bridge thread.
     live: Arc<dyn ksx_api::LiveSource>,
+    /// The last REMOVED controller, held SERVER-side for the rack's short
+    /// undo window — the browser is shown a chip and a verb, never the
+    /// authoring table (`server/nocturne.rs`).
+    nocturne_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
 }
 
 /// Serve the page until the process is killed (Ctrl+C included — no
@@ -187,6 +191,7 @@ pub fn serve(
         control,
         machine,
         live,
+        nocturne_undo: std::sync::Mutex::new(None),
     });
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -227,6 +232,7 @@ pub fn serve(
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/controller", post(nocturne_form_add))
             .route("/nocturne/controller/remove", post(nocturne_form_remove))
+            .route("/nocturne/controller/undo", post(nocturne_form_undo))
             .route("/nocturne/controller/move", post(nocturne_form_move))
             .route("/nocturne/controller/socd", post(nocturne_form_socd))
             .route(

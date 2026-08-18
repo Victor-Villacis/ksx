@@ -7219,6 +7219,85 @@ fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
     );
 }
 
+/// **The undo chip over HTTP**: removing a controller stashes its whole
+/// slot view SERVER-side; the chip is served while the window holds; Undo
+/// replays add + bindings + socd and consumes the stash — a second Undo
+/// gets the honest gone sentence, as does an Undo nobody earned.
+#[test]
+fn nocturne_undoes_a_removal_from_the_server_held_stash() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::SetSocd {
+            number: 2,
+            socd: "last-input".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // Nothing removed yet: no chip, and an unearned Undo says so.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+
+    // Remove P2: the chip appears naming it.
+    let bindings_before = control.staged().slots[1].bindings;
+    assert!(bindings_before > 0);
+    let response = post_form(addr, "/nocturne/controller/remove", "number=2");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip", "{api}");
+    assert!(
+        api["view"]["undo_label"]
+            .as_str()
+            .is_some_and(|label| label.contains("P2") && label.contains("PlayStation")),
+        "{api}"
+    );
+
+    // Undo: the controller returns whole — persona, preset, bindings, SOCD.
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("Controller%20restored"), "{response}");
+    let staged = control.staged();
+    assert_eq!(staged.slots.len(), 2, "{staged:?}");
+    let restored = staged
+        .slots
+        .iter()
+        .find(|slot| slot.number == 2)
+        .expect("P2 back");
+    assert_eq!(restored.persona, "playstation");
+    assert_eq!(restored.preset, "Player 2");
+    assert_eq!(restored.bindings, bindings_before);
+    assert_eq!(restored.socd, "last-input");
+
+    // The stash is consumed: no chip, and a second Undo is honest.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+}
+
 /// **Apply-in-place over HTTP** (`stage_apply`, M1b F3's UI): the button is
 /// served only while a session runs AND the draft is dirty; the verb
 /// flashes the daemon's three shapes — applied in place, `needs-restart`

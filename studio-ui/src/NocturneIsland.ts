@@ -1171,6 +1171,42 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
   }
 }
 
+/** Stage art → binding row (the pointer enhancement's worker). A multi-fn
+ *  hook (a stick's click + four directions) lands on its FIRST function —
+ *  the control itself; the face-button case difference (mapper UPPERCASE vs
+ *  lowercase zones) is matched away. */
+function locateBindRow(root: HTMLElement, fns: string): void {
+  const want = (fns.trim().split(/\s+/)[0] ?? "").toLowerCase();
+  if (!want) return;
+  const row = Array.from(root.querySelectorAll<HTMLDetailsElement>("details.n-bind")).find(
+    (el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === want,
+  );
+  if (!row) return;
+  // The pane must be visible to receive the jump.
+  if (ui.rightRail) {
+    ui.rightRail = false;
+    saveUiPrefs();
+    applyNocturneUi();
+  }
+  // A filter hiding the row yields to the explicit click.
+  if (row.classList.contains("hide")) {
+    const input = root.querySelector<HTMLInputElement>(".n-filter-in");
+    if (input) input.value = "";
+    applyNocturneFilter(root, "");
+    mergeQuery({ q: null });
+  }
+  row.open = true;
+  row.scrollIntoView({
+    block: "nearest",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
+  // Restart the pulse even on a repeated click of the same control.
+  row.classList.remove("locate");
+  void row.offsetWidth;
+  row.classList.add("locate");
+  window.setTimeout(() => row.classList.remove("locate"), 1600);
+}
+
 /** Delegated events on the island root (the map.ts idiom): every interactive
  *  control carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
@@ -1214,6 +1250,16 @@ export function nocturneWire(root: HTMLElement): void {
       const chosen = new URL(sel.href, window.location.origin).searchParams.get("slot");
       mergeQuery({ slot: chosen });
       nocturnePollFn();
+      return;
+    }
+    // Stage art → binding row: every control on the silhouette already
+    // carries its mapper function(s) in data-fn (the live-echo hooks), so a
+    // click jumps the right pane to that row. A POINTER ENHANCEMENT only —
+    // the rows themselves stay the accessible, no-JS path.
+    const zone = target?.closest<Element>(".n-stage [data-fn]");
+    if (zone) {
+      closeMenu();
+      locateBindRow(root, zone.getAttribute("data-fn") ?? "");
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;

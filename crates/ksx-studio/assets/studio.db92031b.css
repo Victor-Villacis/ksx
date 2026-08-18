@@ -7618,6 +7618,34 @@ a.wsrow-title:hover {
   opacity: 0.75;
 }
 
+/* Stage art is clickable: any control jumps to its binding row. */
+.n-stage [data-fn] {
+  cursor: pointer;
+}
+
+.n-bind.locate {
+  animation: n-locate 1.5s ease-out;
+}
+
+@keyframes n-locate {
+  0% {
+    box-shadow:
+      0 0 0 2px var(--n-accent-line),
+      0 0 18px var(--n-accent-tint);
+  }
+
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-bind.locate {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--n-accent-line);
+  }
+}
+
 .n-right-foot {
   margin-top: 14px;
   padding: 8px 4px 0;

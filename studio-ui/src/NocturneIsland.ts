@@ -769,6 +769,9 @@ function syncExpandLabel(): void {
 // The stage's assign cue — pure interaction state, like the learn banner.
 const [nAssignCueCls, setNAssignCueCls] = createSignal("n-assign-cue none");
 const [nAssignCueText, setNAssignCueText] = createSignal("");
+// The keyboard's learn cue — the mirror: a control is waiting for a key.
+const [nKeyCueCls, setNKeyCueCls] = createSignal("n-key-cue none");
+const [nKeyCueText, setNKeyCueText] = createSignal("");
 
 const [nApplyOpen, setNApplyOpen] = createSignal(false);
 const [nApplyMsg, setNApplyMsg] = createSignal("");
@@ -853,13 +856,21 @@ function disarmFocusGuard(): void {
 
 function markArmedRow(fnName: string | null): void {
   if (!learnRoot) return;
-  for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm"))) {
+  for (const el of Array.from(
+    learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-stage .arm"),
+  )) {
     el.classList.remove("arm");
   }
   if (fnName !== null) {
     learnRoot
       .querySelector<HTMLElement>(`.n-bind[data-fn="${CSS.escape(fnName)}"]`)
       ?.classList.add("arm");
+    // The waiting control glows on the pad too — the armed key's mirror.
+    const want = fnName.toLowerCase();
+    for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-stage [data-fn]"))) {
+      const fns = (el.getAttribute("data-fn") ?? "").toLowerCase().split(/\s+/);
+      if (fns.includes(want)) el.classList.add("arm");
+    }
   }
 }
 
@@ -867,11 +878,14 @@ function armLearnUi(row: LearnTarget): void {
   setNLearnCls("n-learnbar listen");
   setNLearnText(`Press the panel key for P${row.slot} · ${row.label}`);
   setNLearnSub(`${learnSentence(row.mode)} Esc cancels.`);
+  setNKeyCueCls("n-key-cue");
+  setNKeyCueText(`Waiting — press a key for ${row.label}, or click one below`);
   markArmedRow(row.fn);
 }
 
 function disarmLearnUi(): void {
   setNLearnCls("n-learnbar none");
+  setNKeyCueCls("n-key-cue none");
   markArmedRow(null);
 }
 
@@ -1635,7 +1649,31 @@ export function nocturneWire(root: HTMLElement): void {
         );
         return;
       }
-      locateBindRow(root, zone.getAttribute("data-fn") ?? "");
+      // The mirror of the key-first flow: clicking a control ARMS its
+      // learn — press a key, or click one on the board. The controls view
+      // opens on the armed row (no fold, no fade: the arm wash waits).
+      const rowEl = Array.from(
+        root.querySelectorAll<HTMLElement>("details.n-bind[data-fn]"),
+      ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName);
+      const rowFn = rowEl?.getAttribute("data-fn") ?? fnName;
+      const rowLabel = rowEl?.querySelector(".n-bind-label")?.textContent?.trim() || fnName;
+      if (ui.rightView !== "controls") {
+        ui.rightView = "controls";
+        saveUiPrefs();
+        applyNocturneUi();
+      }
+      if (ui.rightRail) {
+        ui.rightRail = false;
+        saveUiPrefs();
+        applyNocturneUi();
+      }
+      rowEl?.scrollIntoView({
+        block: "nearest",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+      void startLearn({ fn: rowFn, label: rowLabel, slot: nSlotVal(), mode: "replace" });
       return;
     }
     // A board cap flips the pane to the BY-KEY view and finds its row —
@@ -1644,6 +1682,13 @@ export function nocturneWire(root: HTMLElement): void {
     if (cap) {
       closeMenu();
       const key = cap.getAttribute("data-key") ?? "";
+      if (learnRow && key) {
+        // A control is waiting: clicking a cap IS pressing the key.
+        const row = learnRow;
+        void cancelLearn();
+        void writeLearnedKey(row, key, false);
+        return;
+      }
       ui.rightView = "keys";
       saveUiPrefs();
       applyNocturneUi();
@@ -2609,6 +2654,12 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-kbhead" },
+          h(
+            "div",
+            { "aria-hidden": "true", class: () => nKeyCueCls() },
+            h("span", { class: "n-cue-dot" }),
+            h("span", null, () => nKeyCueText()),
+          ),
           h("span", { class: "n-kick" }, () => nKbTitle()),
           h("div", { class: "n-spring" }),
           h(

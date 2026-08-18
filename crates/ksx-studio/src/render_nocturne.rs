@@ -706,10 +706,13 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 25] = [
+        const CLIENT_ONLY_SLOTS: [&str; 27] = [
             // The stage's assign cue is pure interaction state.
             "nAssignCueCls",
             "nAssignCueText",
+            // ...and the keyboard's learn cue is its mirror.
+            "nKeyCueCls",
+            "nKeyCueText",
             // The expand/collapse-all toggle's label follows which editors
             // the BROWSER is holding open — state no server request carries.
             "nExpandLbl",

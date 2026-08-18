@@ -409,6 +409,22 @@ impl ControlSource for Store {
 
     fn learn_poll(&self) -> ksx_api::LearnView {
         let mut listening = self.listening.lock().unwrap();
+        // KSX_FIXTURE_LEARN=hold keeps the learner listening until it is
+        // cancelled — the scripted instant-hit makes the WAITING state
+        // undrivable otherwise (cap-click answers, cue visibility, Esc).
+        if std::env::var("KSX_FIXTURE_LEARN").as_deref() == Ok("hold") {
+            if let Some(generation) = *listening {
+                return ksx_api::LearnView {
+                    ok: true,
+                    state: "listening".into(),
+                    generation: Some(generation),
+                    remaining_ms: Some(11_000),
+                    device: None,
+                    key: None,
+                    error: None,
+                };
+            }
+        }
         match listening.take() {
             Some(generation) => ksx_api::LearnView {
                 ok: true,

@@ -7939,6 +7939,46 @@ button.n-bind-note.none {
   }
 }
 
+/* The armed CONTROL glows on the art while its learn waits — the armed
+   key's mirror. Transparent hooks gain a visible ring; callouts recolor. */
+.n-stage [data-fn].arm {
+  stroke: var(--n-accent);
+  stroke-width: 3px;
+  fill: rgba(150, 138, 224, 0.15);
+}
+
+.n-stage text.n-fnkey.arm {
+  fill: var(--n-accent-2);
+  stroke-width: 0;
+}
+
+/* The keyboard's learn cue, floating over the board's top edge. */
+.n-kbhead {
+  position: relative;
+}
+
+.n-key-cue {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  background: rgba(22, 24, 38, 0.92);
+  color: var(--n-accent-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.n-key-cue.none {
+  display: none;
+}
+
 /* The assign wait, pinned over the pad where the click must land. */
 .n-assign-cue {
   position: absolute;

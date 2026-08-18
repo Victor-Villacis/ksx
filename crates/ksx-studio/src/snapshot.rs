@@ -3933,6 +3933,10 @@ pub struct NocturneDerived {
     pub pad_badge: String,
     pub pad_name: String,
     pub pad_sub: String,
+    /// The stage's silhouette pair: exactly one visible, by the selected
+    /// slot's family (`"n-padwrap"` / `"n-padwrap none"`).
+    pub pad_xbox_cls: String,
+    pub pad_ps_cls: String,
     pub bind_title: String,
     pub bind_rows: Vec<NocturneBindRow>,
     pub bind_foot: String,
@@ -4266,6 +4270,21 @@ impl NocturneDerived {
             ),
             None => (String::new(), String::new(), String::new()),
         };
+        // Which vendored silhouette the stage draws — the selected slot's
+        // OWN family (the workspace's `pad_ps` rule), so a PlayStation draft
+        // is a DualShock on screen, not an Xbox with relabelled pills. An
+        // empty stage keeps the neutral Xbox outline as its ground.
+        let pad_is_ps = selected.is_some_and(|slot| !slot.is_xinput);
+        let pad_xbox_cls = if pad_is_ps {
+            "n-padwrap none".to_owned()
+        } else {
+            "n-padwrap".to_owned()
+        };
+        let pad_ps_cls = if pad_is_ps {
+            "n-padwrap".to_owned()
+        } else {
+            "n-padwrap none".to_owned()
+        };
         // The keyboard grid: the SAME mapper table the binding pane reads,
         // inverted key→functions, painted onto the standard-board layout.
         let keyboard_name = staged
@@ -4573,6 +4592,8 @@ impl NocturneDerived {
             pad_badge,
             pad_name,
             pad_sub,
+            pad_xbox_cls,
+            pad_ps_cls,
             bind_title: binds.title,
             bind_rows,
             bind_foot: binds.foot,

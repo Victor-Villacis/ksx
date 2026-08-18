@@ -6860,62 +6860,97 @@ a.wsrow-title:hover {
   background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
 }
 
-.n-pad {
-  width: min(520px, 100%);
-  height: auto;
+/* ── The stage silhouettes: the workspace's vendored Gamepad-Asset-Pack
+   art (M2c), repainted in the Nocturne palette. Same class names as the
+   workspace copy — the paint is scoped to this stage, so the two pages
+   keep their own looks. ── */
+
+.n-padwrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.np-zone {
+.n-padwrap.none {
+  display: none;
+}
+
+.n-stage .wspad {
+  width: min(560px, 94%);
+  height: auto;
+  max-height: 94%;
+}
+
+.n-stage .wspad-shell {
+  fill: #20222f;
+  stroke: #383b4e;
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+
+.n-stage .wspad-well {
+  fill: #171923;
+  stroke: #2e3142;
+  stroke-width: 0.35;
+}
+
+.n-stage .wspad-zone {
   fill: #1d1f2b;
   stroke: #3f424d;
-  stroke-width: 1;
+  stroke-width: 0.35;
+  stroke-linejoin: round;
 }
 
-.np-body {
-  fill: #20222f;
-  stroke: #33364a;
-  stroke-width: 1;
-}
-
-.np-well {
-  fill: #191b26;
-  stroke: #2e3142;
-  stroke-width: 1;
-}
-
-.np-stick {
+.n-stage .wspad-stick {
   fill: #2a2d3d;
   stroke: #4a4e63;
-  stroke-width: 1;
+  stroke-width: 0.4;
 }
 
-.np-hub {
+.n-stage .wspad-touch {
+  fill: #171923;
+  stroke: #2e3142;
+  stroke-width: 0.35;
+}
+
+.n-stage .wspad-petals path {
   fill: #1d1f2b;
   stroke: #3f424d;
-  stroke-width: 1;
+  stroke-width: 0.35;
+  stroke-linejoin: round;
 }
 
-.np-guide {
-  fill: #2e3142;
+/* The guide/PS lamp — the one deliberate spot of colour on an idle pad. */
+.n-stage .wspad-guide {
+  fill: var(--n-accent-tint);
+  stroke: var(--n-accent-line);
+  stroke-width: 0.3;
 }
 
-.np-lab {
-  fill: #9397ab;
-  font-size: 12px;
-  font-family: inherit;
+.n-stage .wspad-glyph {
+  fill: none;
+  stroke: #9397ab;
+  stroke-width: 0.55;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
-.np-face {
+.n-stage .wspad-face {
   fill: #cfd3e5;
-  font-size: 14px;
+  font-size: 4.6px;
   font-weight: 600;
   font-family: inherit;
+  pointer-events: none;
 }
 
-.np-sys {
+.n-stage .wspad-sys {
   fill: #75798c;
-  font-size: 10px;
+  font-size: 3.4px;
   font-family: inherit;
+  letter-spacing: 0.02em;
+  pointer-events: none;
 }
 
 .n-kbhead {
@@ -7350,11 +7385,6 @@ a.wsrow-title:hover {
 }
 
 /* The lit schematic wedge: the selected control's zone, accent-filled. */
-.np-zone.lit {
-  fill: var(--n-accent-2);
-  stroke: var(--n-accent);
-}
-
 .n-right-foot {
   margin-top: 14px;
   padding: 8px 4px 0;
@@ -8021,12 +8051,6 @@ a.wsrow-title:hover {
 .n-stage.live {
   border-color: rgba(150, 138, 224, 0.4);
   box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
-}
-
-/* Lit = firing right now: the wedge/pill glows, the pressed keycap glows.
-   Steady, never strobing (the 3 Hz cap). */
-.np-zone.lit {
-  filter: drop-shadow(0 0 6px rgba(150, 138, 224, 0.9));
 }
 
 .n-key.lit {
@@ -8837,12 +8861,9 @@ a.nm-link {
   }
 }
 
-.n-pad [data-fn].live {
+.n-stage [data-fn].live {
   fill: var(--n-accent);
-}
-
-.n-pad .np-guide[data-fn].live {
-  fill: var(--n-accent);
+  stroke: var(--n-accent);
 }
 
 .n-livestats {

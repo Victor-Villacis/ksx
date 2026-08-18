@@ -653,6 +653,9 @@ export function syncPadGrid(): void {
     }
     return;
   }
+  // The zoom ladder: the pads' MINIMUM width; the grid refills columns.
+  const PAD_ZOOM = [260, 340, 450, 580];
+  grid.style.setProperty("--padmin", `${PAD_ZOOM[ui.padZoom] ?? 340}px`);
   const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.title).join("|");
   if (print !== padGridPrint) {
     padGridPrint = print;
@@ -743,6 +746,8 @@ const ui: {
   identify: boolean;
   rightView: "controls" | "keys";
   padsAll: boolean;
+  padZoom: number;
+  kbColors: boolean;
 } = {
   dlg: false,
   leftRail: false,
@@ -751,6 +756,8 @@ const ui: {
   identify: false,
   rightView: "controls",
   padsAll: false,
+  padZoom: 1,
+  kbColors: true,
 };
 
 function applyNocturneUi(): void {
@@ -759,7 +766,9 @@ function applyNocturneUi(): void {
   setNRightCls(
     "n-right" + (ui.rightRail ? " rail" : "") + (ui.rightView === "keys" ? " keys-mode" : ""),
   );
-  setNCenterCls(ui.kbClosed ? "n-center kb-closed" : "n-center");
+  setNCenterCls(
+    "n-center" + (ui.kbClosed ? " kb-closed" : "") + (ui.kbColors ? "" : " nostrips"),
+  );
   // Any pane change resizes the center: the board refits.
   scheduleKbFit();
   setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
@@ -786,12 +795,17 @@ function loadUiPrefs(): void {
       kbClosed?: boolean;
       rightView?: string;
       padsAll?: boolean;
+      padZoom?: number;
+      kbColors?: boolean;
     };
     ui.leftRail = saved.leftRail === true;
     ui.rightView = saved.rightView === "keys" ? "keys" : "controls";
     ui.rightRail = saved.rightRail === true;
     ui.kbClosed = saved.kbClosed === true;
     ui.padsAll = saved.padsAll === true;
+    ui.padZoom =
+      typeof saved.padZoom === "number" ? Math.min(3, Math.max(0, Math.round(saved.padZoom))) : 1;
+    ui.kbColors = saved.kbColors !== false;
   } catch {
     // A blocked or corrupt store reads as the defaults.
   }
@@ -836,6 +850,8 @@ function saveUiPrefs(): void {
         kbClosed: ui.kbClosed,
         rightView: ui.rightView,
         padsAll: ui.padsAll,
+        padZoom: ui.padZoom,
+        kbColors: ui.kbColors,
       }),
     );
   } catch {
@@ -1952,6 +1968,9 @@ export function nocturneWire(root: HTMLElement): void {
   root.classList.add("js");
   applySlotColors();
   syncPadGrid();
+  root
+    .querySelector(".n-kbcolors")
+    ?.setAttribute("aria-pressed", ui.kbColors ? "true" : "false");
   window.addEventListener("resize", scheduleKbFit);
   // Drag-to-reorder on the rack: a pointer enhancement over the SAME
   // whole-order verb the ▴▾ twins post — the drop rewrites the dragged
@@ -2273,6 +2292,17 @@ export function nocturneWire(root: HTMLElement): void {
       // the submit event so the ordinary fetch path handles the form.
       ev.preventDefault();
       target?.closest("form")?.requestSubmit();
+    } else if (hit === "pad-zoom-in" || hit === "pad-zoom-out") {
+      ui.padZoom = Math.min(3, Math.max(0, ui.padZoom + (hit.endsWith("in") ? 1 : -1)));
+      saveUiPrefs();
+      syncPadGrid();
+    } else if (hit === "kb-colors") {
+      ui.kbColors = !ui.kbColors;
+      saveUiPrefs();
+      applyNocturneUi();
+      target
+        ?.closest("[data-nx]")
+        ?.setAttribute("aria-pressed", ui.kbColors ? "true" : "false");
     } else if (hit === "pads-toggle") {
       ui.padsAll = !ui.padsAll;
       saveUiPrefs();
@@ -2346,6 +2376,16 @@ export function nocturneWire(root: HTMLElement): void {
       const slot = Number(pick?.getAttribute("data-slot") ?? "");
       const color = Number(btn?.getAttribute("data-color") ?? "");
       if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16) {
+        // No two controllers wear the same colour: picking one another
+        // slot already wears SWAPS the two.
+        const effective = (n: number): number =>
+          slotColors[String(n)] ?? ((n - 1) % 16) + 1;
+        const previous = effective(slot);
+        for (const pv of lastBindView?.pads ?? []) {
+          if (pv.slot !== slot && effective(pv.slot) === color) {
+            slotColors[String(pv.slot)] = previous;
+          }
+        }
         slotColors[String(slot)] = color;
         try {
           window.localStorage.setItem(COLOR_STORE, JSON.stringify(slotColors));
@@ -3018,6 +3058,41 @@ export function NocturneIsland() {
           // The multi-pad grid: filled imperatively from browser-kept
           // preference; SSR and the no-JS page stay single-pad.
           h("div", { class: "n-padgrid" }),
+          // Its zoom, shown only in multi mode (CSS-gated on .multi).
+          h(
+            "div",
+            { class: "n-zoomctl" },
+            h(
+              "button",
+              {
+                type: "button",
+                "data-nx": "pad-zoom-out",
+                title: "Smaller pads — more on screen",
+                "aria-label": "Zoom out",
+                class: "n-sact",
+              },
+              h(
+                "svg",
+                { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
+              ),
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                "data-nx": "pad-zoom-in",
+                title: "Bigger pads — a closer look",
+                "aria-label": "Zoom in",
+                class: "n-sact",
+              },
+              h(
+                "svg",
+                { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+              ),
+            ),
+          ),
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.
@@ -3385,6 +3460,19 @@ export function NocturneIsland() {
           ),
           h("span", { class: "n-kick" }, () => nKbTitle()),
           h("div", { class: "n-spring" }),
+          // Show or hide the controller colours on the keys. Default state
+          // ships in the markup (the parity gate's rule).
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "kb-colors",
+              "aria-pressed": "true",
+              title: "Show or hide the controller colours on the keys",
+              class: "n-kbcolors",
+            },
+            "Colours",
+          ),
           h(
             "button",
             {

@@ -6267,21 +6267,21 @@ a.wsrow-title:hover {
      the island root from browser-kept state. Identity colours only — they
      never carry status meaning. */
   --pal1: #a98ae0;
-  --pal2: #7fb8f0;
-  --pal3: #f0908e;
-  --pal4: #8ed4a0;
-  --pal5: #eec36a;
-  --pal6: #7cd6d6;
-  --pal7: #de92de;
-  --pal8: #f0aa78;
-  --pal9: #74c9b2;
-  --pal10: #f195b2;
-  --pal11: #bcd47e;
-  --pal12: #93a3f0;
-  --pal13: #d6b48e;
-  --pal14: #a9b8cc;
-  --pal15: #c493ec;
-  --pal16: #96dcc8;
+  --pal2: #4da6ff;
+  --pal3: #ff6b5e;
+  --pal4: #45d05e;
+  --pal5: #ffd23e;
+  --pal6: #35d1d1;
+  --pal7: #e763e7;
+  --pal8: #ff9636;
+  --pal9: #2ec59b;
+  --pal10: #ff7fa6;
+  --pal11: #a8e03e;
+  --pal12: #7d8cff;
+  --pal13: #d8a86a;
+  --pal14: #9fb4cc;
+  --pal15: #b06ef5;
+  --pal16: #6fe6b8;
   --pcs1: var(--pal1);
   --pcs2: var(--pal2);
   --pcs3: var(--pal3);
@@ -9655,6 +9655,25 @@ button.n-keychip:hover {
 
 /* ── The multi-pad grid: every staged controller at once ── */
 
+/* The grid's zoom: only meaningful (and only shown) in multi mode. */
+.n-zoomctl {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+  display: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--n-panel);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.n-stage.multi .n-zoomctl {
+  display: flex;
+}
+
+
 .n-padgrid {
   display: none;
 }
@@ -9670,7 +9689,7 @@ button.n-keychip:hover {
 .n-stage.multi .n-padgrid {
   display: grid;
   width: 100%;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--padmin, 340px), 1fr));
   gap: 14px;
   align-content: start;
   align-self: stretch;
@@ -9842,6 +9861,35 @@ button.n-keychip:hover {
 
 .n-strip.none {
   display: none;
+}
+
+/* The board's colour switch: hide every owner strip when off. */
+.n-center.nostrips .n-strip {
+  display: none;
+}
+
+/* Scripting-only chrome, like the auto-map button. */
+.nocturne:not(.js) .n-kbcolors {
+  display: none;
+}
+
+.n-kbcolors {
+  padding: 3px 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 7px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-kbcolors:hover,
+.n-kbcolors[aria-pressed="true"] {
+  color: var(--n-text-2);
+}
+
+.n-kbcolors[aria-pressed="false"] {
+  border-style: dashed;
 }
 
 .n-cdot.np1 {

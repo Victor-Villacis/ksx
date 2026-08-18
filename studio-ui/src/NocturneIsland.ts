@@ -571,15 +571,26 @@ export function paintStageCallouts(): void {
       if (bindRow.chip !== "Unbound") fnKeys.set(bindRow.function.toLowerCase(), bindRow.chip);
     }
   }
+  // Callouts speak the BOARD's printed-cap vocabulary ("9", "LShift") \u2014 the
+  // full key name lives in the pane; the diagram gets the keycap spelling.
+  const capFor = (name: string): string => {
+    const cap = root
+      .querySelector<HTMLElement>(`.n-kb .n-key[data-key="${CSS.escape(name)}"] .n-key-cap`)
+      ?.textContent?.trim();
+    if (!cap || cap === name) return name;
+    if (name.startsWith("Left") && name.length > 4 && !cap.startsWith("L")) return "L" + cap;
+    if (name.startsWith("Right") && name.length > 5 && !cap.startsWith("R")) return "R" + cap;
+    return cap;
+  };
   for (const el of Array.from(root.querySelectorAll<SVGTextElement>(".n-stage text.n-fnkey"))) {
     const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
     const parts: string[] = [];
     for (const fn of fns) {
       const keys = fnKeys.get(fn.toLowerCase());
-      if (keys) parts.push(keys);
+      if (keys) parts.push(keys.split(" \u00b7 ").map(capFor).join("\u00b7"));
     }
     let text = parts.join("\u00b7");
-    if (text.length > 8) text = (parts[0] ?? "").split(" \u00b7 ")[0] + "\u2026";
+    if (text.length > 9) text = text.slice(0, 8) + "\u2026";
     el.textContent = text;
   }
 }
@@ -2593,10 +2604,10 @@ export function NocturneIsland() {
                 h("circle", { "data-fn": "ry.min", cx: "487", cy: "274", r: "16", fill: "transparent" }),
                 h("circle", { "data-fn": "rx.min", cx: "456", cy: "243", r: "16", fill: "transparent" }),
                 h("circle", { "data-fn": "rx.max", cx: "518", cy: "243", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.up", cx: "263", cy: "222", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.down", cx: "263", cy: "284", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.left", cx: "232", cy: "253", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.right", cx: "294", cy: "253", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.up", cx: "266", cy: "204", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.down", cx: "266", cy: "278", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.left", cx: "230", cy: "241", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.right", cx: "301", cy: "241", r: "18", fill: "transparent" }),
                 h("circle", { "data-fn": "guide", cx: "380", cy: "120", r: "43", fill: "transparent" }),
                 h("circle", { "data-fn": "back", cx: "299", cy: "127", r: "17", fill: "transparent" }),
                 h("circle", { "data-fn": "start", cx: "459", cy: "127", r: "17", fill: "transparent" }),
@@ -2616,10 +2627,10 @@ export function NocturneIsland() {
                 h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "487", y: "311", "text-anchor": "middle" }),
                 h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "430", y: "249", "text-anchor": "end" }),
                 h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "544", y: "249", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "263", y: "190", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "263", y: "318", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "198", y: "259", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "328", y: "259", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "266", y: "174", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "266", y: "316", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "202", y: "247", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "329", y: "247", "text-anchor": "start" }),
                 h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "380", y: "179", "text-anchor": "middle" }),
                 h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "299", y: "158", "text-anchor": "middle" }),
                 h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "459", y: "158", "text-anchor": "middle" }),

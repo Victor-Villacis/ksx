@@ -7733,6 +7733,37 @@ a.wsrow-title:hover {
   opacity: 0.75;
 }
 
+/* The stage's glance callouts: which key presses each control. Outlined
+   so they read on any art ground; sized per art viewBox scale. */
+.n-stage text.n-fnkey {
+  fill: var(--n-text-2);
+  stroke: #0c0d12;
+  stroke-width: 3.2px;
+  paint-order: stroke;
+  font-weight: 650;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.n-stage svg.wspad:not(.x360a) text.n-fnkey {
+  font-size: 4.4px;
+  stroke-width: 0.75px;
+}
+
+.n-stage text.n-fnkey.live {
+  fill: var(--n-accent-2);
+}
+
+/* Shared keys wear ONE signal everywhere: the board's dashed ring. An
+   outline (not a border) so the chip's box never shifts; the global
+   focus ring still wins while focused. */
+button.n-keychip.shared:not(:focus-visible) {
+  outline: 1.5px dashed rgba(150, 138, 224, 0.6);
+  outline-offset: 1px;
+}
+
 /* The chip IS the control: click it, press the new key. */
 button.n-keychip {
   cursor: pointer;

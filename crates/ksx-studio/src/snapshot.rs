@@ -4895,10 +4895,11 @@ impl NocturneDerived {
                 } else {
                     "n-bind".to_owned()
                 },
-                chip_cls: if bound {
-                    "n-keychip".to_owned()
-                } else {
-                    "n-keychip ghost".to_owned()
+                chip_cls: match (bound, row.share_note.is_empty()) {
+                    (true, true) => "n-keychip".to_owned(),
+                    // The ONE shared-key signal, the board's dashed ring.
+                    (true, false) => "n-keychip shared".to_owned(),
+                    (false, _) => "n-keychip ghost".to_owned(),
                 },
                 clear_cls: if bound {
                     "n-bclear".to_owned()

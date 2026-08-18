@@ -473,6 +473,47 @@ export function applyNocturne(p: NocturnePayload): void {
       el.open = openRows.has(el.getAttribute("data-fn") ?? "");
     }
     syncExpandLabel();
+    paintStageCallouts();
+  }
+  lastBindView = v;
+  if (learnRoot) paintStageCallouts();
+}
+
+/** The last applied view, for repainting the stage callouts after the
+ *  island mounts — the seed applies BEFORE `learnRoot` exists, and an idle
+ *  page's deduped polls never re-apply. */
+let lastBindView: NocturneView | null = null;
+
+/** The stage's glance callouts: every control shows the key(s) that press
+ *  it, straight from the served rows. Imperative textContent on
+ *  data-live-chatter nodes (the ticker's contract). */
+export function paintStageCallouts(): void {
+  const root = learnRoot;
+  const v = lastBindView;
+  if (!root || !v) return;
+  const fnKeys = new Map<string, string>();
+  for (const rows of [
+    v.bind_face,
+    v.bind_dpad,
+    v.bind_shoulders,
+    v.bind_lstick,
+    v.bind_rstick,
+    v.bind_system,
+  ]) {
+    for (const bindRow of rows) {
+      if (bindRow.chip !== "Unbound") fnKeys.set(bindRow.function.toLowerCase(), bindRow.chip);
+    }
+  }
+  for (const el of Array.from(root.querySelectorAll<SVGTextElement>(".n-stage text.n-fnkey"))) {
+    const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
+    const parts: string[] = [];
+    for (const fn of fns) {
+      const keys = fnKeys.get(fn.toLowerCase());
+      if (keys) parts.push(keys);
+    }
+    let text = parts.join("\u00b7");
+    if (text.length > 8) text = (parts[0] ?? "").split(" \u00b7 ")[0] + "\u2026";
+    el.textContent = text;
   }
 }
 
@@ -2259,6 +2300,26 @@ export function NocturneIsland() {
                 h("circle", { "data-fn": "x", cx: "537", cy: "124", r: "29", fill: "transparent" }),
                 h("circle", { "data-fn": "b", cx: "646", cy: "124", r: "29", fill: "transparent" }),
                 h("circle", { "data-fn": "a", cx: "592", cy: "180", r: "29", fill: "transparent" }),
+                // The glance callouts: which KEY presses each control,
+                // filled imperatively per payload (data-live-chatter).
+                h("text", { class: "n-fnkey", "data-fn": "lthumb lx.min lx.max ly.min ly.max", "data-live-chatter": "", x: "163", y: "185", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "rthumb rx.min rx.max ry.min ry.max", "data-live-chatter": "", x: "487", y: "312", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.up dpad.down dpad.left dpad.right", "data-live-chatter": "", x: "263", y: "330", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "380", y: "179", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "299", y: "158", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "459", y: "158", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "592", y: "29", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "498", y: "130", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "685", y: "130", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "592", y: "227", "text-anchor": "middle" }),
+              ),
+              h(
+                "g",
+                null,
+                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "101", y: "34", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "101", y: "94", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "650", y: "34", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "650", y: "94", "text-anchor": "start" }),
               ),
             ),
           ),
@@ -2320,6 +2381,27 @@ export function NocturneIsland() {
                 // The PS lamp.
                 h("circle", { class: "wspad-well", cx: "56.34", cy: "41.33", r: "3.4" }),
                 h("circle", { "data-fn": "guide", class: "wspad-guide", cx: "56.34", cy: "41.33", r: "1.7" }),
+              ),
+              h(
+                "g",
+                null,
+                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "17", y: "5.6", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "17", y: "14.6", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "94.5", y: "5.6", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "94.5", y: "14.6", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "35.2", y: "23", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "77.4", y: "23", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "23.1", y: "28.8", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "23.1", y: "51.6", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "12.6", y: "41.2", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "33.6", y: "41.2", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "lthumb lx.min lx.max ly.min ly.max", "data-live-chatter": "", x: "39.3", y: "64.5", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "rthumb rx.min rx.max ry.min ry.max", "data-live-chatter": "", x: "73.3", y: "64.5", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "56.3", y: "66.5", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "89.3", y: "25.6", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "103.5", y: "40.8", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "76.4", y: "40.8", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "89.3", y: "53.8", "text-anchor": "middle" }),
               ),
             ),
           ),

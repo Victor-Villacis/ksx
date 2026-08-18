@@ -687,6 +687,35 @@ function loadUiPrefs(): void {
   }
 }
 
+/** Per-slot colour overrides (slot number → palette index 1..16), kept in
+ *  this browser: identity colours are a viewing aid, not daemon state. The
+ *  defaults live in CSS (`--pcs{N}: var(--pal{N})`); an override writes the
+ *  variable on the island root — absent entirely until a user picks one, so
+ *  the parity gate's empty-storage run never sees a style attribute. */
+const COLOR_STORE = "ksx-nocturne-colors";
+let slotColors: Record<string, number> = {};
+
+function loadSlotColors(): void {
+  try {
+    const raw = window.localStorage.getItem(COLOR_STORE);
+    slotColors = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    slotColors = {};
+  }
+}
+
+function applySlotColors(): void {
+  const root = learnRoot;
+  if (!root) return;
+  for (const [slot, idx] of Object.entries(slotColors)) {
+    const n = Number(slot);
+    const i = Number(idx);
+    if (n >= 1 && n <= 16 && i >= 1 && i <= 16) {
+      root.style.setProperty(`--pcs${n}`, `var(--pal${i})`);
+    }
+  }
+}
+
 function saveUiPrefs(): void {
   try {
     window.localStorage.setItem(
@@ -1766,10 +1795,12 @@ export function nocturneWire(root: HTMLElement): void {
   // Chrome preferences load BEFORE the island builds (the entry calls this
   // first), so the hydrated first paint already has the panes the user left.
   loadUiPrefs();
+  loadSlotColors();
   applyNocturneUi();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
+  applySlotColors();
   window.addEventListener("resize", scheduleKbFit);
   root.addEventListener(
     "toggle",
@@ -2060,6 +2091,21 @@ export function nocturneWire(root: HTMLElement): void {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
       applyNocturneUi();
+    } else if (hit === "slot-color") {
+      const btn = target?.closest<HTMLElement>("[data-color]");
+      const pick = btn?.closest<HTMLElement>("[data-slot]");
+      const slot = Number(pick?.getAttribute("data-slot") ?? "");
+      const color = Number(btn?.getAttribute("data-color") ?? "");
+      if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16) {
+        slotColors[String(slot)] = color;
+        try {
+          window.localStorage.setItem(COLOR_STORE, JSON.stringify(slotColors));
+        } catch {
+          // The pick simply will not survive this session.
+        }
+        applySlotColors();
+        pick?.closest("details")?.removeAttribute("open");
+      }
     } else if (hit === "key-remove") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
       if (key) armAssign(key, "remove");
@@ -2432,6 +2478,8 @@ export function NocturneIsland() {
             "|" +
             r.badge_cls +
             "|" +
+            r.dot_cls +
+            "|" +
             r.name +
             "|" +
             r.meta +
@@ -2459,6 +2507,33 @@ export function NocturneIsland() {
                   { class: "n-slot-txt" },
                   h("span", { class: "n-slot-name" }, r.name),
                   h("span", { class: "n-slot-meta" }, r.meta),
+                ),
+              ),
+              // The controller's colour: a dot that opens the 16-swatch
+              // picker. Presentation state, kept in this browser.
+              h(
+                "details",
+                { class: "n-cpick", "data-slot": r.number },
+                h("summary", { class: r.dot_cls, title: "Pick this controller's colour" }),
+                h(
+                  "div",
+                  { class: "n-cpick-pop", "data-nx": "menu-noop" },
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "1", title: "Colour 1", "aria-label": "Colour 1 for this controller", class: "n-swatch pal1" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "2", title: "Colour 2", "aria-label": "Colour 2 for this controller", class: "n-swatch pal2" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "3", title: "Colour 3", "aria-label": "Colour 3 for this controller", class: "n-swatch pal3" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "4", title: "Colour 4", "aria-label": "Colour 4 for this controller", class: "n-swatch pal4" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "5", title: "Colour 5", "aria-label": "Colour 5 for this controller", class: "n-swatch pal5" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "6", title: "Colour 6", "aria-label": "Colour 6 for this controller", class: "n-swatch pal6" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "7", title: "Colour 7", "aria-label": "Colour 7 for this controller", class: "n-swatch pal7" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "8", title: "Colour 8", "aria-label": "Colour 8 for this controller", class: "n-swatch pal8" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "9", title: "Colour 9", "aria-label": "Colour 9 for this controller", class: "n-swatch pal9" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "10", title: "Colour 10", "aria-label": "Colour 10 for this controller", class: "n-swatch pal10" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "11", title: "Colour 11", "aria-label": "Colour 11 for this controller", class: "n-swatch pal11" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "12", title: "Colour 12", "aria-label": "Colour 12 for this controller", class: "n-swatch pal12" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "13", title: "Colour 13", "aria-label": "Colour 13 for this controller", class: "n-swatch pal13" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
+                h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
                 ),
               ),
               // One whole-order reorder per click; an end row's order is
@@ -3121,13 +3196,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3136,13 +3219,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow2(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3151,13 +3242,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow3(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3166,13 +3265,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow4(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3181,13 +3288,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow5(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3196,13 +3311,21 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow6(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),
@@ -3219,13 +3342,21 @@ export function NocturneIsland() {
             { class: "n-kbtray-row" },
             createList(
               () => nKbTray(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
+                  h(
+                    "span",
+                    { class: "n-strips" },
+                    h("span", { class: r.s1 }),
+                    h("span", { class: r.s2 }),
+                    h("span", { class: r.s3 }),
+                    h("span", { class: r.s4 }),
+                  ),
                 ),
             ),
           ),

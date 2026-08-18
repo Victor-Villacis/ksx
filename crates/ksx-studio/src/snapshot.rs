@@ -3831,9 +3831,12 @@ pub struct NocturneChoiceRow {
 pub struct NocturneRackRow {
     pub number: String,
     pub badge: String,
-    /// The player-identity ramp: `n-pbadge np1..np4` by `(number-1)%4+1` —
-    /// slot 5 wears P1's shade again, the way the design's ramp wraps.
+    /// The controller's identity colour class: `n-pbadge np1..np16` by
+    /// slot number — each of the 16 slots owns a distinct default colour
+    /// (`--pcs1..16`), user-overridable from the rack's colour dot.
     pub badge_cls: String,
+    /// The colour dot that opens the picker: `n-cdot np{N}`.
+    pub dot_cls: String,
     pub name: String,
     pub meta: String,
     pub cls: String,
@@ -3987,6 +3990,13 @@ pub struct NocturneKeyCell {
     /// The hover sentence: which controls this key drives, in the persona's
     /// readable zone labels. Empty on an unbound cap.
     pub title: String,
+    /// Up to four owner strips: `n-strip s{N}` per controller this key
+    /// drives ANYWHERE in the setup (`n-strip none` when unused) — the
+    /// board's global colour read.
+    pub s1: String,
+    pub s2: String,
+    pub s3: String,
+    pub s4: String,
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
@@ -4411,7 +4421,8 @@ impl NocturneDerived {
                 .map(|(at, slot)| NocturneRackRow {
                     number: slot.number.to_string(),
                     badge: format!("P{}", slot.number),
-                    badge_cls: format!("n-pbadge np{}", (slot.number - 1) % 4 + 1),
+                    badge_cls: format!("n-pbadge np{}", slot.number),
+                    dot_cls: format!("n-cdot np{}", slot.number),
                     name: slot.persona_label.clone(),
                     meta: format!(
                         "\"{}\" · {} bound · SOCD {}",
@@ -4580,7 +4591,7 @@ impl NocturneDerived {
         // The selected slot's ramp digit, worn by every surface that speaks
         // for it: the meta badge, the board's bound-cap tint, and the
         // binding pane's dots.
-        let ramp = selected.map(|slot| (slot.number - 1) % 4 + 1);
+        let ramp = selected.map(|slot| slot.number);
         let pad_badge_cls = match ramp {
             Some(digit) => format!("n-pbadge np{digit}"),
             None => "n-pbadge".to_owned(),
@@ -4645,6 +4656,28 @@ impl NocturneDerived {
                 }
             }
         }
+        // The GLOBAL ownership read: which controllers each key drives,
+        // across EVERY staged slot — the board's colour strips wear it.
+        let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
+            std::collections::BTreeMap::new();
+        for slot in &staged.slots {
+            if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                for keys in m.bindings.values() {
+                    for key in keys {
+                        let owners = key_slots.entry(key.clone()).or_default();
+                        if !owners.contains(&slot.number) {
+                            owners.push(slot.number);
+                        }
+                    }
+                }
+            }
+        }
+        let strip = |owners: &[u8], at: usize| -> String {
+            match owners.get(at) {
+                Some(n) => format!("n-strip s{n}"),
+                None => "n-strip none".to_owned(),
+            }
+        };
         let persona = selected
             .map(|slot| slot.persona.as_str())
             .unwrap_or("xbox360");
@@ -4702,6 +4735,21 @@ impl NocturneDerived {
                 }
                 None => (String::new(), String::new()),
             };
+            let owners = key_slots.get(cell.key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let others: Vec<String> = owners
+                .iter()
+                .filter(|n| Some(**n) != selected_number)
+                .map(|n| format!("P{n}"))
+                .collect();
+            let title = if !others.is_empty() {
+                if title.is_empty() {
+                    format!("{} — bound on {}", cell.cap, others.join(" · "))
+                } else {
+                    format!("{title}; also bound on {}", others.join(" · "))
+                }
+            } else {
+                title
+            };
             let aria = if title.is_empty() {
                 cell.cap.to_owned()
             } else {
@@ -4714,6 +4762,10 @@ impl NocturneDerived {
                 short,
                 title,
                 aria,
+                s1: strip(owners, 0),
+                s2: strip(owners, 1),
+                s3: strip(owners, 2),
+                s4: strip(owners, 3),
             }
         };
         let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
@@ -4738,6 +4790,7 @@ impl NocturneDerived {
             .iter()
             .filter(|(key, _)| !board_keys.contains(*key))
             .map(|(key, fns)| {
+                let tray_owners = key_slots.get(*key).map(|v| v.as_slice()).unwrap_or(&[]);
                 let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
                 let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
                 NocturneKeyCell {
@@ -4751,6 +4804,10 @@ impl NocturneDerived {
                     short: crate::keyboard_layout::short_for(persona, fns[0]),
                     aria: title.clone(),
                     title,
+                    s1: strip(tray_owners, 0),
+                    s2: strip(tray_owners, 1),
+                    s3: strip(tray_owners, 2),
+                    s4: strip(tray_owners, 3),
                 }
             })
             .collect();
@@ -5156,7 +5213,7 @@ impl NocturneDerived {
         let bind_g_cls = if binds.rows.is_empty() {
             "n-bindgroups none".to_owned()
         } else {
-            match selected.map(|slot| (slot.number - 1) % 4 + 1) {
+            match selected.map(|slot| slot.number) {
                 Some(digit) => format!("n-bindgroups np{digit}"),
                 None => "n-bindgroups".to_owned(),
             }

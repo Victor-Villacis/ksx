@@ -193,6 +193,7 @@ fn rack_row(row: &NocturneRackRow) -> SlotValue {
     SlotValue::object(vec![
         ("number".to_owned(), SlotValue::Text(row.number.clone())),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("dot_cls".to_owned(), SlotValue::Text(row.dot_cls.clone())),
         (
             "badge_cls".to_owned(),
             SlotValue::Text(row.badge_cls.clone()),
@@ -259,6 +260,10 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("s1".to_owned(), SlotValue::Text(row.s1.clone())),
+        ("s2".to_owned(), SlotValue::Text(row.s2.clone())),
+        ("s3".to_owned(), SlotValue::Text(row.s3.clone())),
+        ("s4".to_owned(), SlotValue::Text(row.s4.clone())),
     ])
 }
 

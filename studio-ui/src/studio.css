@@ -6261,6 +6261,43 @@ a.wsrow-title:hover {
   --np2: #c7b1f0;
   --np3: #9a86c9;
   --np4: #e4d9f6;
+  /* The 16-slot identity palette: mid-bright pastels, dark badge text
+     stays readable on every one. --pcs{N} is what surfaces WEAR (slot N's
+     colour, default = palette slot N); a user's pick overrides --pcs{N} on
+     the island root from browser-kept state. Identity colours only — they
+     never carry status meaning. */
+  --pal1: #a98ae0;
+  --pal2: #7fb8f0;
+  --pal3: #f0908e;
+  --pal4: #8ed4a0;
+  --pal5: #eec36a;
+  --pal6: #7cd6d6;
+  --pal7: #de92de;
+  --pal8: #f0aa78;
+  --pal9: #74c9b2;
+  --pal10: #f195b2;
+  --pal11: #bcd47e;
+  --pal12: #93a3f0;
+  --pal13: #d6b48e;
+  --pal14: #a9b8cc;
+  --pal15: #c493ec;
+  --pal16: #96dcc8;
+  --pcs1: var(--pal1);
+  --pcs2: var(--pal2);
+  --pcs3: var(--pal3);
+  --pcs4: var(--pal4);
+  --pcs5: var(--pal5);
+  --pcs6: var(--pal6);
+  --pcs7: var(--pal7);
+  --pcs8: var(--pal8);
+  --pcs9: var(--pal9);
+  --pcs10: var(--pal10);
+  --pcs11: var(--pal11);
+  --pcs12: var(--pal12);
+  --pcs13: var(--pal13);
+  --pcs14: var(--pal14);
+  --pcs15: var(--pal15);
+  --pcs16: var(--pal16);
   --n-bg: #161826;
   --n-panel: #1a1c28;
   --n-panel-2: #232532;
@@ -6792,20 +6829,69 @@ a.wsrow-title:hover {
 }
 
 .n-pbadge.np1 {
-  background: var(--np1);
+  background: var(--pcs1);
 }
 
 .n-pbadge.np2 {
-  background: var(--np2);
+  background: var(--pcs2);
 }
 
 .n-pbadge.np3 {
-  background: var(--np3);
+  background: var(--pcs3);
 }
 
 .n-pbadge.np4 {
-  background: var(--np4);
+  background: var(--pcs4);
 }
+
+.n-pbadge.np5 {
+  background: var(--pcs5);
+}
+
+.n-pbadge.np6 {
+  background: var(--pcs6);
+}
+
+.n-pbadge.np7 {
+  background: var(--pcs7);
+}
+
+.n-pbadge.np8 {
+  background: var(--pcs8);
+}
+
+.n-pbadge.np9 {
+  background: var(--pcs9);
+}
+
+.n-pbadge.np10 {
+  background: var(--pcs10);
+}
+
+.n-pbadge.np11 {
+  background: var(--pcs11);
+}
+
+.n-pbadge.np12 {
+  background: var(--pcs12);
+}
+
+.n-pbadge.np13 {
+  background: var(--pcs13);
+}
+
+.n-pbadge.np14 {
+  background: var(--pcs14);
+}
+
+.n-pbadge.np15 {
+  background: var(--pcs15);
+}
+
+.n-pbadge.np16 {
+  background: var(--pcs16);
+}
+
 
 .n-pbadge.dim {
   background: var(--n-panel-2);
@@ -7271,20 +7357,69 @@ a.wsrow-title:hover {
 }
 
 .n-kb.np1 {
-  --kbt: var(--np1);
+  --kbt: var(--pcs1);
 }
 
 .n-kb.np2 {
-  --kbt: var(--np2);
+  --kbt: var(--pcs2);
 }
 
 .n-kb.np3 {
-  --kbt: var(--np3);
+  --kbt: var(--pcs3);
 }
 
 .n-kb.np4 {
-  --kbt: var(--np4);
+  --kbt: var(--pcs4);
 }
+
+.n-kb.np5 {
+  --kbt: var(--pcs5);
+}
+
+.n-kb.np6 {
+  --kbt: var(--pcs6);
+}
+
+.n-kb.np7 {
+  --kbt: var(--pcs7);
+}
+
+.n-kb.np8 {
+  --kbt: var(--pcs8);
+}
+
+.n-kb.np9 {
+  --kbt: var(--pcs9);
+}
+
+.n-kb.np10 {
+  --kbt: var(--pcs10);
+}
+
+.n-kb.np11 {
+  --kbt: var(--pcs11);
+}
+
+.n-kb.np12 {
+  --kbt: var(--pcs12);
+}
+
+.n-kb.np13 {
+  --kbt: var(--pcs13);
+}
+
+.n-kb.np14 {
+  --kbt: var(--pcs14);
+}
+
+.n-kb.np15 {
+  --kbt: var(--pcs15);
+}
+
+.n-kb.np16 {
+  --kbt: var(--pcs16);
+}
+
 
 .n-key.bound::before {
   background:
@@ -7458,19 +7593,67 @@ a.wsrow-title:hover {
 }
 
 .n-bindgroups.np1 .n-bind.on .n-bind-dot {
-  background: var(--np1);
+  background: var(--pcs1);
 }
 
 .n-bindgroups.np2 .n-bind.on .n-bind-dot {
-  background: var(--np2);
+  background: var(--pcs2);
 }
 
 .n-bindgroups.np3 .n-bind.on .n-bind-dot {
-  background: var(--np3);
+  background: var(--pcs3);
 }
 
 .n-bindgroups.np4 .n-bind.on .n-bind-dot {
-  background: var(--np4);
+  background: var(--pcs4);
+}
+
+.n-bindgroups.np5 .n-bind.on .n-bind-dot {
+  background: var(--pcs5);
+}
+
+.n-bindgroups.np6 .n-bind.on .n-bind-dot {
+  background: var(--pcs6);
+}
+
+.n-bindgroups.np7 .n-bind.on .n-bind-dot {
+  background: var(--pcs7);
+}
+
+.n-bindgroups.np8 .n-bind.on .n-bind-dot {
+  background: var(--pcs8);
+}
+
+.n-bindgroups.np9 .n-bind.on .n-bind-dot {
+  background: var(--pcs9);
+}
+
+.n-bindgroups.np10 .n-bind.on .n-bind-dot {
+  background: var(--pcs10);
+}
+
+.n-bindgroups.np11 .n-bind.on .n-bind-dot {
+  background: var(--pcs11);
+}
+
+.n-bindgroups.np12 .n-bind.on .n-bind-dot {
+  background: var(--pcs12);
+}
+
+.n-bindgroups.np13 .n-bind.on .n-bind-dot {
+  background: var(--pcs13);
+}
+
+.n-bindgroups.np14 .n-bind.on .n-bind-dot {
+  background: var(--pcs14);
+}
+
+.n-bindgroups.np15 .n-bind.on .n-bind-dot {
+  background: var(--pcs15);
+}
+
+.n-bindgroups.np16 .n-bind.on .n-bind-dot {
+  background: var(--pcs16);
 }
 
 .n-bind-label {
@@ -9404,6 +9587,273 @@ button.n-keychip:hover {
   display: block;
   fill: currentColor;
   pointer-events: none;
+}
+
+/* ── Controller colours: the dot, the picker, the cap strips ── */
+
+.n-cpick {
+  position: relative;
+  flex: none;
+  align-self: center;
+}
+
+.n-cpick > summary {
+  list-style: none;
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.n-cpick > summary::-webkit-details-marker {
+  display: none;
+}
+
+.n-cpick-pop {
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(8, 18px);
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 9px;
+  background: var(--n-panel-2);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.5);
+}
+
+.n-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.n-swatch:hover {
+  transform: scale(1.15);
+}
+
+/* Cap owner strips: one segment per controller this key drives, anywhere
+   in the setup — the board's global colour read. Flex shares the width, so
+   one owner reads as a full underline, two as halves. */
+.n-strips {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 3px;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.n-strip {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.n-strip.none {
+  display: none;
+}
+
+.n-cdot.np1 {
+  background: var(--pcs1);
+}
+
+.n-cdot.np2 {
+  background: var(--pcs2);
+}
+
+.n-cdot.np3 {
+  background: var(--pcs3);
+}
+
+.n-cdot.np4 {
+  background: var(--pcs4);
+}
+
+.n-cdot.np5 {
+  background: var(--pcs5);
+}
+
+.n-cdot.np6 {
+  background: var(--pcs6);
+}
+
+.n-cdot.np7 {
+  background: var(--pcs7);
+}
+
+.n-cdot.np8 {
+  background: var(--pcs8);
+}
+
+.n-cdot.np9 {
+  background: var(--pcs9);
+}
+
+.n-cdot.np10 {
+  background: var(--pcs10);
+}
+
+.n-cdot.np11 {
+  background: var(--pcs11);
+}
+
+.n-cdot.np12 {
+  background: var(--pcs12);
+}
+
+.n-cdot.np13 {
+  background: var(--pcs13);
+}
+
+.n-cdot.np14 {
+  background: var(--pcs14);
+}
+
+.n-cdot.np15 {
+  background: var(--pcs15);
+}
+
+.n-cdot.np16 {
+  background: var(--pcs16);
+}
+
+.n-swatch.pal1 {
+  background: var(--pal1);
+}
+
+.n-swatch.pal2 {
+  background: var(--pal2);
+}
+
+.n-swatch.pal3 {
+  background: var(--pal3);
+}
+
+.n-swatch.pal4 {
+  background: var(--pal4);
+}
+
+.n-swatch.pal5 {
+  background: var(--pal5);
+}
+
+.n-swatch.pal6 {
+  background: var(--pal6);
+}
+
+.n-swatch.pal7 {
+  background: var(--pal7);
+}
+
+.n-swatch.pal8 {
+  background: var(--pal8);
+}
+
+.n-swatch.pal9 {
+  background: var(--pal9);
+}
+
+.n-swatch.pal10 {
+  background: var(--pal10);
+}
+
+.n-swatch.pal11 {
+  background: var(--pal11);
+}
+
+.n-swatch.pal12 {
+  background: var(--pal12);
+}
+
+.n-swatch.pal13 {
+  background: var(--pal13);
+}
+
+.n-swatch.pal14 {
+  background: var(--pal14);
+}
+
+.n-swatch.pal15 {
+  background: var(--pal15);
+}
+
+.n-swatch.pal16 {
+  background: var(--pal16);
+}
+
+.n-strip.s1 {
+  background: var(--pcs1);
+}
+
+.n-strip.s2 {
+  background: var(--pcs2);
+}
+
+.n-strip.s3 {
+  background: var(--pcs3);
+}
+
+.n-strip.s4 {
+  background: var(--pcs4);
+}
+
+.n-strip.s5 {
+  background: var(--pcs5);
+}
+
+.n-strip.s6 {
+  background: var(--pcs6);
+}
+
+.n-strip.s7 {
+  background: var(--pcs7);
+}
+
+.n-strip.s8 {
+  background: var(--pcs8);
+}
+
+.n-strip.s9 {
+  background: var(--pcs9);
+}
+
+.n-strip.s10 {
+  background: var(--pcs10);
+}
+
+.n-strip.s11 {
+  background: var(--pcs11);
+}
+
+.n-strip.s12 {
+  background: var(--pcs12);
+}
+
+.n-strip.s13 {
+  background: var(--pcs13);
+}
+
+.n-strip.s14 {
+  background: var(--pcs14);
+}
+
+.n-strip.s15 {
+  background: var(--pcs15);
+}
+
+.n-strip.s16 {
+  background: var(--pcs16);
 }
 
 /* The relation's other voice: "driven by" before the chip, the mirror of

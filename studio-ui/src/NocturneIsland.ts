@@ -1699,10 +1699,13 @@ export function nocturneWire(root: HTMLElement): void {
       // learn — press a key, or click one on the board. The controls view
       // opens on the armed row (no fold, no fade: the arm wash waits).
       const rowEl = Array.from(
-        root.querySelectorAll<HTMLElement>("details.n-bind[data-fn]"),
+        root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
       ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName);
       const rowFn = rowEl?.getAttribute("data-fn") ?? fnName;
-      const rowLabel = rowEl?.querySelector(".n-bind-label")?.textContent?.trim() || fnName;
+      const rowLabel =
+        rowEl?.querySelector(".n-bind-label")?.textContent?.trim() ||
+        (rowEl?.classList.contains("n-ctlchip") ? rowEl.textContent?.trim() : "") ||
+        fnName;
       if (ui.rightView !== "controls") {
         ui.rightView = "controls";
         saveUiPrefs();
@@ -2572,9 +2575,20 @@ export function NocturneIsland() {
               h(
                 "g",
                 { transform: "translate(0,120)" },
-                h("circle", { "data-fn": "lthumb lx.min lx.max ly.min ly.max", cx: "163", cy: "115", r: "50", fill: "transparent" }),
-                h("circle", { "data-fn": "rthumb rx.min rx.max ry.min ry.max", cx: "487", cy: "243", r: "49", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.up dpad.down dpad.left dpad.right", cx: "263", cy: "253", r: "57", fill: "transparent" }),
+                h("circle", { "data-fn": "lthumb", cx: "163", cy: "115", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.max", cx: "163", cy: "84", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.min", cx: "163", cy: "146", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.min", cx: "132", cy: "115", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.max", cx: "194", cy: "115", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "rthumb", cx: "487", cy: "243", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.max", cx: "487", cy: "212", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.min", cx: "487", cy: "274", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.min", cx: "456", cy: "243", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.max", cx: "518", cy: "243", r: "16", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.up", cx: "263", cy: "222", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.down", cx: "263", cy: "284", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.left", cx: "232", cy: "253", r: "18", fill: "transparent" }),
+                h("circle", { "data-fn": "dpad.right", cx: "294", cy: "253", r: "18", fill: "transparent" }),
                 h("circle", { "data-fn": "guide", cx: "380", cy: "120", r: "43", fill: "transparent" }),
                 h("circle", { "data-fn": "back", cx: "299", cy: "127", r: "17", fill: "transparent" }),
                 h("circle", { "data-fn": "start", cx: "459", cy: "127", r: "17", fill: "transparent" }),
@@ -2648,9 +2662,19 @@ export function NocturneIsland() {
                 ),
                 // Sticks: symmetric and low, the PlayStation way.
                 h("circle", { class: "wspad-well", cx: "38.1", cy: "36.12", r: "9.6" }),
-                h("circle", { "data-fn": "lthumb lx.min lx.max ly.min ly.max", class: "wspad-stick", cx: "38.1", cy: "36.12", r: "6.6" }),
+                h("circle", { class: "wspad-stick", cx: "38.1", cy: "36.12", r: "6.6" }),
+                h("circle", { "data-fn": "lthumb", cx: "38.1", cy: "36.12", r: "3.0", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.max", cx: "38.1", cy: "31.9", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.min", cx: "38.1", cy: "40.3", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.min", cx: "33.9", cy: "36.12", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.max", cx: "42.3", cy: "36.12", r: "2.3", fill: "transparent" }),
                 h("circle", { class: "wspad-well", cx: "74.46", cy: "36.12", r: "9.6" }),
-                h("circle", { "data-fn": "rthumb rx.min rx.max ry.min ry.max", class: "wspad-stick", cx: "74.46", cy: "36.12", r: "6.6" }),
+                h("circle", { class: "wspad-stick", cx: "74.46", cy: "36.12", r: "6.6" }),
+                h("circle", { "data-fn": "rthumb", cx: "74.46", cy: "36.12", r: "3.0", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.max", cx: "74.46", cy: "31.9", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.min", cx: "74.46", cy: "40.3", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.min", cx: "70.26", cy: "36.12", r: "2.3", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.max", cx: "78.66", cy: "36.12", r: "2.3", fill: "transparent" }),
                 // The face shapes, drawn as SHAPES: triangle, circle, cross, square.
                 h("circle", { "data-fn": "y", class: "wspad-zone", cx: "91.52", cy: "12.85", r: "4.1" }),
                 h("circle", { "data-fn": "b", class: "wspad-zone", cx: "99.61", cy: "20.89", r: "4.1" }),

@@ -8232,6 +8232,38 @@ button.n-keychip:hover {
   white-space: nowrap;
 }
 
+/* Hovering a control answers like the keycaps do: visible shapes lift
+   and brighten, transparent hooks gain a soft accent ring — either way
+   the pad says "clickable" before the click. */
+.n-stage [data-fn] {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease;
+}
+
+.n-stage [data-fn]:hover {
+  transform: scale(1.08);
+  stroke: var(--n-accent-line);
+  stroke-width: 2.5px;
+  filter: brightness(1.15);
+}
+
+.n-stage circle[fill="transparent"][data-fn]:hover {
+  fill: rgba(150, 138, 224, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-stage [data-fn] {
+    transition: none;
+  }
+
+  .n-stage [data-fn]:hover {
+    transform: none;
+  }
+}
+
 /* Stage art is clickable: any control jumps to its binding row. */
 .n-stage [data-fn] {
   cursor: pointer;

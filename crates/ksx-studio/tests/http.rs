@@ -7279,6 +7279,38 @@ fn nocturne_applies_the_dirty_draft_to_the_running_session() {
         response.contains("could%20not%20be%20applied"),
         "{response}"
     );
+
+    // The JSON twin answers with the daemon's OWN words: the hot path's
+    // fixed flash, and the needs-restart shape carrying the difference
+    // sentence verbatim for the quoting dialog.
+    control.running.store(true, Ordering::SeqCst);
+    control.apply_needs_restart.store(false, Ordering::SeqCst);
+    let hot: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(hot["done"], true, "{hot}");
+    assert!(
+        hot["flash"]
+            .as_str()
+            .is_some_and(|f| f.starts_with("Changes applied")),
+        "{hot}"
+    );
+    control.apply_needs_restart.store(true, Ordering::SeqCst);
+    let restart: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(restart["done"], false, "{restart}");
+    assert_eq!(restart["code"], "needs-restart", "{restart}");
+    assert_eq!(
+        restart["message"], "the draft changed the session's structure",
+        "{restart}"
+    );
+    control.running.store(false, Ordering::SeqCst);
+    let idle: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(idle["done"], false, "{idle}");
+    assert!(idle["code"].is_null(), "{idle}");
 }
 
 /// **The MIGRATED configuration menu, over HTTP.** The menu's facts are

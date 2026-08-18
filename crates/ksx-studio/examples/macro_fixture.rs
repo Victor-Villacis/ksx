@@ -452,6 +452,21 @@ impl ControlSource for Store {
         view
     }
 
+    /// Play, scripted: the engine's own readiness answers — a draft that
+    /// commits "starts" (this double runs no sessions; the flash is the
+    /// thing under test), and an unready one refuses with the engine's
+    /// sentence.
+    fn stage_play(&self) -> ksx_api::StageOutcome {
+        let setup = self.stage.lock().unwrap();
+        match setup.commit() {
+            Ok(_) => ksx_api::StageOutcome::ok(&setup, "started"),
+            Err(err) => {
+                let refusal = ksx_api::Refusal::new("not-ready", err.to_string());
+                ksx_api::StageOutcome::refused(&setup, &refusal)
+            }
+        }
+    }
+
     /// Apply-in-place, the daemon's shape: refused when nothing runs; ok
     /// (and the dirty bit settles) when the fixture session is running.
     fn stage_apply(&self) -> ksx_api::StageOutcome {
@@ -459,6 +474,15 @@ impl ControlSource for Store {
         if !fixture_session().running {
             let refusal =
                 ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        // KSX_FIXTURE_APPLY=restart scripts the structural-difference shape,
+        // in a daemon-shaped sentence, so the quoting dialog is drivable.
+        if std::env::var("KSX_FIXTURE_APPLY").as_deref() == Ok("restart") {
+            let refusal = ksx_api::Refusal::new(
+                "needs-restart",
+                "the draft adds controller P3 (Xbox 360), which the running session does not have — only a replaced session can plug it",
+            );
             return ksx_api::StageOutcome::refused(&setup, &refusal);
         }
         self.dirty.store(false, Ordering::SeqCst);

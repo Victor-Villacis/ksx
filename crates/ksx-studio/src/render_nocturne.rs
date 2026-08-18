@@ -638,7 +638,12 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 19] = [
+        const CLIENT_ONLY_SLOTS: [&str; 22] = [
+            // Apply's needs-restart dialog is a fetch answer, never server
+            // state.
+            "nApplyOpen",
+            "show:nApplyOpen",
+            "nApplyMsg",
             "nCapPrep",
             "nCapRel",
             "nCenterCls",

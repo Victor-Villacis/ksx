@@ -638,6 +638,10 @@ const LEARN_POLL_MS = 33;
 const [nLearnCls, setNLearnCls] = createSignal("n-learnbar none");
 const [nLearnText, setNLearnText] = createSignal("");
 const [nLearnSub, setNLearnSub] = createSignal("");
+// The Apply verb's needs-restart dialog: client-only (a fetch answer),
+// quoting the daemon's own difference sentence.
+const [nApplyOpen, setNApplyOpen] = createSignal(false);
+const [nApplyMsg, setNApplyMsg] = createSignal("");
 const [nConfOpen, setNConfOpen] = createSignal(false);
 const [nConfTitle, setNConfTitle] = createSignal("");
 const [nConfLines, setNConfLines] = createSignal("");
@@ -1221,6 +1225,41 @@ function locateBindRow(root: HTMLElement, fns: string): void {
   window.setTimeout(() => row.classList.remove("locate"), 1600);
 }
 
+/** The Apply form's scripted path: the same verb as the no-JS door, but the
+ *  answer comes back as JSON carrying the daemon's OWN sentence — a
+ *  needs-restart refusal opens the quoting dialog instead of the fixed
+ *  flash the allowlist permits. */
+let applyPending = false;
+
+async function applyDraftViaJson(): Promise<void> {
+  if (applyPending) return;
+  applyPending = true;
+  try {
+    const res = await fetch("/nocturne/api/apply", {
+      method: "POST",
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const out = (await res.json()) as {
+      done: boolean;
+      code?: string;
+      message?: string;
+      flash?: string;
+    };
+    if (!out.done && out.code === "needs-restart") {
+      setNApplyMsg(out.message || "The draft differs from the running session's structure.");
+      setNApplyOpen(true);
+    } else {
+      applyFlash(out.flash ?? null);
+    }
+  } catch {
+    applyFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    applyPending = false;
+  }
+  nocturnePollFn();
+}
+
 /** Delegated events on the island root (the map.ts idiom): every interactive
  *  control carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
@@ -1235,6 +1274,12 @@ export function nocturneWire(root: HTMLElement): void {
   // banner while the round-trip is in flight; applyFlash settles it.
   root.addEventListener("submit", (ev) => {
     const form = ev.target as HTMLElement | null;
+    if (form instanceof HTMLFormElement && form.classList.contains("n-applyform")) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      void applyDraftViaJson();
+      return;
+    }
     if (form && form.classList.contains("n-idform")) {
       ui.identify = true;
       applyNocturneUi();
@@ -1332,6 +1377,14 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "conf-cancel") {
       pendingConflict = null;
       setNConfOpen(false);
+    } else if (hit === "apply-cancel") {
+      setNApplyOpen(false);
+    } else if (hit === "apply-replace") {
+      // The remedy the daemon named: stage-play replaces the session. The
+      // hidden Play twin carries the verb; the generic fetch path flashes
+      // and polls like any form.
+      setNApplyOpen(false);
+      root.querySelector<HTMLFormElement>('form[action="/nocturne/play"]')?.requestSubmit();
     } else if (hit === "dlg-noop") {
       // A dialog panel: exists so panel clicks stop here instead of
       // reaching the backdrop's dlg-close. Never preventDefault — the
@@ -1490,7 +1543,7 @@ export function NocturneIsland() {
       // needs-restart sentence naming Play.
       h(
         "form",
-        { class: "n-inline", method: "post", action: "/nocturne/apply" },
+        { class: "n-inline n-applyform", method: "post", action: "/nocturne/apply" },
         h("button", { type: "submit", class: () => nApplyCls() }, "⟳ Apply"),
       ),
       h(
@@ -3343,6 +3396,48 @@ export function NocturneIsland() {
                 "button",
                 { class: "nd-btn primary", type: "button", "data-nx": "conf-force" },
                 "Use here too",
+              ),
+            ),
+          ),
+        ),
+    ),
+    // ═══ Apply's needs-restart dialog — the daemon's own words on WHAT the ══
+    // draft changed, and the remedy it named: replacing the session.
+    // Client-only: a fetch answer, never server state.
+    createShow(
+      () => nApplyOpen(),
+      () =>
+        h(
+          "div",
+          { class: "nd-back", "data-nx": "apply-cancel" },
+          h(
+            "div",
+            {
+              class: "nd",
+              "data-nx": "dlg-noop",
+              role: "dialog",
+              "aria-label": "Session restart needed",
+            },
+            h("div", { class: "nd-kick" }, "Session restart needed"),
+            h("div", { class: "nd-title" }, "The running session cannot take these changes"),
+            h("div", { class: "nd-lede" }, () => nApplyMsg()),
+            h(
+              "div",
+              { class: "nd-note" },
+              "Replacing the session unplugs the pads and plugs the new draft — a game mid-match will see the controllers reconnect.",
+            ),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h(
+                "button",
+                { class: "nd-btn", type: "button", "data-nx": "apply-cancel" },
+                "Keep playing as-is",
+              ),
+              h(
+                "button",
+                { class: "nd-btn primary", type: "button", "data-nx": "apply-replace" },
+                "Replace the session",
               ),
             ),
           ),

@@ -885,6 +885,32 @@ pub(super) async fn nocturne_form_apply(State(state): State<Arc<AppState>>) -> R
     nocturne_redirect(flash)
 }
 
+/// POST /nocturne/api/apply — the scripted twin of `/nocturne/apply`: the
+/// same verb, but the browser gets the DAEMON'S OWN WORDS back, so a
+/// `needs-restart` refusal opens a dialog quoting exactly what differs —
+/// the flash allowlist only reflects fixed sentences, which is why the
+/// no-JS door keeps its generic one.
+pub(super) async fn nocturne_api_apply(State(state): State<Arc<AppState>>) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || state.control.stage_apply())
+        .await
+        .ok();
+    let json = match outcome {
+        Some(outcome) if outcome.ok => serde_json::json!({
+            "done": true,
+            "flash": N_APPLY_OK,
+        }),
+        Some(outcome) if outcome.code.as_deref() == Some("needs-restart") => serde_json::json!({
+            "done": false,
+            "code": "needs-restart",
+            // The daemon's sentence naming the difference, verbatim.
+            "message": outcome.error.unwrap_or_default(),
+            "flash": N_APPLY_RESTART,
+        }),
+        _ => serde_json::json!({ "done": false, "flash": N_APPLY_ERROR }),
+    };
+    axum::Json(json).into_response()
+}
+
 /// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)
 /// — the same controller again, in the next free slot. A COMPOSITION of
 /// existing staging verbs: add + set-bindings + set-socd, with the fresh slot

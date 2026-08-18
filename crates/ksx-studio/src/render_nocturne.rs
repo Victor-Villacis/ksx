@@ -18,8 +18,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
     NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneGameRow,
-    NocturneKeyCell, NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow,
-    NocturneRackRow,
+    NocturneKeyCell, NocturneMacroRow, NocturneOptionRow, NocturneOtherRow, NocturnePayload,
+    NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -36,6 +36,7 @@ const LIST_SLOT_LAYOUTS: &str = "list:nLayoutOpts:array";
 const LIST_SLOT_SOCDS: &str = "list:nSocdOpts:array";
 const LIST_SLOT_BINDS: &str = "list:nBindRows:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
+const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -78,6 +79,8 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nPadSub": payload.view.pad_sub,
         "nBindTitle": payload.view.bind_title,
         "nBindFoot": payload.view.bind_foot,
+        "nMacrosHead": payload.view.macros_head,
+        "nMacrosNote": payload.view.macros_note,
         "nKbTrayHead": payload.view.kb_tray_head,
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
@@ -185,6 +188,30 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
     ])
 }
 
+fn macro_row(row: &NocturneMacroRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("fn_name".to_owned(), SlotValue::Text(row.fn_name.clone())),
+        ("chip".to_owned(), SlotValue::Text(row.chip.clone())),
+        ("chip_cls".to_owned(), SlotValue::Text(row.chip_cls.clone())),
+        ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+        (
+            "edit_href".to_owned(),
+            SlotValue::Text(row.edit_href.clone()),
+        ),
+        (
+            "toggle_label".to_owned(),
+            SlotValue::Text(row.toggle_label.clone()),
+        ),
+        (
+            "toggle_value".to_owned(),
+            SlotValue::Text(row.toggle_value.clone()),
+        ),
+    ])
+}
+
 fn game_row(row: &NocturneGameRow) -> SlotValue {
     SlotValue::object(vec![
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
@@ -213,12 +240,16 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 18] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 19] {
     let view = &payload.view;
     [
         (
             LIST_SLOT_GAMES,
             SlotValue::array(view.game_rows.iter().map(game_row).collect()),
+        ),
+        (
+            LIST_SLOT_MACROS,
+            SlotValue::array(view.macro_rows.iter().map(macro_row).collect()),
         ),
         (
             LIST_SLOT_KB[0],
@@ -457,10 +488,11 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 18] = [
+        const SERVED_LIST_PREFIXES: [&str; 19] = [
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
+            "list:nMacroRows:",
             "list:nKbRow1:",
             "list:nKbRow2:",
             "list:nKbRow3:",
@@ -477,9 +509,11 @@ mod tests {
             "list:nSocdOpts:",
             "list:nBindRows:",
         ];
-        const SERVED_SLOTS: [&str; 50] = [
+        const SERVED_SLOTS: [&str; 52] = [
             "nDevCount",
             "nModeNote",
+            "nMacrosHead",
+            "nMacrosNote",
             "nPadXboxCls",
             "nPadPsCls",
             "nKbTrayHead",
@@ -586,6 +620,7 @@ mod tests {
             LIST_SLOT_DEVICES,
             LIST_SLOT_EXP,
             LIST_SLOT_GAMES,
+            LIST_SLOT_MACROS,
             LIST_SLOT_OTHER,
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],

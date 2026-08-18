@@ -383,46 +383,11 @@ pub(super) async fn api_bind_keys(
     .await
 }
 
-/// POST /api/macro/save — write (or delete) one whole `[macros.<name>]` table.
-///
-/// `reload` is forced on, exactly like the restore route: the daemon only
-/// applies to a session that is actually RUNNING, and a macro body is a
-/// binding change — it changes no slot, persona or device, so the session
-/// hot-swaps it with the pads left plugged instead of bouncing them.
-///
-/// Feedback parity with every other write on this page: `message` is the
-/// toast, `problems` are the refusal's rows, `warnings` are the advisories a
-/// successful save still has to say out loud (a step below the sampling
-/// floor), and `backup` names the restore point this edit left — which the
-/// mapper's existing "Restore backup from …" (`latest-backup`) undoes.
-pub(super) async fn api_macro_save(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<TargetedMacroWrite>,
-) -> Response {
-    let write = crate::control::MacroWrite {
-        reload: true,
-        ..request.write
-    };
-    control_json(state, move |control| {
-        consumerize_macro(macro_for_target(
-            control,
-            request.target.as_deref(),
-            request.slot,
-            &write,
-        ))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-pub(super) struct TargetedMacroWrite {
-    #[serde(flatten)]
-    write: crate::control::MacroWrite,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    slot: Option<u8>,
-}
+// `POST /api/macro/save` (and its `TargetedMacroWrite` body) MOVED to
+// `server/nocturne.rs` on 2026-08-17 with the macro-lifecycle migration —
+// same route, one macro-writing surface for both pages. The
+// `macro_for_target`/`consumerize_macro` machinery stays here beside its
+// bind twins; the moved handler calls back into it.
 
 #[derive(Deserialize)]
 pub(super) struct RestoreRequest {

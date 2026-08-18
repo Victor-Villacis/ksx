@@ -221,7 +221,41 @@ fn authored_preset(name: &str) -> ksx_config::PresetFile {
             (Key::Enter, Binding::Button(XButton::Start)),
         ],
         chords: Vec::new(),
-        macros: Default::default(),
+        // One REAL macro with a trigger key, so the right pane's macro
+        // lifecycle rows have a fact to show: a three-step quarter-circle
+        // ending on X, started by P.
+        macros: ksx_core::Macros {
+            defs: vec![ksx_core::Macro {
+                name: "hadouken".into(),
+                steps: vec![
+                    ksx_core::MacroStep {
+                        hold: vec![Binding::Dpad(DpadDirection::Down)],
+                        duration: ksx_core::StepDuration::Ms(50),
+                        allow_short: false,
+                    },
+                    ksx_core::MacroStep {
+                        hold: vec![
+                            Binding::Dpad(DpadDirection::Down),
+                            Binding::Dpad(DpadDirection::Right),
+                        ],
+                        duration: ksx_core::StepDuration::Ms(50),
+                        allow_short: false,
+                    },
+                    ksx_core::MacroStep {
+                        hold: vec![Binding::Button(XButton::X)],
+                        duration: ksx_core::StepDuration::Ms(80),
+                        allow_short: false,
+                    },
+                ],
+                on_release: Default::default(),
+                retrigger: Default::default(),
+                interrupt: Default::default(),
+                repeat: Default::default(),
+                turbo: None,
+                enabled: true,
+            }],
+            triggers: vec![ksx_core::MacroTrigger::new(Key::P, 0)],
+        },
         turbo: vec![ksx_core::TurboBinding::new(
             Binding::Trigger(ksx_core::Trigger::Right),
             12,

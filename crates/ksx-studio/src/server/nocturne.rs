@@ -1,20 +1,20 @@
-//! `/nocturne` — the Nocturne front end, now growing its REAL backend.
+//! `/nocturne` — the Nocturne front end, the product surface.
 //!
-//! The keyboard section migrated here from `/start` on 2026-08-17 — MOVED,
-//! not copied: the device pick (`ChooseDevice`), identify-by-key, the
-//! split-or-freeze answer, and the WinUSB prepare/release transactions with
-//! their exact-identity guards all live in this module now, and `/start`'s
-//! own routes for them point at these handlers. `/start` keeps rendering its
-//! frames untouched, but pressing its keyboard buttons lands the answer on
-//! `/nocturne` — the old page hollows out one section at a time while the new
-//! one becomes the product surface. The rack, binding-list, session and
-//! keyboard-diagram passes followed the same pattern, and the rebind pass
-//! moved the learner's JSON trio here from `/map` (same routes; one
-//! daemon-owned listening surface for every door) and added the staged bind
-//! verb plus the turbo/toggle form twins.
+//! Grown one migration pass at a time through 2026-08-17, each MOVING (never
+//! copying) a section's backend here while the old page keeps rendering its
+//! frames and its buttons land their answers on `/nocturne`: the keyboard
+//! section from `/start` (device pick, identify-by-key, split-or-freeze,
+//! the WinUSB capture transactions with every guard), the rack and session
+//! verbs from `/workspace`, the learner's JSON trio and the macro editor
+//! verb from `/map` (same routes — one daemon-owned surface per verb for
+//! every door), the configuration menu (adopt grown a per-game field, Start
+//! over, the sign-in task), the staged bind verb with its turbo/toggle
+//! twins, and the macro lifecycle twins. The live input echo rides
+//! `/api/live` client-side.
 //!
-//! Still placeholder until their own passes: the configuration menu's
-//! contents and the live input echo — each says so on the page.
+//! What deliberately remains elsewhere: macro STEP editing (the Controls
+//! grid, linked from each macro row until its own pass) and the workspace's
+//! move/socd forms.
 
 use super::*;
 
@@ -126,6 +126,11 @@ pub(super) const N_TOGGLE_OK: &str = "Press behaviour updated. Nothing has been 
 pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
      nothing to hold. Bind a key first; nothing was changed.";
 
+pub(super) const N_MACRO_OK: &str = "Macro updated. Nothing has been saved or started.";
+
+pub(super) const N_MACRO_DELETED: &str = "Macro removed from this draft — its trigger keys are \
+     unbound with it. Nothing saved was touched.";
+
 pub(super) const N_ADOPT_OK: &str =
     "Loaded into this draft — review it, then Play. Nothing has been saved or started.";
 
@@ -159,7 +164,9 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 43] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 45] = [
+    N_MACRO_OK,
+    N_MACRO_DELETED,
     N_ADOPT_OK,
     N_ADOPT_BLOCKED,
     N_DISCARD_OK,
@@ -1100,6 +1107,134 @@ pub(super) async fn nocturne_form_bind_toggle(
     .await
     .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+// ── The macro machinery (moved from /map 2026-08-17, macro migration) ──────
+
+/// POST /api/macro/save — write (or delete) one whole `[macros.<name>]`
+/// table. Moved here with the macro-lifecycle migration; the target
+/// resolution and the presentation boundary stay in map.rs beside their bind
+/// twins, and this handler is the one door both pages' editors go through.
+///
+/// `reload` is forced on, exactly like the restore route: the daemon only
+/// applies to a session that is actually RUNNING, and a macro body is a
+/// binding change — the session hot-swaps it with the pads left plugged.
+pub(super) async fn api_macro_save(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<TargetedMacroWrite>,
+) -> Response {
+    let write = crate::control::MacroWrite {
+        reload: true,
+        ..request.write
+    };
+    control_json(state, move |control| {
+        consumerize_macro(macro_for_target(
+            control,
+            request.target.as_deref(),
+            request.slot,
+            &write,
+        ))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+pub(super) struct TargetedMacroWrite {
+    #[serde(flatten)]
+    write: crate::control::MacroWrite,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    slot: Option<u8>,
+}
+
+/// The lifecycle twins' form: the slot number and the table name — the two
+/// identities a staged macro write needs. The server resolves the preset.
+#[derive(Deserialize)]
+pub(super) struct NocturneMacroForm {
+    slot: u8,
+    name: String,
+    /// The toggle twin's direction: `yes` enables, anything else disables —
+    /// served on the row, never inferred from a possibly-stale page.
+    #[serde(default)]
+    enable: Option<String>,
+}
+
+/// One staged macro write with the slot's preset resolved server-side, and
+/// the outcome folded to a flash. The write shapes are `MacroWrite`'s own
+/// contracts: `enabled` with NO steps is a pure toggle (the table keeps
+/// every step and policy), and `delete` is an explicit flag so a lost grid
+/// can never delete by omission.
+async fn nocturne_macro_write(
+    state: Arc<AppState>,
+    slot: u8,
+    write: crate::control::MacroWrite,
+    ok_flash: &'static str,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
+            return N_EDIT_ERROR;
+        };
+        let write = crate::control::MacroWrite {
+            preset: found.preset.clone(),
+            ..write
+        };
+        let outcome = state.control.stage_macro(&ksx_api::StagedMacroRequest {
+            number: slot,
+            write,
+        });
+        if outcome.ok {
+            ok_flash
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+/// POST /nocturne/macro/toggle — disable (or re-enable) one macro. The table
+/// keeps everything; only the flag moves — that is the whole promise of
+/// disabling instead of deleting.
+pub(super) async fn nocturne_form_macro_toggle(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneMacroForm>,
+) -> Response {
+    let enable = checked(form.enable.as_deref());
+    nocturne_macro_write(
+        state,
+        form.slot,
+        crate::control::MacroWrite {
+            name: form.name,
+            enabled: Some(enable),
+            ..crate::control::MacroWrite::default()
+        },
+        N_MACRO_OK,
+    )
+    .await
+}
+
+/// POST /nocturne/macro/delete — remove one macro table (and the trigger
+/// rows that would otherwise dangle) from THIS DRAFT. The row's fold states
+/// the consequence before this verb is reachable; saved files are untouched
+/// until Save.
+pub(super) async fn nocturne_form_macro_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneMacroForm>,
+) -> Response {
+    nocturne_macro_write(
+        state,
+        form.slot,
+        crate::control::MacroWrite {
+            name: form.name,
+            delete: true,
+            ..crate::control::MacroWrite::default()
+        },
+        N_MACRO_DELETED,
+    )
+    .await
 }
 
 #[derive(Deserialize)]

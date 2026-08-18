@@ -235,6 +235,8 @@ pub fn serve(
             .route("/nocturne/api/bind", post(nocturne_api_bind))
             .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
             .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))
+            .route("/nocturne/macro/toggle", post(nocturne_form_macro_toggle))
+            .route("/nocturne/macro/delete", post(nocturne_form_macro_delete))
             .route("/nocturne/save", post(nocturne_form_save))
             .route("/nocturne/play", post(nocturne_form_play))
             .route("/nocturne/stop", post(nocturne_form_stop))

@@ -8715,6 +8715,48 @@ details.n-bind {
   display: none;
 }
 
+/* ── The macro rows' extra controls ── */
+
+a.n-bbtn-link {
+  display: inline-block;
+  text-decoration: none;
+  color: #e4e7f5;
+}
+
+.n-bbtn.ghost {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #3f424d;
+  color: var(--n-text-2);
+}
+
+.n-bbtn.danger {
+  background: rgba(231, 154, 166, 0.14);
+  box-shadow: inset 0 0 0 1px #6b3a44;
+  color: #e79aa6;
+}
+
+.n-bdel {
+  display: inline-block;
+}
+
+.n-bdel > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-block;
+}
+
+.n-bdel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.n-bdel-body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 6px;
+}
+
 /* ── The learn banner: capture-time state, inline, never a dialog ── */
 
 .n-learnbar {

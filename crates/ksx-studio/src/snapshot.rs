@@ -3857,6 +3857,31 @@ pub struct NocturneBindRow {
     pub tog_cls: String,
 }
 
+/// One macro of the selected slot's layout, as the right pane's lifecycle
+/// row: trigger keys, a step/policy summary, and the enable/disable state.
+/// Step EDITING stays on the Controls editor until its own pass; this row
+/// says so with a link instead of pretending.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroRow {
+    /// The table name — the display label.
+    pub name: String,
+    /// `macro.<name>` — the binding-table function the learn flow rebinds.
+    pub fn_name: String,
+    /// Trigger keys joined, or the honest "No trigger key".
+    pub chip: String,
+    pub chip_cls: String,
+    /// "3 steps · repeats while held · …".
+    pub meta: String,
+    pub cls: String,
+    pub slot: String,
+    /// The Controls editor, opened at exactly this macro.
+    pub edit_href: String,
+    /// The lifecycle pair, precomposed: what the submit does and the wire
+    /// value it sends ("yes" enables, empty disables).
+    pub toggle_label: String,
+    pub toggle_value: String,
+}
+
 /// One saved game in the configuration menu — a LOAD row, never a launcher.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneGameRow {
@@ -3949,6 +3974,10 @@ pub struct NocturneDerived {
     pub bind_title: String,
     pub bind_rows: Vec<NocturneBindRow>,
     pub bind_foot: String,
+    /// The selected slot's macros: lifecycle rows + the honest state line.
+    pub macros_head: String,
+    pub macro_rows: Vec<NocturneMacroRow>,
+    pub macros_note: String,
     /// The keyboard grid, dressed: six rows of the standard board with each
     /// key's binding short, the off-board tray, and the honesty note naming
     /// which controller the shorts describe.
@@ -4596,6 +4625,89 @@ impl NocturneDerived {
             })
             .collect();
 
+        // ── The selected slot's macros: lifecycle rows off the SAME staged
+        // authoring the mapper reads. Step editing stays on Controls until
+        // its own pass, and the rows say so with a link, not a pretence.
+        let (macros_head, macro_rows, macros_note) = match selected {
+            None => ("Macros".to_owned(), Vec::new(), String::new()),
+            Some(slot) => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                if !snap.available {
+                    ("Macros".to_owned(), Vec::new(), snap.reason.clone())
+                } else {
+                    let rows: Vec<NocturneMacroRow> = snap
+                        .macros
+                        .iter()
+                        .map(|mac| {
+                            let triggered = !mac.triggers.is_empty();
+                            let mut notes = vec![match mac.steps.len() {
+                                1 => "1 step".to_owned(),
+                                n => format!("{n} steps"),
+                            }];
+                            match mac.repeat.as_str() {
+                                "while-held" => notes.push("repeats while held".to_owned()),
+                                "turbo" => notes.push(match (mac.turbo_hz, mac.gap_ms) {
+                                    (Some(hz), _) => format!("turbo {hz} Hz"),
+                                    (_, Some(gap)) => format!("turbo · {gap} ms gap"),
+                                    _ => "turbo".to_owned(),
+                                }),
+                                _ => {}
+                            }
+                            if mac.on_release == "abort" {
+                                notes.push("aborts on release".to_owned());
+                            }
+                            if mac.disabled {
+                                notes.push("disabled — keeps every step, never starts".to_owned());
+                            }
+                            NocturneMacroRow {
+                                name: mac.name.clone(),
+                                fn_name: format!("macro.{}", mac.name),
+                                chip: if triggered {
+                                    mac.triggers.join(" · ")
+                                } else {
+                                    "No trigger key".to_owned()
+                                },
+                                chip_cls: if triggered {
+                                    "n-keychip".to_owned()
+                                } else {
+                                    "n-keychip ghost".to_owned()
+                                },
+                                meta: notes.join(" · "),
+                                cls: if triggered && !mac.disabled {
+                                    "n-bind on".to_owned()
+                                } else {
+                                    "n-bind".to_owned()
+                                },
+                                slot: slot.number.to_string(),
+                                edit_href: format!(
+                                    "/map?target=stage&slot={}&macro={}",
+                                    slot.number, mac.name
+                                ),
+                                toggle_label: if mac.disabled {
+                                    "Enable".to_owned()
+                                } else {
+                                    "Disable".to_owned()
+                                },
+                                toggle_value: if mac.disabled {
+                                    "yes".to_owned()
+                                } else {
+                                    String::new()
+                                },
+                            }
+                        })
+                        .collect();
+                    let head = format!("Macros · {}", rows.len());
+                    let note = if rows.is_empty() {
+                        "No macros in this layout yet — author them in the Controls editor."
+                            .to_owned()
+                    } else {
+                        String::new()
+                    };
+                    (head, rows, note)
+                }
+            }
+        };
+
         Self {
             version,
             chip_text,
@@ -4619,6 +4731,9 @@ impl NocturneDerived {
             bind_title: binds.title,
             bind_rows,
             bind_foot: binds.foot,
+            macros_head,
+            macro_rows,
+            macros_note,
             kb_row1,
             kb_row2,
             kb_row3,

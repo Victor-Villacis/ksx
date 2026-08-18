@@ -76,6 +76,19 @@ export interface NocturneKeyCellView {
   title: string;
 }
 
+export interface NocturneMacroRowView {
+  name: string;
+  fn_name: string;
+  chip: string;
+  chip_cls: string;
+  meta: string;
+  cls: string;
+  slot: string;
+  edit_href: string;
+  toggle_label: string;
+  toggle_value: string;
+}
+
 export interface NocturneGameRowView {
   title: string;
   meta: string;
@@ -139,6 +152,9 @@ export interface NocturneView {
   bind_title: string;
   bind_rows: NocturneBindRowView[];
   bind_foot: string;
+  macros_head: string;
+  macro_rows: NocturneMacroRowView[];
+  macros_note: string;
   kb_row1: NocturneKeyCellView[];
   kb_row2: NocturneKeyCellView[];
   kb_row3: NocturneKeyCellView[];
@@ -223,6 +239,9 @@ const [nPadPsCls, setNPadPsCls] = createSignal("n-padwrap none");
 const [nBindTitle, setNBindTitle] = createSignal("");
 const [nBindRows, setNBindRows] = createSignal<NocturneBindRowView[]>([]);
 const [nBindFoot, setNBindFoot] = createSignal("");
+const [nMacrosHead, setNMacrosHead] = createSignal("");
+const [nMacroRows, setNMacroRows] = createSignal<NocturneMacroRowView[]>([]);
+const [nMacrosNote, setNMacrosNote] = createSignal("");
 const [nKbRow1, setNKbRow1] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow2, setNKbRow2] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow3, setNKbRow3] = createSignal<NocturneKeyCellView[]>([]);
@@ -299,6 +318,9 @@ export function applyNocturne(p: NocturnePayload): void {
   setNBindTitle(v.bind_title);
   setNBindRows(v.bind_rows);
   setNBindFoot(v.bind_foot);
+  setNMacrosHead(v.macros_head);
+  setNMacroRows(v.macro_rows);
+  setNMacrosNote(v.macros_note);
   setNKbRow1(v.kb_row1);
   setNKbRow2(v.kb_row2);
   setNKbRow3(v.kb_row3);
@@ -1950,6 +1972,113 @@ export function NocturneIsland() {
               ),
             ),
         ),
+        // ── Macros: lifecycle rows off the same staged authoring. The
+        // trigger keys rebind through the SAME learn flow as any control
+        // (the rows carry data-fn="macro.<name>"); enable/disable and
+        // delete are real form twins; step EDITING stays on the Controls
+        // editor until its own pass — the link says so, honestly.
+        h(
+          "div",
+          { class: "n-group-head" },
+          h("span", { class: "n-kick" }, () => nMacrosHead()),
+        ),
+        createList(
+          () => nMacroRows(),
+          (r) =>
+            [
+              r.name,
+              r.fn_name,
+              r.chip,
+              r.chip_cls,
+              r.meta,
+              r.cls,
+              r.slot,
+              r.toggle_label,
+              r.toggle_value,
+            ].join("|"),
+          (r) =>
+            h(
+              "details",
+              { class: r.cls, "data-fn": r.fn_name, "data-slot": r.slot },
+              h(
+                "summary",
+                { class: "n-bind-sum" },
+                h("span", { class: "n-bind-dot" }),
+                h(
+                  "span",
+                  { class: "n-bind-txt" },
+                  h("span", { class: "n-bind-label" }, r.name),
+                  h("span", { class: "n-bind-note" }, r.meta),
+                ),
+                h("span", { class: r.chip_cls }, r.chip),
+              ),
+              h(
+                "div",
+                { class: "n-bedit" },
+                h(
+                  "div",
+                  { class: "n-bedit-row" },
+                  h(
+                    "button",
+                    { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
+                    "Rebind trigger — press a key",
+                  ),
+                  h(
+                    "button",
+                    { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
+                    "Add trigger key",
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/macro/toggle" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "name", value: r.name }),
+                    h("input", { type: "hidden", name: "enable", value: r.toggle_value }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        title: "A disabled macro keeps every step and never starts",
+                        class: "n-bpill",
+                      },
+                      r.toggle_label,
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  { class: "n-bedit-row" },
+                  h(
+                    "a",
+                    { class: "n-bbtn n-bbtn-link", href: r.edit_href },
+                    "Edit steps in Controls",
+                  ),
+                  h(
+                    "details",
+                    { class: "n-bdel" },
+                    h("summary", { class: "n-bbtn ghost" }, "Delete…"),
+                    h(
+                      "div",
+                      { class: "n-bdel-body" },
+                      h(
+                        "span",
+                        { class: "n-bedit-lab" },
+                        "Removes the steps and unbinds its trigger keys — in this draft only.",
+                      ),
+                      h(
+                        "form",
+                        { class: "n-inline", method: "post", action: "/nocturne/macro/delete" },
+                        h("input", { type: "hidden", name: "slot", value: r.slot }),
+                        h("input", { type: "hidden", name: "name", value: r.name }),
+                        h("button", { type: "submit", class: "n-bbtn danger" }, "Delete this macro"),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ),
+        h("p", { class: "n-devnote" }, () => nMacrosNote()),
         h("div", { class: "n-right-foot" }, () => nBindFoot()),
       ),
     ),

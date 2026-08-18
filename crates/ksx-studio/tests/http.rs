@@ -6867,6 +6867,126 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     );
 }
 
+/// **The MIGRATED macro lifecycle, over HTTP.** The macro rows are the
+/// staged authoring's own facts; the moved /api/macro/save authors into the
+/// draft; the trigger rebinds through the SAME staged bind verb as any
+/// control; the toggle keeps every step; delete removes table and triggers
+/// together — and every twin refuses junk in allowlisted words.
+#[test]
+fn nocturne_serves_the_migrated_macro_lifecycle_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // A layout with no macros serves the honest empty state.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["macro_rows"]
+            .as_array()
+            .expect("rows")
+            .is_empty(),
+        "{api}"
+    );
+    assert!(
+        api["view"]["macros_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Controls")),
+        "{api}"
+    );
+
+    // Author one through the MOVED editor verb (same route as ever).
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\"steps\":[{\"hold\":[\"dpad.down\"],\"ms\":50},{\"hold\":[\"A\"],\"ms\":80}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["macro_rows"][0].clone();
+    assert_eq!(row["name"], "combo", "{api}");
+    assert_eq!(row["chip"], "No trigger key", "{api}");
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("2 steps")),
+        "{api}"
+    );
+
+    // The trigger rebinds through the same staged bind verb as any control.
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":1,\"function\":\"macro.combo\",\"key\":\"F9\"}",
+    )))
+    .expect("trigger bind");
+    assert_eq!(bound["ok"], true, "{bound}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["macro_rows"][0]["chip"], "F9", "{api}");
+
+    // Toggle off: the table keeps everything, only the flag moves.
+    let off = post_form(addr, "/nocturne/macro/toggle", "slot=1&name=combo");
+    assert!(off.contains("Macro%20updated"), "{off}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["macro_rows"][0].clone();
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("disabled")),
+        "{api}"
+    );
+    assert_eq!(row["toggle_label"], "Enable", "{api}");
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("2 steps")),
+        "the toggle must keep the steps: {api}"
+    );
+
+    // Back on…
+    let on = post_form(
+        addr,
+        "/nocturne/macro/toggle",
+        "slot=1&name=combo&enable=yes",
+    );
+    assert!(on.contains("Macro%20updated"), "{on}");
+
+    // …and delete removes the table AND its trigger rows, in this draft only.
+    let gone = post_form(addr, "/nocturne/macro/delete", "slot=1&name=combo");
+    assert!(gone.contains("Macro%20removed"), "{gone}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["macro_rows"]
+            .as_array()
+            .expect("rows")
+            .is_empty(),
+        "{api}"
+    );
+
+    // A slot this draft does not have refuses without touching anything.
+    let missing = post_form(addr, "/nocturne/macro/delete", "slot=9&name=combo");
+    assert!(missing.contains("flash=error"), "{missing}");
+}
+
 /// **Slot selection is server-resolved.** `?slot=N` picks which controller
 /// every pane follows — the rack mark, the binding title, the stage family —
 /// and a number the draft does not have falls back to the first slot instead

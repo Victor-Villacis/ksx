@@ -210,6 +210,11 @@ pub(crate) const ROWS: [&[KeyCell]; 6] = [ROW1, ROW2, ROW3, ROW4, ROW5, ROW6];
 /// The corner short for one mapper function, in the given persona's own
 /// vocabulary — derived from the SAME zone table the binding pane reads.
 pub(crate) fn short_for(persona: &str, fn_name: &str) -> String {
+    // A macro trigger has no zone; its keycap corner says M and the cap's
+    // title carries the full name.
+    if fn_name.starts_with("macro.") {
+        return "M".to_owned();
+    }
     // Directions carry their cluster prefix; everything else compacts the
     // zone's own label.
     match fn_name {
@@ -278,6 +283,14 @@ mod tests {
                 assert!(seen.insert(cell.key), "duplicate board key {:?}", cell.key);
             }
         }
+    }
+
+    /// A macro trigger's short is the one-letter M — a full `macro.<name>`
+    /// would overflow the keycap corner it lives in.
+    #[test]
+    fn a_macro_trigger_short_fits_the_corner() {
+        assert_eq!(short_for("xbox360", "macro.hadouken"), "M");
+        assert_eq!(short_for("playstation", "macro.x"), "M");
     }
 
     /// Shorts come from the zone vocabulary: family-aware, compact, total

@@ -3615,14 +3615,25 @@ fn workspace_bind_rows(
             if mapper.toggle.contains(zone.fn_name) {
                 notes.push("Toggle: a press holds until the next press".to_owned());
             }
-            let share_note = if share.is_empty() {
-                String::new()
-            } else {
-                // `share_text` is the mapper's compact badge ("also A · B",
-                // capped); this sentence gives it a subject, so the badge's
-                // own "also " comes off first.
-                let names = crate::render_map::share_text(share);
-                format!("this key also drives {}", names.trim_start_matches("also "))
+            // PER-KEY fan-out, subject named — "this key also drives…" could
+            // not say WHICH key on a multi-key row. One vocabulary
+            // everywhere: keys DRIVE controls (the board's own words).
+            let share_note = {
+                let mut parts: Vec<String> = Vec::new();
+                for key in crate::render_map::keys_of(&mapper, zone.fn_name) {
+                    let others: Vec<String> = zones
+                        .iter()
+                        .filter(|other| other.fn_name != zone.fn_name)
+                        .filter(|other| {
+                            crate::render_map::keys_of(&mapper, other.fn_name).contains(&key)
+                        })
+                        .map(crate::render_map::legend_label)
+                        .collect();
+                    if !others.is_empty() {
+                        parts.push(format!("{key} also drives {}", others.join(" · ")));
+                    }
+                }
+                parts.join(" — ")
             };
             if !share_note.is_empty() {
                 notes.push(share_note.clone());
@@ -3874,6 +3885,9 @@ pub struct NocturneBindRow {
     pub slot: String,
     /// The turbo box's prefill — the delivered rate ("12"), or empty.
     pub turbo: String,
+    /// The chip's hover sentence: the RELATION, stated from the game's side
+    /// ("Pressed by G or H — …"), because the chip lives on a control row.
+    pub chip_title: String,
     /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
     /// visibility class ("" cannot ride CSS `:empty`: the renderer keeps a
     /// zero-width text node in an empty slot).
@@ -4848,6 +4862,14 @@ impl NocturneDerived {
                     "Unbound".to_owned()
                 },
                 note: row.share_note.clone(),
+                chip_title: if bound {
+                    format!(
+                        "Pressed by {} — click, then press a new key to replace",
+                        row.keys.replace(" · ", " or ")
+                    )
+                } else {
+                    "Not bound — click, then press a key".to_owned()
+                },
                 badge: {
                     let mut parts: Vec<String> = Vec::new();
                     if row.toggle {

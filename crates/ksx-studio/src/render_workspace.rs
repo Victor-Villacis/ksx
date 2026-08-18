@@ -561,7 +561,7 @@ mod tests {
         };
         assert_eq!(row("A").keys, "G · H");
         assert!(
-            row("A").notes.contains("this key also drives"),
+            row("A").notes.contains("also drives"),
             "{:?}",
             row("A").notes
         );

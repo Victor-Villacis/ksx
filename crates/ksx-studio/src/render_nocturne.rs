@@ -274,6 +274,10 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
         ),
         ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
         ("turbo".to_owned(), SlotValue::Text(row.turbo.clone())),
+        (
+            "chip_title".to_owned(),
+            SlotValue::Text(row.chip_title.clone()),
+        ),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
         (
             "badge_cls".to_owned(),

@@ -112,6 +112,7 @@ export interface NocturneBindRowView {
   clear_cls: string;
   slot: string;
   turbo: string;
+  chip_title: string;
   badge: string;
   badge_cls: string;
   add_cls: string;
@@ -2701,7 +2702,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,
@@ -2907,7 +2908,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,
@@ -3113,7 +3114,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,
@@ -3319,7 +3320,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,
@@ -3525,7 +3526,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,
@@ -3731,7 +3732,7 @@ export function NocturneIsland() {
                     {
                       type: "button",
                       "data-nx": "chip-learn",
-                      title: "Rebind — click, then press the new key",
+                      title: r.chip_title,
                       class: r.chip_cls,
                     },
                     r.chip,

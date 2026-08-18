@@ -1943,6 +1943,12 @@ export function nocturneWire(root: HTMLElement): void {
           mode: hit.endsWith("add") ? "add" : "replace",
         });
       }
+    } else if (hit === "row-clear") {
+      // A submit button INSIDE a summary: preventDefault stops the fold
+      // toggling under it (and the native submit); requestSubmit re-fires
+      // the submit event so the ordinary fetch path handles the form.
+      ev.preventDefault();
+      target?.closest("form")?.requestSubmit();
     } else if (hit === "auto-map") {
       startAutoMap();
     } else if (hit === "learn-skip") {
@@ -3233,7 +3239,7 @@ export function NocturneIsland() {
           h(
             "p",
             { class: "n-teach" },
-            "Click a key chip, then press the new key; + adds one. Open a row for press behaviour, turbo and Clear.",
+            "Click a key chip, then press the new key; + adds one, ✕ unbinds. Open a row for press behaviour and turbo.",
           ),
         h(
           "section",
@@ -3294,9 +3300,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -3332,17 +3366,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -3506,9 +3529,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -3544,17 +3595,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -3718,9 +3758,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -3756,17 +3824,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -3930,9 +3987,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -3968,17 +4053,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -4142,9 +4216,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -4180,17 +4282,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -4354,9 +4445,37 @@ export function NocturneIsland() {
                       type: "button",
                       "data-nx": "chip-add",
                       title: "Add another key to this control",
+                      "aria-label": "Add another key to this control",
                       class: r.add_cls,
                     },
-                    "+",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                    ),
+                  ),
+                  // The control's own Clear: a real form twin riding the
+                  // hover, so unbinding is one click from the row itself.
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                    h("input", { type: "hidden", name: "slot", value: r.slot }),
+                    h("input", { type: "hidden", name: "function", value: r.function }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        "data-nx": "row-clear",
+                        title: "Back to unbound",
+                        "aria-label": "Unbind this control",
+                        class: r.clear_cls,
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
                   ),
                 ),
                 h(
@@ -4392,17 +4511,6 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
-                      ),
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
                       ),
                     ),
                   ),
@@ -4545,9 +4653,14 @@ export function NocturneIsland() {
                     type: "button",
                     "data-nx": "key-assign",
                     title: "Assign this key to another control — then click that control on the pad",
+                    "aria-label": "Assign this key to another control",
                     class: "n-addchip",
                   },
-                  "+",
+                  h(
+                    "svg",
+                    { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                    h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                  ),
                 ),
                 // The key's own Clear: takes it away from EVERYTHING it
                 // drives — a real form twin, so it works with scripting off.
@@ -4562,8 +4675,13 @@ export function NocturneIsland() {
                       type: "submit",
                       class: "n-krow-clear",
                       title: "Unbind this key from everything it drives",
+                      "aria-label": "Unbind this key from everything it drives",
                     },
-                    "✕",
+                    h(
+                      "svg",
+                      { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                      h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                    ),
                   ),
                 ),
               ),
@@ -4705,9 +4823,14 @@ export function NocturneIsland() {
                     type: "button",
                     "data-nx": "chip-add",
                     title: "Add another trigger key",
+                    "aria-label": "Add another trigger key",
                     class: r.add_cls,
                   },
-                  "+",
+                  h(
+                    "svg",
+                    { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                    h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
+                  ),
                 ),
               ),
               h(

@@ -9397,27 +9397,47 @@ button.n-keychip:hover {
   color: var(--n-text-3);
 }
 
-.n-bclear {
+/* The shared icon element: a Phosphor path drawn in the button's color. */
+.n-ico {
+  width: 11px;
+  height: 11px;
+  display: block;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+/* The control row's own Clear: quiet until the row is under the pointer. */
+.n-rowclear {
+  width: 22px;
   height: 22px;
-  padding: 0 8px;
   flex: none;
   display: grid;
   place-items: center;
-  white-space: nowrap;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   background: none;
   color: var(--n-text-3);
-  font-size: 11px;
   cursor: pointer;
+  opacity: 0;
 }
 
-.n-bclear:hover {
+.n-bind-sum:hover .n-rowclear,
+.n-rowclear:focus-visible {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .n-rowclear {
+    opacity: 1;
+  }
+}
+
+.n-rowclear:hover {
   background: rgba(231, 154, 166, 0.15);
   color: #e79aa6;
 }
 
-.n-bclear.none {
+.n-rowclear.none {
   display: none;
 }
 
@@ -9710,21 +9730,6 @@ details.n-bind.arm[open] .n-bind-sum {
   color: var(--n-text);
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11.5px;
-}
-
-.n-bedit .n-bclear {
-  padding: 4px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  box-shadow: inset 0 0 0 1px #3f424d;
-  color: var(--n-text-2);
-  font-size: 11.5px;
-  cursor: pointer;
-}
-
-.n-bedit .n-bclear.none {
-  display: none;
 }
 
 /* ── The macro rows' extra controls ── */

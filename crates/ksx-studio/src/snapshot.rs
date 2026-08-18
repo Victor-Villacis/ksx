@@ -5058,9 +5058,9 @@ impl NocturneDerived {
                     (false, _) => "n-keychip ghost".to_owned(),
                 },
                 clear_cls: if bound {
-                    "n-bclear".to_owned()
+                    "n-rowclear".to_owned()
                 } else {
-                    "n-bclear none".to_owned()
+                    "n-rowclear none".to_owned()
                 },
                 slot: row.slot.clone(),
                 turbo: row.turbo_hz.clone(),

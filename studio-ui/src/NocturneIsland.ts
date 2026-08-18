@@ -211,6 +211,9 @@ export interface NocturneView {
   kb_tray: NocturneKeyCellView[];
   key_rows: NocturneKeyRowView[];
   keys_note: string;
+  avail_keys: NocturneKeyRowView[];
+  avail_head: string;
+  avail_cls: string;
   kb_tray_head: string;
   kb_tray_cls: string;
   kb_note: string;
@@ -339,6 +342,9 @@ const [nKbRow6, setNKbRow6] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbTray, setNKbTray] = createSignal<NocturneKeyCellView[]>([]);
 const [nKeyRows, setNKeyRows] = createSignal<NocturneKeyRowView[]>([]);
 const [nKeysNote, setNKeysNote] = createSignal("");
+const [nAvailKeys, setNAvailKeys] = createSignal<NocturneKeyRowView[]>([]);
+const [nAvailHead, setNAvailHead] = createSignal("");
+const [nAvailCls, setNAvailCls] = createSignal("n-akeys none");
 const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
@@ -449,6 +455,9 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTray(v.kb_tray);
   setNKeyRows(v.key_rows);
   setNKeysNote(v.keys_note);
+  setNAvailKeys(v.avail_keys);
+  setNAvailHead(v.avail_head);
+  setNAvailCls(v.avail_cls);
   setNKbTrayHead(v.kb_tray_head);
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
@@ -1378,9 +1387,9 @@ async function applyDraftViaJson(): Promise<void> {
 /** The BY-KEY view's twin of locateBindRow: pulse a key's row. */
 function locateKeyRow(root: HTMLElement, key: string): void {
   if (!key) return;
-  const row = Array.from(root.querySelectorAll<HTMLElement>(".n-krows [data-key]")).find(
-    (el) => (el.getAttribute("data-key") ?? "") === key,
-  );
+  const row = Array.from(
+    root.querySelectorAll<HTMLElement>(".n-krows [data-key], .n-akey-grid [data-key]"),
+  ).find((el) => (el.getAttribute("data-key") ?? "") === key);
   if (!row) return;
   if (ui.rightRail) {
     ui.rightRail = false;
@@ -1575,10 +1584,19 @@ export function nocturneWire(root: HTMLElement): void {
     const cap = target?.closest<HTMLElement>(".n-kb [data-key]");
     if (cap) {
       closeMenu();
+      const key = cap.getAttribute("data-key") ?? "";
       ui.rightView = "keys";
       saveUiPrefs();
       applyNocturneUi();
-      locateKeyRow(root, cap.getAttribute("data-key") ?? "");
+      locateKeyRow(root, key);
+      // An UNBOUND cap goes straight to work: the pad is the picker.
+      const bound = root.querySelector(`.n-krows .n-krow[data-key="${CSS.escape(key)}"]`);
+      if (!bound && key) {
+        assignKey = key;
+        setNLearnCls("n-learnbar listen");
+        setNLearnText(`Click a control on the pad to add ${key}`);
+        setNLearnSub("Esc cancels");
+      }
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -2879,6 +2897,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3071,6 +3090,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3263,6 +3283,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3455,6 +3476,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3647,6 +3669,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3839,6 +3862,7 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
+                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -4009,7 +4033,7 @@ export function NocturneIsland() {
                 "div",
                 { "data-key": r.key, class: r.cls },
                 h("span", { class: "n-krow-chip" }, r.key),
-                h("span", { class: "n-krow-arrow" }, "→"),
+                h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "→"),
                 h("span", { class: "n-krow-tg" }, r.targets),
                 h(
                   "button",
@@ -4022,6 +4046,33 @@ export function NocturneIsland() {
                   "+",
                 ),
               ),
+          ),
+          // The rest of the board's REAL vocabulary, free to bind: click a
+          // key, then the control on the pad that should take it.
+          h(
+            "div",
+            { class: () => nAvailCls() },
+            h("div", { class: "n-bindg-head" }, h("span", { class: "n-bindg-lab" }, () => nAvailHead())),
+            h(
+              "div",
+              { class: "n-akey-grid" },
+              createList(
+                () => nAvailKeys(),
+                (r) => r.key,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "key-assign",
+                      "data-key": r.key,
+                      title: "Free — click, then click the control on the pad that should take it",
+                      class: r.cls,
+                    },
+                    r.key,
+                  ),
+              ),
+            ),
           ),
         ),
         // ── Macros: lifecycle rows off the same staged authoring. The

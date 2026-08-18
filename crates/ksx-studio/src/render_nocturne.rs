@@ -44,6 +44,7 @@ const LIST_SLOT_BIND_SYS: &str = "list:nBindSys:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
 const LIST_SLOT_KEYROWS: &str = "list:nKeyRows:array";
+const LIST_SLOT_AVAILKEYS: &str = "list:nAvailKeys:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -115,6 +116,8 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
         "nKeysNote": payload.view.keys_note,
+        "nAvailHead": payload.view.avail_head,
+        "nAvailCls": payload.view.avail_cls,
         "nPadXboxCls": payload.view.pad_xbox_cls,
         "nPadPsCls": payload.view.pad_ps_cls,
         "nCfgLine": payload.view.cfg_line,
@@ -304,7 +307,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 26] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 27] {
     let view = &payload.view;
     [
         (
@@ -314,6 +317,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 26] {
         (
             LIST_SLOT_KEYROWS,
             SlotValue::array(view.key_rows.iter().map(key_row_view).collect()),
+        ),
+        (
+            LIST_SLOT_AVAILKEYS,
+            SlotValue::array(view.avail_keys.iter().map(key_row_view).collect()),
         ),
         (
             LIST_SLOT_MACROS,
@@ -582,8 +589,9 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 26] = [
+        const SERVED_LIST_PREFIXES: [&str; 27] = [
             "list:nKeyRows:",
+            "list:nAvailKeys:",
             "list:nSocdEditOpts:",
             "list:nBindFace:",
             "list:nBindDpad:",
@@ -610,8 +618,10 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 76] = [
+        const SERVED_SLOTS: [&str; 78] = [
             "nKeysNote",
+            "nAvailHead",
+            "nAvailCls",
             "nBindFaceCls",
             "nBindDpadCls",
             "nBindShlCls",

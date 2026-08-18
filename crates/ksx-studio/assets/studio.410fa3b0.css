@@ -7823,6 +7823,43 @@ a.wsrow-title:hover {
   line-height: 1.4;
 }
 
+/* The available-key grid: the board's free vocabulary as ghost chips. */
+.n-akeys {
+  margin-top: 10px;
+}
+
+.n-akeys.none {
+  display: none;
+}
+
+.n-akey-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.n-akey {
+  padding: 3px 8px;
+  border: 1px dashed var(--n-line-2);
+  border-radius: 6px;
+  background: none;
+  color: var(--n-text-3);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.n-akey:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.n-akey.locate {
+  animation: n-locate 3.5s ease-out;
+  border-color: var(--n-accent);
+  color: var(--n-accent-2);
+}
+
 /* Board caps are a doorway to the BY-KEY view. */
 .n-kb [data-key] {
   cursor: pointer;

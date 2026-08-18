@@ -4104,6 +4104,10 @@ pub struct NocturneDerived {
     /// The BY-KEY view: one row per bound key, keyboard -> controller.
     pub key_rows: Vec<NocturneKeyRow>,
     pub keys_note: String,
+    /// The rest of the board's REAL vocabulary, free to bind.
+    pub avail_keys: Vec<NocturneKeyRow>,
+    pub avail_head: String,
+    pub avail_cls: String,
     pub kb_tray_head: String,
     pub kb_tray_cls: String,
     pub kb_note: String,
@@ -4733,12 +4737,42 @@ impl NocturneDerived {
                 },
             })
             .collect();
+        // Every key on the standard board NOT yet bound — the REAL roster
+        // (the board table is unit-pinned against `ksx_core::Key`), served
+        // so the By-key view can offer what is still free.
+        let avail_keys: Vec<NocturneKeyRow> = if selected.is_some() {
+            crate::keyboard_layout::ROWS
+                .iter()
+                .flat_map(|row| row.iter())
+                .filter(|cell| !cell.ghost && !cell.key.is_empty())
+                .filter(|cell| !key_fns.contains_key(cell.key))
+                .map(|cell| NocturneKeyRow {
+                    key: cell.key.to_owned(),
+                    targets: String::new(),
+                    cls: "n-akey".to_owned(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let avail_head = if avail_keys.is_empty() {
+            String::new()
+        } else {
+            format!("Available keys · {}", avail_keys.len())
+        };
+        let avail_cls = if avail_keys.is_empty() {
+            "n-akeys none".to_owned()
+        } else {
+            "n-akeys".to_owned()
+        };
         let keys_note = match selected {
-            Some(_) if !key_rows.is_empty() => {
-                format!("{} keys drive this controller.", key_rows.len())
-            }
+            Some(_) if !key_rows.is_empty() => format!(
+                "{} keys drive this controller · {} more available below.",
+                key_rows.len(),
+                avail_keys.len()
+            ),
             Some(_) => {
-                "No keys bound yet — bind from the Controls view, or assign from here.".to_owned()
+                "No keys bound yet — click an available key, then a control on the pad.".to_owned()
             }
             None => String::new(),
         };
@@ -5196,6 +5230,9 @@ impl NocturneDerived {
             kb_tray,
             key_rows,
             keys_note,
+            avail_keys,
+            avail_head,
+            avail_cls,
             kb_tray_head,
             kb_tray_cls,
             kb_note,

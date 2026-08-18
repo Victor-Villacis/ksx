@@ -897,7 +897,7 @@ function disarmFocusGuard(): void {
 function markArmedRow(fnName: string | null): void {
   if (!learnRoot) return;
   for (const el of Array.from(
-    learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-stage .arm"),
+    learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-ctlchip.arm, .n-stage .arm"),
   )) {
     el.classList.remove("arm");
   }
@@ -905,6 +905,14 @@ function markArmedRow(fnName: string | null): void {
     learnRoot
       .querySelector<HTMLElement>(`.n-bind[data-fn="${CSS.escape(fnName)}"]`)
       ?.classList.add("arm");
+    // A FREE control lives as its group's chip — light that too, so the
+    // waiting control is visible in the pane and not just the banner.
+    const wanted = fnName.toLowerCase();
+    for (const chip of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-ctlchip[data-fn]"))) {
+      if ((chip.getAttribute("data-fn") ?? "").toLowerCase() === wanted) {
+        chip.classList.add("arm");
+      }
+    }
     // The waiting control glows on the pad too — the armed key's mirror.
     const want = fnName.toLowerCase();
     for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-stage [data-fn]"))) {

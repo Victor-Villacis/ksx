@@ -7874,6 +7874,22 @@ button.n-krow-tg {
   color: var(--n-accent-2);
 }
 
+/* The ARMED free control: its chip breathes until a key answers. */
+.n-ctlchip.arm {
+  border-style: solid;
+  border-color: var(--n-accent);
+  color: var(--n-accent-2);
+  background: rgba(150, 138, 224, 0.12);
+  animation: n-assignwait 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-ctlchip.arm {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--n-accent-tint);
+  }
+}
+
 .n-ctlchip.hide {
   display: none;
 }

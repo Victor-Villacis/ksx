@@ -11,6 +11,7 @@ import {
   applyNocturneUnreachable,
   NocturneIsland,
   paintStageCallouts,
+  syncPadGrid,
   nocturneLiveConnect,
   nocturneWire,
   restoreNocturneFilter,
@@ -182,6 +183,7 @@ activateIslands({
       // The seed applied before the island existed: paint the stage's key
       // callouts now that it does.
       paintStageCallouts();
+      syncPadGrid();
     });
     // A no-JS POST landed us on ?flash=…: the server already painted the
     // line; strip the query so a manual reload does not replay feedback for

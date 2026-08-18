@@ -3978,6 +3978,23 @@ pub struct NocturneKeyRow {
     pub slot: String,
 }
 
+/// One controller for the stage's MULTI-PAD grid: everything the client
+/// needs to clone the right master art and dress it for this slot. Pure
+/// payload data — no template reads it, so it mints no slots.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturnePadView {
+    pub slot: u8,
+    /// "xbox" | "ps" — which master silhouette the client clones.
+    pub family: String,
+    pub title: String,
+    /// Canonical fn → its key chip ("G · H"), for the clone's callouts.
+    pub fn_keys: std::collections::BTreeMap<String, String>,
+    /// Canonical fn → the persona's readable label ("LS ↑", "△") — the
+    /// toast's vocabulary for arming ANY pad's control, not just the
+    /// selected one.
+    pub fn_names: std::collections::BTreeMap<String, String>,
+}
+
 /// One keycap on the standard board, dressed with its binding short.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyCell {
@@ -4140,6 +4157,8 @@ pub struct NocturneDerived {
     pub avail_main: Vec<NocturneKeyRow>,
     pub avail_nav: Vec<NocturneKeyRow>,
     pub avail_num: Vec<NocturneKeyRow>,
+    /// The multi-pad grid's controllers (payload data, no slots).
+    pub pads: Vec<NocturnePadView>,
     pub avail_main_head: String,
     pub avail_nav_head: String,
     pub avail_num_head: String,
@@ -4678,6 +4697,38 @@ impl NocturneDerived {
                 None => "n-strip none".to_owned(),
             }
         };
+        // The multi-pad grid's data: every staged controller, its family,
+        // its callout chips and its readable control names.
+        let pads: Vec<NocturnePadView> = staged
+            .slots
+            .iter()
+            .map(|slot| {
+                let mut fn_keys = std::collections::BTreeMap::new();
+                if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                    for (fn_name, keys) in &m.bindings {
+                        if !keys.is_empty() {
+                            fn_keys.insert(fn_name.clone(), keys.join(" · "));
+                        }
+                    }
+                }
+                let fn_names = crate::render_map::zones_for(&slot.persona)
+                    .iter()
+                    .map(|zone| {
+                        (
+                            zone.fn_name.to_owned(),
+                            crate::render_map::legend_label(zone),
+                        )
+                    })
+                    .collect();
+                NocturnePadView {
+                    slot: slot.number,
+                    family: if slot.is_xinput { "xbox" } else { "ps" }.to_owned(),
+                    title: format!("{} — \"{}\"", slot.persona_label, slot.preset),
+                    fn_keys,
+                    fn_names,
+                }
+            })
+            .collect();
         let persona = selected
             .map(|slot| slot.persona.as_str())
             .unwrap_or("xbox360");
@@ -5388,6 +5439,7 @@ impl NocturneDerived {
             avail_main,
             avail_nav,
             avail_num,
+            pads,
             avail_main_head,
             avail_nav_head,
             avail_num_head,

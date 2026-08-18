@@ -7471,6 +7471,70 @@ fn nocturne_clears_one_key_everywhere_it_drives() {
     assert!(none.contains("not%20driving%20anything"), "{none}");
 }
 
+/// **The multi-pad payload**: every staged controller serves its family,
+/// title, callout chips and readable control names — the clone grid's whole
+/// diet, pure payload data that mints no slots.
+#[test]
+fn nocturne_serves_every_pad_for_the_grid() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                preset,
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    assert_eq!(pads.len(), 2, "{api}");
+    assert_eq!(pads[0]["slot"], 1, "{api}");
+    assert_eq!(pads[0]["family"], "xbox", "{api}");
+    assert_eq!(pads[0]["fn_keys"]["A"], "G · H", "{api}");
+    assert_eq!(pads[1]["slot"], 2, "{api}");
+    assert_eq!(pads[1]["family"], "ps", "{api}");
+    // The readable names speak the persona's own vocabulary.
+    assert_eq!(pads[0]["fn_names"]["A"], "A", "{api}");
+    assert!(
+        pads[1]["fn_names"]
+            .as_object()
+            .expect("names")
+            .values()
+            .any(|v| v == "△"),
+        "{api}"
+    );
+}
+
 /// **The ⊖ over HTTP**: mode "remove" on the bind verb takes ONE key off ONE
 /// control — its other keys stay, and removing the last key leaves the
 /// control honestly unbound. A key the control never had refuses in words.

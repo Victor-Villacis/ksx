@@ -227,6 +227,13 @@ export interface NocturneView {
   avail_main_cls: string;
   avail_nav_cls: string;
   avail_num_cls: string;
+  pads: {
+    slot: number;
+    family: string;
+    title: string;
+    fn_keys: Record<string, string>;
+    fn_names: Record<string, string>;
+  }[];
   avail_ctl_face: NocturneCtlChipView[];
   avail_ctl_dpad: NocturneCtlChipView[];
   avail_ctl_shoulders: NocturneCtlChipView[];
@@ -543,7 +550,10 @@ export function applyNocturne(p: NocturnePayload): void {
     if (assignKey) markAssignTargets(assignKey);
   }
   lastBindView = v;
-  if (learnRoot) paintStageCallouts();
+  if (learnRoot) {
+    paintStageCallouts();
+    syncPadGrid();
+  }
 }
 
 /** The last applied view, for repainting the stage callouts after the
@@ -595,6 +605,102 @@ export function paintStageCallouts(): void {
   }
 }
 
+/** The multi-pad grid: every staged controller cloned from its family's
+ *  master art, colour-framed, slot-stamped — all mappable at once. Clones
+ *  are built imperatively AFTER hydration from browser-kept preference
+ *  (the parity gate's empty-storage run stays single-pad), and rebuilt
+ *  only when the pad roster changes. */
+let padGridPrint = "";
+
+function calloutText(chip: string, capFor: (name: string) => string): string {
+  let text = chip
+    .split(" \u00b7 ")
+    .map(capFor)
+    .join("\u00b7");
+  if (text.length > 9) text = text.slice(0, 8) + "\u2026";
+  return text;
+}
+
+function capForBoard(root: HTMLElement): (name: string) => string {
+  return (name: string): string => {
+    const cap = root
+      .querySelector<HTMLElement>(`.n-kb .n-key[data-key="${CSS.escape(name)}"] .n-key-cap`)
+      ?.textContent?.trim();
+    if (!cap || cap === name) return name;
+    if (name.startsWith("Left") && name.length > 4 && !cap.startsWith("L")) return "L" + cap;
+    if (name.startsWith("Right") && name.length > 5 && !cap.startsWith("R")) return "R" + cap;
+    return cap;
+  };
+}
+
+export function syncPadGrid(): void {
+  const root = learnRoot;
+  const v = lastBindView;
+  if (!root || !v) return;
+  const stage = root.querySelector<HTMLElement>(".n-stage");
+  const grid = root.querySelector<HTMLElement>(".n-padgrid");
+  if (!stage || !grid) return;
+  const pads = v.pads ?? [];
+  const on = ui.padsAll && pads.length > 0;
+  stage.classList.toggle("multi", on);
+  const btn = root.querySelector<HTMLElement>(".n-padsbtn");
+  btn?.setAttribute("aria-pressed", on ? "true" : "false");
+  if (!on) {
+    if (grid.firstChild) {
+      grid.textContent = "";
+      padGridPrint = "";
+      liveFnNodes = null;
+    }
+    return;
+  }
+  const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.title).join("|");
+  if (print !== padGridPrint) {
+    padGridPrint = print;
+    grid.textContent = "";
+    // The two masters, in template order: [0] Xbox, [1] DualShock.
+    const masters = root.querySelectorAll<HTMLElement>(".n-padwrap");
+    for (const pv of pads) {
+      const master = pv.family === "ps" ? masters[1] : masters[0];
+      const svg = master?.querySelector("svg");
+      if (!svg) continue;
+      const wrap = document.createElement("div");
+      wrap.className = "n-mini np" + pv.slot;
+      wrap.setAttribute("data-pad-slot", String(pv.slot));
+      const head = document.createElement("div");
+      head.className = "n-mini-head";
+      const badge = document.createElement("span");
+      badge.className = "n-pbadge np" + pv.slot;
+      badge.textContent = "P" + pv.slot;
+      const title = document.createElement("span");
+      title.className = "n-mini-title";
+      title.textContent = pv.title;
+      head.append(badge, title);
+      wrap.append(head, svg.cloneNode(true));
+      grid.append(wrap);
+    }
+    liveFnNodes = null;
+  }
+  // Dress every clone's callouts from ITS slot's own table.
+  const capFor = capForBoard(root);
+  for (const wrap of Array.from(grid.querySelectorAll<HTMLElement>("[data-pad-slot]"))) {
+    const pv = pads.find((x) => String(x.slot) === wrap.getAttribute("data-pad-slot"));
+    if (!pv) continue;
+    const byFn = new Map<string, string>();
+    for (const [fnName, keys] of Object.entries(pv.fn_keys)) {
+      byFn.set(fnName.toLowerCase(), keys);
+    }
+    for (const el of Array.from(wrap.querySelectorAll<SVGTextElement>("text.n-fnkey"))) {
+      const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
+      const parts: string[] = [];
+      for (const fnName of fns) {
+        const keys = byFn.get(fnName.toLowerCase());
+        if (keys) parts.push(calloutText(keys, capFor));
+      }
+      el.textContent = parts.join("\u00b7");
+    }
+  }
+}
+
 /** The poll could not reach the server: say so, change nothing else. */
 export function applyNocturneUnreachable(): void {
   setNDevCount("unavailable");
@@ -636,6 +742,7 @@ const ui: {
   kbClosed: boolean;
   identify: boolean;
   rightView: "controls" | "keys";
+  padsAll: boolean;
 } = {
   dlg: false,
   leftRail: false,
@@ -643,6 +750,7 @@ const ui: {
   kbClosed: false,
   identify: false,
   rightView: "controls",
+  padsAll: false,
 };
 
 function applyNocturneUi(): void {
@@ -677,11 +785,13 @@ function loadUiPrefs(): void {
       rightRail?: boolean;
       kbClosed?: boolean;
       rightView?: string;
+      padsAll?: boolean;
     };
     ui.leftRail = saved.leftRail === true;
     ui.rightView = saved.rightView === "keys" ? "keys" : "controls";
     ui.rightRail = saved.rightRail === true;
     ui.kbClosed = saved.kbClosed === true;
+    ui.padsAll = saved.padsAll === true;
   } catch {
     // A blocked or corrupt store reads as the defaults.
   }
@@ -725,6 +835,7 @@ function saveUiPrefs(): void {
         rightRail: ui.rightRail,
         kbClosed: ui.kbClosed,
         rightView: ui.rightView,
+        padsAll: ui.padsAll,
       }),
     );
   } catch {
@@ -870,7 +981,21 @@ let learnTimer: number | undefined;
 let learnStartFlight: Promise<NocturneLearnView> | null = null;
 let learnRoot: HTMLElement | null = null;
 /** The hit waiting on the conflict dialog's verdict. */
-let pendingConflict: { row: LearnTarget; key: string } | null = null;
+let pendingConflict: {
+  row: LearnTarget;
+  key: string;
+  origin: "assign" | "learn";
+  chain: boolean;
+  assignMode: "replace" | "add" | "remove";
+} | null = null;
+/** What the write in flight was doing, so a conflict's consent dialog can
+ *  resume the SAME hand ("Bind several" survives the ask). Set by every
+ *  writeLearnedKey caller just before the call. */
+let lastWrite: {
+  origin: "assign" | "learn";
+  chain: boolean;
+  assignMode: "replace" | "add" | "remove";
+} = { origin: "learn", chain: false, assignMode: "replace" };
 
 /** The page poller, installed by the entry so a successful JSON bind
  *  repaints the rows immediately instead of waiting out the 2 s tick. */
@@ -941,7 +1066,7 @@ function disarmFocusGuard(): void {
   window.removeEventListener("keypress", guardLearnKeys, true);
 }
 
-function markArmedRow(fnName: string | null): void {
+function markArmedRow(fnName: string | null, slot?: string): void {
   if (!learnRoot) return;
   for (const el of Array.from(
     learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-ctlchip.arm, .n-stage .arm"),
@@ -949,20 +1074,30 @@ function markArmedRow(fnName: string | null): void {
     el.classList.remove("arm");
   }
   if (fnName !== null) {
-    learnRoot
-      .querySelector<HTMLElement>(`.n-bind[data-fn="${CSS.escape(fnName)}"]`)
-      ?.classList.add("arm");
-    // A FREE control lives as its group's chip — light that too, so the
-    // waiting control is visible in the pane and not just the banner.
-    const wanted = fnName.toLowerCase();
-    for (const chip of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-ctlchip[data-fn]"))) {
-      if ((chip.getAttribute("data-fn") ?? "").toLowerCase() === wanted) {
-        chip.classList.add("arm");
+    // The pane speaks for the SELECTED slot only.
+    const armSlot = slot ?? nSlotVal();
+    if (armSlot === nSlotVal()) {
+      learnRoot
+        .querySelector<HTMLElement>(`.n-bind[data-fn="${CSS.escape(fnName)}"]`)
+        ?.classList.add("arm");
+      // A FREE control lives as its group's chip — light that too, so the
+      // waiting control is visible in the pane and not just the banner.
+      const wanted = fnName.toLowerCase();
+      for (const chip of Array.from(
+        learnRoot.querySelectorAll<HTMLElement>(".n-ctlchip[data-fn]"),
+      )) {
+        if ((chip.getAttribute("data-fn") ?? "").toLowerCase() === wanted) {
+          chip.classList.add("arm");
+        }
       }
     }
-    // The waiting control glows on the pad too — the armed key's mirror.
+    // The waiting control glows on ITS pad — clones are slot-stamped, the
+    // master speaks for the selected slot.
     const want = fnName.toLowerCase();
     for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-stage [data-fn]"))) {
+      const padSlot =
+        el.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ?? nSlotVal();
+      if (padSlot !== armSlot) continue;
       const fns = (el.getAttribute("data-fn") ?? "").toLowerCase().split(/\s+/);
       if (fns.includes(want)) el.classList.add("arm");
     }
@@ -1006,7 +1141,7 @@ function armLearnUi(row: LearnTarget): void {
       ? `Waiting — press the key to remove from ${row.label}, or click it below`
       : `Waiting — press a key for ${row.label}, or click one below`,
   );
-  markArmedRow(row.fn);
+  markArmedRow(row.fn, row.slot);
   setRailGlow(true);
 }
 
@@ -1133,6 +1268,7 @@ async function pollLearn(): Promise<void> {
       // fast-hit poll may overlap, and only the first terminal response may
       // reach the bind verb.
       const chain = chainWanted();
+      lastWrite = { origin: "learn", chain, assignMode: "replace" };
       retireLearn();
       if (learn.key) {
         void writeLearnedKey(row, learn.key, false).then((ok) => {
@@ -1268,7 +1404,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
   } else if (outcome.code === "conflict" && outcome.conflicts.length > 0) {
     // Cross-slot (or a second macro trigger): fan-out is the product, but it
     // is asked about, never assumed. "Use here too" takes nothing away.
-    pendingConflict = { row, key };
+    pendingConflict = { row, key, ...lastWrite };
     const lines = outcome.conflicts.map((c) => {
       const control = c.function.startsWith("macro.")
         ? `the "${c.function.slice(6)}" macro`
@@ -1345,11 +1481,15 @@ let liveEvents = 0;
 let liveDropped = 0;
 const liveKeysDown = new Set<string>();
 const liveFnsDown = new Set<string>();
+/** Per-slot down/hit sets — the multi-pad grid lights each clone from its
+ *  OWN slot's frame. */
+const liveSlotFns = new Map<number, Set<string>>();
+const EMPTY_FNS: ReadonlySet<string> = new Set();
 const liveTicker: string[] = [];
 /** Cached paint targets — invalidated whenever reconciliation may have
  *  replaced nodes (every applied payload). */
 let liveKeyNodes: HTMLElement[] | null = null;
-let liveFnNodes: { el: HTMLElement; fns: string[] }[] | null = null;
+let liveFnNodes: { el: HTMLElement; fns: string[]; slot: number }[] | null = null;
 
 function liveFingerprint(): string {
   const s = liveSession;
@@ -1382,6 +1522,7 @@ function resetLiveLedger(): void {
   liveDropped = 0;
   liveKeysDown.clear();
   liveFnsDown.clear();
+  liveSlotFns.clear();
   liveTicker.length = 0;
   clearLivePaint();
 }
@@ -1447,13 +1588,19 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
     liveAnnounce("Live input is active.");
   }
 
-  // The FIRST slot is this page's selected slot (its rows, its board).
-  const slot = envelope.frame.slots.find((s) => s.slot === 1) ?? envelope.frame.slots[0];
-  liveFnsDown.clear();
-  if (slot) {
-    for (const control of slot.down) liveFnsDown.add(normalizedFn(control));
-    for (const control of slot.hit) liveFnsDown.add(normalizedFn(control));
+  // Every slot's frame, keyed — each pad lights from its OWN; the pane
+  // rows and the board speak for the SELECTED slot.
+  liveSlotFns.clear();
+  for (const sf of envelope.frame.slots) {
+    const set = new Set<string>();
+    for (const control of sf.down) set.add(normalizedFn(control));
+    for (const control of sf.hit) set.add(normalizedFn(control));
+    liveSlotFns.set(sf.slot, set);
   }
+  const selectedFrame =
+    liveSlotFns.get(Number(nSlotVal() || "1")) ?? liveSlotFns.values().next().value ?? EMPTY_FNS;
+  liveFnsDown.clear();
+  for (const control of selectedFrame) liveFnsDown.add(control);
   for (const hit of envelope.frame.keys) {
     const key = hit.key.trim();
     if (key === "") continue;
@@ -1476,18 +1623,21 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
     liveFnNodes = Array.from(root.querySelectorAll<HTMLElement>("[data-fn]")).map((el) => ({
       el,
       fns: (el.dataset.fn ?? "").split(/\s+/).map(normalizedFn),
+      slot: Number(el.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ?? "0"),
     }));
   }
   for (const el of liveKeyNodes) {
     el.classList.toggle("live", liveKeysDown.has(el.dataset.key ?? ""));
   }
-  for (const { el, fns } of liveFnNodes) {
+  for (const { el, fns, slot } of liveFnNodes) {
     // Space-separated where one element stands for several functions — a
     // stick lights on its click OR any of its four directions, the Xbox
-    // cross on any d-pad direction.
+    // cross on any d-pad direction. Slot-stamped nodes (the clone grid)
+    // light from their OWN slot's frame.
+    const down = slot === 0 ? liveFnsDown : (liveSlotFns.get(slot) ?? EMPTY_FNS);
     el.classList.toggle(
       "live",
-      fns.some((fnName) => liveFnsDown.has(fnName)),
+      fns.some((fnName) => down.has(fnName)),
     );
   }
   const stats = root.querySelector<HTMLElement>(".n-livestats");
@@ -1801,6 +1951,7 @@ export function nocturneWire(root: HTMLElement): void {
   // auto-map button) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
   applySlotColors();
+  syncPadGrid();
   window.addEventListener("resize", scheduleKbFit);
   root.addEventListener(
     "toggle",
@@ -1882,6 +2033,16 @@ export function nocturneWire(root: HTMLElement): void {
     if (zone) {
       closeMenu();
       const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
+      // The clone grid stamps each pad with its slot; the master speaks
+      // for the selected one. The pad's own served tables carry the
+      // CANONICAL fn spelling and the readable label for ANY slot.
+      const padSlot =
+        zone.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ?? nSlotVal();
+      const pv = (lastBindView?.pads ?? []).find((x) => String(x.slot) === padSlot);
+      const padCanonical = pv
+        ? Object.keys(pv.fn_names).find((f) => f.toLowerCase() === fnName.toLowerCase())
+        : undefined;
+      const padLabel = padCanonical ? pv?.fn_names[padCanonical] : undefined;
       if (assignKey && fnName) {
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
@@ -1895,12 +2056,14 @@ export function nocturneWire(root: HTMLElement): void {
         const owner = Array.from(
           root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
         ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName.toLowerCase());
-        const canonical = owner?.getAttribute("data-fn") ?? fnName;
+        const canonical = padCanonical ?? owner?.getAttribute("data-fn") ?? fnName;
+        lastWrite = { origin: "assign", chain, assignMode: mode };
         const label =
+          padLabel ||
           owner?.querySelector(".n-bind-label")?.textContent?.trim() ||
           (owner?.classList.contains("n-ctlchip") ? owner.textContent?.trim() : "") ||
           fnName;
-        void writeLearnedKey({ fn: canonical, label, slot: nSlotVal(), mode }, held, false).then(
+        void writeLearnedKey({ fn: canonical, label, slot: padSlot, mode }, held, false).then(
           (ok) => {
             // "Bind several": the key stays in your hand for the next
             // control; the box survives the re-arm.
@@ -1915,11 +2078,15 @@ export function nocturneWire(root: HTMLElement): void {
       // The mirror of the key-first flow: clicking a control ARMS its
       // learn — press a key, or click one on the board. The controls view
       // opens on the armed row (no fold, no fade: the arm wash waits).
-      const rowEl = Array.from(
-        root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
-      ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName);
-      const rowFn = rowEl?.getAttribute("data-fn") ?? fnName;
+      const rowEl =
+        padSlot === nSlotVal()
+          ? Array.from(
+              root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
+            ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName)
+          : undefined;
+      const rowFn = padCanonical ?? rowEl?.getAttribute("data-fn") ?? fnName;
       const rowLabel =
+        padLabel ||
         rowEl?.querySelector(".n-bind-label")?.textContent?.trim() ||
         (rowEl?.classList.contains("n-ctlchip") ? rowEl.textContent?.trim() : "") ||
         fnName;
@@ -1940,7 +2107,7 @@ export function nocturneWire(root: HTMLElement): void {
       }
       // A hand-armed control replaces any running auto-map walk.
       autoMap = null;
-      void startLearn({ fn: rowFn, label: rowLabel, slot: nSlotVal(), mode: "replace" });
+      void startLearn({ fn: rowFn, label: rowLabel, slot: padSlot, mode: "replace" });
       return;
     }
     // A board cap flips the pane to the BY-KEY view and finds its row —
@@ -1953,6 +2120,7 @@ export function nocturneWire(root: HTMLElement): void {
         // A control is waiting: clicking a cap IS pressing the key.
         const row = learnRow;
         const chain = ev.shiftKey || chainWanted();
+        lastWrite = { origin: "learn", chain, assignMode: "replace" };
         void cancelLearn();
         void writeLearnedKey(row, key, false).then((ok) => {
           // "Bind several": the control keeps listening; further keys ADD.
@@ -2041,6 +2209,10 @@ export function nocturneWire(root: HTMLElement): void {
       // the submit event so the ordinary fetch path handles the form.
       ev.preventDefault();
       target?.closest("form")?.requestSubmit();
+    } else if (hit === "pads-toggle") {
+      ui.padsAll = !ui.padsAll;
+      saveUiPrefs();
+      syncPadGrid();
     } else if (hit === "auto-map") {
       startAutoMap();
     } else if (hit === "learn-skip") {
@@ -2056,7 +2228,20 @@ export function nocturneWire(root: HTMLElement): void {
       pendingConflict = null;
       setNConfOpen(false);
       restoreDialogFocus();
-      if (pend) void writeLearnedKey(pend.row, pend.key, true);
+      if (pend) {
+        void writeLearnedKey(pend.row, pend.key, true).then((ok) => {
+          // "Bind several" survives the consent dialog: consenting binds
+          // AND puts the same hand back up for the next target.
+          if (ok && pend.chain && !autoMap) {
+            if (pend.origin === "assign") {
+              armAssign(pend.key, pend.assignMode);
+            } else {
+              void startLearn({ ...pend.row, mode: "add" });
+            }
+            setChainBox(true);
+          }
+        });
+      }
     } else if (hit === "conf-cancel") {
       pendingConflict = null;
       setNConfOpen(false);
@@ -2662,6 +2847,22 @@ export function NocturneIsland() {
             },
             "Map all…",
           ),
+          // The multi-pad view: every staged controller on stage at once,
+          // each mappable in place. Scripting-only chrome, like Map all.
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "pads-toggle",
+              // The default state ships in the markup so the wire's
+              // re-stamp is byte-identical (the parity gate's rule).
+              "aria-pressed": "false",
+              title:
+                "Show every staged controller at once — click any pad's control to map it; the pane keeps following the selected one.",
+              class: "n-autobtn n-padsbtn",
+            },
+            "All pads",
+          ),
           // The live echo's readouts: written IMPERATIVELY at frame rate,
           // both hidden from assistive tech (the sr twin below announces
           // transitions only, so the uptime clock cannot spam a reader).
@@ -2708,6 +2909,9 @@ export function NocturneIsland() {
           // The across-the-room read: one quiet word from the polled
           // session, visual only (the sr status line announces transitions).
           h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
+          // The multi-pad grid: filled imperatively from browser-kept
+          // preference; SSR and the no-JS page stay single-pad.
+          h("div", { class: "n-padgrid" }),
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.

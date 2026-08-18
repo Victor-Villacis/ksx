@@ -1470,6 +1470,58 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-stage" },
+          // The paint servers both silhouettes draw with: one zero-size SVG
+          // whose defs resolve document-wide, so the CSS can fill shells,
+          // wells, sticks and buttons with real gradients instead of flats.
+          h(
+            "svg",
+            { class: "nx-defs", width: "0", height: "0", "aria-hidden": "true", focusable: "false" },
+            h(
+              "defs",
+              null,
+              h(
+                "linearGradient",
+                { id: "nxg-shell", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#2b2e3e" }),
+                h("stop", { offset: "0.55", "stop-color": "#20222f" }),
+                h("stop", { offset: "1", "stop-color": "#191b26" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-well", cx: "0.5", cy: "0.45", r: "0.65" },
+                h("stop", { offset: "0", "stop-color": "#101219" }),
+                h("stop", { offset: "0.8", "stop-color": "#14161f" }),
+                h("stop", { offset: "1", "stop-color": "#1c1e2a" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-stick", cx: "0.38", cy: "0.32", r: "0.85" },
+                h("stop", { offset: "0", "stop-color": "#3d4156" }),
+                h("stop", { offset: "0.55", "stop-color": "#2b2e3e" }),
+                h("stop", { offset: "1", "stop-color": "#222434" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-btn", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#2a2d3c" }),
+                h("stop", { offset: "0.5", "stop-color": "#20222f" }),
+                h("stop", { offset: "1", "stop-color": "#1a1c27" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-touch", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#12141d" }),
+                h("stop", { offset: "1", "stop-color": "#191b26" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-lamp", cx: "0.5", cy: "0.4", r: "0.75" },
+                h("stop", { offset: "0", "stop-color": "#cfc6f7" }),
+                h("stop", { offset: "0.45", "stop-color": "#968ae0" }),
+                h("stop", { offset: "1", "stop-color": "#5d5494" }),
+              ),
+            ),
+          ),
           h(
             "div",
             { class: () => nPadXboxCls() },

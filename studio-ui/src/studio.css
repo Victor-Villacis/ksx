@@ -6877,56 +6877,63 @@ a.wsrow-title:hover {
   display: none;
 }
 
+.n-stage .nx-defs {
+  position: absolute;
+}
+
 .n-stage .wspad {
   width: min(560px, 94%);
   height: auto;
   max-height: 94%;
+  /* The pad sits ABOVE the stage ground: a real cast shadow, not a flat. */
+  filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.5));
 }
 
 .n-stage .wspad-shell {
-  fill: #20222f;
-  stroke: #383b4e;
+  fill: url(#nxg-shell);
+  stroke: #3d4154;
   stroke-width: 0.5;
   stroke-linejoin: round;
 }
 
 .n-stage .wspad-well {
-  fill: #171923;
+  fill: url(#nxg-well);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
 .n-stage .wspad-zone {
-  fill: #1d1f2b;
-  stroke: #3f424d;
+  fill: url(#nxg-btn);
+  stroke: #454960;
   stroke-width: 0.35;
   stroke-linejoin: round;
 }
 
 .n-stage .wspad-stick {
-  fill: #2a2d3d;
-  stroke: #4a4e63;
+  fill: url(#nxg-stick);
+  stroke: #50546b;
   stroke-width: 0.4;
 }
 
 .n-stage .wspad-touch {
-  fill: #171923;
+  fill: url(#nxg-touch);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
 .n-stage .wspad-petals path {
-  fill: #1d1f2b;
-  stroke: #3f424d;
+  fill: url(#nxg-btn);
+  stroke: #454960;
   stroke-width: 0.35;
   stroke-linejoin: round;
 }
 
-/* The guide/PS lamp — the one deliberate spot of colour on an idle pad. */
+/* The guide/PS lamp — LIT: a real lamp with its own soft halo. */
 .n-stage .wspad-guide {
-  fill: var(--n-accent-tint);
+  fill: url(#nxg-lamp);
   stroke: var(--n-accent-line);
   stroke-width: 0.3;
+  filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.55));
 }
 
 .n-stage .wspad-glyph {
@@ -6979,11 +6986,78 @@ a.wsrow-title:hover {
   width: max-content;
   padding: 13px 13px 15px;
   border-radius: 14px;
-  background: linear-gradient(180deg, #232532, #1a1c28 55%, #171823);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.013) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px
+    ),
+    linear-gradient(180deg, #232532, #1a1c28 55%, #171823);
   box-shadow:
-    inset 0 1px 0 rgba(233, 233, 237, 0.08),
+    inset 0 1px 0 rgba(233, 233, 237, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
     inset 0 0 0 1px #0f1118,
+    inset 0 0 22px rgba(0, 0, 0, 0.26),
     0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* Per-row sculpt profile (the Cherry-ish stagger): each row's face seats a
+   touch differently — top rows tilt away, the home row sits tallest and
+   catches the most light. Inset-only, so the bound/live face treatments
+   compose untouched. */
+.n-kbcase .n-kbrow:nth-child(1) .n-key::before {
+  inset: 2.5px 2px 5px;
+}
+
+.n-kbcase .n-kbrow:nth-child(2) .n-key::before {
+  inset: 2px 2px 5.5px;
+}
+
+.n-kbcase .n-kbrow:nth-child(3) .n-key::before {
+  inset: 1.5px 2px 6px;
+}
+
+.n-kbcase .n-kbrow:nth-child(4) .n-key::before {
+  inset: 1px 2px 6.5px;
+  filter: brightness(1.05);
+}
+
+.n-kbcase .n-kbrow:nth-child(5) .n-key::before {
+  inset: 1px 2px 6px;
+}
+
+.n-kbcase .n-kbrow:nth-child(6) .n-key::before {
+  inset: 1.5px 2px 5.5px;
+}
+
+/* Homing bumps on F and J — the touch-typist's landmark, cast in relief. */
+.n-key[data-key="F"]::after,
+.n-key[data-key="J"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 9px;
+  z-index: 1;
+  width: 8px;
+  height: 2px;
+  margin-left: -4px;
+  border-radius: 1px;
+  background: rgba(233, 233, 237, 0.16);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  transition: transform 70ms ease;
+}
+
+.n-key.live[data-key="F"]::after,
+.n-key.live[data-key="J"]::after {
+  transform: translateY(3px);
+  background: rgba(22, 24, 38, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-key[data-key="F"]::after,
+  .n-key[data-key="J"]::after {
+    transition: none;
+  }
 }
 
 .n-kbrow {
@@ -8979,7 +9053,8 @@ a.nm-link {
   }
 }
 
-.n-stage [data-fn].live {
+.n-stage [data-fn].live,
+.n-stage .wspad-petals path[data-fn].live {
   fill: var(--n-accent);
   stroke: var(--n-accent);
 }

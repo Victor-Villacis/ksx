@@ -7733,6 +7733,86 @@ a.wsrow-title:hover {
   opacity: 0.75;
 }
 
+/* The chip IS the control: click it, press the new key. */
+button.n-keychip {
+  cursor: pointer;
+}
+
+button.n-keychip:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.n-bind.arm button.n-keychip {
+  border-color: var(--n-accent);
+  color: var(--n-accent-2);
+  animation: n-chip-arm 1.3s ease-in-out infinite;
+}
+
+@keyframes n-chip-arm {
+  50% {
+    box-shadow: 0 0 0 3px var(--n-accent-tint);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-bind.arm button.n-keychip {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--n-accent-tint);
+  }
+}
+
+.n-addchip {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--n-line-2);
+  border-radius: 50%;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.n-addchip:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.n-addchip.none {
+  display: none;
+}
+
+/* The summary's modifier badges — empty means off, and hidden. */
+.n-rowbadge {
+  flex: none;
+  margin-right: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(150, 138, 224, 0.12);
+  color: var(--n-accent-2);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.n-rowbadge.none {
+  display: none;
+}
+
+/* The one-line teach: how the pane wants to be used. */
+.n-teach {
+  margin: 0 2px 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--n-text-3);
+}
+
 /* Bulk hands over the binding list: expand/collapse-all + clear-all. */
 .n-bindtools {
   display: flex;

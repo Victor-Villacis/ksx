@@ -3234,6 +3234,9 @@ pub struct WorkspaceBindRow {
     pub notes: String,
     /// `"wsbind"` (+" unbound"/" shared").
     pub cls: String,
+    /// The fan-out sentence ALONE ("this key also drives A · B"), for a
+    /// surface that shows turbo/toggle as badges instead of prose.
+    pub share_note: String,
     /// "Clear" on a bound row, empty (and therefore hidden) on an unbound
     /// one — the list idiom for a per-row action that is sometimes a no-op.
     pub clear: String,
@@ -3612,15 +3615,17 @@ fn workspace_bind_rows(
             if mapper.toggle.contains(zone.fn_name) {
                 notes.push("Toggle: a press holds until the next press".to_owned());
             }
-            if !share.is_empty() {
+            let share_note = if share.is_empty() {
+                String::new()
+            } else {
                 // `share_text` is the mapper's compact badge ("also A · B",
                 // capped); this sentence gives it a subject, so the badge's
                 // own "also " comes off first.
                 let names = crate::render_map::share_text(share);
-                notes.push(format!(
-                    "this key also drives {}",
-                    names.trim_start_matches("also ")
-                ));
+                format!("this key also drives {}", names.trim_start_matches("also "))
+            };
+            if !share_note.is_empty() {
+                notes.push(share_note.clone());
             }
             let mut cls = String::from("wsbind");
             if unbound {
@@ -3635,6 +3640,7 @@ fn workspace_bind_rows(
                 keys,
                 notes: notes.join(" · "),
                 cls,
+                share_note,
                 clear: if unbound {
                     String::new()
                 } else {
@@ -3868,6 +3874,14 @@ pub struct NocturneBindRow {
     pub slot: String,
     /// The turbo box's prefill — the delivered rate ("12"), or empty.
     pub turbo: String,
+    /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
+    /// visibility class ("" cannot ride CSS `:empty`: the renderer keeps a
+    /// zero-width text node in an empty slot).
+    pub badge: String,
+    pub badge_cls: String,
+    /// The ghost "+" add-a-key chip: hidden on an unbound row, whose main
+    /// chip already binds the first key.
+    pub add_cls: String,
     /// The Hold|Toggle pill pair, precomposed: exactly one carries `on`.
     pub hold_cls: String,
     pub tog_cls: String,
@@ -4833,7 +4847,27 @@ impl NocturneDerived {
                 } else {
                     "Unbound".to_owned()
                 },
-                note: row.notes.clone(),
+                note: row.share_note.clone(),
+                badge: {
+                    let mut parts: Vec<String> = Vec::new();
+                    if row.toggle {
+                        parts.push("Toggle".to_owned());
+                    }
+                    if !row.turbo_hz.is_empty() {
+                        parts.push(format!("{}/s", row.turbo_hz));
+                    }
+                    parts.join(" · ")
+                },
+                badge_cls: if row.toggle || !row.turbo_hz.is_empty() {
+                    "n-rowbadge".to_owned()
+                } else {
+                    "n-rowbadge none".to_owned()
+                },
+                add_cls: if bound {
+                    "n-addchip".to_owned()
+                } else {
+                    "n-addchip none".to_owned()
+                },
                 cls: if bound {
                     "n-bind on".to_owned()
                 } else {

@@ -112,6 +112,9 @@ export interface NocturneBindRowView {
   clear_cls: string;
   slot: string;
   turbo: string;
+  badge: string;
+  badge_cls: string;
+  add_cls: string;
   hold_cls: string;
   tog_cls: string;
 }
@@ -1488,8 +1491,15 @@ export function nocturneWire(root: HTMLElement): void {
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
       mergeQuery({ q: null });
-    } else if (hit === "bind-learn" || hit === "bind-add") {
+    } else if (
+      hit === "bind-learn" ||
+      hit === "bind-add" ||
+      hit === "chip-learn" ||
+      hit === "chip-add"
+    ) {
       // The row's own facts travel on its element, never re-derived here.
+      // A CHIP click must not also toggle the fold it sits in.
+      if (hit.startsWith("chip")) ev.preventDefault();
       const holder = target?.closest<HTMLElement>("[data-fn]");
       const fnName = holder?.dataset.fn ?? "";
       const slot = holder?.dataset.slot ?? "";
@@ -1499,7 +1509,7 @@ export function nocturneWire(root: HTMLElement): void {
           fn: fnName,
           label,
           slot,
-          mode: hit === "bind-add" ? "add" : "replace",
+          mode: hit.endsWith("add") ? "add" : "replace",
         });
       }
     } else if (hit === "learn-cancel") {
@@ -2638,6 +2648,11 @@ export function NocturneIsland() {
         h(
           "div",
           { class: () => nBindGCls() },
+          h(
+            "p",
+            { class: "n-teach" },
+            "Click a key chip, then press the new key. Open a row for press behaviour and turbo.",
+          ),
         h(
           "section",
           { class: () => nBindFaceCls() },
@@ -2660,6 +2675,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -2677,7 +2695,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -2688,12 +2726,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",
@@ -2843,6 +2881,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -2860,7 +2901,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -2871,12 +2932,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",
@@ -3026,6 +3087,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -3043,7 +3107,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -3054,12 +3138,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",
@@ -3209,6 +3293,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -3226,7 +3313,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -3237,12 +3344,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",
@@ -3392,6 +3499,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -3409,7 +3519,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -3420,12 +3550,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",
@@ -3575,6 +3705,9 @@ export function NocturneIsland() {
                 r.clear_cls,
                 r.slot,
                 r.turbo,
+                r.badge,
+                r.badge_cls,
+                r.add_cls,
                 r.hold_cls,
                 r.tog_cls,
               ].join("|"),
@@ -3592,7 +3725,27 @@ export function NocturneIsland() {
                     h("span", { class: "n-bind-label" }, r.label),
                     h("span", { class: "n-bind-note" }, r.note),
                   ),
-                  h("span", { class: r.chip_cls }, r.chip),
+                  h("span", { class: r.badge_cls }, r.badge),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-learn",
+                      title: "Rebind — click, then press the new key",
+                      class: r.chip_cls,
+                    },
+                    r.chip,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "chip-add",
+                      title: "Add another key to this control",
+                      class: r.add_cls,
+                    },
+                    "+",
+                  ),
                 ),
                 h(
                   "div",
@@ -3603,12 +3756,12 @@ export function NocturneIsland() {
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind — press a key",
+                      "Rebind",
                     ),
                     h(
                       "button",
                       { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add another key",
+                      "Add key",
                     ),
                     h(
                       "form",

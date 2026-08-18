@@ -6868,9 +6868,9 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
         .find(|r| r["function"] == bound_fn.as_str())
         .expect("turbo row");
     assert!(
-        row["note"]
+        row["badge"]
             .as_str()
-            .is_some_and(|note| note.contains("Turbo")),
+            .is_some_and(|badge| badge.ends_with("/s")),
         "{row}"
     );
     assert!(!row["turbo"].as_str().unwrap_or("").is_empty(), "{row}");
@@ -6900,9 +6900,9 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
         .find(|r| r["function"] == bound_fn.as_str())
         .expect("toggle row");
     assert!(
-        row["note"]
+        row["badge"]
             .as_str()
-            .is_some_and(|note| note.contains("Toggle")),
+            .is_some_and(|badge| badge.contains("Toggle")),
         "{row}"
     );
     assert_eq!(row["tog_cls"], "n-bpill on", "{row}");

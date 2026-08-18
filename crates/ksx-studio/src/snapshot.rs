@@ -3237,6 +3237,8 @@ pub struct WorkspaceBindRow {
     /// The fan-out sentence ALONE ("this key also drives A · B"), for a
     /// surface that shows turbo/toggle as badges instead of prose.
     pub share_note: String,
+    /// The keys that fan out, space-joined — the door to the By-key rows.
+    pub share_keys: String,
     /// "Clear" on a bound row, empty (and therefore hidden) on an unbound
     /// one — the list idiom for a per-row action that is sometimes a no-op.
     pub clear: String,
@@ -3618,8 +3620,9 @@ fn workspace_bind_rows(
             // PER-KEY fan-out, subject named — "this key also drives…" could
             // not say WHICH key on a multi-key row. One vocabulary
             // everywhere: keys DRIVE controls (the board's own words).
-            let share_note = {
+            let (share_note, share_keys) = {
                 let mut parts: Vec<String> = Vec::new();
+                let mut shared_keys: Vec<String> = Vec::new();
                 for key in crate::render_map::keys_of(&mapper, zone.fn_name) {
                     let others: Vec<String> = zones
                         .iter()
@@ -3631,9 +3634,10 @@ fn workspace_bind_rows(
                         .collect();
                     if !others.is_empty() {
                         parts.push(format!("{key} also drives {}", others.join(" · ")));
+                        shared_keys.push(key.clone());
                     }
                 }
-                parts.join(" — ")
+                (parts.join(" — "), shared_keys.join(" "))
             };
             if !share_note.is_empty() {
                 notes.push(share_note.clone());
@@ -3652,6 +3656,7 @@ fn workspace_bind_rows(
                 notes: notes.join(" · "),
                 cls,
                 share_note,
+                share_keys,
                 clear: if unbound {
                     String::new()
                 } else {
@@ -3888,6 +3893,11 @@ pub struct NocturneBindRow {
     /// The chip's hover sentence: the RELATION, stated from the game's side
     /// ("Pressed by G or H — …"), because the chip lives on a control row.
     pub chip_title: String,
+    /// The fan-out note as a DOOR: its class hides the empty button (an
+    /// empty slot renders a zero-width text node, so CSS `:empty` cannot),
+    /// and the shared keys ride along for the jump.
+    pub note_cls: String,
+    pub note_keys: String,
     /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
     /// visibility class ("" cannot ride CSS `:empty`: the renderer keeps a
     /// zero-width text node in an empty slot).
@@ -3950,6 +3960,9 @@ pub struct NocturneKeyRow {
     pub key: String,
     /// The controls this key drives, in readable zone labels ("A · RB").
     pub targets: String,
+    /// The same controls as canonical fn tokens, space-joined lowercase —
+    /// the client's door to the By-control rows.
+    pub fns: String,
     /// `n-krow` (+" shared" when the key fans out to several controls).
     pub cls: String,
 }
@@ -4730,6 +4743,11 @@ impl NocturneDerived {
                     .map(|f| readable(f))
                     .collect::<Vec<_>>()
                     .join(" · "),
+                fns: fns
+                    .iter()
+                    .map(|f| f.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 cls: if fns.len() > 1 {
                     "n-krow shared".to_owned()
                 } else {
@@ -4749,6 +4767,7 @@ impl NocturneDerived {
                 .map(|cell| NocturneKeyRow {
                     key: cell.key.to_owned(),
                     targets: String::new(),
+                    fns: String::new(),
                     cls: "n-akey".to_owned(),
                 })
                 .collect()
@@ -4941,6 +4960,12 @@ impl NocturneDerived {
                     "Unbound".to_owned()
                 },
                 note: row.share_note.clone(),
+                note_cls: if row.share_note.is_empty() {
+                    "n-bind-note none".to_owned()
+                } else {
+                    "n-bind-note door".to_owned()
+                },
+                note_keys: row.share_keys.clone(),
                 chip_title: if bound {
                     format!(
                         "Pressed by {} — click, then press a new key to replace",

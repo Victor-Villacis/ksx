@@ -225,6 +225,7 @@ fn key_row_view(row: &NocturneKeyRow) -> SlotValue {
     SlotValue::object(vec![
         ("key".to_owned(), SlotValue::Text(row.key.clone())),
         ("targets".to_owned(), SlotValue::Text(row.targets.clone())),
+        ("fns".to_owned(), SlotValue::Text(row.fns.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
     ])
 }
@@ -295,6 +296,11 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
         (
             "chip_title".to_owned(),
             SlotValue::Text(row.chip_title.clone()),
+        ),
+        ("note_cls".to_owned(), SlotValue::Text(row.note_cls.clone())),
+        (
+            "note_keys".to_owned(),
+            SlotValue::Text(row.note_keys.clone()),
         ),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
         (

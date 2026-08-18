@@ -7809,10 +7809,33 @@ a.wsrow-title:hover {
   outline-offset: 1px;
 }
 
-.n-krow-arrow {
+.n-krow-verb {
   flex: none;
   color: var(--n-text-3);
-  font-size: 11px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+/* Names are doors: text that names the other side flips the view. */
+button.n-krow-tg,
+button.n-bind-note {
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.door:hover,
+button.n-bind-note:hover {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  color: var(--n-accent-2);
+}
+
+button.n-bind-note.none {
+  display: none;
 }
 
 .n-krow-tg {

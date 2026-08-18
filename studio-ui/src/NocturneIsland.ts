@@ -72,6 +72,7 @@ export interface NocturnePersonaRowView {
 export interface NocturneKeyRowView {
   key: string;
   targets: string;
+  fns: string;
   cls: string;
 }
 
@@ -121,6 +122,8 @@ export interface NocturneBindRowView {
   slot: string;
   turbo: string;
   chip_title: string;
+  note_cls: string;
+  note_keys: string;
   badge: string;
   badge_cls: string;
   add_cls: string;
@@ -1384,6 +1387,26 @@ async function applyDraftViaJson(): Promise<void> {
   nocturnePollFn();
 }
 
+/** Pulse a set of rows in whichever view just opened; scroll to the
+ *  first. The counterpart of a jump can be SEVERAL rows (a key that fans
+ *  out, a control with two keys) — all of them light. */
+function pulseRows(rows: HTMLElement[]): void {
+  rows.forEach((row, at) => {
+    if (at === 0) {
+      row.scrollIntoView({
+        block: "nearest",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+    }
+    row.classList.remove("locate");
+    void row.offsetWidth;
+    row.classList.add("locate");
+    window.setTimeout(() => row.classList.remove("locate"), 3600);
+  });
+}
+
 /** The BY-KEY view's twin of locateBindRow: pulse a key's row. */
 function locateKeyRow(root: HTMLElement, key: string): void {
   if (!key) return;
@@ -1664,6 +1687,39 @@ export function nocturneWire(root: HTMLElement): void {
       pendingConflict = null;
       setNConfOpen(false);
       restoreDialogFocus();
+    } else if (hit === "jump-controls") {
+      // The targets text names controls: flip and light them all.
+      ev.preventDefault();
+      const fns = (target?.closest("[data-fns]")?.getAttribute("data-fns") ?? "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (fns.length > 0) {
+        ui.rightView = "controls";
+        saveUiPrefs();
+        applyNocturneUi();
+        const all = Array.from(root.querySelectorAll<HTMLElement>("details.n-bind[data-fn]"));
+        const rows = fns
+          .map((fn) => all.find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fn))
+          .filter((el): el is HTMLElement => Boolean(el));
+        pulseRows(rows);
+      }
+    } else if (hit === "jump-keys") {
+      // The note names keys: flip and light them all. Never the fold.
+      ev.preventDefault();
+      const keys = (target?.closest("[data-keys]")?.getAttribute("data-keys") ?? "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (keys.length > 0) {
+        ui.rightView = "keys";
+        saveUiPrefs();
+        applyNocturneUi();
+        const rows = keys
+          .map((key) =>
+            root.querySelector<HTMLElement>(`.n-krows .n-krow[data-key="${CSS.escape(key)}"]`),
+          )
+          .filter((el): el is HTMLElement => Boolean(el));
+        pulseRows(rows);
+      }
     } else if (hit === "view-ctl" || hit === "view-keys") {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
@@ -2894,10 +2950,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3087,10 +3152,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3280,10 +3354,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3473,10 +3556,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3666,10 +3758,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -3859,10 +3960,19 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h("span", { class: "n-bind-note" }, r.note),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "jump-keys",
+                        "data-keys": r.note_keys,
+                        title: "Open these keys in the By-key view",
+                        class: r.note_cls,
+                      },
+                      r.note,
+                    ),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
-                  h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "←"),
                   h(
                     "button",
                     {
@@ -4027,14 +4137,23 @@ export function NocturneIsland() {
           h("p", { class: "n-foot" }, () => nKeysNote()),
           createList(
             () => nKeyRows(),
-            (r) => r.key + "|" + r.targets + "|" + r.cls,
+            (r) => r.key + "|" + r.targets + "|" + r.fns + "|" + r.cls,
             (r) =>
               h(
                 "div",
-                { "data-key": r.key, class: r.cls },
+                { "data-key": r.key, "data-fns": r.fns, class: r.cls },
                 h("span", { class: "n-krow-chip" }, r.key),
-                h("span", { class: "n-krow-arrow", "aria-hidden": "true" }, "→"),
-                h("span", { class: "n-krow-tg" }, r.targets),
+                h("span", { class: "n-krow-verb" }, "drives"),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "jump-controls",
+                    title: "Open these controls in the By-control view",
+                    class: "n-krow-tg door",
+                  },
+                  r.targets,
+                ),
                 h(
                   "button",
                   {

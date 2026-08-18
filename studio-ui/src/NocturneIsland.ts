@@ -2288,11 +2288,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2303,11 +2303,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow2(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2318,11 +2318,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow3(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2333,11 +2333,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow4(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2348,11 +2348,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow5(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2363,11 +2363,11 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow6(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -2386,11 +2386,11 @@ export function NocturneIsland() {
             { class: "n-kbtray-row" },
             createList(
               () => nKbTray(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),

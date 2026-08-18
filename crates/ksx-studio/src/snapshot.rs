@@ -3917,8 +3917,12 @@ pub struct NocturneKeyCell {
     pub key: String,
     pub cls: String,
     pub short: String,
-    /// The full sentence for hover/aria: which controls this key drives.
+    /// The hover sentence: which controls this key drives, in the persona's
+    /// readable zone labels. Empty on an unbound cap.
     pub title: String,
+    /// The assistive name (`role="img"` + `aria-label`): the same sentence
+    /// on a bound cap, the bare cap otherwise — never empty.
+    pub aria: String,
 }
 
 /// Every sentence `/nocturne` states as a served fact.
@@ -4534,6 +4538,32 @@ impl NocturneDerived {
         let persona = selected
             .map(|slot| slot.persona.as_str())
             .unwrap_or("xbox360");
+        // The READABLE control names for hover/assistive sentences — the
+        // zone tables' own labels ("LS ↑", "D-pad ←", "△"), looked up
+        // case-bridged because the mapper spells face functions UPPERCASE.
+        let zone_labels: std::collections::HashMap<String, String> =
+            crate::render_map::zones_for(persona)
+                .iter()
+                .map(|zone| {
+                    (
+                        zone.fn_name.to_ascii_lowercase(),
+                        crate::render_map::legend_label(zone),
+                    )
+                })
+                .collect();
+        let readable = |f: &str| -> String {
+            if let Some(name) = f.strip_prefix("macro.") {
+                format!("macro \"{name}\"")
+            } else {
+                zone_labels
+                    .get(&f.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| f.to_owned())
+            }
+        };
+        let drives_whom = selected
+            .map(|slot| format!(" on P{}", slot.number))
+            .unwrap_or_default();
         let dress = |cell: &crate::keyboard_layout::KeyCell| {
             let mut cls = String::from("n-key");
             if !cell.unit.is_empty() {
@@ -4553,16 +4583,19 @@ impl NocturneDerived {
                     if fns.len() > 1 {
                         cls.push_str(" shared");
                     }
-                    let names: Vec<String> = fns
-                        .iter()
-                        .map(|f| crate::keyboard_layout::short_for(persona, f))
-                        .collect();
+                    let short = crate::keyboard_layout::short_for(persona, fns[0]);
+                    let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
                     (
-                        names[0].clone(),
-                        format!("{} — drives {}", cell.cap, names.join(" · ")),
+                        short,
+                        format!("{} — drives {}{drives_whom}", cell.cap, spoken.join(" · ")),
                     )
                 }
                 None => (String::new(), String::new()),
+            };
+            let aria = if title.is_empty() {
+                cell.cap.to_owned()
+            } else {
+                title.clone()
             };
             NocturneKeyCell {
                 cap: cell.cap.to_owned(),
@@ -4570,6 +4603,7 @@ impl NocturneDerived {
                 cls,
                 short,
                 title,
+                aria,
             }
         };
         let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
@@ -4594,10 +4628,8 @@ impl NocturneDerived {
             .iter()
             .filter(|(key, _)| !board_keys.contains(*key))
             .map(|(key, fns)| {
-                let names: Vec<String> = fns
-                    .iter()
-                    .map(|f| crate::keyboard_layout::short_for(persona, f))
-                    .collect();
+                let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
+                let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
                 NocturneKeyCell {
                     cap: (*key).to_owned(),
                     key: (*key).to_owned(),
@@ -4606,8 +4638,9 @@ impl NocturneDerived {
                     } else {
                         "n-key tray bound".to_owned()
                     },
-                    short: names[0].clone(),
-                    title: format!("{key} — drives {}", names.join(" · ")),
+                    short: crate::keyboard_layout::short_for(persona, fns[0]),
+                    aria: title.clone(),
+                    title,
                 }
             })
             .collect();

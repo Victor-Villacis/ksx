@@ -216,6 +216,7 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
     ])
 }
 

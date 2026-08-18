@@ -9128,3 +9128,30 @@ a.nm-link {
   font-family: inherit;
   pointer-events: none;
 }
+
+
+/* ── The keyboard bottom pane: collapsible like the side rails ── */
+
+.n-kbpane {
+  display: contents;
+}
+
+.n-center.kb-closed .n-kbpane {
+  display: none;
+}
+
+.n-kbtoggle {
+  flex: none;
+  order: 3;
+  transition: transform 0.15s ease;
+}
+
+.n-center.kb-closed .n-kbtoggle {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-kbtoggle {
+    transition: none;
+  }
+}

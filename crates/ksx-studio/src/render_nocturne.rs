@@ -565,9 +565,10 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 18] = [
+        const CLIENT_ONLY_SLOTS: [&str; 19] = [
             "nCapPrep",
             "nCapRel",
+            "nCenterCls",
             "nDlgOpen",
             "show:nDlgOpen",
             "nLeftCls",

@@ -120,6 +120,12 @@ const SNAPSHOT = `(() => {
   //    fails. Durable state goes through separate announcers and show pairs,
   //    which stay fully asserted.
   clone.querySelectorAll("[data-live-chatter]").forEach((el) => { el.textContent = ""; });
+  // 3c. CLIENT FIT, by contract. A node marked data-client-fit is scaled to
+  //    the viewer's viewport after adoption (the board's zoom-to-fit) — a
+  //    fact the server can never know. Exactly its STYLE attribute is
+  //    exempt; the node, its content and every other attribute still
+  //    compare, and any un-marked inline style still fails.
+  clone.querySelectorAll("[data-client-fit]").forEach((el) => { el.removeAttribute("style"); });
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.

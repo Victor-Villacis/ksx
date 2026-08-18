@@ -1,5 +1,4 @@
 import { activateIslands } from "@getforma/core";
-import { fetchJSON } from "@getforma/core/http";
 
 // The compiler's island-first entry pattern (parseEntryPoint): the imported
 // `*Page` component NOT in the activateIslands registry is the SSR root.
@@ -13,6 +12,8 @@ import {
   NocturneIsland,
   nocturneLiveConnect,
   nocturneWire,
+  restoreNocturneFilter,
+  scheduleKbFit,
   setNocturnePoll,
   type NocturnePayload,
 } from "./NocturneIsland";
@@ -23,14 +24,29 @@ void NocturnePage; // compile-time anchor only (see above)
  *  on human actions, not at display rate. */
 const POLL_MS = 2000;
 
+/** The last applied body, verbatim. An idle page's polls come back byte
+ *  identical, and skipping the apply then costs ~50 signal writes and every
+ *  list's key walk — the cheapest work is the work not done. */
+let lastBody = "";
+
 async function poll(): Promise<void> {
+  // A hidden tab does not need fresh paint; visibilitychange below polls
+  // the moment it returns.
+  if (document.hidden) return;
   // The poller echoes the page's own selection, so the payload it copies is
   // the one this URL's SSR would paint (the workspace's rule).
   const slot = new URLSearchParams(window.location.search).get("slot");
   const url = slot ? `/api/nocturne?slot=${encodeURIComponent(slot)}` : "/api/nocturne";
   try {
-    applyNocturne(await fetchJSON<NocturnePayload>(url));
+    const res = await fetch(url, { headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error(String(res.status));
+    const body = await res.text();
+    if (body === lastBody) return;
+    lastBody = body;
+    applyNocturne(JSON.parse(body) as NocturnePayload);
   } catch {
+    // Recovery must re-apply even an identical payload.
+    lastBody = "";
     applyNocturneUnreachable();
   }
 }
@@ -129,6 +145,15 @@ activateIslands({
     setNocturnePoll(() => void poll());
     nocturneLiveConnect();
     window.setInterval(() => void poll(), POLL_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) void poll();
+    });
+    // The filter input and the board exist only after the island mounts:
+    // restore ?q= and run the first fit on the next frame.
+    window.requestAnimationFrame(() => {
+      restoreNocturneFilter();
+      scheduleKbFit();
+    });
     // A no-JS POST landed us on ?flash=…: the server already painted the
     // line; strip the query so a manual reload does not replay feedback for
     // an action nobody just took.

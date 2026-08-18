@@ -348,6 +348,18 @@ export function applyNocturne(p: NocturnePayload): void {
   setNAutoFormCls(v.auto_form_cls);
   // The live echo's license rides the same payload (fail-closed origin).
   reconcileLiveSession(p);
+  // Reconciliation may have replaced rows or keycaps: the live paint's
+  // cached node lists re-query on the next frame, the board refits, and
+  // the filter re-applies — a fresh row arrives without the imperative
+  // `.hide` class its predecessor carried.
+  liveKeyNodes = null;
+  liveFnNodes = null;
+  scheduleKbFit();
+  const root = learnRoot;
+  if (root) {
+    const query = root.querySelector<HTMLInputElement>(".n-filter-in")?.value ?? "";
+    if (query.trim() !== "") applyNocturneFilter(root, query);
+  }
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -377,6 +389,7 @@ export function applyFlash(flash: string | null): void {
 // on the SSR pass. JS only adds outside-click dismissal.
 
 const [nDlgOpen, setNDlgOpen] = createSignal(false);
+const [nCenterCls, setNCenterCls] = createSignal("n-center");
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
 const [nIdLinkCls, setNIdLinkCls] = createSignal("n-link");
@@ -387,11 +400,13 @@ const ui: {
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
+  kbClosed: boolean;
   identify: boolean;
 } = {
   dlg: false,
   leftRail: false,
   rightRail: false,
+  kbClosed: false,
   identify: false,
 };
 
@@ -399,9 +414,106 @@ function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
+  setNCenterCls(ui.kbClosed ? "n-center kb-closed" : "n-center");
+  // Any pane change resizes the center: the board refits.
+  scheduleKbFit();
   setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
   setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
   setNIdText("Press a key on the keyboard you want to use");
+}
+
+// ── Chrome preferences that survive a refresh ──────────────────────────────
+// The pane rails are a layout choice, not a transient disclosure: collapsing
+// a pane and losing it on reload reads as the page forgetting you. Stored in
+// localStorage (loaded BEFORE the island builds, so the hydrated first paint
+// is already collapsed); dialogs, folds and the capture state stay
+// deliberately transient.
+
+const UI_STORE = "ksx-nocturne-ui";
+
+function loadUiPrefs(): void {
+  try {
+    const raw = window.localStorage.getItem(UI_STORE);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as {
+      leftRail?: boolean;
+      rightRail?: boolean;
+      kbClosed?: boolean;
+    };
+    ui.leftRail = saved.leftRail === true;
+    ui.rightRail = saved.rightRail === true;
+    ui.kbClosed = saved.kbClosed === true;
+  } catch {
+    // A blocked or corrupt store reads as the defaults.
+  }
+}
+
+function saveUiPrefs(): void {
+  try {
+    window.localStorage.setItem(
+      UI_STORE,
+      JSON.stringify({
+        leftRail: ui.leftRail,
+        rightRail: ui.rightRail,
+        kbClosed: ui.kbClosed,
+      }),
+    );
+  } catch {
+    // Nothing to do: the preference simply will not survive this session.
+  }
+}
+
+/** Merge one query change into the page URL without navigating — the URL is
+ *  the page's durable state (selection, filter), and every writer merges so
+ *  it cannot clobber the other's key. */
+function mergeQuery(set: Record<string, string | null>): void {
+  const params = new URLSearchParams(window.location.search);
+  for (const [key, value] of Object.entries(set)) {
+    if (value === null || value === "") params.delete(key);
+    else params.set(key, value);
+  }
+  params.delete("flash");
+  const query = params.toString();
+  window.history.replaceState(null, "", query === "" ? "/nocturne" : `/nocturne?${query}`);
+}
+
+/** Restore the filter from `?q=` after the island has mounted (the input
+ *  does not exist before the build). Called by the entry. */
+export function restoreNocturneFilter(): void {
+  const root = learnRoot;
+  if (!root) return;
+  const q = new URLSearchParams(window.location.search).get("q") ?? "";
+  const input = root.querySelector<HTMLInputElement>(".n-filter-in");
+  if (input) input.value = q;
+  if (q !== "") applyNocturneFilter(root, q);
+}
+
+let filterUrlTimer: number | undefined;
+
+let kbFitRaf = 0;
+
+export function scheduleKbFit(): void {
+  if (kbFitRaf !== 0) return;
+  kbFitRaf = window.requestAnimationFrame(() => {
+    kbFitRaf = 0;
+    fitKeyboard();
+  });
+}
+
+function fitKeyboard(): void {
+  const root = learnRoot;
+  if (!root) return;
+  const kb = root.querySelector<HTMLElement>(".n-kb");
+  const kbcase = root.querySelector<HTMLElement>(".n-kbcase");
+  if (!kb || !kbcase) return;
+  const available = kb.clientWidth;
+  const naturalW = kbcase.offsetWidth;
+  const naturalH = kbcase.offsetHeight;
+  if (available === 0 || naturalW === 0) return; // collapsed or not laid out
+  const f = Math.min(1.9, Math.max(0.55, available / naturalW));
+  kbcase.style.transform = "scale(" + f + ")";
+  kbcase.style.transformOrigin = "top left";
+  kb.style.height = Math.ceil(naturalH * f) + "px";
 }
 
 /** Close the configuration menu (a native details, not signal state). */
@@ -807,6 +919,10 @@ let liveDropped = 0;
 const liveKeysDown = new Set<string>();
 const liveFnsDown = new Set<string>();
 const liveTicker: string[] = [];
+/** Cached paint targets — invalidated whenever reconciliation may have
+ *  replaced nodes (every applied payload). */
+let liveKeyNodes: HTMLElement[] | null = null;
+let liveFnNodes: { el: HTMLElement; fns: string[] }[] | null = null;
 
 function liveFingerprint(): string {
   const s = liveSession;
@@ -922,18 +1038,29 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
   }
   liveDropped += envelope.frame.dropped;
 
-  // Paint: one sweep, class toggles only.
-  for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-key]"))) {
+  // Paint: one sweep, class toggles only. The node lists are CACHED — a
+  // real daemon feeds ~60 Hz, and re-querying ~200 elements per frame is
+  // the kind of hidden cost that melts a laptop; applyNocturne invalidates
+  // the cache whenever reconciliation may have replaced rows.
+  if (liveKeyNodes === null) {
+    liveKeyNodes = Array.from(root.querySelectorAll<HTMLElement>("[data-key]"));
+  }
+  if (liveFnNodes === null) {
+    liveFnNodes = Array.from(root.querySelectorAll<HTMLElement>("[data-fn]")).map((el) => ({
+      el,
+      fns: (el.dataset.fn ?? "").split(/\s+/).map(normalizedFn),
+    }));
+  }
+  for (const el of liveKeyNodes) {
     el.classList.toggle("live", liveKeysDown.has(el.dataset.key ?? ""));
   }
-  for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-fn]"))) {
+  for (const { el, fns } of liveFnNodes) {
     // Space-separated where one element stands for several functions — a
     // stick lights on its click OR any of its four directions, the Xbox
     // cross on any d-pad direction.
-    const fns = (el.dataset.fn ?? "").split(/\s+/);
     el.classList.toggle(
       "live",
-      fns.some((fnName) => liveFnsDown.has(normalizedFn(fnName))),
+      fns.some((fnName) => liveFnsDown.has(fnName)),
     );
   }
   const stats = root.querySelector<HTMLElement>(".n-livestats");
@@ -979,6 +1106,11 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
  *  control carries `data-nx`; everything else is inert. */
 export function nocturneWire(root: HTMLElement): void {
   learnRoot = root;
+  // Chrome preferences load BEFORE the island builds (the entry calls this
+  // first), so the hydrated first paint already has the panes the user left.
+  loadUiPrefs();
+  applyNocturneUi();
+  window.addEventListener("resize", scheduleKbFit);
   // Identify-by-key is a REAL verb: the form posts and the server listens
   // for one keypress (up to 11 s). The submit hook only shows the listening
   // banner while the round-trip is in flight; applyFlash settles it.
@@ -993,6 +1125,12 @@ export function nocturneWire(root: HTMLElement): void {
     const t = ev.target as HTMLElement | null;
     if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
       applyNocturneFilter(root, t.value);
+      // The filter is page state: it rides ?q= (debounced), so a refresh
+      // keeps it and the poller's URL echo cannot lose it.
+      if (filterUrlTimer !== undefined) window.clearTimeout(filterUrlTimer);
+      filterUrlTimer = window.setTimeout(() => {
+        mergeQuery({ q: t.value.trim() });
+      }, 300);
     }
   });
   root.addEventListener("click", (ev) => {
@@ -1002,7 +1140,10 @@ export function nocturneWire(root: HTMLElement): void {
     const sel = target?.closest<HTMLAnchorElement>("a.n-slot-sel");
     if (sel) {
       ev.preventDefault();
-      window.history.pushState(null, "", sel.getAttribute("href") ?? "/nocturne");
+      // MERGE the slot into the current query rather than replacing the
+      // whole URL — the filter's ?q= must survive a selection change.
+      const chosen = new URL(sel.href, window.location.origin).searchParams.get("slot");
+      mergeQuery({ slot: chosen });
       nocturnePollFn();
       return;
     }
@@ -1024,12 +1165,20 @@ export function nocturneWire(root: HTMLElement): void {
     }
     if (hit === "slot-new") ui.dlg = true;
     else if (hit === "dlg-close") ui.dlg = false;
-    else if (hit === "pane-left") ui.leftRail = !ui.leftRail;
-    else if (hit === "pane-right") ui.rightRail = !ui.rightRail;
-    else if (hit === "filter-reset") {
+    else if (hit === "pane-left") {
+      ui.leftRail = !ui.leftRail;
+      saveUiPrefs();
+    } else if (hit === "pane-right") {
+      ui.rightRail = !ui.rightRail;
+      saveUiPrefs();
+    } else if (hit === "pane-bottom") {
+      ui.kbClosed = !ui.kbClosed;
+      saveUiPrefs();
+    } else if (hit === "filter-reset") {
       const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
+      mergeQuery({ q: null });
     } else if (hit === "bind-learn" || hit === "bind-add") {
       // The row's own facts travel on its element, never re-derived here.
       const holder = target?.closest<HTMLElement>("[data-fn]");
@@ -1060,7 +1209,7 @@ export function nocturneWire(root: HTMLElement): void {
       // panel contains real form controls.
       return;
     }
-    if (hit === "slot-new" || hit === "dlg-close" || hit === "pane-left" || hit === "pane-right" || hit === "filter-reset") {
+    if (hit === "slot-new" || hit === "dlg-close" || hit === "pane-left" || hit === "pane-right" || hit === "pane-bottom" || hit === "filter-reset") {
       ev.preventDefault();
     }
     applyNocturneUi();
@@ -1444,7 +1593,7 @@ export function NocturneIsland() {
       // ── Center ───────────────────────────────────────────────────────────
       h(
         "section",
-        { class: "n-center" },
+        { class: () => nCenterCls() },
         h(
           "div",
           { class: "n-meta" },
@@ -1750,7 +1899,20 @@ export function NocturneIsland() {
           { class: "n-kbhead" },
           h("span", { class: "n-kick" }, () => nKbTitle()),
           h("div", { class: "n-spring" }),
+          h(
+            "button",
+            {
+              class: "n-collapse n-kbtoggle",
+              type: "button",
+              title: "Show or hide the keyboard",
+              "data-nx": "pane-bottom",
+            },
+            "▾",
+          ),
         ),
+        h(
+          "div",
+          { class: "n-kbpane" },
         // ── Prepared-for-play (migrated from /start's capture card) ────────
         h(
           "div",
@@ -1849,10 +2011,10 @@ export function NocturneIsland() {
         ),
         h(
           "div",
-          { class: "n-kb" },
+          { class: "n-kb", "data-client-fit": "" },
           h(
             "div",
-            { class: "n-kbcase" },
+            { class: "n-kbcase", "data-client-fit": "" },
           h(
             "div",
             { class: "n-kbrow" },
@@ -1968,6 +2130,7 @@ export function NocturneIsland() {
           ),
         ),
         h("p", { class: "n-devnote" }, () => nKbNote()),
+        ),
       ),
       // ── Right pane: the binding list, off the mapper's own machinery ─────
       h(

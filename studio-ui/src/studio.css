@@ -7733,6 +7733,101 @@ a.wsrow-title:hover {
   opacity: 0.75;
 }
 
+/* The pane's two readings: the segmented view toggle and the BY-KEY rows. */
+.n-vseg {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 2px;
+  padding: 3px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: var(--n-panel);
+}
+
+.n-vseg-btn {
+  flex: 1;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-right:not(.keys-mode) .n-vseg-btn.vc,
+.n-right.keys-mode .n-vseg-btn.vk {
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
+  font-weight: 600;
+}
+
+.n-krows {
+  display: none;
+}
+
+.n-right.keys-mode .n-krows {
+  display: block;
+}
+
+.n-right.keys-mode .n-bindtools,
+.n-right.keys-mode .n-bindgroups,
+.n-right.keys-mode .n-macrosec {
+  display: none;
+}
+
+.n-macrosec {
+  display: contents;
+}
+
+.n-krow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.n-krow:hover {
+  background: var(--n-panel);
+}
+
+.n-krow-chip {
+  flex: none;
+  min-width: 44px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #292b31;
+  color: #e4e7f5;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.n-krow.shared .n-krow-chip {
+  outline: 1.5px dashed rgba(150, 138, 224, 0.6);
+  outline-offset: 1px;
+}
+
+.n-krow-arrow {
+  flex: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+}
+
+.n-krow-tg {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--n-text-2);
+  line-height: 1.4;
+}
+
+/* Board caps are a doorway to the BY-KEY view. */
+.n-kb [data-key] {
+  cursor: pointer;
+}
+
 /* The stage's glance callouts: which key presses each control. Outlined
    so they read on any art ground; sized per art viewBox scale. */
 .n-stage text.n-fnkey {
@@ -7919,8 +8014,9 @@ button.n-keychip:hover {
   cursor: pointer;
 }
 
-.n-bind.locate {
-  animation: n-locate 1.5s ease-out;
+.n-bind.locate,
+.n-krow.locate {
+  animation: n-locate 3.5s ease-out;
 }
 
 @keyframes n-locate {
@@ -7936,7 +8032,8 @@ button.n-keychip:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .n-bind.locate {
+  .n-bind.locate,
+  .n-krow.locate {
     animation: none;
     box-shadow: 0 0 0 2px var(--n-accent-line);
   }

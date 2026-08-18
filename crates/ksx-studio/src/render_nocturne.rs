@@ -18,8 +18,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
     NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneGameRow,
-    NocturneKeyCell, NocturneMacroRow, NocturneOptionRow, NocturneOtherRow, NocturnePayload,
-    NocturnePersonaRow, NocturneRackRow,
+    NocturneKeyCell, NocturneKeyRow, NocturneMacroRow, NocturneOptionRow, NocturneOtherRow,
+    NocturnePayload, NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -43,6 +43,7 @@ const LIST_SLOT_BIND_RS: &str = "list:nBindRs:array";
 const LIST_SLOT_BIND_SYS: &str = "list:nBindSys:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
+const LIST_SLOT_KEYROWS: &str = "list:nKeyRows:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -113,6 +114,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayHead": payload.view.kb_tray_head,
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
+        "nKeysNote": payload.view.keys_note,
         "nPadXboxCls": payload.view.pad_xbox_cls,
         "nPadPsCls": payload.view.pad_ps_cls,
         "nCfgLine": payload.view.cfg_line,
@@ -216,6 +218,14 @@ fn option_row(row: &NocturneOptionRow) -> SlotValue {
     ])
 }
 
+fn key_row_view(row: &NocturneKeyRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("targets".to_owned(), SlotValue::Text(row.targets.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
 fn key_cell(row: &NocturneKeyCell) -> SlotValue {
     SlotValue::object(vec![
         ("cap".to_owned(), SlotValue::Text(row.cap.clone())),
@@ -294,12 +304,16 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 25] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 26] {
     let view = &payload.view;
     [
         (
             LIST_SLOT_GAMES,
             SlotValue::array(view.game_rows.iter().map(game_row).collect()),
+        ),
+        (
+            LIST_SLOT_KEYROWS,
+            SlotValue::array(view.key_rows.iter().map(key_row_view).collect()),
         ),
         (
             LIST_SLOT_MACROS,
@@ -568,7 +582,8 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 25] = [
+        const SERVED_LIST_PREFIXES: [&str; 26] = [
+            "list:nKeyRows:",
             "list:nSocdEditOpts:",
             "list:nBindFace:",
             "list:nBindDpad:",
@@ -595,7 +610,8 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 75] = [
+        const SERVED_SLOTS: [&str; 76] = [
+            "nKeysNote",
             "nBindFaceCls",
             "nBindDpadCls",
             "nBindShlCls",

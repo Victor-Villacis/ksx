@@ -69,6 +69,12 @@ export interface NocturnePersonaRowView {
   cls: string;
 }
 
+export interface NocturneKeyRowView {
+  key: string;
+  targets: string;
+  cls: string;
+}
+
 export interface NocturneOptionRowView {
   value: string;
   label: string;
@@ -203,6 +209,8 @@ export interface NocturneView {
   kb_row5: NocturneKeyCellView[];
   kb_row6: NocturneKeyCellView[];
   kb_tray: NocturneKeyCellView[];
+  key_rows: NocturneKeyRowView[];
+  keys_note: string;
   kb_tray_head: string;
   kb_tray_cls: string;
   kb_note: string;
@@ -329,6 +337,8 @@ const [nKbRow4, setNKbRow4] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow5, setNKbRow5] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow6, setNKbRow6] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbTray, setNKbTray] = createSignal<NocturneKeyCellView[]>([]);
+const [nKeyRows, setNKeyRows] = createSignal<NocturneKeyRowView[]>([]);
+const [nKeysNote, setNKeysNote] = createSignal("");
 const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
@@ -437,6 +447,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbRow5(v.kb_row5);
   setNKbRow6(v.kb_row6);
   setNKbTray(v.kb_tray);
+  setNKeyRows(v.key_rows);
+  setNKeysNote(v.keys_note);
   setNKbTrayHead(v.kb_tray_head);
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
@@ -559,18 +571,22 @@ const ui: {
   rightRail: boolean;
   kbClosed: boolean;
   identify: boolean;
+  rightView: "controls" | "keys";
 } = {
   dlg: false,
   leftRail: false,
   rightRail: false,
   kbClosed: false,
   identify: false,
+  rightView: "controls",
 };
 
 function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
-  setNRightCls(ui.rightRail ? "n-right rail" : "n-right");
+  setNRightCls(
+    "n-right" + (ui.rightRail ? " rail" : "") + (ui.rightView === "keys" ? " keys-mode" : ""),
+  );
   setNCenterCls(ui.kbClosed ? "n-center kb-closed" : "n-center");
   // Any pane change resizes the center: the board refits.
   scheduleKbFit();
@@ -596,8 +612,10 @@ function loadUiPrefs(): void {
       leftRail?: boolean;
       rightRail?: boolean;
       kbClosed?: boolean;
+      rightView?: string;
     };
     ui.leftRail = saved.leftRail === true;
+    ui.rightView = saved.rightView === "keys" ? "keys" : "controls";
     ui.rightRail = saved.rightRail === true;
     ui.kbClosed = saved.kbClosed === true;
   } catch {
@@ -613,6 +631,7 @@ function saveUiPrefs(): void {
         leftRail: ui.leftRail,
         rightRail: ui.rightRail,
         kbClosed: ui.kbClosed,
+        rightView: ui.rightView,
       }),
     );
   } catch {
@@ -1317,7 +1336,7 @@ function locateBindRow(root: HTMLElement, fns: string): void {
   row.classList.remove("locate");
   void row.offsetWidth;
   row.classList.add("locate");
-  window.setTimeout(() => row.classList.remove("locate"), 1600);
+  window.setTimeout(() => row.classList.remove("locate"), 3600);
 }
 
 /** The Apply form's scripted path: the same verb as the no-JS door, but the
@@ -1354,6 +1373,38 @@ async function applyDraftViaJson(): Promise<void> {
     applyPending = false;
   }
   nocturnePollFn();
+}
+
+/** The BY-KEY view's twin of locateBindRow: pulse a key's row. */
+function locateKeyRow(root: HTMLElement, key: string): void {
+  if (!key) return;
+  const row = Array.from(root.querySelectorAll<HTMLElement>(".n-krows [data-key]")).find(
+    (el) => (el.getAttribute("data-key") ?? "") === key,
+  );
+  if (!row) return;
+  if (ui.rightRail) {
+    ui.rightRail = false;
+    saveUiPrefs();
+    applyNocturneUi();
+  }
+  row.scrollIntoView({
+    block: "nearest",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
+  row.classList.remove("locate");
+  void row.offsetWidth;
+  row.classList.add("locate");
+  window.setTimeout(() => row.classList.remove("locate"), 3600);
+}
+
+/** The BY-KEY assign flow: the user picked a KEY; the pad is the control
+ *  picker. Rides writeLearnedKey wholesale, so refusals and the conflict
+ *  dialog behave exactly like a learned key. */
+let assignKey: string | null = null;
+
+function cancelAssign(): void {
+  assignKey = null;
+  setNLearnCls("n-learnbar none");
 }
 
 /** The dialog keyboard contract: Escape closes the open dialog, Tab stays
@@ -1438,6 +1489,11 @@ export function nocturneWire(root: HTMLElement): void {
     true,
   );
   window.addEventListener("keydown", (ev) => {
+    if (assignKey && ev.key === "Escape") {
+      ev.preventDefault();
+      cancelAssign();
+      return;
+    }
     if (!anyDialogOpen()) return;
     if (ev.key === "Escape") {
       ev.preventDefault();
@@ -1495,7 +1551,34 @@ export function nocturneWire(root: HTMLElement): void {
     const zone = target?.closest<Element>(".n-stage [data-fn]");
     if (zone) {
       closeMenu();
+      const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
+      if (assignKey && fnName) {
+        // The pad IS the picker: give the chosen control this key.
+        const held = assignKey;
+        cancelAssign();
+        const label =
+          root
+            .querySelector(`details.n-bind[data-fn="${CSS.escape(fnName)}" i] .n-bind-label`)
+            ?.textContent?.trim() || fnName;
+        void writeLearnedKey(
+          { fn: fnName, label, slot: nSlotVal(), mode: "add" },
+          held,
+          false,
+        );
+        return;
+      }
       locateBindRow(root, zone.getAttribute("data-fn") ?? "");
+      return;
+    }
+    // A board cap flips the pane to the BY-KEY view and finds its row —
+    // the same gesture as clicking the pad, read from the other side.
+    const cap = target?.closest<HTMLElement>(".n-kb [data-key]");
+    if (cap) {
+      closeMenu();
+      ui.rightView = "keys";
+      saveUiPrefs();
+      applyNocturneUi();
+      locateKeyRow(root, cap.getAttribute("data-key") ?? "");
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -1563,6 +1646,18 @@ export function nocturneWire(root: HTMLElement): void {
       pendingConflict = null;
       setNConfOpen(false);
       restoreDialogFocus();
+    } else if (hit === "view-ctl" || hit === "view-keys") {
+      ui.rightView = hit === "view-keys" ? "keys" : "controls";
+      saveUiPrefs();
+      applyNocturneUi();
+    } else if (hit === "key-assign") {
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) {
+        assignKey = key;
+        setNLearnCls("n-learnbar listen");
+        setNLearnText(`Click a control on the pad to add ${key}`);
+        setNLearnSub("Esc cancels");
+      }
     } else if (hit === "bind-expand") {
       const rows = Array.from(
         root.querySelectorAll<HTMLDetailsElement>(".n-right details[data-fn]"),
@@ -2663,6 +2758,14 @@ export function NocturneIsland() {
             h("input", { class: "n-filter-in", type: "text", name: "q", placeholder: "Filter inputs" }),
           ),
           h("button", { class: "n-reset", type: "button", "data-nx": "filter-reset" }, "Reset"),
+        ),
+        // The pane's two READINGS of one relation: by control (game side)
+        // and by key (hand side). Same facts, opposite subject.
+        h(
+          "div",
+          { class: "n-vseg" },
+          h("button", { type: "button", class: "n-vseg-btn vc", "data-nx": "view-ctl" }, "By control"),
+          h("button", { type: "button", class: "n-vseg-btn vk", "data-nx": "view-keys" }, "By key"),
         ),
         h(
           "div",
@@ -3886,11 +3989,49 @@ export function NocturneIsland() {
           ),
         ),
         ),
+        // ── The BY-KEY view: keyboard -> controller. Assign starts from
+        // the key; the pad is the picker (click the control to give it the
+        // key), riding the same bind machinery and conflict dialog.
+        h(
+          "div",
+          { class: "n-krows" },
+          h(
+            "p",
+            { class: "n-teach" },
+            "Each key, and everything it drives. + assigns the key to another control — click that control on the pad.",
+          ),
+          h("p", { class: "n-foot" }, () => nKeysNote()),
+          createList(
+            () => nKeyRows(),
+            (r) => r.key + "|" + r.targets + "|" + r.cls,
+            (r) =>
+              h(
+                "div",
+                { "data-key": r.key, class: r.cls },
+                h("span", { class: "n-krow-chip" }, r.key),
+                h("span", { class: "n-krow-arrow" }, "→"),
+                h("span", { class: "n-krow-tg" }, r.targets),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "key-assign",
+                    title: "Assign this key to another control — then click that control on the pad",
+                    class: "n-addchip",
+                  },
+                  "+",
+                ),
+              ),
+          ),
+        ),
         // ── Macros: lifecycle rows off the same staged authoring. The
         // trigger keys rebind through the SAME learn flow as any control
         // (the rows carry data-fn="macro.<name>"); enable/disable and
         // delete are real form twins; step EDITING stays on the Controls
         // editor until its own pass — the link says so, honestly.
+        h(
+          "div",
+          { class: "n-macrosec" },
         h(
           "div",
           { class: "n-group-head" },
@@ -4004,6 +4145,7 @@ export function NocturneIsland() {
             ),
         ),
         h("p", { class: "n-devnote" }, () => nMacrosNote()),
+        ),
         h("div", { class: "n-right-foot" }, () => nBindFoot()),
       ),
     ),

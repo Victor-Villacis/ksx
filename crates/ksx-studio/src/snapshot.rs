@@ -3943,6 +3943,17 @@ pub struct NocturneGameRow {
     pub ico_cls: String,
 }
 
+/// One row of the pane's BY-KEY view: a bound key and everything it
+/// drives, the relation read from the keyboard's side.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneKeyRow {
+    pub key: String,
+    /// The controls this key drives, in readable zone labels ("A · RB").
+    pub targets: String,
+    /// `n-krow` (+" shared" when the key fans out to several controls).
+    pub cls: String,
+}
+
 /// One keycap on the standard board, dressed with its binding short.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyCell {
@@ -4090,6 +4101,9 @@ pub struct NocturneDerived {
     pub kb_row5: Vec<NocturneKeyCell>,
     pub kb_row6: Vec<NocturneKeyCell>,
     pub kb_tray: Vec<NocturneKeyCell>,
+    /// The BY-KEY view: one row per bound key, keyboard -> controller.
+    pub key_rows: Vec<NocturneKeyRow>,
+    pub keys_note: String,
     pub kb_tray_head: String,
     pub kb_tray_cls: String,
     pub kb_note: String,
@@ -4701,6 +4715,33 @@ impl NocturneDerived {
                 }
             })
             .collect();
+        // The BY-KEY view's rows: the same inversion the board reads,
+        // alphabetical (BTreeMap order), each key with its whole fan-out.
+        let key_rows: Vec<NocturneKeyRow> = key_fns
+            .iter()
+            .map(|(key, fns)| NocturneKeyRow {
+                key: (*key).to_owned(),
+                targets: fns
+                    .iter()
+                    .map(|f| readable(f))
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                cls: if fns.len() > 1 {
+                    "n-krow shared".to_owned()
+                } else {
+                    "n-krow".to_owned()
+                },
+            })
+            .collect();
+        let keys_note = match selected {
+            Some(_) if !key_rows.is_empty() => {
+                format!("{} keys drive this controller.", key_rows.len())
+            }
+            Some(_) => {
+                "No keys bound yet — bind from the Controls view, or assign from here.".to_owned()
+            }
+            None => String::new(),
+        };
         let kb_tray_head = format!("Bound off this board · {}", kb_tray.len());
         let kb_tray_cls = if kb_tray.is_empty() {
             "n-kbtray none".to_owned()
@@ -5153,6 +5194,8 @@ impl NocturneDerived {
             kb_row5,
             kb_row6,
             kb_tray,
+            key_rows,
+            keys_note,
             kb_tray_head,
             kb_tray_cls,
             kb_note,

@@ -233,6 +233,11 @@ fn macro_row(row: &NocturneMacroRow) -> SlotValue {
         ("fn_name".to_owned(), SlotValue::Text(row.fn_name.clone())),
         ("chip".to_owned(), SlotValue::Text(row.chip.clone())),
         ("chip_cls".to_owned(), SlotValue::Text(row.chip_cls.clone())),
+        (
+            "chip_title".to_owned(),
+            SlotValue::Text(row.chip_title.clone()),
+        ),
+        ("add_cls".to_owned(), SlotValue::Text(row.add_cls.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("slot".to_owned(), SlotValue::Text(row.slot.clone())),

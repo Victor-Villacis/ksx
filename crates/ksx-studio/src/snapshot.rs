@@ -3913,6 +3913,10 @@ pub struct NocturneMacroRow {
     pub fn_name: String,
     /// Trigger keys joined, or the honest "No trigger key".
     pub chip: String,
+    /// The chip's hover sentence — the relation, plus the gesture.
+    pub chip_title: String,
+    /// The ghost "+" add-a-trigger chip; hidden until one trigger exists.
+    pub add_cls: String,
     pub chip_cls: String,
     /// "3 steps · repeats while held · …".
     pub meta: String,
@@ -5032,6 +5036,19 @@ impl NocturneDerived {
                                     mac.triggers.join(" · ")
                                 } else {
                                     "No trigger key".to_owned()
+                                },
+                                chip_title: if triggered {
+                                    format!(
+                                        "Pressed by {} — click, then press a new trigger key",
+                                        mac.triggers.join(" or ")
+                                    )
+                                } else {
+                                    "No trigger key — click, then press a key".to_owned()
+                                },
+                                add_cls: if triggered {
+                                    "n-addchip".to_owned()
+                                } else {
+                                    "n-addchip none".to_owned()
                                 },
                                 chip_cls: if triggered {
                                     "n-keychip".to_owned()

@@ -87,6 +87,8 @@ export interface NocturneMacroRowView {
   fn_name: string;
   chip: string;
   chip_cls: string;
+  chip_title: string;
+  add_cls: string;
   meta: string;
   cls: string;
   slot: string;
@@ -1533,15 +1535,10 @@ export function nocturneWire(root: HTMLElement): void {
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
       mergeQuery({ q: null });
-    } else if (
-      hit === "bind-learn" ||
-      hit === "bind-add" ||
-      hit === "chip-learn" ||
-      hit === "chip-add"
-    ) {
+    } else if (hit === "chip-learn" || hit === "chip-add") {
       // The row's own facts travel on its element, never re-derived here.
-      // A CHIP click must not also toggle the fold it sits in.
-      if (hit.startsWith("chip")) ev.preventDefault();
+      // The chip click must not also toggle the fold it sits in.
+      ev.preventDefault();
       const holder = target?.closest<HTMLElement>("[data-fn]");
       const fnName = holder?.dataset.fn ?? "";
       const slot = holder?.dataset.slot ?? "";
@@ -2734,7 +2731,7 @@ export function NocturneIsland() {
           h(
             "p",
             { class: "n-teach" },
-            "Click a key chip, then press the new key. Open a row for press behaviour and turbo.",
+            "Click a key chip, then press the new key; + adds one. Open a row for press behaviour, turbo and Clear.",
           ),
         h(
           "section",
@@ -2806,31 +2803,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -2858,6 +2830,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3012,31 +2995,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -3064,6 +3022,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3218,31 +3187,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -3270,6 +3214,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3424,31 +3379,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -3476,6 +3406,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3630,31 +3571,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -3682,6 +3598,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3836,31 +3763,6 @@ export function NocturneIsland() {
                   h(
                     "div",
                     { class: "n-bedit-row" },
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                      "Rebind",
-                    ),
-                    h(
-                      "button",
-                      { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                      "Add key",
-                    ),
-                    h(
-                      "form",
-                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
-                      h("input", { type: "hidden", name: "slot", value: r.slot }),
-                      h("input", { type: "hidden", name: "function", value: r.function }),
-                      h(
-                        "button",
-                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
-                        "Clear",
-                      ),
-                    ),
-                  ),
-                  h(
-                    "div",
-                    { class: "n-bedit-row" },
                     h("span", { class: "n-bedit-lab" }, "Press"),
                     h(
                       "form",
@@ -3888,6 +3790,17 @@ export function NocturneIsland() {
                           class: r.tog_cls,
                         },
                         "Toggle",
+                      ),
+                    ),
+                    h(
+                      "form",
+                      { class: "n-inline", method: "post", action: "/nocturne/bind/clear" },
+                      h("input", { type: "hidden", name: "slot", value: r.slot }),
+                      h("input", { type: "hidden", name: "function", value: r.function }),
+                      h(
+                        "button",
+                        { type: "submit", title: "Back to unbound", class: r.clear_cls },
+                        "Clear",
                       ),
                     ),
                   ),
@@ -3991,6 +3904,8 @@ export function NocturneIsland() {
               r.fn_name,
               r.chip,
               r.chip_cls,
+              r.chip_title,
+              r.add_cls,
               r.meta,
               r.cls,
               r.slot,
@@ -4011,7 +3926,26 @@ export function NocturneIsland() {
                   h("span", { class: "n-bind-label" }, r.name),
                   h("span", { class: "n-bind-note" }, r.meta),
                 ),
-                h("span", { class: r.chip_cls }, r.chip),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "chip-learn",
+                    title: r.chip_title,
+                    class: r.chip_cls,
+                  },
+                  r.chip,
+                ),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "chip-add",
+                    title: "Add another trigger key",
+                    class: r.add_cls,
+                  },
+                  "+",
+                ),
               ),
               h(
                 "div",
@@ -4019,16 +3953,6 @@ export function NocturneIsland() {
                 h(
                   "div",
                   { class: "n-bedit-row" },
-                  h(
-                    "button",
-                    { type: "button", class: "n-bbtn", "data-nx": "bind-learn" },
-                    "Rebind trigger — press a key",
-                  ),
-                  h(
-                    "button",
-                    { type: "button", class: "n-bbtn", "data-nx": "bind-add" },
-                    "Add trigger key",
-                  ),
                   h(
                     "form",
                     { class: "n-inline", method: "post", action: "/nocturne/macro/toggle" },

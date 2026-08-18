@@ -500,6 +500,7 @@ export function applyNocturne(p: NocturnePayload): void {
     }
     syncExpandLabel();
     paintStageCallouts();
+    if (assignKey) markAssignTargets(assignKey);
   }
   lastBindView = v;
   if (learnRoot) paintStageCallouts();
@@ -764,6 +765,10 @@ const [nExpandLbl, setNExpandLbl] = createSignal("Expand all");
 function syncExpandLabel(): void {
   setNExpandLbl(openRows.size > 0 ? "Collapse all" : "Expand all");
 }
+
+// The stage's assign cue — pure interaction state, like the learn banner.
+const [nAssignCueCls, setNAssignCueCls] = createSignal("n-assign-cue none");
+const [nAssignCueText, setNAssignCueText] = createSignal("");
 
 const [nApplyOpen, setNApplyOpen] = createSignal(false);
 const [nApplyMsg, setNApplyMsg] = createSignal("");
@@ -1434,9 +1439,40 @@ function locateKeyRow(root: HTMLElement, key: string): void {
  *  dialog behave exactly like a learned key. */
 let assignKey: string | null = null;
 
+/** Light the armed key everywhere it appears (board cap, tray, available
+ *  chip) — a glow that WAITS, cleared only by resolution or Esc. */
+function markAssignTargets(key: string | null): void {
+  const root = learnRoot;
+  if (!root) return;
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>(".assign"))) {
+    el.classList.remove("assign");
+  }
+  if (key) {
+    for (const el of Array.from(
+      root.querySelectorAll<HTMLElement>(
+        `.n-kb [data-key="${CSS.escape(key)}"], .n-akey-grid [data-key="${CSS.escape(key)}"]`,
+      ),
+    )) {
+      el.classList.add("assign");
+    }
+  }
+}
+
+function armAssign(key: string): void {
+  assignKey = key;
+  setNLearnCls("n-learnbar listen");
+  setNLearnText(`Click a control on the pad to add ${key}`);
+  setNLearnSub("Esc cancels");
+  setNAssignCueCls("n-assign-cue");
+  setNAssignCueText(`Waiting — click a control on the pad to add ${key}`);
+  markAssignTargets(key);
+}
+
 function cancelAssign(): void {
   assignKey = null;
   setNLearnCls("n-learnbar none");
+  setNAssignCueCls("n-assign-cue none");
+  markAssignTargets(null);
 }
 
 /** The dialog keyboard contract: Escape closes the open dialog, Tab stays
@@ -1614,12 +1650,7 @@ export function nocturneWire(root: HTMLElement): void {
       locateKeyRow(root, key);
       // An UNBOUND cap goes straight to work: the pad is the picker.
       const bound = root.querySelector(`.n-krows .n-krow[data-key="${CSS.escape(key)}"]`);
-      if (!bound && key) {
-        assignKey = key;
-        setNLearnCls("n-learnbar listen");
-        setNLearnText(`Click a control on the pad to add ${key}`);
-        setNLearnSub("Esc cancels");
-      }
+      if (!bound && key) armAssign(key);
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -1726,12 +1757,7 @@ export function nocturneWire(root: HTMLElement): void {
       applyNocturneUi();
     } else if (hit === "key-assign") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
-      if (key) {
-        assignKey = key;
-        setNLearnCls("n-learnbar listen");
-        setNLearnText(`Click a control on the pad to add ${key}`);
-        setNLearnSub("Esc cancels");
-      }
+      if (key) armAssign(key);
     } else if (hit === "bind-expand") {
       const rows = Array.from(
         root.querySelectorAll<HTMLDetailsElement>(".n-right details[data-fn]"),
@@ -2256,6 +2282,14 @@ export function NocturneIsland() {
           // The across-the-room read: one quiet word from the polled
           // session, visual only (the sr status line announces transitions).
           h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
+          // The assign wait, said WHERE the click must land. aria-hidden:
+          // the learn banner (role=status) already speaks this sentence.
+          h(
+            "div",
+            { "aria-hidden": "true", class: () => nAssignCueCls() },
+            h("span", { class: "n-cue-dot" }),
+            h("span", null, () => nAssignCueText()),
+          ),
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.

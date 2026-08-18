@@ -7883,6 +7883,106 @@ button.n-bind-note.none {
   color: var(--n-accent-2);
 }
 
+/* Hovering a cap lifts it toward the cursor — the sculpted board's own
+   physics saying "clickable" — and an ARMED key glows until the assign
+   resolves: no countdown, because the pad click has none. */
+.n-kb .n-key {
+  transition:
+    transform 120ms ease,
+    filter 120ms ease;
+}
+
+.n-kb .n-key:not(.ghost):hover {
+  transform: translateY(-2px) scale(1.1);
+  z-index: 3;
+  filter: brightness(1.2);
+}
+
+.n-kb .n-key.assign {
+  z-index: 3;
+  filter: brightness(1.25);
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 2px var(--n-accent),
+    0 0 14px var(--n-accent-tint);
+  animation: n-assignwait 1.3s ease-in-out infinite;
+}
+
+.n-akey.assign {
+  border-style: solid;
+  border-color: var(--n-accent);
+  color: var(--n-accent-2);
+  box-shadow: 0 0 10px var(--n-accent-tint);
+  animation: n-assignwait 1.3s ease-in-out infinite;
+}
+
+@keyframes n-assignwait {
+  50% {
+    box-shadow:
+      0 0 0 2px var(--n-accent),
+      0 0 24px rgba(150, 138, 224, 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-kb .n-key {
+    transition: none;
+  }
+
+  .n-kb .n-key:not(.ghost):hover {
+    transform: none;
+  }
+
+  .n-kb .n-key.assign,
+  .n-akey.assign {
+    animation: none;
+  }
+}
+
+/* The assign wait, pinned over the pad where the click must land. */
+.n-assign-cue {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  background: rgba(22, 24, 38, 0.92);
+  color: var(--n-accent-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.n-assign-cue.none {
+  display: none;
+}
+
+.n-cue-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--n-accent);
+  animation: n-cuepulse 1.3s ease-in-out infinite;
+}
+
+@keyframes n-cuepulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-cue-dot {
+    animation: none;
+  }
+}
+
 /* Board caps are a doorway to the BY-KEY view. */
 .n-kb [data-key] {
   cursor: pointer;

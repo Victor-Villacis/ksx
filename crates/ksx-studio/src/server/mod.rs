@@ -347,6 +347,7 @@ pub fn serve(
             )
             .route("/nocturne/bind/clear", post(nocturne_form_bind_clear))
             .route("/nocturne/bind/clear-all", post(nocturne_form_clear_all))
+            .route("/nocturne/key/clear", post(nocturne_form_key_clear))
             .route("/nocturne/api/bind", post(nocturne_api_bind))
             .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
             .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))

@@ -247,6 +247,7 @@ fn key_row_view(row: &NocturneKeyRow) -> SlotValue {
         ("targets".to_owned(), SlotValue::Text(row.targets.clone())),
         ("fns".to_owned(), SlotValue::Text(row.fns.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
     ])
 }
 
@@ -765,10 +766,11 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 27] = [
-            // The stage's assign cue is pure interaction state.
-            "nAssignCueCls",
-            "nAssignCueText",
+        const CLIENT_ONLY_SLOTS: [&str; 26] = [
+            // The auto-map toast's Skip button exists only while a walk runs
+            // — SSR paints it hidden. (The auto-map button itself is static
+            // markup revealed by the wire's js marker class.)
+            "nLearnSkipCls",
             // ...and the keyboard's learn cue is its mirror.
             "nKeyCueCls",
             "nKeyCueText",

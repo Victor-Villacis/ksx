@@ -6564,6 +6564,7 @@ a.wsrow-title:hover {
 }
 
 .n-center {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -6953,6 +6954,29 @@ a.wsrow-title:hover {
 .n-meta-hint {
   font-size: 12px;
   color: var(--n-text-3);
+}
+
+/* The auto-map walk's door: a quiet button in the meta bar, revealed only
+   once the wire that runs it is attached. */
+.n-autobtn {
+  padding: 5px 11px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n-autobtn:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+/* Scripting-only chrome: hidden until the wire stamps its js marker. */
+.nocturne:not(.js) .n-autobtn {
+  display: none;
 }
 
 /* The across-the-room read: a quiet word in the stage's corner while a
@@ -7766,7 +7790,9 @@ a.wsrow-title:hover {
   display: none;
 }
 
-.n-right.keys-mode .n-krows {
+/* :not(.rail): this show rule outranks the collapsed rail's blanket hide,
+   so it must stand down when the pane is rolled away. */
+.n-right.keys-mode:not(.rail) .n-krows {
   display: block;
 }
 
@@ -7786,6 +7812,37 @@ a.wsrow-title:hover {
   gap: 8px;
   padding: 7px 8px;
   border-radius: 8px;
+}
+
+/* The key's own Clear — quiet until the row is under the pointer. */
+.n-krow-clear {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.n-krow:hover .n-krow-clear,
+.n-krow-clear:focus-visible {
+  opacity: 1;
+}
+
+/* Touch never hovers: the Clear stays visible under a coarse pointer. */
+@media (pointer: coarse) {
+  .n-krow-clear {
+    opacity: 1;
+  }
+}
+
+.n-krow-clear:hover {
+  border-color: var(--n-danger-line, rgba(231, 154, 166, 0.5));
+  color: var(--n-danger, #e79aa6);
 }
 
 .n-krow:hover {
@@ -8015,29 +8072,6 @@ button.n-krow-tg {
 }
 
 .n-key-cue.none {
-  display: none;
-}
-
-/* The assign wait, pinned over the pad where the click must land. */
-.n-assign-cue {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border: 1px solid var(--n-accent-line);
-  border-radius: 999px;
-  background: rgba(22, 24, 38, 0.92);
-  color: var(--n-accent-2);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.n-assign-cue.none {
   display: none;
 }
 
@@ -8576,6 +8610,31 @@ button.n-keychip:hover {
 .n-rail-n {
   font-size: 11px;
   color: var(--n-text-2);
+}
+
+/* A capture waiting behind a rolled-away pane: the rail says so. */
+.n-rail.arm {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--n-accent);
+}
+
+.n-rail.arm .n-rail-vlab {
+  color: var(--n-accent-2);
+}
+
+.n-rail.arm::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--n-accent);
+  animation: noct-pulse 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-rail.arm::after {
+    animation: none;
+  }
 }
 
 
@@ -9710,17 +9769,25 @@ a.n-bbtn-link {
   padding-top: 6px;
 }
 
-/* ── The learn banner: capture-time state, inline, never a dialog ── */
+/* ── The capture toast: capture-time state, floating over the stage so
+   mapping works with either pane rolled away; never a dialog ── */
 
 .n-learnbar {
+  position: absolute;
+  top: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: min(560px, calc(100% - 28px));
   display: flex;
   align-items: center;
   gap: 9px;
-  margin: 4px 2px 8px;
   padding: 9px 11px;
   border-radius: 9px;
-  background: rgba(150, 138, 224, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.4);
+  background: rgba(26, 24, 44, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(150, 138, 224, 0.45),
+    0 14px 30px rgba(0, 0, 0, 0.5);
 }
 
 .n-learnbar.none {

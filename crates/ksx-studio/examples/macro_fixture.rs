@@ -447,8 +447,20 @@ impl ControlSource for Store {
         }
     }
 
-    fn learn_cancel_generation(&self, _generation: Option<u64>) -> ksx_api::LearnView {
-        *self.listening.lock().unwrap() = None;
+    fn learn_cancel_generation(&self, generation: Option<u64>) -> ksx_api::LearnView {
+        // Generation-qualified like the real daemon: a stale attempt's late
+        // cancel must never stop a listener that superseded it (the island's
+        // skip-to-next flow races exactly this way).
+        let mut listening = self.listening.lock().unwrap();
+        let cancels = match (generation, *listening) {
+            (Some(gen), Some(current)) => gen == current,
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        if cancels {
+            *listening = None;
+        }
+        drop(listening);
         ksx_api::LearnView {
             ok: true,
             state: "cancelled".into(),

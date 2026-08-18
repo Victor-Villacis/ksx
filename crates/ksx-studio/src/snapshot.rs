@@ -3967,6 +3967,9 @@ pub struct NocturneKeyRow {
     pub fns: String,
     /// `n-krow` (+" shared" when the key fans out to several controls).
     pub cls: String,
+    /// The selected slot's number, carried so the row's per-key Clear form
+    /// twin can name it. Empty on the free-key chips (nothing to clear).
+    pub slot: String,
 }
 
 /// One keycap on the standard board, dressed with its binding short.
@@ -4769,6 +4772,7 @@ impl NocturneDerived {
                 } else {
                     "n-krow".to_owned()
                 },
+                slot: selected_number.map(|n| n.to_string()).unwrap_or_default(),
             })
             .collect();
         // Every key on the standard board NOT yet bound — the REAL roster
@@ -4807,6 +4811,7 @@ impl NocturneDerived {
                     targets: String::new(),
                     fns: String::new(),
                     cls: "n-akey".to_owned(),
+                    slot: String::new(),
                 };
                 if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
                     avail_num.push(chip);

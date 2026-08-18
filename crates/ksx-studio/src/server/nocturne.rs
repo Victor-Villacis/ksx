@@ -50,6 +50,12 @@ pub(super) const N_APPLY_ERROR: &str = "error: The changes could not be applied.
 pub(super) const N_CLEAR_ALL_OK: &str = "Every key unbound on this controller — its macros \
      kept their steps. Nothing has been saved.";
 
+pub(super) const N_KEY_CLEAR_OK: &str = "That key is free again — everything it drove on this \
+     controller is unbound (macro steps are kept). Nothing has been saved.";
+
+pub(super) const N_KEY_CLEAR_NONE: &str =
+    "error: That key was not driving anything on this controller. Nothing changed.";
+
 pub(super) const N_UNDO_OK: &str =
     "Controller restored with its bindings. Nothing has been saved or started.";
 
@@ -189,10 +195,12 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 54] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 56] = [
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
+    N_KEY_CLEAR_OK,
+    N_KEY_CLEAR_NONE,
     N_UNDO_OK,
     N_UNDO_GONE,
     N_UNDO_FULL,
@@ -1120,6 +1128,80 @@ pub(super) async fn nocturne_form_clear_all(
         } else {
             N_EDIT_ERROR
         }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneKeyClearForm {
+    number: u8,
+    key: String,
+}
+
+/// POST /nocturne/key/clear — take ONE key away from everything it drives on
+/// one slot's draft. The list of touched functions comes from the same staged
+/// mapper inversion the By-key rows render — never from anything a browser
+/// sent — and each rewrite goes through the daemon's own staged-bind verb
+/// (force: shrinking a key list consents to nothing new).
+pub(super) async fn nocturne_form_key_clear(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneKeyClearForm>,
+) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some(slot) = staged.slots.iter().find(|s| s.number == form.number) else {
+            return N_EDIT_ERROR;
+        };
+        let key = form.key.trim().to_owned();
+        if key.is_empty() {
+            return N_EDIT_ERROR;
+        }
+        let keyboard = staged
+            .device
+            .as_ref()
+            .map(|device| device.label.as_str())
+            .unwrap_or("(none)");
+        let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
+            return N_EDIT_ERROR;
+        };
+        let driven: Vec<(String, Vec<String>)> = mapper
+            .bindings
+            .iter()
+            .filter(|(_, keys)| keys.iter().any(|k| k.eq_ignore_ascii_case(&key)))
+            .map(|(function, keys)| {
+                let rest: Vec<String> = keys
+                    .iter()
+                    .filter(|k| !k.eq_ignore_ascii_case(&key))
+                    .cloned()
+                    .collect();
+                (function.clone(), rest)
+            })
+            .collect();
+        if driven.is_empty() {
+            return N_KEY_CLEAR_NONE;
+        }
+        for (function, rest) in driven {
+            let keys = if rest.is_empty() {
+                vec!["none".to_owned()]
+            } else {
+                rest
+            };
+            let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+                number: slot.number,
+                preset: slot.preset.clone(),
+                function,
+                keys,
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            });
+            if !outcome.ok {
+                return N_EDIT_ERROR;
+            }
+        }
+        N_KEY_CLEAR_OK
     })
     .await
     .unwrap_or(N_EDIT_ERROR);

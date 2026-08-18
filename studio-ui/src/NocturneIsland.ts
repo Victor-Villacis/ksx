@@ -818,8 +818,7 @@ function syncExpandLabel(): void {
 }
 
 // The stage's assign cue — pure interaction state, like the learn banner.
-const [nAssignCueCls, setNAssignCueCls] = createSignal("n-assign-cue none");
-const [nAssignCueText, setNAssignCueText] = createSignal("");
+const [nLearnSkipCls, setNLearnSkipCls] = createSignal("n-bbtn sm none");
 // The keyboard's learn cue — the mirror: a control is waiting for a key.
 const [nKeyCueCls, setNKeyCueCls] = createSignal("n-key-cue none");
 const [nKeyCueText, setNKeyCueText] = createSignal("");
@@ -890,7 +889,11 @@ function guardLearnKeys(ev: KeyboardEvent): void {
   if (!learnRow) return;
   ev.preventDefault();
   ev.stopPropagation();
-  if (ev.key === "Escape") void cancelLearn();
+  if (ev.key === "Escape") {
+    void cancelLearn();
+    // Mid-walk, Esc skips just this control; the run moves on.
+    autoMapAdvance(false);
+  }
 }
 
 function armFocusGuard(): void {
@@ -933,19 +936,36 @@ function markArmedRow(fnName: string | null): void {
   }
 }
 
+/** The auto-map walk: every control of the selected slot in pane order,
+ *  each arming its learn in turn. Purely a sequencing layer over the
+ *  ordinary learn flow — every step binds, refuses and conflicts exactly
+ *  like a hand-armed one. */
+let autoMap: { steps: { fn: string; label: string }[]; idx: number; bound: number } | null = null;
+
+/** With a pane rolled away, the armed state still needs a face: the
+ *  collapsed rail glows while a capture or assign waits inside. */
+function setRailGlow(on: boolean): void {
+  learnRoot?.querySelector<HTMLElement>(".n-right .n-rail")?.classList.toggle("arm", on);
+}
+
 function armLearnUi(row: LearnTarget): void {
+  const step = autoMap ? ` — ${autoMap.idx + 1} of ${autoMap.steps.length}` : "";
   setNLearnCls("n-learnbar listen");
-  setNLearnText(`Press the panel key for P${row.slot} · ${row.label}`);
-  setNLearnSub(`${learnSentence(row.mode)} Esc cancels.`);
+  setNLearnText(`Press the panel key for P${row.slot} · ${row.label}${step}`);
+  setNLearnSub(`${learnSentence(row.mode)} ${autoMap ? "Esc skips this one." : "Esc cancels."}`);
+  setNLearnSkipCls(autoMap ? "n-bbtn sm" : "n-bbtn sm none");
   setNKeyCueCls("n-key-cue");
   setNKeyCueText(`Waiting — press a key for ${row.label}, or click one below`);
   markArmedRow(row.fn);
+  setRailGlow(true);
 }
 
 function disarmLearnUi(): void {
   setNLearnCls("n-learnbar none");
+  setNLearnSkipCls("n-bbtn sm none");
   setNKeyCueCls("n-key-cue none");
   markArmedRow(null);
+  setRailGlow(false);
 }
 
 /** Retire the current browser attempt in one place. */
@@ -964,6 +984,8 @@ async function startLearn(row: LearnTarget): Promise<void> {
     await cancelLearn();
     return;
   }
+  // The two arm flows are exclusive: a fresh learn retires a waiting assign.
+  if (assignKey) cancelAssign();
   // Retire the previous attempt BEFORE installing the new target, so a timer
   // poll can never snapshot the new target with the old daemon generation.
   const previousDaemonGen = daemonGen;
@@ -1051,7 +1073,8 @@ async function pollLearn(): Promise<void> {
   switch (learn.state) {
     case "listening": {
       const secs = Math.max(0, Math.ceil((learn.remaining_ms ?? 0) / 1000));
-      setNLearnSub(`${learnSentence(row.mode)} ${secs}s left · Esc cancels.`);
+      const esc = autoMap ? "Esc skips this one." : "Esc cancels.";
+      setNLearnSub(`${learnSentence(row.mode)} ${secs}s left · ${esc}`);
       break;
     }
     case "hit":
@@ -1063,12 +1086,22 @@ async function pollLearn(): Promise<void> {
       break;
     case "timeout":
       retireLearn();
-      applyFlash(
-        `error: Timed out — no key was pressed in time for ${row.label}. Nothing changed.`,
-      );
+      if (autoMap) {
+        // A walked-away wizard must not grind through the whole queue.
+        autoMap = null;
+        applyFlash(
+          `error: Auto-map stopped — no key was pressed in time for ${row.label}. Nothing more changed.`,
+        );
+      } else {
+        applyFlash(
+          `error: Timed out — no key was pressed in time for ${row.label}. Nothing changed.`,
+        );
+      }
       break;
     case "cancelled":
       retireLearn();
+      // Cancelled by someone else (another tab, Identify): fail closed.
+      autoMap = null;
       break;
     default:
       // failed / unavailable / idle-after-restart: report and stop.
@@ -1089,6 +1122,50 @@ async function cancelLearn(): Promise<void> {
   await cancelDaemonGen(generation);
 }
 
+function startAutoMap(): void {
+  const root = learnRoot;
+  if (!root) return;
+  const steps: { fn: string; label: string }[] = [];
+  for (const el of Array.from(
+    root.querySelectorAll<HTMLElement>(
+      ".n-bindgroups details.n-bind[data-fn], .n-bindgroups .n-ctlchip[data-fn]",
+    ),
+  )) {
+    const fn = el.getAttribute("data-fn") ?? "";
+    if (!fn || fn.startsWith("macro.")) continue;
+    const label =
+      el.querySelector(".n-bind-label")?.textContent?.trim() || el.textContent?.trim() || fn;
+    steps.push({ fn, label });
+  }
+  if (steps.length === 0) {
+    applyFlash("error: No controls to map — add a controller first.");
+    return;
+  }
+  autoMap = { steps, idx: 0, bound: 0 };
+  stepAutoMap();
+}
+
+function stepAutoMap(): void {
+  const run = autoMap;
+  if (!run) return;
+  if (run.idx >= run.steps.length) {
+    autoMap = null;
+    applyFlash(`Auto-map finished — ${run.bound} of ${run.steps.length} controls got a key.`);
+    return;
+  }
+  const s = run.steps[run.idx];
+  void startLearn({ fn: s.fn, label: s.label, slot: nSlotVal(), mode: "replace" });
+}
+
+/** One wizard step settled (bound, skipped, or conflict declined): move on. */
+function autoMapAdvance(didBind: boolean): void {
+  const run = autoMap;
+  if (!run) return;
+  if (didBind) run.bound += 1;
+  run.idx += 1;
+  stepAutoMap();
+}
+
 /** One learned key onto one staged control, through the server-resolved bind
  *  verb. The server reads the slot's preset identity and current key list
  *  itself; this browser is never trusted with a key list it made up. */
@@ -1107,6 +1184,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
       }),
     });
   } catch {
+    autoMap = null;
     applyFlash("error: The bind request failed — is ksx studio still running?");
     return;
   }
@@ -1122,6 +1200,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     }
     applyFlash(line);
     nocturnePollFn();
+    autoMapAdvance(true);
   } else if (outcome.code === "conflict" && outcome.conflicts.length > 0) {
     // Cross-slot (or a second macro trigger): fan-out is the product, but it
     // is asked about, never assumed. "Use here too" takes nothing away.
@@ -1144,6 +1223,8 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
   } else {
     pendingConflict = null;
     setNConfOpen(false);
+    // A refusal ends a running auto-map walk: its sentence explains why.
+    autoMap = null;
     // The error is authored, self-contained customer copy either way: the
     // server module's own guard sentences, or its consumerized fallback.
     applyFlash(`error: ${outcome.error ?? "That control could not be changed. Nothing changed."}`);
@@ -1537,21 +1618,41 @@ function markAssignTargets(key: string | null): void {
   }
 }
 
+/** The assign wait has the same shape as a learn: a window, a countdown in
+ *  the toast, and a timeout that says so — the two arms feel like one hand. */
+const ASSIGN_WINDOW_MS = 12000;
+let assignTimer: number | undefined;
+
 function armAssign(key: string): void {
   assignKey = key;
+  const deadline = Date.now() + ASSIGN_WINDOW_MS;
   setNLearnCls("n-learnbar listen");
   setNLearnText(`Click a control on the pad to add ${key}`);
-  setNLearnSub("Esc cancels");
-  setNAssignCueCls("n-assign-cue");
-  setNAssignCueText(`Waiting — click a control on the pad to add ${key}`);
+  setNLearnSub(`${Math.ceil(ASSIGN_WINDOW_MS / 1000)}s left · Esc cancels.`);
+  setNLearnSkipCls("n-bbtn sm none");
   markAssignTargets(key);
+  setRailGlow(true);
+  if (assignTimer !== undefined) window.clearInterval(assignTimer);
+  assignTimer = window.setInterval(() => {
+    const secs = Math.ceil((deadline - Date.now()) / 1000);
+    if (secs <= 0) {
+      cancelAssign();
+      applyFlash(`error: Timed out — no control was chosen for ${key}. Nothing changed.`);
+      return;
+    }
+    setNLearnSub(`${secs}s left · Esc cancels.`);
+  }, 250);
 }
 
 function cancelAssign(): void {
   assignKey = null;
+  if (assignTimer !== undefined) {
+    window.clearInterval(assignTimer);
+    assignTimer = undefined;
+  }
   setNLearnCls("n-learnbar none");
-  setNAssignCueCls("n-assign-cue none");
   markAssignTargets(null);
+  setRailGlow(false);
 }
 
 /** The dialog keyboard contract: Escape closes the open dialog, Tab stays
@@ -1620,6 +1721,9 @@ export function nocturneWire(root: HTMLElement): void {
   // first), so the hydrated first paint already has the panes the user left.
   loadUiPrefs();
   applyNocturneUi();
+  // The wire's own "JavaScript is live" marker: scripting-only chrome (the
+  // auto-map button) reveals off it, and the parity gate normalizes it.
+  root.classList.add("js");
   window.addEventListener("resize", scheduleKbFit);
   root.addEventListener(
     "toggle",
@@ -1687,6 +1791,8 @@ export function nocturneWire(root: HTMLElement): void {
       // MERGE the slot into the current query rather than replacing the
       // whole URL — the filter's ?q= must survive a selection change.
       const chosen = new URL(sel.href, window.location.origin).searchParams.get("slot");
+      // The walk was built for one slot's controls: changing slots ends it.
+      autoMap = null;
       mergeQuery({ slot: chosen });
       nocturnePollFn();
       return;
@@ -1703,10 +1809,18 @@ export function nocturneWire(root: HTMLElement): void {
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
         cancelAssign();
+        // A FREE control has no row — its group chip carries the name.
+        const chipLabel = Array.from(
+          root.querySelectorAll<HTMLElement>(".n-ctlchip[data-fn]"),
+        )
+          .find((c) => (c.getAttribute("data-fn") ?? "").toLowerCase() === fnName.toLowerCase())
+          ?.textContent?.trim();
         const label =
           root
             .querySelector(`details.n-bind[data-fn="${CSS.escape(fnName)}" i] .n-bind-label`)
-            ?.textContent?.trim() || fnName;
+            ?.textContent?.trim() ||
+          chipLabel ||
+          fnName;
         void writeLearnedKey(
           { fn: fnName, label, slot: nSlotVal(), mode: "add" },
           held,
@@ -1730,17 +1844,18 @@ export function nocturneWire(root: HTMLElement): void {
         saveUiPrefs();
         applyNocturneUi();
       }
-      if (ui.rightRail) {
-        ui.rightRail = false;
-        saveUiPrefs();
-        applyNocturneUi();
+      // A rolled-away pane STAYS away: the toast carries the wait, the rail
+      // glows, and mapping needs no panel at all. Open panes still follow.
+      if (!ui.rightRail) {
+        rowEl?.scrollIntoView({
+          block: "nearest",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? "auto"
+            : "smooth",
+        });
       }
-      rowEl?.scrollIntoView({
-        block: "nearest",
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
-      });
+      // A hand-armed control replaces any running auto-map walk.
+      autoMap = null;
       void startLearn({ fn: rowFn, label: rowLabel, slot: nSlotVal(), mode: "replace" });
       return;
     }
@@ -1755,6 +1870,13 @@ export function nocturneWire(root: HTMLElement): void {
         const row = learnRow;
         void cancelLearn();
         void writeLearnedKey(row, key, false);
+        return;
+      }
+      // With the pane rolled away, a cap click goes straight to mapping:
+      // arm the key (bound keys can add another control), the pad picks —
+      // the pane stays closed and its rail glows instead.
+      if (ui.rightRail) {
+        if (key && !autoMap) armAssign(key);
         return;
       }
       ui.rightView = "keys";
@@ -1812,6 +1934,8 @@ export function nocturneWire(root: HTMLElement): void {
       const slot = holder?.dataset.slot ?? "";
       const label = holder?.querySelector(".n-bind-label")?.textContent?.trim() || fnName;
       if (fnName && slot) {
+        // A hand-armed chip replaces any running auto-map walk.
+        autoMap = null;
         void startLearn({
           fn: fnName,
           label,
@@ -1819,8 +1943,16 @@ export function nocturneWire(root: HTMLElement): void {
           mode: hit.endsWith("add") ? "add" : "replace",
         });
       }
-    } else if (hit === "learn-cancel") {
+    } else if (hit === "auto-map") {
+      startAutoMap();
+    } else if (hit === "learn-skip") {
       void cancelLearn();
+      autoMapAdvance(false);
+    } else if (hit === "learn-cancel") {
+      // The toast's Cancel ends the whole walk, not just this step.
+      autoMap = null;
+      void cancelLearn();
+      cancelAssign();
     } else if (hit === "conf-force") {
       const pend = pendingConflict;
       pendingConflict = null;
@@ -1831,6 +1963,8 @@ export function nocturneWire(root: HTMLElement): void {
       pendingConflict = null;
       setNConfOpen(false);
       restoreDialogFocus();
+      // Declining a conflict mid-walk skips that control; the run moves on.
+      autoMapAdvance(false);
     } else if (hit === "jump-controls") {
       // The targets text names controls: flip and light them all.
       ev.preventDefault();
@@ -2365,12 +2499,43 @@ export function NocturneIsland() {
           h("span", { class: "n-meta-name" }, () => nPadName()),
           h("span", { class: "n-meta-sub" }, () => nPadSub()),
           h("div", { class: "n-spring" }),
+          // The auto-map walk exists only when scripting can run it: CSS
+          // hides this until the root wears the wire's own "js" marker (the
+          // parity contract already normalizes that class), so a no-JS page
+          // never shows dead chrome.
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "auto-map",
+              class: "n-autobtn",
+              title:
+                "Walk every control in turn — press a key for each. Esc skips one; Cancel stops the run.",
+            },
+            "Map all…",
+          ),
           // The live echo's readouts: written IMPERATIVELY at frame rate,
           // both hidden from assistive tech (the sr twin below announces
           // transitions only, so the uptime clock cannot spam a reader).
           h("span", { "aria-hidden": "true", class: "n-ticker" }),
           h("span", { "aria-hidden": "true", class: "n-livestats" }),
           h("span", { role: "status", class: "n-live-sr" }),
+        ),
+        // The capture toast: capture-time browser state, floating over the
+        // stage so mapping works with either pane rolled away. role=status —
+        // the a11y contract from its pane-banner days carries over unchanged.
+        h(
+          "div",
+          { role: "status", class: () => nLearnCls() },
+          h("span", { class: "n-learn-dot" }),
+          h(
+            "span",
+            { class: "n-learn-txt" },
+            h("span", { class: "n-learn-line" }, () => nLearnText()),
+            h("span", { class: "n-learn-sub" }, () => nLearnSub()),
+          ),
+          h("button", { type: "button", "data-nx": "learn-skip", class: () => nLearnSkipCls() }, "Skip"),
+          h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
         ),
         // The stage: the vendored Gamepad-Asset-Pack silhouettes (the
         // workspace's M2c art) with the token-painted control layer —
@@ -2386,14 +2551,6 @@ export function NocturneIsland() {
           // The across-the-room read: one quiet word from the polled
           // session, visual only (the sr status line announces transitions).
           h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
-          // The assign wait, said WHERE the click must land. aria-hidden:
-          // the learn banner (role=status) already speaks this sentence.
-          h(
-            "div",
-            { "aria-hidden": "true", class: () => nAssignCueCls() },
-            h("span", { class: "n-cue-dot" }),
-            h("span", null, () => nAssignCueText()),
-          ),
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.
@@ -3060,22 +3217,6 @@ export function NocturneIsland() {
               ),
             ),
           ),
-        ),
-        // The capture banner: INLINE, role=status — a deliberate a11y
-        // contract change from /map's dialog, documented at M9. It says
-        // which control is armed and that Esc cancels; the countdown ticks
-        // in the sub-line.
-        h(
-          "div",
-          { role: "status", class: () => nLearnCls() },
-          h("span", { class: "n-learn-dot" }),
-          h(
-            "span",
-            { class: "n-learn-txt" },
-            h("span", { class: "n-learn-line" }, () => nLearnText()),
-            h("span", { class: "n-learn-sub" }, () => nLearnSub()),
-          ),
-          h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
         ),
         // Every row is the mapper's own truth (keys, fan-out, turbo and
         // toggle notes) AND a native disclosure: the summary is the row,
@@ -4381,7 +4522,7 @@ export function NocturneIsland() {
           h("p", { class: "n-foot" }, () => nKeysNote()),
           createList(
             () => nKeyRows(),
-            (r) => r.key + "|" + r.targets + "|" + r.fns + "|" + r.cls,
+            (r) => r.key + "|" + r.targets + "|" + r.fns + "|" + r.cls + "|" + r.slot,
             (r) =>
               h(
                 "div",
@@ -4407,6 +4548,23 @@ export function NocturneIsland() {
                     class: "n-addchip",
                   },
                   "+",
+                ),
+                // The key's own Clear: takes it away from EVERYTHING it
+                // drives — a real form twin, so it works with scripting off.
+                h(
+                  "form",
+                  { class: "n-inline", method: "post", action: "/nocturne/key/clear" },
+                  h("input", { type: "hidden", name: "number", value: r.slot }),
+                  h("input", { type: "hidden", name: "key", value: r.key }),
+                  h(
+                    "button",
+                    {
+                      type: "submit",
+                      class: "n-krow-clear",
+                      title: "Unbind this key from everything it drives",
+                    },
+                    "✕",
+                  ),
                 ),
               ),
           ),

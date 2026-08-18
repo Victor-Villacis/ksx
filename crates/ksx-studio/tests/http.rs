@@ -7407,6 +7407,70 @@ fn nocturne_clears_every_binding_in_one_write() {
     assert!(junk.contains("could%20not%20be%20made"), "{junk}");
 }
 
+/// **Per-key clear over HTTP**: one key taken away from EVERYTHING it drives
+/// — a shared control keeps its other keys, a solo control goes unbound —
+/// each rewrite through the daemon's own staged-bind verb, the touched
+/// functions named by the same staged inversion the By-key rows render. A
+/// key that drives nothing gets the honest nothing-changed sentence.
+#[test]
+fn nocturne_clears_one_key_everywhere_it_drives() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    for (function, keys) in [("A", vec!["G", "H"]), ("B", vec!["G"])] {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number: 1,
+                    preset: preset.clone(),
+                    function: function.into(),
+                    keys: keys.into_iter().map(str::to_owned).collect(),
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let response = post_form(addr, "/nocturne/key/clear", "number=1&key=G");
+    assert!(response.contains("free%20again"), "{response}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert_eq!(
+        mapper.bindings.get("A").cloned().unwrap_or_default(),
+        vec!["H".to_owned()],
+        "the shared control keeps its other key"
+    );
+    assert!(
+        mapper
+            .bindings
+            .get("B")
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "the solo control goes unbound"
+    );
+
+    let none = post_form(addr, "/nocturne/key/clear", "number=1&key=F9");
+    assert!(none.contains("not%20driving%20anything"), "{none}");
+}
+
 /// **The undo chip over HTTP**: removing a controller stashes its whole
 /// slot view SERVER-side; the chip is served while the window holds; Undo
 /// replays add + bindings + socd and consumes the stash — a second Undo

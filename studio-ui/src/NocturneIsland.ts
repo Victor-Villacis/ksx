@@ -1698,6 +1698,9 @@ export function NocturneIsland() {
           { class: "n-kb" },
           h(
             "div",
+            { class: "n-kbcase" },
+          h(
+            "div",
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
@@ -1785,6 +1788,7 @@ export function NocturneIsland() {
                   h("span", { class: "n-key-short" }, r.short),
                 ),
             ),
+          ),
           ),
         ),
         // Bound keys that are not on the standard board — honest, never

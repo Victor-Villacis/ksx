@@ -6971,6 +6971,21 @@ a.wsrow-title:hover {
   padding-bottom: 6px;
 }
 
+/* The case: a rounded aluminium plate the caps sit in — the board's own
+   silhouette, the way the stage got the vendored controller bodies. It is a
+   separate element so the plate travels with the rows when a narrow pane
+   scrolls them. */
+.n-kbcase {
+  width: max-content;
+  padding: 13px 13px 15px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #232532, #1a1c28 55%, #171823);
+  box-shadow:
+    inset 0 1px 0 rgba(233, 233, 237, 0.08),
+    inset 0 0 0 1px #0f1118,
+    0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
 .n-kbrow {
   display: flex;
   gap: 4px;
@@ -6978,19 +6993,57 @@ a.wsrow-title:hover {
   width: max-content;
 }
 
+.n-kbrow:last-child {
+  margin-bottom: 0;
+}
+
+/* A keycap is TWO layers: this element is the side walls (dark, seated in
+   the plate), and ::before is the sculpted TOP FACE, lit from above. */
 .n-key {
   position: relative;
   width: 30px;
-  height: 30px;
+  height: 34px;
   flex: none;
-  border: 1px solid var(--n-line);
-  border-radius: 5px;
-  background: var(--n-panel);
+  border: none;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #0e1017, #0a0c12);
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
-.n-key.bound {
-  background: var(--n-accent-tint);
-  border-color: rgba(150, 138, 224, 0.5);
+.n-key::before {
+  content: "";
+  position: absolute;
+  inset: 1px 2px 6px 2px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #323548, #262939 60%, #222534);
+  box-shadow:
+    inset 0 1px 0 rgba(233, 233, 237, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+  transition: transform 70ms ease, background 70ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-key::before,
+  .n-key .n-key-cap,
+  .n-key .n-key-short {
+    transition: none;
+  }
+}
+
+.n-key.bound::before {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(150, 138, 224, 0.34),
+      rgba(150, 138, 224, 0.2) 65%,
+      rgba(150, 138, 224, 0.16)
+    ),
+    linear-gradient(180deg, #2e3142, #242737);
+  box-shadow:
+    inset 0 1px 0 rgba(233, 233, 237, 0.14),
+    inset 0 0 0 1px rgba(150, 138, 224, 0.35);
 }
 
 .n-key.ghost {
@@ -7037,10 +7090,13 @@ a.wsrow-title:hover {
 
 .n-key-cap {
   position: absolute;
-  top: 2px;
-  left: 4px;
+  top: 3px;
+  left: 5px;
+  z-index: 1;
   font-size: 9.5px;
-  color: var(--n-text-2);
+  color: #a9adbf;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+  transition: transform 70ms ease;
 }
 
 .n-key.bound .n-key-cap {
@@ -7049,11 +7105,13 @@ a.wsrow-title:hover {
 
 .n-key-short {
   position: absolute;
-  right: 3px;
-  bottom: 1px;
+  right: 4px;
+  bottom: 8px;
+  z-index: 1;
   font-size: 8.5px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--n-accent-2);
+  transition: transform 70ms ease;
 }
 
 /* ── Right pane: filter + binding list ── */
@@ -8053,11 +8111,6 @@ a.wsrow-title:hover {
   box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
 }
 
-.n-key.lit {
-  background: rgba(150, 138, 224, 0.5);
-  border-color: var(--n-accent);
-  box-shadow: 0 0 10px rgba(150, 138, 224, 0.5);
-}
 
 
 /* Identify-by-key (shots 04/05) + the saved chip */
@@ -8522,26 +8575,29 @@ a.wsrow-title:hover {
 
 /* The dressed keyboard: shared = dashed (shape channel), and the tray row. */
 
-.n-key.shared {
-  border-style: dashed;
+.n-key.shared::before {
+  border: 1px dashed rgba(150, 138, 224, 0.75);
 }
 
 .n-key.tray {
   width: auto;
-  min-width: 30px;
-  padding: 0 6px 0 4px;
+  min-width: 34px;
+  height: auto;
+  padding: 3px 7px 9px 6px;
 }
 
 .n-key.tray .n-key-cap {
-  position: static;
+  position: relative;
+  z-index: 1;
   display: block;
-  padding-top: 2px;
+  padding-top: 1px;
   font-size: 9px;
   white-space: nowrap;
 }
 
 .n-key.tray .n-key-short {
-  position: static;
+  position: relative;
+  z-index: 1;
   display: block;
   text-align: right;
 }
@@ -8897,14 +8953,19 @@ a.nm-link {
 /* ── The live echo: steady lit fills; the ONLY motion is the 1.3 s pulse ── */
 /* (turbo strobe ≤3 Hz by construction — photosensitivity, non-negotiable) */
 
-.n-key.live {
-  background: var(--n-accent);
-  box-shadow: none;
+.n-key.live::before {
+  transform: translateY(3px);
+  background: linear-gradient(180deg, #b7abf3, var(--n-accent) 70%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 14px rgba(150, 138, 224, 0.45);
 }
 
 .n-key.live .n-key-cap,
 .n-key.live .n-key-short {
+  transform: translateY(3px);
   color: #161826;
+  text-shadow: none;
 }
 
 .n-bind.live .n-bind-dot {

@@ -3,6 +3,7 @@
 //! no drivers at all still yields a complete `DriverReport`.
 
 pub(crate) mod devices;
+pub use devices::ancestor_instance_ids;
 mod filever;
 // `crate::app_paths` reads a different hive through the same wrappers rather
 // than opening a second registry binding beside this one.

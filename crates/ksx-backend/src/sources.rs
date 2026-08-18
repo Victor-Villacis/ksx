@@ -1181,6 +1181,15 @@ impl ksx_api::MachineSource for LocalMachine {
     /// owns the live panel tap, this joins its returned instance path to the
     /// same board inventory as `device_scan`, and the Studio stage writer
     /// performs the later reversible choice.
+    ///
+    /// The join is by PnP tree, not by string alone. Raw Input — the source
+    /// that hears an ORDINARY keyboard — names the press by its **HID child**
+    /// devnode, while the scan enumerates the **USB interface** devnodes
+    /// (different class prefix AND a different instance suffix; measured on
+    /// hardware 2026-08-17, where exact matching made press-to-identify
+    /// structurally impossible for any unclaimed keyboard). So the observed
+    /// path is matched first as given — a WinUSB-claimed observation already
+    /// speaks USB — and then each of its PnP ancestors, nearest first.
     #[cfg(windows)]
     fn device_identify(
         &self,
@@ -1193,50 +1202,11 @@ impl ksx_api::MachineSource for LocalMachine {
             ));
         }
         let scan = self.device_scan()?;
-        let matches = scan
-            .boards
-            .into_iter()
-            .filter(|board| {
-                board
-                    .keyboard
-                    .as_deref()
-                    .is_some_and(|id| id.eq_ignore_ascii_case(observed_instance))
-                    || board.interfaces.iter().any(|interface| {
-                        interface
-                            .instance_id
-                            .eq_ignore_ascii_case(observed_instance)
-                    })
-            })
-            .collect::<Vec<_>>();
-        let [board] = matches.as_slice() else {
-            return Err(Refusal::new(
-                ksx_api::codes::IDENTIFY_UNMATCHED,
-                "the pressed key did not resolve to exactly one selectable keyboard",
-            ));
-        };
-        if !board.pickable {
-            return Err(Refusal::new(
-                ksx_api::codes::IDENTIFY_UNMATCHED,
-                "the pressed device is not a keyboard ksx can select",
-            ));
-        }
-        let selector = board.selector.clone().ok_or_else(|| {
-            Refusal::new(
-                ksx_api::codes::IDENTIFY_UNMATCHED,
-                "the pressed keyboard has no exact selector",
-            )
-        })?;
-        if board.alias_hint.trim().is_empty() || board.name.trim().is_empty() {
-            return Err(Refusal::new(
-                ksx_api::codes::IDENTIFY_UNMATCHED,
-                "the pressed keyboard has no safe display identity",
-            ));
-        }
-        Ok(ksx_api::DeviceIdentifyView {
-            selector,
-            alias: board.alias_hint.clone(),
-            label: board.name.clone(),
-        })
+        let mut candidates = vec![observed_instance.to_owned()];
+        // Four levels is HID child → USB interface → composite device → hub,
+        // comfortably past every real join point without walking to the root.
+        candidates.extend(ksx_platform::ancestor_instance_ids(observed_instance, 4));
+        identify_board(scan, &candidates)
     }
 
     /// Write one `[[device]]` entry — the plan/apply pair, never the CLI verb.
@@ -2128,6 +2098,75 @@ fn remove_view(outcome: &crate::device_edit::RemoveOutcome) -> ksx_api::DeviceRe
     }
 }
 
+/// The identify join, pure: the FIRST candidate path that matches any board
+/// decides, and it must resolve to exactly one. Candidates arrive nearest
+/// first (the observed devnode, then its PnP ancestors), so a path the scan
+/// speaks directly always wins over anything inferred by climbing — and an
+/// ancestor that two boards somehow share refuses as ambiguous rather than
+/// guessing, exactly like a direct two-board collision.
+fn identify_board(
+    scan: ksx_api::DeviceScanView,
+    candidates: &[String],
+) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+    let matches_candidate = |board: &ksx_api::BoardRow, candidate: &str| {
+        board
+            .keyboard
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(candidate))
+            || board
+                .interfaces
+                .iter()
+                .any(|interface| interface.instance_id.eq_ignore_ascii_case(candidate))
+    };
+    let matched = candidates.iter().find_map(|candidate| {
+        let matched: Vec<&ksx_api::BoardRow> = scan
+            .boards
+            .iter()
+            .filter(|board| matches_candidate(board, candidate))
+            .collect();
+        if matched.is_empty() {
+            None
+        } else {
+            Some(matched)
+        }
+    });
+    let Some(matched) = matched else {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed key did not resolve to exactly one selectable keyboard",
+        ));
+    };
+    let [board] = matched.as_slice() else {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed key did not resolve to exactly one selectable keyboard",
+        ));
+    };
+    if !board.pickable {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed device is not a keyboard ksx can select",
+        ));
+    }
+    let selector = board.selector.clone().ok_or_else(|| {
+        Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed keyboard has no exact selector",
+        )
+    })?;
+    if board.alias_hint.trim().is_empty() || board.name.trim().is_empty() {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed keyboard has no safe display identity",
+        ));
+    }
+    Ok(ksx_api::DeviceIdentifyView {
+        selector,
+        alias: board.alias_hint.clone(),
+        label: board.name.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     /// **The residue read, against whatever machine runs it.**
@@ -2732,5 +2771,99 @@ steps = [{ hold = ["A"], ms = 50 }]
         // must always disclose the mechanism's limit and point at the pipe.
         let (_, detail) = daemon_check();
         assert!(detail.contains("Session panel"), "{detail}");
+    }
+
+    /// One pickable board shaped like the measured machine: USB interface
+    /// devnodes in the scan, HID child devnodes from Raw Input.
+    fn hp_board() -> ksx_api::BoardRow {
+        ksx_api::BoardRow {
+            name: "HP Elite USB Keyboard".into(),
+            alias_hint: "hp-elite".into(),
+            selector: Some("usb:03f0:034a:00".into()),
+            pickable: true,
+            looks_like_a_keyboard: true,
+            keyboard: Some(r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".into()),
+            interfaces: vec![
+                ksx_api::UsbRow {
+                    instance_id: r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".into(),
+                    ..Default::default()
+                },
+                ksx_api::UsbRow {
+                    instance_id: r"USB\VID_03F0&PID_034A&MI_01\7&F06C3D8&0&0001".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn scan_with(boards: Vec<ksx_api::BoardRow>) -> ksx_api::DeviceScanView {
+        ksx_api::DeviceScanView {
+            boards,
+            ..Default::default()
+        }
+    }
+
+    /// **The measured defect (2026-08-17).** Raw Input reports the HID child
+    /// (`HID\…\8&…`), the scan speaks USB interfaces (`USB\…\7&…`) — exact
+    /// matching alone can never join them on real hardware, which made
+    /// press-to-identify refuse every unclaimed keyboard. With the observed
+    /// path's PnP ancestors as later candidates, the USB interface parent
+    /// matches exactly and the board resolves.
+    #[test]
+    #[cfg(windows)]
+    fn a_raw_input_hid_child_identifies_its_board_through_its_usb_parent() {
+        let candidates = vec![
+            // What Raw Input reported — matches nothing in the scan.
+            r"HID\VID_03F0&PID_034A&MI_00\8&2F8AC447&0&0000".to_owned(),
+            // Its PnP parent — the exact devnode the scan enumerates.
+            r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned(),
+            // Grandparent (the composite device) — never reached.
+            r"USB\VID_03F0&PID_034A\5&11111111&0&1".to_owned(),
+        ];
+        let identified = identify_board(scan_with(vec![hp_board()]), &candidates)
+            .expect("the HID child must resolve through its USB parent");
+        assert_eq!(identified.selector, "usb:03f0:034a:00");
+        assert_eq!(identified.label, "HP Elite USB Keyboard");
+    }
+
+    /// A WinUSB-claimed observation already speaks USB: the FIRST candidate
+    /// matches and no climbing is consulted.
+    #[test]
+    #[cfg(windows)]
+    fn a_usb_level_observation_still_matches_directly() {
+        let candidates = vec![r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned()];
+        assert!(identify_board(scan_with(vec![hp_board()]), &candidates).is_ok());
+    }
+
+    /// No candidate matching anything is the same honest refusal as before.
+    #[test]
+    #[cfg(windows)]
+    fn an_unmatchable_observation_still_refuses() {
+        let candidates = vec![
+            r"HID\VID_AAAA&PID_BBBB\9&0".to_owned(),
+            r"USB\VID_AAAA&PID_BBBB&MI_00\9&0".to_owned(),
+        ];
+        let refusal =
+            identify_board(scan_with(vec![hp_board()]), &candidates).expect_err("nothing matches");
+        assert!(
+            refusal.message.contains("exactly one"),
+            "{}",
+            refusal.message
+        );
+    }
+
+    /// An ancestor two boards somehow share refuses as ambiguous rather than
+    /// guessing — the twin-board rule, unchanged by the climb.
+    #[test]
+    #[cfg(windows)]
+    fn an_ancestor_shared_by_two_boards_is_ambiguous_not_a_guess() {
+        let mut twin = hp_board();
+        twin.name = "HP Elite USB Keyboard (2)".into();
+        let candidates = vec![
+            r"HID\VID_03F0&PID_034A&MI_00\8&2F8AC447&0&0000".to_owned(),
+            r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned(),
+        ];
+        assert!(identify_board(scan_with(vec![hp_board(), twin]), &candidates).is_err());
     }
 }

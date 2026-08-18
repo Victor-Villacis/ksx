@@ -62,6 +62,69 @@ pub fn present_instance_ids() -> Vec<String> {
     parse_multi_sz(&buf)
 }
 
+/// The PnP ancestors of one device instance, nearest first, at most `max`.
+///
+/// Exists for one measured mismatch (2026-08-17, an HP Elite USB Keyboard and
+/// an I-PAC 4X): Raw Input names the key press by its **HID child** devnode
+/// (`HID\VID_03F0&PID_034A&MI_00\8&…`), while the board inventory enumerates
+/// the **USB interface** devnodes (`USB\VID_03F0&PID_034A&MI_00\7&…`) — a
+/// different class prefix AND a different instance suffix, so no string
+/// comparison can join them. The PnP tree can: the HID child's parent IS that
+/// USB interface node. Climbing is the honest bridge, and returning every
+/// ancestor (rather than guessing which level matters) lets the caller keep
+/// exact matching.
+///
+/// Read-only: `CM_Locate_DevNodeW` + `CM_Get_Parent` + `CM_Get_Device_IDW`
+/// return numbers and strings. Nothing is opened. Failures return what was
+/// walked so far — an unlocatable device simply has no ancestors to offer.
+pub fn ancestor_instance_ids(instance_id: &str, max: usize) -> Vec<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        CM_Get_Device_IDW, CM_Get_Device_ID_Size, CM_Get_Parent, CM_Locate_DevNodeW,
+        CM_LOCATE_DEVNODE_NORMAL, CR_SUCCESS,
+    };
+
+    let wide: Vec<u16> = instance_id
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut devinst = 0u32;
+    // SAFETY: `wide` is a NUL-terminated UTF-16 instance id that outlives the
+    // call; `devinst` is a valid out-parameter. NORMAL = present devices only.
+    let cr = unsafe { CM_Locate_DevNodeW(&mut devinst, wide.as_ptr(), CM_LOCATE_DEVNODE_NORMAL) };
+    if cr != CR_SUCCESS {
+        return Vec::new();
+    }
+    let mut ancestors = Vec::new();
+    let mut current = devinst;
+    for _ in 0..max {
+        let mut parent = 0u32;
+        // SAFETY: `parent` is a valid out-parameter; `current` was returned by
+        // a successful locate or a previous CM_Get_Parent.
+        if unsafe { CM_Get_Parent(&mut parent, current, 0) } != CR_SUCCESS {
+            break;
+        }
+        let mut len = 0u32;
+        // SAFETY: valid out-parameter, devinst from a successful CM_Get_Parent.
+        if unsafe { CM_Get_Device_ID_Size(&mut len, parent, 0) } != CR_SUCCESS || len == 0 {
+            break;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        // SAFETY: `buf` holds `len + 1` UTF-16 units, the documented size + NUL.
+        if unsafe { CM_Get_Device_IDW(parent, buf.as_mut_ptr(), len + 1, 0) } != CR_SUCCESS {
+            break;
+        }
+        let id = String::from_utf16_lossy(&buf[..len as usize])
+            .trim_end_matches('\0')
+            .to_owned();
+        if id.is_empty() {
+            break;
+        }
+        ancestors.push(id);
+        current = parent;
+    }
+    ancestors
+}
+
 /// What the PnP manager says about one device right now.
 ///
 /// "Present" is not the same as "working": a paired Bluetooth keyboard that is

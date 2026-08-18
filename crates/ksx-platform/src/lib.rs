@@ -40,7 +40,9 @@ pub mod xinput;
 mod win;
 
 #[cfg(windows)]
-pub use win::{collect, collect_hidmaestro, collect_vigembus, collect_virtual_pads};
+pub use win::{
+    ancestor_instance_ids, collect, collect_hidmaestro, collect_vigembus, collect_virtual_pads,
+};
 
 pub use advice::{summarize, Advice, Severity};
 pub use report::{

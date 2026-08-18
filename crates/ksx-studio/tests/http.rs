@@ -6740,24 +6740,34 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
     let rows = nocturne_bind_rows(&api);
     assert!(!rows.is_empty(), "{api}");
-    // The six controller groups carry every zone exactly once: face 4,
+    // The six controller groups carry every zone exactly once — bound
+    // controls as rows, FREE ones as the group's available chips: face 4,
     // D-pad 4, shoulders & triggers 4, each stick 5 (hub + four
-    // directions), system 3 — and each header's count is served.
-    for (group, count) in [
-        ("bind_face", 4),
-        ("bind_dpad", 4),
-        ("bind_shoulders", 4),
-        ("bind_lstick", 5),
-        ("bind_rstick", 5),
-        ("bind_system", 3),
+    // directions), system 3.
+    for (group, avail, count) in [
+        ("bind_face", "avail_ctl_face", 4),
+        ("bind_dpad", "avail_ctl_dpad", 4),
+        ("bind_shoulders", "avail_ctl_shoulders", 4),
+        ("bind_lstick", "avail_ctl_lstick", 5),
+        ("bind_rstick", "avail_ctl_rstick", 5),
+        ("bind_system", "avail_ctl_system", 3),
     ] {
-        assert_eq!(
-            api["view"][group].as_array().expect(group).len(),
-            count,
-            "{api}"
-        );
+        let bound = api["view"][group].as_array().expect(group).len();
+        let free = api["view"][avail].as_array().expect(avail).len();
+        assert_eq!(bound + free, count, "{group}: {api}");
     }
-    assert_eq!(rows.len(), 25, "{api}");
+    let free_total: usize = [
+        "avail_ctl_face",
+        "avail_ctl_dpad",
+        "avail_ctl_shoulders",
+        "avail_ctl_lstick",
+        "avail_ctl_rstick",
+        "avail_ctl_system",
+    ]
+    .iter()
+    .map(|k| api["view"][k].as_array().expect(k).len())
+    .sum();
+    assert_eq!(rows.len() + free_total, 25, "{api}");
     assert!(
         api["view"]["bind_face_n"]
             .as_str()
@@ -6777,10 +6787,18 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
         .as_str()
         .expect("function")
         .to_owned();
-    let unbound_fn = rows
-        .iter()
-        .find(|r| r["chip"] == "Unbound")
-        .expect("an unbound row")["function"]
+    // Unbound controls are the groups' FREE chips now, not rows.
+    let unbound_fn = [
+        "avail_ctl_face",
+        "avail_ctl_dpad",
+        "avail_ctl_shoulders",
+        "avail_ctl_lstick",
+        "avail_ctl_rstick",
+        "avail_ctl_system",
+    ]
+    .iter()
+    .find_map(|k| api["view"][k].as_array().and_then(|chips| chips.first()))
+    .expect("a free control chip")["function"]
         .as_str()
         .expect("function")
         .to_owned();

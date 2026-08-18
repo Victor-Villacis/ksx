@@ -69,6 +69,12 @@ export interface NocturnePersonaRowView {
   cls: string;
 }
 
+export interface NocturneCtlChipView {
+  function: string;
+  label: string;
+  cls: string;
+}
+
 export interface NocturneKeyRowView {
   key: string;
   targets: string;
@@ -122,8 +128,6 @@ export interface NocturneBindRowView {
   slot: string;
   turbo: string;
   chip_title: string;
-  note_cls: string;
-  note_keys: string;
   badge: string;
   badge_cls: string;
   add_cls: string;
@@ -214,9 +218,21 @@ export interface NocturneView {
   kb_tray: NocturneKeyCellView[];
   key_rows: NocturneKeyRowView[];
   keys_note: string;
-  avail_keys: NocturneKeyRowView[];
-  avail_head: string;
-  avail_cls: string;
+  avail_main: NocturneKeyRowView[];
+  avail_nav: NocturneKeyRowView[];
+  avail_num: NocturneKeyRowView[];
+  avail_main_head: string;
+  avail_nav_head: string;
+  avail_num_head: string;
+  avail_main_cls: string;
+  avail_nav_cls: string;
+  avail_num_cls: string;
+  avail_ctl_face: NocturneCtlChipView[];
+  avail_ctl_dpad: NocturneCtlChipView[];
+  avail_ctl_shoulders: NocturneCtlChipView[];
+  avail_ctl_lstick: NocturneCtlChipView[];
+  avail_ctl_rstick: NocturneCtlChipView[];
+  avail_ctl_system: NocturneCtlChipView[];
   kb_tray_head: string;
   kb_tray_cls: string;
   kb_note: string;
@@ -345,9 +361,21 @@ const [nKbRow6, setNKbRow6] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbTray, setNKbTray] = createSignal<NocturneKeyCellView[]>([]);
 const [nKeyRows, setNKeyRows] = createSignal<NocturneKeyRowView[]>([]);
 const [nKeysNote, setNKeysNote] = createSignal("");
-const [nAvailKeys, setNAvailKeys] = createSignal<NocturneKeyRowView[]>([]);
-const [nAvailHead, setNAvailHead] = createSignal("");
-const [nAvailCls, setNAvailCls] = createSignal("n-akeys none");
+const [nAvailMain, setNAvailMain] = createSignal<NocturneKeyRowView[]>([]);
+const [nAvailNav, setNAvailNav] = createSignal<NocturneKeyRowView[]>([]);
+const [nAvailNum, setNAvailNum] = createSignal<NocturneKeyRowView[]>([]);
+const [nAvailMainHead, setNAvailMainHead] = createSignal("");
+const [nAvailNavHead, setNAvailNavHead] = createSignal("");
+const [nAvailNumHead, setNAvailNumHead] = createSignal("");
+const [nAvailMainCls, setNAvailMainCls] = createSignal("n-akeysec none");
+const [nAvailNavCls, setNAvailNavCls] = createSignal("n-akeysec none");
+const [nAvailNumCls, setNAvailNumCls] = createSignal("n-akeysec none");
+const [nCtlFace, setNCtlFace] = createSignal<NocturneCtlChipView[]>([]);
+const [nCtlDpad, setNCtlDpad] = createSignal<NocturneCtlChipView[]>([]);
+const [nCtlShl, setNCtlShl] = createSignal<NocturneCtlChipView[]>([]);
+const [nCtlLs, setNCtlLs] = createSignal<NocturneCtlChipView[]>([]);
+const [nCtlRs, setNCtlRs] = createSignal<NocturneCtlChipView[]>([]);
+const [nCtlSys, setNCtlSys] = createSignal<NocturneCtlChipView[]>([]);
 const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
@@ -458,9 +486,21 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTray(v.kb_tray);
   setNKeyRows(v.key_rows);
   setNKeysNote(v.keys_note);
-  setNAvailKeys(v.avail_keys);
-  setNAvailHead(v.avail_head);
-  setNAvailCls(v.avail_cls);
+  setNAvailMain(v.avail_main);
+  setNAvailNav(v.avail_nav);
+  setNAvailNum(v.avail_num);
+  setNAvailMainHead(v.avail_main_head);
+  setNAvailNavHead(v.avail_nav_head);
+  setNAvailNumHead(v.avail_num_head);
+  setNAvailMainCls(v.avail_main_cls);
+  setNAvailNavCls(v.avail_nav_cls);
+  setNAvailNumCls(v.avail_num_cls);
+  setNCtlFace(v.avail_ctl_face);
+  setNCtlDpad(v.avail_ctl_dpad);
+  setNCtlShl(v.avail_ctl_shoulders);
+  setNCtlLs(v.avail_ctl_lstick);
+  setNCtlRs(v.avail_ctl_rstick);
+  setNCtlSys(v.avail_ctl_system);
   setNKbTrayHead(v.kb_tray_head);
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
@@ -1329,7 +1369,13 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
       const label = (el.querySelector(".n-bind-label")?.textContent ?? "").toLowerCase();
       el.classList.toggle("hide", query !== "" && !gmatch && !label.includes(query));
     }
-    const visible = group.querySelector(".n-bind:not(.hide)") !== null;
+    for (const chip of Array.from(group.querySelectorAll<HTMLElement>(".n-ctlchip"))) {
+      const label = (chip.textContent ?? "").toLowerCase();
+      chip.classList.toggle("hide", query !== "" && !gmatch && !label.includes(query));
+    }
+    const visible =
+      group.querySelector(".n-bind:not(.hide)") !== null ||
+      group.querySelector(".n-ctlchip:not(.hide)") !== null;
     group.classList.toggle("empty", query !== "" && !visible);
   }
 }
@@ -1779,22 +1825,13 @@ export function nocturneWire(root: HTMLElement): void {
           .filter((el): el is HTMLElement => Boolean(el));
         pulseRows(rows);
       }
-    } else if (hit === "jump-keys") {
-      // The note names keys: flip and light them all. Never the fold.
-      ev.preventDefault();
-      const keys = (target?.closest("[data-keys]")?.getAttribute("data-keys") ?? "")
-        .split(/\s+/)
-        .filter(Boolean);
-      if (keys.length > 0) {
-        ui.rightView = "keys";
-        saveUiPrefs();
-        applyNocturneUi();
-        const rows = keys
-          .map((key) =>
-            root.querySelector<HTMLElement>(`.n-krows .n-krow[data-key="${CSS.escape(key)}"]`),
-          )
-          .filter((el): el is HTMLElement => Boolean(el));
-        pulseRows(rows);
+    } else if (hit === "ctl-assign") {
+      // A FREE control chip: arm its learn — press a key, or click one.
+      const chip = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = chip?.getAttribute("data-fn") ?? "";
+      const label = chip?.textContent?.trim() || fnName;
+      if (fnName) {
+        void startLearn({ fn: fnName, label, slot: nSlotVal(), mode: "replace" });
       }
     } else if (hit === "view-ctl" || hit === "view-keys") {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
@@ -3035,17 +3072,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -3195,6 +3222,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlFace(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         h(
@@ -3237,17 +3284,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -3397,6 +3434,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlDpad(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         h(
@@ -3439,17 +3496,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -3599,6 +3646,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlShl(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         h(
@@ -3641,17 +3708,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -3801,6 +3858,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlLs(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         h(
@@ -3843,17 +3920,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -4003,6 +4070,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlRs(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         h(
@@ -4045,17 +4132,7 @@ export function NocturneIsland() {
                     "span",
                     { class: "n-bind-txt" },
                     h("span", { class: "n-bind-label" }, r.label),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "data-nx": "jump-keys",
-                        "data-keys": r.note_keys,
-                        title: "Open these keys in the By-key view",
-                        class: r.note_cls,
-                      },
-                      r.note,
-                    ),
+                    h("span", { class: "n-bind-note" }, r.note),
                   ),
                   h("span", { class: r.badge_cls }, r.badge),
                   h(
@@ -4205,6 +4282,26 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+          ),
+          h(
+            "div",
+            { class: "n-ctlstrip" },
+            createList(
+              () => nCtlSys(),
+              (r) => r.function + "|" + r.label + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "ctl-assign",
+                    "data-fn": r.function,
+                    title: "Free — click, then press a key (or click one on the board)",
+                    class: r.cls,
+                  },
+                  r.label,
+                ),
+            ),
           ),
         ),
         ),
@@ -4251,17 +4348,67 @@ export function NocturneIsland() {
                 ),
               ),
           ),
-          // The rest of the board's REAL vocabulary, free to bind: click a
-          // key, then the control on the pad that should take it.
+          // The rest of the board's REAL vocabulary, free to bind — in the
+          // keyboard's own geography.
           h(
             "div",
-            { class: () => nAvailCls() },
-            h("div", { class: "n-bindg-head" }, h("span", { class: "n-bindg-lab" }, () => nAvailHead())),
+            { class: () => nAvailMainCls() },
+            h("div", { class: "n-bindg-head" }, h("span", { class: "n-bindg-lab" }, () => nAvailMainHead())),
             h(
               "div",
               { class: "n-akey-grid" },
               createList(
-                () => nAvailKeys(),
+                () => nAvailMain(),
+                (r) => r.key,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "key-assign",
+                      "data-key": r.key,
+                      title: "Free — click, then click the control on the pad that should take it",
+                      class: r.cls,
+                    },
+                    r.key,
+                  ),
+              ),
+            ),
+          ),
+          h(
+            "div",
+            { class: () => nAvailNavCls() },
+            h("div", { class: "n-bindg-head" }, h("span", { class: "n-bindg-lab" }, () => nAvailNavHead())),
+            h(
+              "div",
+              { class: "n-akey-grid" },
+              createList(
+                () => nAvailNav(),
+                (r) => r.key,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      "data-nx": "key-assign",
+                      "data-key": r.key,
+                      title: "Free — click, then click the control on the pad that should take it",
+                      class: r.cls,
+                    },
+                    r.key,
+                  ),
+              ),
+            ),
+          ),
+          h(
+            "div",
+            { class: () => nAvailNumCls() },
+            h("div", { class: "n-bindg-head" }, h("span", { class: "n-bindg-lab" }, () => nAvailNumHead())),
+            h(
+              "div",
+              { class: "n-akey-grid" },
+              createList(
+                () => nAvailNum(),
                 (r) => r.key,
                 (r) =>
                   h(

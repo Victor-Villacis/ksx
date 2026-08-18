@@ -143,6 +143,9 @@ pub(super) const N_TURBO_INPUT_ERROR: &str = "error: Type a number of presses a 
 pub(super) const N_TURBO_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
      nothing to auto-fire. Bind a key first; nothing was changed.";
 
+pub(super) const N_TOGGLE_OLD_DAEMON: &str = "error: This ksx daemon predates press-behaviour \
+     rules, so Hold/Toggle cannot take. Update ksx; nothing was changed.";
+
 pub(super) const N_TOGGLE_OK: &str = "Press behaviour updated. Nothing has been saved or started.";
 
 pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
@@ -186,8 +189,9 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 53] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 54] = [
     N_MOVE_AT_END,
+    N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
     N_UNDO_OK,
     N_UNDO_GONE,
@@ -1409,6 +1413,8 @@ pub(super) async fn nocturne_form_bind_toggle(
         if current.is_empty() {
             return N_TOGGLE_UNBOUND_ERROR;
         }
+        let slot_number = slot.number;
+        let function = form.function.clone();
         let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
             number: slot.number,
             preset: slot.preset.clone(),
@@ -1420,10 +1426,24 @@ pub(super) async fn nocturne_form_bind_toggle(
             turbo_hz: None,
             toggle: Some(latch),
         });
-        if outcome.ok {
+        if !outcome.ok {
+            return N_EDIT_ERROR;
+        }
+        // An OLDER daemon ignores the toggle field it does not know and
+        // still answers ok — read the draft back before claiming success.
+        let took = state
+            .control
+            .staged()
+            .slots
+            .iter()
+            .find(|s| s.number == slot_number)
+            .and_then(|s| ksx_api::staged_mapper_slot(s, "").ok())
+            .map(|m| m.toggle.contains(&function))
+            .unwrap_or(false);
+        if took == latch {
             N_TOGGLE_OK
         } else {
-            N_EDIT_ERROR
+            N_TOGGLE_OLD_DAEMON
         }
     })
     .await

@@ -17,9 +17,9 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
-    NocturneBindRow, NocturneChoiceRow, NocturneDeviceRow, NocturneEmptyRow, NocturneGameRow,
-    NocturneKeyCell, NocturneKeyRow, NocturneMacroRow, NocturneOptionRow, NocturneOtherRow,
-    NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+    NocturneBindRow, NocturneChoiceRow, NocturneCtlChip, NocturneDeviceRow, NocturneEmptyRow,
+    NocturneGameRow, NocturneKeyCell, NocturneKeyRow, NocturneMacroRow, NocturneOptionRow,
+    NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -44,7 +44,15 @@ const LIST_SLOT_BIND_SYS: &str = "list:nBindSys:array";
 const LIST_SLOT_GAMES: &str = "list:nGameRows:array";
 const LIST_SLOT_MACROS: &str = "list:nMacroRows:array";
 const LIST_SLOT_KEYROWS: &str = "list:nKeyRows:array";
-const LIST_SLOT_AVAILKEYS: &str = "list:nAvailKeys:array";
+const LIST_SLOT_AVAIL_MAIN: &str = "list:nAvailMain:array";
+const LIST_SLOT_AVAIL_NAV: &str = "list:nAvailNav:array";
+const LIST_SLOT_AVAIL_NUM: &str = "list:nAvailNum:array";
+const LIST_SLOT_CTL_FACE: &str = "list:nCtlFace:array";
+const LIST_SLOT_CTL_DPAD: &str = "list:nCtlDpad:array";
+const LIST_SLOT_CTL_SHL: &str = "list:nCtlShl:array";
+const LIST_SLOT_CTL_LS: &str = "list:nCtlLs:array";
+const LIST_SLOT_CTL_RS: &str = "list:nCtlRs:array";
+const LIST_SLOT_CTL_SYS: &str = "list:nCtlSys:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -116,8 +124,12 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
         "nKeysNote": payload.view.keys_note,
-        "nAvailHead": payload.view.avail_head,
-        "nAvailCls": payload.view.avail_cls,
+        "nAvailMainHead": payload.view.avail_main_head,
+        "nAvailNavHead": payload.view.avail_nav_head,
+        "nAvailNumHead": payload.view.avail_num_head,
+        "nAvailMainCls": payload.view.avail_main_cls,
+        "nAvailNavCls": payload.view.avail_nav_cls,
+        "nAvailNumCls": payload.view.avail_num_cls,
         "nPadXboxCls": payload.view.pad_xbox_cls,
         "nPadPsCls": payload.view.pad_ps_cls,
         "nCfgLine": payload.view.cfg_line,
@@ -221,6 +233,14 @@ fn option_row(row: &NocturneOptionRow) -> SlotValue {
     ])
 }
 
+fn ctl_chip(row: &NocturneCtlChip) -> SlotValue {
+    SlotValue::object(vec![
+        ("function".to_owned(), SlotValue::Text(row.function.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
 fn key_row_view(row: &NocturneKeyRow) -> SlotValue {
     SlotValue::object(vec![
         ("key".to_owned(), SlotValue::Text(row.key.clone())),
@@ -297,11 +317,6 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
             "chip_title".to_owned(),
             SlotValue::Text(row.chip_title.clone()),
         ),
-        ("note_cls".to_owned(), SlotValue::Text(row.note_cls.clone())),
-        (
-            "note_keys".to_owned(),
-            SlotValue::Text(row.note_keys.clone()),
-        ),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
         (
             "badge_cls".to_owned(),
@@ -313,7 +328,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 27] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 35] {
     let view = &payload.view;
     [
         (
@@ -325,8 +340,40 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 27] {
             SlotValue::array(view.key_rows.iter().map(key_row_view).collect()),
         ),
         (
-            LIST_SLOT_AVAILKEYS,
-            SlotValue::array(view.avail_keys.iter().map(key_row_view).collect()),
+            LIST_SLOT_AVAIL_MAIN,
+            SlotValue::array(view.avail_main.iter().map(key_row_view).collect()),
+        ),
+        (
+            LIST_SLOT_AVAIL_NAV,
+            SlotValue::array(view.avail_nav.iter().map(key_row_view).collect()),
+        ),
+        (
+            LIST_SLOT_AVAIL_NUM,
+            SlotValue::array(view.avail_num.iter().map(key_row_view).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_FACE,
+            SlotValue::array(view.avail_ctl_face.iter().map(ctl_chip).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_DPAD,
+            SlotValue::array(view.avail_ctl_dpad.iter().map(ctl_chip).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_SHL,
+            SlotValue::array(view.avail_ctl_shoulders.iter().map(ctl_chip).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_LS,
+            SlotValue::array(view.avail_ctl_lstick.iter().map(ctl_chip).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_RS,
+            SlotValue::array(view.avail_ctl_rstick.iter().map(ctl_chip).collect()),
+        ),
+        (
+            LIST_SLOT_CTL_SYS,
+            SlotValue::array(view.avail_ctl_system.iter().map(ctl_chip).collect()),
         ),
         (
             LIST_SLOT_MACROS,
@@ -595,9 +642,17 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 27] = [
+        const SERVED_LIST_PREFIXES: [&str; 35] = [
             "list:nKeyRows:",
-            "list:nAvailKeys:",
+            "list:nAvailMain:",
+            "list:nAvailNav:",
+            "list:nAvailNum:",
+            "list:nCtlFace:",
+            "list:nCtlDpad:",
+            "list:nCtlShl:",
+            "list:nCtlLs:",
+            "list:nCtlRs:",
+            "list:nCtlSys:",
             "list:nSocdEditOpts:",
             "list:nBindFace:",
             "list:nBindDpad:",
@@ -624,10 +679,14 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 78] = [
+        const SERVED_SLOTS: [&str; 82] = [
             "nKeysNote",
-            "nAvailHead",
-            "nAvailCls",
+            "nAvailMainHead",
+            "nAvailNavHead",
+            "nAvailNumHead",
+            "nAvailMainCls",
+            "nAvailNavCls",
+            "nAvailNumCls",
             "nBindFaceCls",
             "nBindDpadCls",
             "nBindShlCls",

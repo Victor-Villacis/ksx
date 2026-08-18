@@ -7817,8 +7817,7 @@ a.wsrow-title:hover {
 }
 
 /* Names are doors: text that names the other side flips the view. */
-button.n-krow-tg,
-button.n-bind-note {
+button.n-krow-tg {
   border: none;
   background: none;
   padding: 0;
@@ -7827,15 +7826,10 @@ button.n-bind-note {
   font: inherit;
 }
 
-.door:hover,
-button.n-bind-note:hover {
+.door:hover {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
   color: var(--n-accent-2);
-}
-
-button.n-bind-note.none {
-  display: none;
 }
 
 .n-krow-tg {
@@ -7846,12 +7840,41 @@ button.n-bind-note.none {
   line-height: 1.4;
 }
 
-/* The available-key grid: the board's free vocabulary as ghost chips. */
-.n-akeys {
+/* The available-key sections: the board's free vocabulary as ghost
+   chips, in the keyboard's own geography. */
+.n-akeysec {
   margin-top: 10px;
 }
 
-.n-akeys.none {
+.n-akeysec.none {
+  display: none;
+}
+
+/* Each control group's FREE controls, as the same ghost-chip grammar. */
+.n-ctlstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 2px 0 6px;
+  padding: 0 8px;
+}
+
+.n-ctlchip {
+  padding: 3px 8px;
+  border: 1px dashed var(--n-line-2);
+  border-radius: 6px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.n-ctlchip:hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.n-ctlchip.hide {
   display: none;
 }
 

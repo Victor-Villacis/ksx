@@ -3237,8 +3237,7 @@ pub struct WorkspaceBindRow {
     /// The fan-out sentence ALONE ("this key also drives A · B"), for a
     /// surface that shows turbo/toggle as badges instead of prose.
     pub share_note: String,
-    /// The keys that fan out, space-joined — the door to the By-key rows.
-    pub share_keys: String,
+
     /// "Clear" on a bound row, empty (and therefore hidden) on an unbound
     /// one — the list idiom for a per-row action that is sometimes a no-op.
     pub clear: String,
@@ -3620,9 +3619,8 @@ fn workspace_bind_rows(
             // PER-KEY fan-out, subject named — "this key also drives…" could
             // not say WHICH key on a multi-key row. One vocabulary
             // everywhere: keys DRIVE controls (the board's own words).
-            let (share_note, share_keys) = {
+            let share_note = {
                 let mut parts: Vec<String> = Vec::new();
-                let mut shared_keys: Vec<String> = Vec::new();
                 for key in crate::render_map::keys_of(&mapper, zone.fn_name) {
                     let others: Vec<String> = zones
                         .iter()
@@ -3634,10 +3632,9 @@ fn workspace_bind_rows(
                         .collect();
                     if !others.is_empty() {
                         parts.push(format!("{key} also drives {}", others.join(" · ")));
-                        shared_keys.push(key.clone());
                     }
                 }
-                (parts.join(" — "), shared_keys.join(" "))
+                parts.join(" — ")
             };
             if !share_note.is_empty() {
                 notes.push(share_note.clone());
@@ -3656,7 +3653,6 @@ fn workspace_bind_rows(
                 notes: notes.join(" · "),
                 cls,
                 share_note,
-                share_keys,
                 clear: if unbound {
                     String::new()
                 } else {
@@ -3893,11 +3889,7 @@ pub struct NocturneBindRow {
     /// The chip's hover sentence: the RELATION, stated from the game's side
     /// ("Pressed by G or H — …"), because the chip lives on a control row.
     pub chip_title: String,
-    /// The fan-out note as a DOOR: its class hides the empty button (an
-    /// empty slot renders a zero-width text node, so CSS `:empty` cannot),
-    /// and the shared keys ride along for the jump.
-    pub note_cls: String,
-    pub note_keys: String,
+
     /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
     /// visibility class ("" cannot ride CSS `:empty`: the renderer keeps a
     /// zero-width text node in an empty slot).
@@ -3951,6 +3943,16 @@ pub struct NocturneGameRow {
     /// `"nm-game"` (+" broken").
     pub cls: String,
     pub ico_cls: String,
+}
+
+/// One FREE control in the By-control view's per-group strip: click it,
+/// then press (or click) a key — the control-side twin of a free key chip.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneCtlChip {
+    /// The mapper's own spelling, for the learn target.
+    pub function: String,
+    pub label: String,
+    pub cls: String,
 }
 
 /// One row of the pane's BY-KEY view: a bound key and everything it
@@ -4117,10 +4119,24 @@ pub struct NocturneDerived {
     /// The BY-KEY view: one row per bound key, keyboard -> controller.
     pub key_rows: Vec<NocturneKeyRow>,
     pub keys_note: String,
-    /// The rest of the board's REAL vocabulary, free to bind.
-    pub avail_keys: Vec<NocturneKeyRow>,
-    pub avail_head: String,
-    pub avail_cls: String,
+    /// The rest of the board's REAL vocabulary, free to bind — in the
+    /// keyboard's own geography (main / navigation / numpad).
+    pub avail_main: Vec<NocturneKeyRow>,
+    pub avail_nav: Vec<NocturneKeyRow>,
+    pub avail_num: Vec<NocturneKeyRow>,
+    pub avail_main_head: String,
+    pub avail_nav_head: String,
+    pub avail_num_head: String,
+    pub avail_main_cls: String,
+    pub avail_nav_cls: String,
+    pub avail_num_cls: String,
+    /// The By-control strips: each group's FREE controls as chips.
+    pub avail_ctl_face: Vec<NocturneCtlChip>,
+    pub avail_ctl_dpad: Vec<NocturneCtlChip>,
+    pub avail_ctl_shoulders: Vec<NocturneCtlChip>,
+    pub avail_ctl_lstick: Vec<NocturneCtlChip>,
+    pub avail_ctl_rstick: Vec<NocturneCtlChip>,
+    pub avail_ctl_system: Vec<NocturneCtlChip>,
     pub kb_tray_head: String,
     pub kb_tray_cls: String,
     pub kb_note: String,
@@ -4758,37 +4774,65 @@ impl NocturneDerived {
         // Every key on the standard board NOT yet bound — the REAL roster
         // (the board table is unit-pinned against `ksx_core::Key`), served
         // so the By-key view can offer what is still free.
-        let avail_keys: Vec<NocturneKeyRow> = if selected.is_some() {
-            crate::keyboard_layout::ROWS
+        // The free keys, in the keyboard's own geography: main block,
+        // navigation cluster, numpad — classified by canonical name.
+        const NAV_KEYS: [&str; 13] = [
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "PrintScreen",
+            "ScrollLock",
+            "Pause",
+        ];
+        let mut avail_main: Vec<NocturneKeyRow> = Vec::new();
+        let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
+        let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
+        if selected.is_some() {
+            for cell in crate::keyboard_layout::ROWS
                 .iter()
                 .flat_map(|row| row.iter())
-                .filter(|cell| !cell.ghost && !cell.key.is_empty())
-                .filter(|cell| !key_fns.contains_key(cell.key))
-                .map(|cell| NocturneKeyRow {
+            {
+                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key) {
+                    continue;
+                }
+                let chip = NocturneKeyRow {
                     key: cell.key.to_owned(),
                     targets: String::new(),
                     fns: String::new(),
                     cls: "n-akey".to_owned(),
-                })
-                .collect()
-        } else {
-            Vec::new()
+                };
+                if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
+                    avail_num.push(chip);
+                } else if NAV_KEYS.contains(&cell.key) {
+                    avail_nav.push(chip);
+                } else {
+                    avail_main.push(chip);
+                }
+            }
+        }
+        let section = |name: &str, rows: &Vec<NocturneKeyRow>| -> (String, String) {
+            if rows.is_empty() {
+                (String::new(), "n-akeysec none".to_owned())
+            } else {
+                (format!("{name} · {}", rows.len()), "n-akeysec".to_owned())
+            }
         };
-        let avail_head = if avail_keys.is_empty() {
-            String::new()
-        } else {
-            format!("Available keys · {}", avail_keys.len())
-        };
-        let avail_cls = if avail_keys.is_empty() {
-            "n-akeys none".to_owned()
-        } else {
-            "n-akeys".to_owned()
-        };
+        let (avail_main_head, avail_main_cls) = section("Main block", &avail_main);
+        let (avail_nav_head, avail_nav_cls) = section("Navigation", &avail_nav);
+        let (avail_num_head, avail_num_cls) = section("Numpad", &avail_num);
+        let avail_total = avail_main.len() + avail_nav.len() + avail_num.len();
         let keys_note = match selected {
             Some(_) if !key_rows.is_empty() => format!(
                 "{} keys drive this controller · {} more available below.",
                 key_rows.len(),
-                avail_keys.len()
+                avail_total
             ),
             Some(_) => {
                 "No keys bound yet — click an available key, then a control on the pad.".to_owned()
@@ -4943,14 +4987,23 @@ impl NocturneDerived {
         // control. Six served lists (a list body is one flat template; the
         // group headers live in the island markup over these).
         let mut bind_groups: [Vec<NocturneBindRow>; 6] = Default::default();
+        let mut avail_groups: [Vec<NocturneCtlChip>; 6] = Default::default();
         let mut bind_bound = [0usize; 6];
         for row in &binds.rows {
             // The mapper's own unbound placeholder (`key_tag`).
             let bound = row.keys != "—";
             let group = nocturne_bind_group(&row.function);
-            if bound {
-                bind_bound[group] += 1;
+            if !bound {
+                // A free control is a CHIP, not a row: its whole story is
+                // "available" — click it to give it a key.
+                avail_groups[group].push(NocturneCtlChip {
+                    function: row.function.clone(),
+                    label: row.label.clone(),
+                    cls: "n-ctlchip".to_owned(),
+                });
+                continue;
             }
+            bind_bound[group] += 1;
             bind_groups[group].push(NocturneBindRow {
                 function: row.function.clone(),
                 label: row.label.clone(),
@@ -4960,12 +5013,6 @@ impl NocturneDerived {
                     "Unbound".to_owned()
                 },
                 note: row.share_note.clone(),
-                note_cls: if row.share_note.is_empty() {
-                    "n-bind-note none".to_owned()
-                } else {
-                    "n-bind-note door".to_owned()
-                },
-                note_keys: row.share_keys.clone(),
                 chip_title: if bound {
                     format!(
                         "Pressed by {} — click, then press a new key to replace",
@@ -5050,19 +5097,28 @@ impl NocturneDerived {
                 .map(str::to_lowercase);
         let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
         if let Some(query) = query.as_deref() {
-            for (group, rows) in bind_groups.iter_mut().enumerate() {
+            for group in 0..6 {
                 let gmatch = NOCTURNE_BIND_GROUP_LABELS[group]
                     .to_lowercase()
                     .contains(query);
                 let mut visible = 0usize;
-                for row in rows.iter_mut() {
+                for row in bind_groups[group].iter_mut() {
                     if gmatch || row.label.to_lowercase().contains(query) {
                         visible += 1;
                     } else {
                         row.cls.push_str(" hide");
                     }
                 }
-                if visible == 0 && !rows.is_empty() {
+                for chip in avail_groups[group].iter_mut() {
+                    if gmatch || chip.label.to_lowercase().contains(query) {
+                        visible += 1;
+                    } else {
+                        chip.cls.push_str(" hide");
+                    }
+                }
+                if visible == 0
+                    && !(bind_groups[group].is_empty() && avail_groups[group].is_empty())
+                {
                     bind_group_cls[group] = "n-bindg empty".to_owned();
                 }
             }
@@ -5071,14 +5127,16 @@ impl NocturneDerived {
             bind_group_cls;
         let bind_heads: Vec<String> = bind_groups
             .iter()
+            .zip(avail_groups.iter())
             .zip(bind_bound)
-            .map(|(rows, bound)| {
-                if rows.is_empty() {
+            .map(|((rows, avail), bound)| {
+                let total = rows.len() + avail.len();
+                if total == 0 {
                     String::new()
                 } else if bound == 0 {
                     "none bound".to_owned()
                 } else {
-                    format!("{bound} of {} bound", rows.len())
+                    format!("{bound} of {total} bound")
                 }
             })
             .collect();
@@ -5092,6 +5150,8 @@ impl NocturneDerived {
         };
         let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
             bind_groups;
+        let [avail_face, avail_dpad, avail_shoulders, avail_lstick, avail_rstick, avail_system] =
+            avail_groups;
         let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
             bind_heads.try_into().expect("six groups");
 
@@ -5255,9 +5315,21 @@ impl NocturneDerived {
             kb_tray,
             key_rows,
             keys_note,
-            avail_keys,
-            avail_head,
-            avail_cls,
+            avail_main,
+            avail_nav,
+            avail_num,
+            avail_main_head,
+            avail_nav_head,
+            avail_num_head,
+            avail_main_cls,
+            avail_nav_cls,
+            avail_num_cls,
+            avail_ctl_face: avail_face,
+            avail_ctl_dpad: avail_dpad,
+            avail_ctl_shoulders: avail_shoulders,
+            avail_ctl_lstick: avail_lstick,
+            avail_ctl_rstick: avail_rstick,
+            avail_ctl_system: avail_system,
             kb_tray_head,
             kb_tray_cls,
             kb_note,

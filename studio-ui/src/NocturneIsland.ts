@@ -1953,6 +1953,70 @@ export function nocturneWire(root: HTMLElement): void {
   applySlotColors();
   syncPadGrid();
   window.addEventListener("resize", scheduleKbFit);
+  // Drag-to-reorder on the rack: a pointer enhancement over the SAME
+  // whole-order verb the ▴▾ twins post — the drop rewrites the dragged
+  // row's own move form and submits it through the ordinary fetch path.
+  let dragSlot: string | null = null;
+  const dropClean = (): void => {
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-slot-row]"))) {
+      el.classList.remove("dragging", "dropmark");
+    }
+  };
+  root.addEventListener("dragstart", (ev) => {
+    const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
+    if (!row) return;
+    dragSlot = row.getAttribute("data-slot-row");
+    row.classList.add("dragging");
+    ev.dataTransfer?.setData("text/plain", dragSlot ?? "");
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+  });
+  root.addEventListener("dragover", (ev) => {
+    if (dragSlot === null) return;
+    const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
+    if (!row) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-slot-row]"))) {
+      el.classList.toggle(
+        "dropmark",
+        el === row && row.getAttribute("data-slot-row") !== dragSlot,
+      );
+    }
+  });
+  root.addEventListener("drop", (ev) => {
+    const from = dragSlot;
+    dragSlot = null;
+    const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
+    if (from === null || !row) {
+      dropClean();
+      return;
+    }
+    ev.preventDefault();
+    const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-slot-row]"));
+    const numbers = rows.map((el) => el.getAttribute("data-slot-row") ?? "");
+    const to = row.getAttribute("data-slot-row") ?? "";
+    dropClean();
+    if (from === to) return;
+    // Dragging down lands AFTER the target, up lands BEFORE — the
+    // standard feel.
+    const without = numbers.filter((n) => n !== from);
+    let at = without.indexOf(to);
+    if (numbers.indexOf(from) < numbers.indexOf(to)) at += 1;
+    without.splice(at, 0, from);
+    const source = rows.find((el) => el.getAttribute("data-slot-row") === from);
+    const form = source?.querySelector<HTMLFormElement>(
+      'form[action="/nocturne/controller/move"]',
+    );
+    const input = form?.querySelector<HTMLInputElement>('input[name="order"]');
+    if (form && input) {
+      input.value = without.join(" ");
+      form.requestSubmit();
+    }
+  });
+  root.addEventListener("dragend", () => {
+    dragSlot = null;
+    dropClean();
+  });
   root.addEventListener(
     "toggle",
     (ev) => {
@@ -2679,7 +2743,7 @@ export function NocturneIsland() {
           (r) =>
             h(
               "div",
-              { class: r.cls },
+              { draggable: "true", "data-slot-row": r.number, class: r.cls },
               // Clicking the row's identity SELECTS it: a server-resolved
               // link (?slot=N), so every pane follows with no JavaScript;
               // with it, the wire swaps the URL and polls in place.
@@ -2694,10 +2758,15 @@ export function NocturneIsland() {
                   h("span", { class: "n-slot-meta" }, r.meta),
                 ),
               ),
-              // The controller's colour: a dot that opens the 16-swatch
-              // picker. Presentation state, kept in this browser.
+              // The action corner: the colour dot rides the row always;
+              // the verbs reveal on hover (always under a coarse pointer).
+              // The whole row DRAGS to reorder — the ▴▾ forms below are the
+              // no-JS and keyboard twins the drop submits through.
               h(
-                "details",
+                "div",
+                { class: "n-sacts" },
+                h(
+                  "details",
                 { class: "n-cpick", "data-slot": r.number },
                 h("summary", { class: r.dot_cls, title: "Pick this controller's colour" }),
                 h(
@@ -2721,31 +2790,68 @@ export function NocturneIsland() {
                 h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
                 ),
               ),
-              // One whole-order reorder per click; an end row's order is
-              // empty and the server answers with the honest sentence.
-              h(
-                "form",
-                { class: "n-inline first", method: "post", action: "/nocturne/controller/move" },
-                h("input", { type: "hidden", name: "order", value: r.up_order }),
-                h("button", { class: "n-slot-act", type: "submit", title: "Move up" }, "▴"),
-              ),
-              h(
-                "form",
-                { class: "n-inline", method: "post", action: "/nocturne/controller/move" },
-                h("input", { type: "hidden", name: "order", value: r.down_order }),
-                h("button", { class: "n-slot-act", type: "submit", title: "Move down" }, "▾"),
-              ),
-              h(
-                "form",
-                { class: "n-inline", method: "post", action: "/nocturne/controller/duplicate" },
-                h("input", { type: "hidden", name: "number", value: r.number }),
-                h("button", { class: "n-slot-act", type: "submit", title: "Duplicate" }, "⧉"),
-              ),
-              h(
-                "form",
-                { class: "n-inline", method: "post", action: "/nocturne/controller/remove" },
-                h("input", { type: "hidden", name: "number", value: r.number }),
-                h("button", { class: "n-slot-act", type: "submit", title: "Remove" }, "✕"),
+                // One whole-order reorder per click; an end row's order
+                // is empty and the server answers the honest sentence.
+                h(
+                  "div",
+                  { class: "n-sact-row" },
+                  h(
+                    "form",
+                    { class: "n-inline first", method: "post", action: "/nocturne/controller/move" },
+                    h("input", { type: "hidden", name: "order", value: r.up_order }),
+                    h(
+                      "button",
+                      { class: "n-sact", type: "submit", title: "Move up", "aria-label": "Move up" },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M216.49,168.49a12,12,0,0,1-17,0L128,97,56.49,168.49a12,12,0,0,1-17-17l80-80a12,12,0,0,1,17,0l80,80A12,12,0,0,1,216.49,168.49Z" }),
+                      ),
+                    ),
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/controller/move" },
+                    h("input", { type: "hidden", name: "order", value: r.down_order }),
+                    h(
+                      "button",
+                      { class: "n-sact", type: "submit", title: "Move down", "aria-label": "Move down" },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M216.49,104.49l-80,80a12,12,0,0,1-17,0l-80-80a12,12,0,0,1,17-17L128,159l71.51-71.52a12,12,0,0,1,17,17Z" }),
+                      ),
+                    ),
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/controller/duplicate" },
+                    h("input", { type: "hidden", name: "number", value: r.number }),
+                    h(
+                      "button",
+                      { class: "n-sact", type: "submit", title: "Duplicate", "aria-label": "Duplicate" },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M216,28H88A12,12,0,0,0,76,40V76H40A12,12,0,0,0,28,88V216a12,12,0,0,0,12,12H168a12,12,0,0,0,12-12V180h36a12,12,0,0,0,12-12V40A12,12,0,0,0,216,28ZM156,204H52V100H156Zm48-48H180V88a12,12,0,0,0-12-12H100V52H204Z" }),
+                      ),
+                    ),
+                  ),
+                  h(
+                    "form",
+                    { class: "n-inline", method: "post", action: "/nocturne/controller/remove" },
+                    h("input", { type: "hidden", name: "number", value: r.number }),
+                    h(
+                      "button",
+                      { class: "n-sact danger", type: "submit", title: "Remove", "aria-label": "Remove" },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
         ),

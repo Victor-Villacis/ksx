@@ -242,6 +242,7 @@ pub fn serve(
             .route("/nocturne/save", post(nocturne_form_save))
             .route("/nocturne/play", post(nocturne_form_play))
             .route("/nocturne/stop", post(nocturne_form_stop))
+            .route("/nocturne/apply", post(nocturne_form_apply))
             .route("/nocturne/adopt", post(nocturne_form_adopt))
             .route("/nocturne/discard", post(nocturne_form_discard))
             .route("/nocturne/autostart", post(nocturne_form_autostart))

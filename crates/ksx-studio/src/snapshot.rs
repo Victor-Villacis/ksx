@@ -3961,6 +3961,9 @@ pub struct NocturneDerived {
     pub escape_line: String,
     pub play_cls: String,
     pub stop_cls: String,
+    /// The title bar's Apply-changes verb: visible only while a session
+    /// runs AND the draft is dirty (`stage_apply` — M1b F3's UI).
+    pub apply_cls: String,
     /// The rack.
     pub rack_rows: Vec<NocturneRackRow>,
     pub rack_empty: Vec<NocturneEmptyRow>,
@@ -4251,6 +4254,13 @@ impl NocturneDerived {
         let running = p.session.reachable && p.session.running;
         let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
         let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
+        // Apply-in-place is offered exactly when it can mean something: a
+        // session is running AND the draft has unsaved edits to hand it.
+        let apply_cls = if running && staged.dirty {
+            "n-apply".to_owned()
+        } else {
+            "n-apply none".to_owned()
+        };
 
         // The selected slot: the `?slot=N` the request asked for when the
         // draft still has it, else the first — resolved HERE so every pane
@@ -4890,6 +4900,7 @@ impl NocturneDerived {
             escape_line,
             play_cls,
             stop_cls,
+            apply_cls,
             rack_rows,
             rack_empty,
             rack_caption,

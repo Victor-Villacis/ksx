@@ -19,6 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ksx_studio::{
@@ -107,6 +108,10 @@ fn seed_macros() -> Vec<MacroView> {
 struct Store {
     macros: Arc<Mutex<Vec<MacroView>>>,
     stage: Arc<Mutex<ksx_core::stage::StagedSetup>>,
+    /// Set by any HTTP-driven staging edit (the seed does not count), the
+    /// way the daemon's StageMeta stamps `dirty` — so the Apply button's
+    /// running+dirty visibility is drivable on this double.
+    dirty: Arc<AtomicBool>,
     /// `Some(generation)` while the scripted learner is "listening"; the next
     /// poll answers with a hit on the fixture I-PAC and clears it.
     listening: Arc<Mutex<Option<u64>>>,
@@ -115,6 +120,7 @@ struct Store {
 impl Store {
     fn new() -> Self {
         Self {
+            dirty: Arc::new(AtomicBool::new(false)),
             macros: Arc::new(Mutex::new(seed_macros())),
             stage: Arc::new(Mutex::new(seeded_stage())),
             listening: Arc::new(Mutex::new(None)),
@@ -365,6 +371,7 @@ impl ControlSource for Store {
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
+                self.dirty.store(true, Ordering::SeqCst);
                 ksx_api::StageOutcome::ok(&setup, "staged")
             }
             Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
@@ -440,7 +447,22 @@ impl ControlSource for Store {
     /// how a reviewer screenshots the stage's DualShock schematic (the show
     /// pair follows the first slot's family).
     fn staged(&self) -> ksx_api::StagedSetupView {
-        ksx_api::StagedSetupView::of(&self.stage.lock().unwrap())
+        let mut view = ksx_api::StagedSetupView::of(&self.stage.lock().unwrap());
+        view.dirty = self.dirty.load(Ordering::SeqCst);
+        view
+    }
+
+    /// Apply-in-place, the daemon's shape: refused when nothing runs; ok
+    /// (and the dirty bit settles) when the fixture session is running.
+    fn stage_apply(&self) -> ksx_api::StageOutcome {
+        let setup = self.stage.lock().unwrap();
+        if !fixture_session().running {
+            let refusal =
+                ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        self.dirty.store(false, Ordering::SeqCst);
+        ksx_api::StageOutcome::ok(&setup, "applied in place")
     }
 
     /// Adoption, with the daemon's exact refusal discipline: never over a

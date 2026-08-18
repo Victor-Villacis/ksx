@@ -37,6 +37,16 @@ pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or sta
 pub(super) const N_MOVE_AT_END: &str =
     "That controller is already at that end of the order. Nothing changed.";
 
+pub(super) const N_APPLY_OK: &str = "Changes applied to the running session in place — the pads \
+     stayed plugged. Nothing has been saved.";
+
+pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bindings, so the \
+     running session cannot take it in place. Press Play to replace the session; nothing was \
+     changed.";
+
+pub(super) const N_APPLY_ERROR: &str = "error: The changes could not be applied. The running \
+     session was not changed; reopen ksx and try again.";
+
 pub(super) const N_ADD_LAYOUT_ERROR: &str = "error: That starting layout has no key block for this player number, so the controller was not added. Try another layout or Empty; nothing was changed.";
 
 pub(super) const N_DUP_OK: &str =
@@ -166,8 +176,11 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 46] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 49] = [
     N_MOVE_AT_END,
+    N_APPLY_OK,
+    N_APPLY_RESTART,
+    N_APPLY_ERROR,
     N_MACRO_OK,
     N_MACRO_DELETED,
     N_ADOPT_OK,
@@ -850,6 +863,26 @@ pub(super) async fn nocturne_form_socd(
         },
     )
     .await
+}
+
+/// POST /nocturne/apply — hand the draft's binding changes to the RUNNING
+/// session in place (`stage_apply`, M1b F3): pads stay plugged, nothing is
+/// written. A structural difference refuses (`needs-restart`) and the
+/// sentence names Play as the verb that replaces the session.
+pub(super) async fn nocturne_form_apply(State(state): State<Arc<AppState>>) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        let outcome = state.control.stage_apply();
+        if outcome.ok {
+            N_APPLY_OK
+        } else if outcome.code.as_deref() == Some("needs-restart") {
+            N_APPLY_RESTART
+        } else {
+            N_APPLY_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_APPLY_ERROR);
+    nocturne_redirect(flash)
 }
 
 /// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)

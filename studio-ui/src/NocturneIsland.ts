@@ -142,6 +142,7 @@ export interface NocturneView {
   escape_line: string;
   play_cls: string;
   stop_cls: string;
+  apply_cls: string;
   rack_rows: NocturneRackRowView[];
   rack_empty: NocturneEmptyRowView[];
   rack_caption: string;
@@ -246,6 +247,7 @@ const [nSaveText, setNSaveText] = createSignal("");
 const [nEscapeLine, setNEscapeLine] = createSignal("");
 const [nPlayCls, setNPlayCls] = createSignal("n-play");
 const [nStopCls, setNStopCls] = createSignal("n-stop none");
+const [nApplyCls, setNApplyCls] = createSignal("n-apply none");
 const [nRackRows, setNRackRows] = createSignal<NocturneRackRowView[]>([]);
 const [nRackEmpty, setNRackEmpty] = createSignal<NocturneEmptyRowView[]>([]);
 const [nRackCaption, setNRackCaption] = createSignal("");
@@ -349,6 +351,7 @@ export function applyNocturne(p: NocturnePayload): void {
   setNEscapeLine(v.escape_line);
   setNPlayCls(v.play_cls);
   setNStopCls(v.stop_cls);
+  setNApplyCls(v.apply_cls);
   setNRackRows(v.rack_rows);
   setNRackEmpty(v.rack_empty);
   setNRackCaption(v.rack_caption);
@@ -1476,6 +1479,14 @@ export function NocturneIsland() {
       h("span", { class: "n-saved" }, () => nSaveText()),
       h("div", { class: "n-spring" }),
       h("span", { class: "n-hint" }, () => nEscapeLine()),
+      // Apply-in-place (stage_apply): offered only while a session runs AND
+      // the draft is dirty. A structural difference answers with the
+      // needs-restart sentence naming Play.
+      h(
+        "form",
+        { class: "n-inline", method: "post", action: "/nocturne/apply" },
+        h("button", { type: "submit", class: () => nApplyCls() }, "⟳ Apply"),
+      ),
       h(
         "form",
         { class: "n-inline", method: "post", action: "/nocturne/play" },

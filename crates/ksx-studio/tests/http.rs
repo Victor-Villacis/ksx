@@ -164,6 +164,11 @@ struct ScriptedControl {
     committed: AtomicBool,
     learning: AtomicBool,
     learn_generation: AtomicUsize,
+    /// The daemon's StageMeta dirty stamp, scripted: set by the test that
+    /// exercises the Apply button's running+dirty visibility.
+    dirty: AtomicBool,
+    /// Scripts `stage_apply` to refuse with `needs-restart`.
+    apply_needs_restart: AtomicBool,
     /// Optional one-shot daemon learner hit. Ordinary mapper fixtures leave
     /// this empty and continue reporting `listening`; the Identify route test
     /// supplies the exact interface path a real daemon panel tap returns.
@@ -187,6 +192,8 @@ impl ScriptedControl {
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
             learn_generation: AtomicUsize::new(0),
+            dirty: AtomicBool::new(false),
+            apply_needs_restart: AtomicBool::new(false),
             identify_hit: Mutex::new(None),
             bound_with: std::sync::Mutex::new(None),
             restored_with: std::sync::Mutex::new(None),
@@ -419,7 +426,31 @@ impl ControlSource for ScriptedControl {
         if self.no_daemon {
             return ksx_api::StagedSetupView::unreachable(NO_CHANNEL);
         }
-        ksx_api::StagedSetupView::of(&self.staged.lock().unwrap())
+        let mut view = ksx_api::StagedSetupView::of(&self.staged.lock().unwrap());
+        view.dirty = self.dirty.load(Ordering::SeqCst);
+        view
+    }
+
+    /// Apply-in-place, in the daemon's three shapes: refused when nothing
+    /// runs, refused `needs-restart` when scripted to differ structurally,
+    /// ok otherwise (and the dirty stamp settles).
+    fn stage_apply(&self) -> ksx_api::StageOutcome {
+        if self.no_daemon {
+            return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
+        }
+        let setup = self.staged.lock().unwrap();
+        if !self.running.load(Ordering::SeqCst) {
+            let refusal =
+                ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        if self.apply_needs_restart.load(Ordering::SeqCst) {
+            let refusal =
+                ksx_api::Refusal::new("needs-restart", "the draft changed the session's structure");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        self.dirty.store(false, Ordering::SeqCst);
+        ksx_api::StageOutcome::ok(&setup, "applied in place")
     }
 
     fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
@@ -1814,6 +1845,9 @@ fn start_server_with_sources(
         }
         fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
             self.0.stage_adopt(profile)
+        }
+        fn stage_apply(&self) -> ksx_api::StageOutcome {
+            self.0.stage_apply()
         }
     }
     struct SharedMachine(Arc<dyn ksx_api::MachineSource>);
@@ -7174,6 +7208,68 @@ fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
     assert!(
         via_workspace.contains("location: /nocturne?flash="),
         "{via_workspace}"
+    );
+}
+
+/// **Apply-in-place over HTTP** (`stage_apply`, M1b F3's UI): the button is
+/// served only while a session runs AND the draft is dirty; the verb
+/// flashes the daemon's three shapes — applied in place, `needs-restart`
+/// naming Play, and the honest error when nothing can take it.
+#[test]
+fn nocturne_applies_the_dirty_draft_to_the_running_session() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: "Player 1".into(),
+                layout: Some("arcade-6button".into()),
+            })
+            .ok
+    );
+
+    // Idle, clean: the verb is not offered.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["apply_cls"], "n-apply none", "{api}");
+
+    // Running + dirty: offered.
+    control.running.store(true, Ordering::SeqCst);
+    control.dirty.store(true, Ordering::SeqCst);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["apply_cls"], "n-apply", "{api}");
+
+    // The hot path applies in place.
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(response.contains("Changes%20applied"), "{response}");
+
+    // A structural difference refuses with the sentence naming Play.
+    control.dirty.store(true, Ordering::SeqCst);
+    control.apply_needs_restart.store(true, Ordering::SeqCst);
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(
+        response.contains("cannot%20take%20it%20in%20place"),
+        "{response}"
+    );
+
+    // Nothing running: the honest error.
+    control.running.store(false, Ordering::SeqCst);
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(
+        response.contains("could%20not%20be%20applied"),
+        "{response}"
     );
 }
 

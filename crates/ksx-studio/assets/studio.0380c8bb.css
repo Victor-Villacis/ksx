@@ -8289,8 +8289,20 @@ a.wsrow-title:hover {
 
 .n-play.none,
 .n-pause.none,
-.n-stop.none {
+.n-stop.none,
+.n-apply.none {
   display: none;
+}
+
+/* Apply-in-place: the Play family's chrome, offered only running+dirty. */
+.n-apply {
+  padding: 6px 14px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 9px;
+  background: rgba(150, 138, 224, 0.08);
+  color: var(--n-accent-2);
+  font-size: 12.5px;
+  cursor: pointer;
 }
 
 .n-tickrow {

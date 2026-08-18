@@ -9106,3 +9106,25 @@ a.nm-link {
 .n-stage .x360a-sys {
   font-size: 23px;
 }
+
+
+.n-stage .x360a-face {
+  font-size: 32px;
+  font-weight: 700;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.n-stage .x360a-lab {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.n-stage .x360a-num {
+  font-size: 14px;
+  font-family: inherit;
+  pointer-events: none;
+}

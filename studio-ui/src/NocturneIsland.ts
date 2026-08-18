@@ -1528,6 +1528,80 @@ export function NocturneIsland() {
             h(
               "svg",
               { class: "wspad", viewBox: "0 0 112.45 96", "aria-hidden": "true", focusable: "false" },
+              // ── The photoreal experiment: carbon body, ambient occlusion,
+              // clipped rim light, glossy domes, the Series-style d-pad dish
+              // and the glossy guide ball — all paint, zero UX change: the
+              // geometry and every data-fn hook are the ones the live echo
+              // and the selection already speak.
+              h(
+                "defs",
+                null,
+                h("path", { id: "nxr-shell-path", transform: "matrix(0.26458333,0,0,0.26458333,-0.79055,-0.40979)", d: "M 137.05469,1.5488281 68.955078,25.302734 67.365234,34.150391 C 67.142167,33.882724 50.374545,53.23716 43.234375,69.703125 34.488662,89.871667 14.09017,150.9152 7.6816406,185.11523 c -9.057222,48.33536 -5.5726825,68.26275 15.4218754,88.23438 8.949354,8.51331 20.320312,17.94922 20.320312,17.94922 0,0 83.911802,-73.96764 84.685552,-74.09766 11.69504,-1.96688 163.09317,-1.96709 174.78906,0 0.77373,0.13013 84.68554,74.09766 84.68554,74.09766 0,0 11.37096,-9.43591 20.32032,-17.94922 20.99455,-19.97163 24.47906,-39.89902 15.42187,-88.23438 C 416.91764,150.91516 396.51914,89.871651 387.77344,69.703125 380.63327,53.237131 363.86565,33.882707 363.64258,34.150391 L 362.05273,25.302734 293.95312,1.5488281 272.36719,17.996094 H 158.64062 Z" }),
+                h("clipPath", { id: "nxr-clip" }, h("use", { href: "#nxr-shell-path" })),
+                h(
+                  "linearGradient",
+                  { id: "nxr-body", x1: "0", y1: "0", x2: "0", y2: "1" },
+                  h("stop", { offset: "0", "stop-color": "#33343b" }),
+                  h("stop", { offset: "0.4", "stop-color": "#26272d" }),
+                  h("stop", { offset: "1", "stop-color": "#1a1b20" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-well", cx: "0.5", cy: "0.45", r: "0.62" },
+                  h("stop", { offset: "0", "stop-color": "#0b0c0f" }),
+                  h("stop", { offset: "0.78", "stop-color": "#101115" }),
+                  h("stop", { offset: "1", "stop-color": "#1e1f25" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-cap", cx: "0.5", cy: "0.48", r: "0.62" },
+                  h("stop", { offset: "0", "stop-color": "#1e1f24" }),
+                  h("stop", { offset: "0.62", "stop-color": "#28292f" }),
+                  h("stop", { offset: "0.88", "stop-color": "#3c3d45" }),
+                  h("stop", { offset: "1", "stop-color": "#232429" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-dome", cx: "0.38", cy: "0.3", r: "0.85" },
+                  h("stop", { offset: "0", "stop-color": "#3b3c44" }),
+                  h("stop", { offset: "0.55", "stop-color": "#222329" }),
+                  h("stop", { offset: "1", "stop-color": "#141519" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-dish", cx: "0.5", cy: "0.42", r: "0.65" },
+                  h("stop", { offset: "0", "stop-color": "#0d0e11" }),
+                  h("stop", { offset: "0.85", "stop-color": "#121317" }),
+                  h("stop", { offset: "1", "stop-color": "#212227" }),
+                ),
+                h(
+                  "linearGradient",
+                  { id: "nxr-cross", x1: "0", y1: "0", x2: "0", y2: "1" },
+                  h("stop", { offset: "0", "stop-color": "#32333a" }),
+                  h("stop", { offset: "1", "stop-color": "#1d1e23" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-ball", cx: "0.38", cy: "0.3", r: "0.8" },
+                  h("stop", { offset: "0", "stop-color": "#ffffff" }),
+                  h("stop", { offset: "0.55", "stop-color": "#dddee2" }),
+                  h("stop", { offset: "1", "stop-color": "#8e9097" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-ao", cx: "0.5", cy: "0.5", r: "0.5" },
+                  h("stop", { offset: "0", "stop-color": "rgba(0,0,0,0.5)" }),
+                  h("stop", { offset: "0.7", "stop-color": "rgba(0,0,0,0.28)" }),
+                  h("stop", { offset: "1", "stop-color": "rgba(0,0,0,0)" }),
+                ),
+                h(
+                  "radialGradient",
+                  { id: "nxr-sheen", cx: "0.5", cy: "0.5", r: "0.5" },
+                  h("stop", { offset: "0", "stop-color": "rgba(255,255,255,0.09)" }),
+                  h("stop", { offset: "1", "stop-color": "rgba(255,255,255,0)" }),
+                ),
+                h("filter", { id: "nxr-soft" }, h("feGaussianBlur", { stdDeviation: "1.4" })),
+              ),
               h(
                 "g",
                 null,
@@ -1543,41 +1617,66 @@ export function NocturneIsland() {
               h(
                 "g",
                 { transform: "translate(0,18.5)" },
-                // The vendored Xbox One/Series silhouette, exactly as /pads ships it.
-                h("path", {
-                  class: "wspad-shell",
-                  transform: "matrix(0.26458333,0,0,0.26458333,-0.79055,-0.40979)",
-                  d: "M 137.05469,1.5488281 68.955078,25.302734 67.365234,34.150391 C 67.142167,33.882724 50.374545,53.23716 43.234375,69.703125 34.488662,89.871667 14.09017,150.9152 7.6816406,185.11523 c -9.057222,48.33536 -5.5726825,68.26275 15.4218754,88.23438 8.949354,8.51331 20.320312,17.94922 20.320312,17.94922 0,0 83.911802,-73.96764 84.685552,-74.09766 11.69504,-1.96688 163.09317,-1.96709 174.78906,0 0.77373,0.13013 84.68554,74.09766 84.68554,74.09766 0,0 11.37096,-9.43591 20.32032,-17.94922 20.99455,-19.97163 24.47906,-39.89902 15.42187,-88.23438 C 416.91764,150.91516 396.51914,89.871651 387.77344,69.703125 380.63327,53.237131 363.86565,33.882707 363.64258,34.150391 L 362.05273,25.302734 293.95312,1.5488281 272.36719,17.996094 H 158.64062 Z",
-                }),
-                // Guide, with the accent lamp — the one deliberate spot of colour.
-                h("circle", { class: "wspad-well", cx: "56.23", cy: "11.59", r: "4.6" }),
-                h("circle", { "data-fn": "guide", class: "wspad-guide", cx: "56.23", cy: "11.59", r: "2" }),
-                // View · Menu.
-                h("circle", { "data-fn": "back", class: "wspad-zone", cx: "49.48", cy: "22.29", r: "2.6" }),
-                h("circle", { "data-fn": "start", class: "wspad-zone", cx: "62.98", cy: "22.29", r: "2.6" }),
-                // Left stick (upper-left, the Xbox asymmetry) and right stick.
-                // One element stands for the whole stick: the click AND its
-                // four directions all light it.
-                h("circle", { class: "wspad-well", cx: "26.97", cy: "22.89", r: "10.2" }),
-                h("circle", { "data-fn": "lthumb lx.min lx.max ly.min ly.max", class: "wspad-stick", cx: "26.97", cy: "22.89", r: "6.9" }),
-                h("circle", { class: "wspad-well", cx: "70.3", cy: "39.57", r: "10.2" }),
-                h("circle", { "data-fn": "rthumb rx.min rx.max ry.min ry.max", class: "wspad-stick", cx: "70.3", cy: "39.57", r: "6.9" }),
-                // Dpad: one rounded cross — any direction lights it.
+                // The body, then its light: a clipped sheen from above, grip
+                // shading, and an inner rim catching the room.
+                h("use", { href: "#nxr-shell-path", fill: "url(#nxr-body)", stroke: "#3c3d46", "stroke-width": "0.5", "stroke-linejoin": "round" }),
+                h(
+                  "g",
+                  { "clip-path": "url(#nxr-clip)" },
+                  h("ellipse", { cx: "56", cy: "5", rx: "44", ry: "17", fill: "url(#nxr-sheen)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "13", cy: "56", rx: "15", ry: "26", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "99", cy: "56", rx: "15", ry: "26", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("use", { href: "#nxr-shell-path", fill: "none", stroke: "#565761", "stroke-width": "1", opacity: "0.3", filter: "url(#nxr-soft)" }),
+                  // Ambient occlusion beneath every control cluster.
+                  h("ellipse", { cx: "26.97", cy: "23.6", rx: "12.6", ry: "12", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "70.3", cy: "40.2", rx: "12.6", ry: "12", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "40.87", cy: "41.4", rx: "12", ry: "11.4", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "84.7", cy: "23.4", rx: "11.6", ry: "11", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                  h("ellipse", { cx: "56.23", cy: "17.5", rx: "9", ry: "8", fill: "url(#nxr-ao)", filter: "url(#nxr-soft)" }),
+                ),
+                // Guide: the glossy ball, softly lit.
+                h("circle", { cx: "56.23", cy: "11.59", r: "4.9", fill: "url(#nxr-well)" }),
+                h("circle", { "data-fn": "guide", cx: "56.23", cy: "11.59", r: "3.6", fill: "url(#nxr-ball)", stroke: "#6f7178", "stroke-width": "0.2" }),
+                h("ellipse", { cx: "55.1", cy: "10.2", rx: "1.5", ry: "0.9", fill: "rgba(255,255,255,0.55)", filter: "url(#nxr-soft)" }),
+                // View · Menu: engraved buttons.
+                h("circle", { "data-fn": "back", cx: "49.48", cy: "22.29", r: "2.6", fill: "url(#nxr-dome)", stroke: "#0f1013", "stroke-width": "0.3" }),
+                h("circle", { "data-fn": "start", cx: "62.98", cy: "22.29", r: "2.6", fill: "url(#nxr-dome)", stroke: "#0f1013", "stroke-width": "0.3" }),
+                // Sticks: recessed wells, rubber caps with a concave dish, a
+                // rim catching the light and a soft specular.
+                h("circle", { cx: "26.97", cy: "22.89", r: "10.2", fill: "url(#nxr-well)" }),
+                h("circle", { "data-fn": "lthumb lx.min lx.max ly.min ly.max", cx: "26.97", cy: "22.89", r: "6.9", fill: "url(#nxr-cap)", stroke: "#0d0e11", "stroke-width": "0.35" }),
+                h("circle", { cx: "26.97", cy: "22.89", r: "5.2", fill: "none", stroke: "rgba(255,255,255,0.08)", "stroke-width": "0.6" }),
+                h("ellipse", { cx: "25", cy: "20.4", rx: "2.4", ry: "1.4", fill: "rgba(255,255,255,0.09)", filter: "url(#nxr-soft)" }),
+                h("circle", { cx: "70.3", cy: "39.57", r: "10.2", fill: "url(#nxr-well)" }),
+                h("circle", { "data-fn": "rthumb rx.min rx.max ry.min ry.max", cx: "70.3", cy: "39.57", r: "6.9", fill: "url(#nxr-cap)", stroke: "#0d0e11", "stroke-width": "0.35" }),
+                h("circle", { cx: "70.3", cy: "39.57", r: "5.2", fill: "none", stroke: "rgba(255,255,255,0.08)", "stroke-width": "0.6" }),
+                h("ellipse", { cx: "68.3", cy: "37.1", rx: "2.4", ry: "1.4", fill: "rgba(255,255,255,0.09)", filter: "url(#nxr-soft)" }),
+                // D-pad: the Series-style dish with the cross set into it.
+                h("circle", { cx: "40.87", cy: "40.87", r: "9.9", fill: "url(#nxr-dish)", stroke: "#0d0e11", "stroke-width": "0.35" }),
                 h("path", {
                   "data-fn": "dpad.up dpad.down dpad.left dpad.right",
-                  class: "wspad-zone",
                   transform: "translate(40.87,40.87)",
-                  d: "M -2.9,-9.2 h 5.8 v 6.3 h 6.3 v 5.8 h -6.3 v 6.3 h -5.8 v -6.3 h -6.3 v -5.8 h 6.3 z",
+                  d: "M -2.4,-7.6 h 4.8 v 5.2 h 5.2 v 4.8 h -5.2 v 5.2 h -4.8 v -5.2 h -5.2 v -4.8 h 5.2 z",
+                  fill: "url(#nxr-cross)",
+                  stroke: "#0f1014",
+                  "stroke-width": "0.35",
+                  "stroke-linejoin": "round",
                 }),
-                // The face diamond, letters and all.
-                h("circle", { "data-fn": "y", class: "wspad-zone", cx: "84.61", cy: "15.27", r: "4.3" }),
-                h("circle", { "data-fn": "b", class: "wspad-zone", cx: "92.2", cy: "22.85", r: "4.3" }),
-                h("circle", { "data-fn": "a", class: "wspad-zone", cx: "84.66", cy: "30.57", r: "4.3" }),
-                h("circle", { "data-fn": "x", class: "wspad-zone", cx: "77.21", cy: "22.92", r: "4.3" }),
-                h("text", { class: "wspad-face", x: "84.61", y: "16.9", "text-anchor": "middle" }, "Y"),
-                h("text", { class: "wspad-face", x: "92.2", y: "24.5", "text-anchor": "middle" }, "B"),
-                h("text", { class: "wspad-face", x: "84.66", y: "32.2", "text-anchor": "middle" }, "A"),
-                h("text", { class: "wspad-face", x: "77.21", y: "24.55", "text-anchor": "middle" }, "X"),
+                h("ellipse", { cx: "39.4", cy: "35.4", rx: "2.6", ry: "1.2", fill: "rgba(255,255,255,0.07)", filter: "url(#nxr-soft)" }),
+                // The face diamond: glossy black domes, the REAL letter
+                // colours, and a specular kiss on each.
+                h("circle", { "data-fn": "y", cx: "84.61", cy: "15.27", r: "4.3", fill: "url(#nxr-dome)", stroke: "#0d0e11", "stroke-width": "0.3" }),
+                h("circle", { "data-fn": "b", cx: "92.2", cy: "22.85", r: "4.3", fill: "url(#nxr-dome)", stroke: "#0d0e11", "stroke-width": "0.3" }),
+                h("circle", { "data-fn": "a", cx: "84.66", cy: "30.57", r: "4.3", fill: "url(#nxr-dome)", stroke: "#0d0e11", "stroke-width": "0.3" }),
+                h("circle", { "data-fn": "x", cx: "77.21", cy: "22.92", r: "4.3", fill: "url(#nxr-dome)", stroke: "#0d0e11", "stroke-width": "0.3" }),
+                h("ellipse", { cx: "83.4", cy: "13.7", rx: "1.5", ry: "0.8", fill: "rgba(255,255,255,0.14)" }),
+                h("ellipse", { cx: "91", cy: "21.3", rx: "1.5", ry: "0.8", fill: "rgba(255,255,255,0.14)" }),
+                h("ellipse", { cx: "83.45", cy: "29", rx: "1.5", ry: "0.8", fill: "rgba(255,255,255,0.14)" }),
+                h("ellipse", { cx: "76", cy: "21.35", rx: "1.5", ry: "0.8", fill: "rgba(255,255,255,0.14)" }),
+                h("text", { class: "nxr-face", x: "84.61", y: "16.9", "text-anchor": "middle", fill: "#e5c645" }, "Y"),
+                h("text", { class: "nxr-face", x: "92.2", y: "24.5", "text-anchor": "middle", fill: "#d95f5f" }, "B"),
+                h("text", { class: "nxr-face", x: "84.66", y: "32.2", "text-anchor": "middle", fill: "#7cc46c" }, "A"),
+                h("text", { class: "nxr-face", x: "77.21", y: "24.55", "text-anchor": "middle", fill: "#5c9ee2" }, "X"),
               ),
             ),
           ),

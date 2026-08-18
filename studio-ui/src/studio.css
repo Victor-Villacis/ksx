@@ -6881,6 +6881,15 @@ a.wsrow-title:hover {
   position: absolute;
 }
 
+/* The photoreal Xbox's face letters: colour rides the element (the real
+   ABXY palette); this rule carries only the type. */
+.n-stage .nxr-face {
+  font-size: 4.2px;
+  font-weight: 700;
+  font-family: inherit;
+  pointer-events: none;
+}
+
 .n-stage .wspad {
   width: min(560px, 94%);
   height: auto;

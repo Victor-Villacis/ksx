@@ -571,7 +571,7 @@ export function applyNocturne(p: NocturnePayload): void {
     // mute classes and the legend follow their presets to the new numbers.
     applySlotColors();
     applyNocturneUi();
-    syncLegend();
+    syncBoardFilter();
   }
 }
 
@@ -1011,13 +1011,32 @@ function syncLegend(): void {
   if (!root) return;
   for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'))) {
     const preset = presetOfSlot(Number(chip.getAttribute("data-slot") ?? ""));
-    const muted = preset !== undefined && hiddenStrips.has(preset);
-    chip.setAttribute("aria-pressed", muted ? "false" : "true");
-    chip.classList.toggle("muted", muted);
-    chip.title = muted
+    const byHand = preset !== undefined && hiddenStrips.has(preset);
+    // Solo crosses out every OTHER chip — the same state, said the same
+    // way, so the shortcut is never a hidden mode.
+    const bySolo = ui.kbSolo && !chip.classList.contains("on");
+    const off = byHand || bySolo;
+    chip.setAttribute("aria-pressed", off ? "false" : "true");
+    chip.classList.toggle("muted", byHand);
+    chip.title = off
       ? "Show this controller's colour on the keys"
       : "Hide this controller's colour on the keys";
   }
+}
+
+/** ONE place where the board's filter chrome learns the state: the solo
+ *  button's pressed flag and every legend chip, together — so the two can
+ *  never disagree about what the keys are showing. */
+function syncBoardFilter(): void {
+  const root = learnRoot;
+  if (!root) return;
+  root.querySelector(".n-kbcolors")?.setAttribute("aria-pressed", ui.kbSolo ? "true" : "false");
+  syncLegend();
+}
+
+/** Is this preset the controller the page is currently editing? */
+function isSelectedPreset(preset: string): boolean {
+  return presetOfSlot(Number(nSlotVal() || "0")) === preset;
 }
 
 function applySlotColors(): void {
@@ -2176,10 +2195,7 @@ export function nocturneWire(root: HTMLElement): void {
   root.classList.add("js");
   applySlotColors();
   syncPadGrid();
-  root
-    .querySelector(".n-kbcolors")
-    ?.setAttribute("aria-pressed", ui.kbSolo ? "true" : "false");
-  syncLegend();
+  syncBoardFilter();
   window.addEventListener("resize", scheduleKbFit);
   window.addEventListener("resize", schedulePadFit);
   // Drag-to-reorder on the rack: a pointer enhancement over the SAME
@@ -2576,9 +2592,7 @@ export function nocturneWire(root: HTMLElement): void {
       ui.kbSolo = !ui.kbSolo;
       saveUiPrefs();
       applyNocturneUi();
-      target
-        ?.closest("[data-nx]")
-        ?.setAttribute("aria-pressed", ui.kbSolo ? "true" : "false");
+      syncBoardFilter();
     } else if (hit === "legend-mute") {
       // One chip, one player's colour on the keys. Keyed by PRESET like
       // the colours themselves, so muting follows a controller through a
@@ -2586,11 +2600,21 @@ export function nocturneWire(root: HTMLElement): void {
       const chip = target?.closest<HTMLElement>("[data-slot]");
       const preset = presetOfSlot(Number(chip?.getAttribute("data-slot") ?? ""));
       if (chip && preset !== undefined) {
+        // "Only P{n}" is a shortcut for crossing the others out by hand,
+        // so a click after it CONTINUES from what you see: the shortcut
+        // becomes the real mute set, then this chip toggles inside it.
+        if (ui.kbSolo) {
+          ui.kbSolo = false;
+          for (const pv of lastBindView?.pads ?? []) {
+            if (!isSelectedPreset(pv.preset)) hiddenStrips.add(pv.preset);
+          }
+          saveUiPrefs();
+        }
         if (hiddenStrips.has(preset)) hiddenStrips.delete(preset);
         else hiddenStrips.add(preset);
         saveHiddenStrips();
         applyNocturneUi();
-        syncLegend();
+        syncBoardFilter();
       }
     } else if (hit === "pads-toggle") {
       ui.padsAll = !ui.padsAll;

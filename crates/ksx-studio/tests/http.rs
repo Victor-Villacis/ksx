@@ -7570,7 +7570,11 @@ fn nocturne_paints_the_board_by_owner() {
     let legend = api["view"]["legend"].as_array().expect("legend");
     assert_eq!(legend.len(), 2, "{api}");
     assert_eq!(legend[0]["badge"], "P1", "{api}");
-    assert_eq!(legend[0]["cls"], "n-lgd np1", "{api}");
+    assert_eq!(
+        legend[0]["cls"], "n-lgd np1 on",
+        "the selected controller's chip is marked, so soloing can cross out          every other one: {api}"
+    );
+    assert_eq!(legend[1]["cls"], "n-lgd np2", "{api}");
     assert_eq!(api["view"]["solo_label"], "Only P1", "{api}");
 }
 

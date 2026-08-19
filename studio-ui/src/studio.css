@@ -10582,19 +10582,32 @@ button.n-keychip:hover {
   color: var(--n-text-3);
 }
 
-/* A muted controller's chip goes quiet: hollow dot, dimmed text. */
-.n-lgd.muted {
+/* A controller whose colour is off the keys is CROSSED OUT — whether you
+   crossed it yourself or "Only P{n}" did it for you. One look, one
+   meaning: the shortcut leaves exactly the state your own clicks would. */
+.n-lgd.muted,
+.n-center.solo .n-lgd:not(.on) {
   border-style: dashed;
   color: var(--n-text-3);
 }
 
-.n-lgd.muted .n-lgd-dot {
+.n-lgd.muted .n-lgd-dot,
+.n-center.solo .n-lgd:not(.on) .n-lgd-dot {
   background: none;
   box-shadow: inset 0 0 0 1.5px var(--n-line-2);
 }
 
-.n-lgd.muted .n-lgd-name {
+.n-lgd.muted .n-lgd-badge,
+.n-lgd.muted .n-lgd-name,
+.n-center.solo .n-lgd:not(.on) .n-lgd-badge,
+.n-center.solo .n-lgd:not(.on) .n-lgd-name {
   text-decoration: line-through;
+}
+
+/* ...and the one still speaking stands out while it is alone. */
+.n-center.solo .n-lgd.on {
+  border-color: var(--n-accent-line);
+  color: var(--n-text);
 }
 
 /* Scripting-only chrome: without it the chips cannot filter anything. */
@@ -10612,13 +10625,17 @@ button.n-keychip:hover {
   cursor: pointer;
 }
 
-.n-kbcolors:hover,
-.n-kbcolors[aria-pressed="true"] {
+.n-kbcolors:hover {
+  border-color: var(--n-line-2);
   color: var(--n-text-2);
 }
 
-.n-kbcolors[aria-pressed="false"] {
-  border-style: dashed;
+/* On is unmistakable: the button is lit, and every other legend chip is
+   crossed out behind it. */
+.n-kbcolors[aria-pressed="true"] {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
 }
 
 .n-cdot.np1 {

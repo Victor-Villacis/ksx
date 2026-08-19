@@ -4752,7 +4752,14 @@ impl NocturneDerived {
                 slot: slot.number.to_string(),
                 badge: format!("P{}", slot.number),
                 name: slot.persona_label.clone(),
-                cls: format!("n-lgd np{}", slot.number),
+                // The selected controller's chip is marked, so "only this
+                // one" can cross out every OTHER chip without the browser
+                // having to work out which is which.
+                cls: if selected_number == Some(slot.number) {
+                    format!("n-lgd np{} on", slot.number)
+                } else {
+                    format!("n-lgd np{}", slot.number)
+                },
             })
             .collect();
         let solo_label = match selected_number {

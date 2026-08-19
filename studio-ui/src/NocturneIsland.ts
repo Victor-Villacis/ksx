@@ -95,6 +95,13 @@ export interface NocturneKeyCellView {
   title: string;
 }
 
+export interface NocturneLegendRowView {
+  slot: string;
+  badge: string;
+  name: string;
+  cls: string;
+}
+
 export interface NocturneMacroRowView {
   name: string;
   fn_name: string;
@@ -227,6 +234,8 @@ export interface NocturneView {
   avail_main_cls: string;
   avail_nav_cls: string;
   avail_num_cls: string;
+  legend: NocturneLegendRowView[];
+  solo_label: string;
   pads: {
     slot: number;
     family: string;
@@ -360,6 +369,8 @@ const [nBindFoot, setNBindFoot] = createSignal("");
 const [nMacrosHead, setNMacrosHead] = createSignal("");
 const [nMacroRows, setNMacroRows] = createSignal<NocturneMacroRowView[]>([]);
 const [nMacrosNote, setNMacrosNote] = createSignal("");
+const [nLegend, setNLegend] = createSignal<NocturneLegendRowView[]>([]);
+const [nSoloLbl, setNSoloLbl] = createSignal("");
 const [nKbRow1, setNKbRow1] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow2, setNKbRow2] = createSignal<NocturneKeyCellView[]>([]);
 const [nKbRow3, setNKbRow3] = createSignal<NocturneKeyCellView[]>([]);
@@ -485,6 +496,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNMacrosHead(v.macros_head);
   setNMacroRows(v.macro_rows);
   setNMacrosNote(v.macros_note);
+  setNLegend(v.legend);
+  setNSoloLbl(v.solo_label);
   setNKbRow1(v.kb_row1);
   setNKbRow2(v.kb_row2);
   setNKbRow3(v.kb_row3);
@@ -554,10 +567,11 @@ export function applyNocturne(p: NocturnePayload): void {
   if (learnRoot) {
     paintStageCallouts();
     syncPadGrid();
-    // Reorders move controllers between seats: the identity colours and
-    // the hidden-strip classes follow their presets to the new numbers.
+    // Reorders move controllers between seats: the identity colours, the
+    // mute classes and the legend follow their presets to the new numbers.
     applySlotColors();
     applyNocturneUi();
+    syncLegend();
   }
 }
 
@@ -813,7 +827,7 @@ const ui: {
   rightView: "controls" | "keys";
   padsAll: boolean;
   padZoom: number;
-  kbColors: boolean;
+  kbSolo: boolean;
 } = {
   dlg: false,
   leftRail: false,
@@ -823,7 +837,7 @@ const ui: {
   rightView: "controls",
   padsAll: false,
   padZoom: -1,
-  kbColors: true,
+  kbSolo: false,
 };
 
 function applyNocturneUi(): void {
@@ -836,10 +850,10 @@ function applyNocturneUi(): void {
   setNCenterCls(
     "n-center" +
       (ui.kbClosed ? " kb-closed" : "") +
-      (ui.kbColors ? "" : " nostrips") +
+      (ui.kbSolo ? " solo" : "") +
       pads
         .filter((pv) => hiddenStrips.has(pv.preset))
-        .map((pv) => ` hs${pv.slot}`)
+        .map((pv) => ` mute${pv.slot}`)
         .join(""),
   );
   // Any pane change resizes the center: the board refits.
@@ -869,7 +883,7 @@ function loadUiPrefs(): void {
       rightView?: string;
       padsAll?: boolean;
       padZoom?: number;
-      kbColors?: boolean;
+      kbSolo?: boolean;
     };
     ui.leftRail = saved.leftRail === true;
     ui.rightView = saved.rightView === "keys" ? "keys" : "controls";
@@ -880,7 +894,7 @@ function loadUiPrefs(): void {
       typeof saved.padZoom === "number"
         ? Math.min(5, Math.max(-1, Math.round(saved.padZoom)))
         : -1;
-    ui.kbColors = saved.kbColors !== false;
+    ui.kbSolo = saved.kbSolo === true;
   } catch {
     // A blocked or corrupt store reads as the defaults.
   }
@@ -985,12 +999,24 @@ function refreshSwatches(): void {
       sw.classList.toggle("mine", color === assigned.get(slot));
       sw.title = owner ? `Worn by P${owner.slot}` : `Colour ${color}`;
     }
-    const box = pick.querySelector<HTMLInputElement>(".n-strows input");
-    const preset = presetOfSlot(slot);
-    const hidden = preset !== undefined && hiddenStrips.has(preset);
-    if (box) box.checked = !hidden;
-    const stateText = pick.querySelector<HTMLElement>(".n-strows-t");
-    if (stateText) stateText.textContent = hidden ? "Hidden on the keys" : "Shown on the keys";
+  }
+}
+
+/** The legend chips speak their own state: a muted controller's chip goes
+ *  quiet and says so. Runs after every applied payload and every toggle —
+ *  never at hydration with an empty store, where the served markup is
+ *  already right (the parity gate's rule). */
+function syncLegend(): void {
+  const root = learnRoot;
+  if (!root) return;
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'))) {
+    const preset = presetOfSlot(Number(chip.getAttribute("data-slot") ?? ""));
+    const muted = preset !== undefined && hiddenStrips.has(preset);
+    chip.setAttribute("aria-pressed", muted ? "false" : "true");
+    chip.classList.toggle("muted", muted);
+    chip.title = muted
+      ? "Show this controller's colour on the keys"
+      : "Hide this controller's colour on the keys";
   }
 }
 
@@ -1018,7 +1044,7 @@ function saveUiPrefs(): void {
         rightView: ui.rightView,
         padsAll: ui.padsAll,
         padZoom: ui.padZoom,
-        kbColors: ui.kbColors,
+        kbSolo: ui.kbSolo,
       }),
     );
   } catch {
@@ -2152,7 +2178,8 @@ export function nocturneWire(root: HTMLElement): void {
   syncPadGrid();
   root
     .querySelector(".n-kbcolors")
-    ?.setAttribute("aria-pressed", ui.kbColors ? "true" : "false");
+    ?.setAttribute("aria-pressed", ui.kbSolo ? "true" : "false");
+  syncLegend();
   window.addEventListener("resize", scheduleKbFit);
   window.addEventListener("resize", schedulePadFit);
   // Drag-to-reorder on the rack: a pointer enhancement over the SAME
@@ -2546,12 +2573,25 @@ export function nocturneWire(root: HTMLElement): void {
       saveUiPrefs();
       syncPadGrid();
     } else if (hit === "kb-colors") {
-      ui.kbColors = !ui.kbColors;
+      ui.kbSolo = !ui.kbSolo;
       saveUiPrefs();
       applyNocturneUi();
       target
         ?.closest("[data-nx]")
-        ?.setAttribute("aria-pressed", ui.kbColors ? "true" : "false");
+        ?.setAttribute("aria-pressed", ui.kbSolo ? "true" : "false");
+    } else if (hit === "legend-mute") {
+      // One chip, one player's colour on the keys. Keyed by PRESET like
+      // the colours themselves, so muting follows a controller through a
+      // reorder.
+      const chip = target?.closest<HTMLElement>("[data-slot]");
+      const preset = presetOfSlot(Number(chip?.getAttribute("data-slot") ?? ""));
+      if (chip && preset !== undefined) {
+        if (hiddenStrips.has(preset)) hiddenStrips.delete(preset);
+        else hiddenStrips.add(preset);
+        saveHiddenStrips();
+        applyNocturneUi();
+        syncLegend();
+      }
     } else if (hit === "pads-toggle") {
       ui.padsAll = !ui.padsAll;
       saveUiPrefs();
@@ -2619,17 +2659,6 @@ export function nocturneWire(root: HTMLElement): void {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
       applyNocturneUi();
-    } else if (hit === "slot-strips") {
-      const box = target?.closest<HTMLInputElement>('input[data-nx="slot-strips"]');
-      const slot = Number(box?.closest("[data-slot]")?.getAttribute("data-slot") ?? "");
-      const preset = presetOfSlot(slot);
-      if (box && preset !== undefined) {
-        if (box.checked) hiddenStrips.delete(preset);
-        else hiddenStrips.add(preset);
-        saveHiddenStrips();
-        applyNocturneUi();
-        refreshSwatches();
-      }
     } else if (hit === "slot-color") {
       const btn = target?.closest<HTMLElement>("[data-color]");
       const pick = btn?.closest<HTMLElement>("[data-slot]");
@@ -3113,15 +3142,6 @@ export function NocturneIsland() {
                         h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
                         h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
                         h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
-                      // Per-player board visibility: this controller's
-                      // colour strips on the keys, on or off. The kbhead
-                      // "Colours" button stays the master switch.
-                      h(
-                        "label",
-                        { class: "n-strows" },
-                        h("input", { type: "checkbox", checked: "checked", "data-nx": "slot-strips" }),
-                        h("span", { class: "n-strows-t" }, "Shown on the keys"),
-                      ),
                     ),
                   ),
                   // One whole-order reorder per click; an end row's order
@@ -3760,20 +3780,49 @@ export function NocturneIsland() {
             h("span", { class: "n-cue-dot" }),
             h("span", null, () => nKeyCueText()),
           ),
-          h("span", { class: "n-kick" }, () => nKbTitle()),
+                  h("span", { class: "n-kick" }, () => nKbTitle()),
+          // The board's key to its own map: which colour speaks for which
+          // controller. Each chip mutes that player's colour on the keys —
+          // the visibility control lives WITH the colour it explains.
+          h(
+            "div",
+            { class: "n-legend" },
+            createList(
+              () => nLegend(),
+              (r) => r.slot + "|" + r.badge + "|" + r.name + "|" + r.cls,
+              (r) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    "data-nx": "legend-mute",
+                    "data-slot": r.slot,
+                    "aria-pressed": "true",
+                    title: "Hide this controller's colour on the keys",
+                    class: r.cls,
+                  },
+                  h("span", { class: "n-lgd-dot" }),
+                  h("span", { class: "n-lgd-badge" }, r.badge),
+                  h("span", { class: "n-lgd-name" }, r.name),
+                ),
+            ),
+          ),
           h("div", { class: "n-spring" }),
-          // Show or hide the controller colours on the keys. Default state
-          // ships in the markup (the parity gate's rule).
+          // Focus the board on the controller you are editing: everyone
+          // else's colour greys out — nothing is hidden, so a key never
+          // looks unbound when it is not. Default ships in the markup
+          // (the parity gate's rule).
           h(
             "button",
             {
               type: "button",
               "data-nx": "kb-colors",
-              "aria-pressed": "true",
-              title: "Show or hide the controller colours on the keys",
+              "aria-pressed": "false",
+              title:
+                "Grey out every other controller's colour, so only the selected one is coloured on the keys",
               class: "n-kbcolors",
             },
-            "Colours",
+            () => nSoloLbl(),
           ),
           h(
             "button",
@@ -3896,21 +3945,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -3919,21 +3960,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow2(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -3942,21 +3975,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow3(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -3965,21 +3990,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow4(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -3988,21 +4005,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow5(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -4011,21 +4020,13 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow6(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),
@@ -4042,21 +4043,13 @@ export function NocturneIsland() {
             { class: "n-kbtray-row" },
             createList(
               () => nKbTray(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.s1 + r.s2 + r.s3 + r.s4,
+              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
               (r) =>
                 h(
                   "div",
                   { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
-                  h(
-                    "span",
-                    { class: "n-strips" },
-                    h("span", { class: r.s1 }),
-                    h("span", { class: r.s2 }),
-                    h("span", { class: r.s3 }),
-                    h("span", { class: r.s4 }),
-                  ),
                 ),
             ),
           ),

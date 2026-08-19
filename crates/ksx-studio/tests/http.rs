@@ -7538,32 +7538,120 @@ fn nocturne_paints_the_board_by_owner() {
         .clone()
     };
 
-    // Shared: P1 fills it (bound on the selected slot), P2 marks it.
+    // Shared by two: the cap splits, and the SELECTED slot's band leads.
     let g = cell("G");
     let g_cls = g["cls"].as_str().expect("cls");
-    assert!(g_cls.contains(" bound"), "{g}");
-    assert!(g_cls.contains(" own1"), "{g}");
-    assert_eq!(
-        g["s1"], "n-strip s2",
-        "the SECOND owner takes the first mark"
+    assert!(
+        g_cls.contains(" bound"),
+        "the ring says the selection drives it"
     );
-    assert_eq!(g["s2"], "n-strip none", "{g}");
+    assert!(g_cls.contains(" bn2"), "two owners, two bands: {g}");
+    assert!(g_cls.contains(" ba1") && g_cls.contains(" bb2"), "{g}");
+    assert!(
+        g["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("also bound on P2")),
+        "the words name the other owner: {g}"
+    );
 
-    // Owned by another controller only: filled, marked, but not "bound"
-    // here — the selected slot does not drive it.
+    // Owned by another controller only: one band in ITS colour, and no
+    // ring — the selected slot does not drive this key.
     let f6 = cell("F6");
     let f6_cls = f6["cls"].as_str().expect("cls");
-    assert!(
-        f6_cls.contains(" own2") && f6_cls.contains(" owned"),
-        "{f6}"
-    );
+    assert!(f6_cls.contains(" bn1") && f6_cls.contains(" ba2"), "{f6}");
     assert!(!f6_cls.contains(" bound"), "{f6}");
-    assert_eq!(f6["s1"], "n-strip none", "one owner needs no underline");
 
     // Untouched keys stay plain.
     let z = cell("Z");
     let z_cls = z["cls"].as_str().expect("cls");
-    assert!(!z_cls.contains("own") && !z_cls.contains(" bound"), "{z}");
+    assert!(!z_cls.contains(" bn") && !z_cls.contains(" bound"), "{z}");
+
+    // The legend names every controller in its own colour.
+    let legend = api["view"]["legend"].as_array().expect("legend");
+    assert_eq!(legend.len(), 2, "{api}");
+    assert_eq!(legend[0]["badge"], "P1", "{api}");
+    assert_eq!(legend[0]["cls"], "n-lgd np1", "{api}");
+    assert_eq!(api["view"]["solo_label"], "Only P1", "{api}");
+}
+
+/// **A crowded key stays honest**: four bands is the ceiling a 30px cap can
+/// carry, so a key five controllers share paints three of them, turns the
+/// last band neutral, and names every owner in words.
+#[test]
+fn nocturne_caps_a_crowded_key_at_four_bands() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    for n in 1..=5 {
+        // XInput seats only four; the fifth controller is a PlayStation pad
+        // (ViGEm), which is exactly why five owners is a real case.
+        let persona = if n <= 4 { "xbox360" } else { "playstation" };
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: persona.into(),
+                    preset: format!("Player {n}"),
+                    layout: None,
+                })
+                .ok,
+            "adding controller {n}"
+        );
+    }
+    let staged = control.staged();
+    // Every controller drives Q; the selected one (P1) is bound LAST, to
+    // prove its band still leads.
+    for slot in staged.slots.iter().rev() {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number: slot.number,
+                    preset: slot.preset.clone(),
+                    function: "A".into(),
+                    keys: vec!["Q".into()],
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let q = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "Q")
+    .expect("Q is on the board")
+    .clone();
+    let cls = q["cls"].as_str().expect("cls");
+    assert!(cls.contains(" bn4"), "four bands, never five: {q}");
+    assert!(
+        cls.contains(" bdmore"),
+        "the last band says 'and others': {q}"
+    );
+    assert!(
+        cls.contains(" ba3"),
+        "the SELECTED controller's band leads whoever else is on the key: {q}"
+    );
+    assert!(
+        q["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("P1") && t.contains("P5")),
+        "the words name every owner the bands cannot: {q}"
+    );
 }
 
 /// **The multi-pad payload**: every staged controller serves its family,

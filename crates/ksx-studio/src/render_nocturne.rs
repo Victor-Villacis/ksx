@@ -18,8 +18,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::snapshot::{
     NocturneBindRow, NocturneChoiceRow, NocturneCtlChip, NocturneDeviceRow, NocturneEmptyRow,
-    NocturneGameRow, NocturneKeyCell, NocturneKeyRow, NocturneMacroRow, NocturneOptionRow,
-    NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+    NocturneGameRow, NocturneKeyCell, NocturneKeyRow, NocturneLegendRow, NocturneMacroRow,
+    NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -53,6 +53,7 @@ const LIST_SLOT_CTL_SHL: &str = "list:nCtlShl:array";
 const LIST_SLOT_CTL_LS: &str = "list:nCtlLs:array";
 const LIST_SLOT_CTL_RS: &str = "list:nCtlRs:array";
 const LIST_SLOT_CTL_SYS: &str = "list:nCtlSys:array";
+const LIST_SLOT_LEGEND: &str = "list:nLegend:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -97,6 +98,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nPadBadge": payload.view.pad_badge,
         "nPadBadgeCls": payload.view.pad_badge_cls,
         "nKbCls": payload.view.kb_cls,
+        "nSoloLbl": payload.view.solo_label,
         "nUndoCls": payload.view.undo_cls,
         "nUndoLabel": payload.view.undo_label,
         "nStageWord": payload.view.stage_word,
@@ -260,10 +262,15 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
-        ("s1".to_owned(), SlotValue::Text(row.s1.clone())),
-        ("s2".to_owned(), SlotValue::Text(row.s2.clone())),
-        ("s3".to_owned(), SlotValue::Text(row.s3.clone())),
-        ("s4".to_owned(), SlotValue::Text(row.s4.clone())),
+    ])
+}
+
+fn legend_row(row: &NocturneLegendRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
     ])
 }
 
@@ -338,12 +345,16 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 35] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 36] {
     let view = &payload.view;
     [
         (
             LIST_SLOT_GAMES,
             SlotValue::array(view.game_rows.iter().map(game_row).collect()),
+        ),
+        (
+            LIST_SLOT_LEGEND,
+            SlotValue::array(view.legend.iter().map(legend_row).collect()),
         ),
         (
             LIST_SLOT_KEYROWS,
@@ -652,7 +663,7 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 35] = [
+        const SERVED_LIST_PREFIXES: [&str; 36] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -674,6 +685,7 @@ mod tests {
             "list:nDevExp:",
             "list:nGameRows:",
             "list:nMacroRows:",
+            "list:nLegend:",
             "list:nKbRow1:",
             "list:nKbRow2:",
             "list:nKbRow3:",
@@ -689,7 +701,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 82] = [
+        const SERVED_SLOTS: [&str; 83] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -707,6 +719,7 @@ mod tests {
             "nUndoCls",
             "nUndoLabel",
             "nKbCls",
+            "nSoloLbl",
             "nStageWord",
             "nApplyCls",
             "nPadBadgeCls",
@@ -850,6 +863,7 @@ mod tests {
             LIST_SLOT_GAMES,
             LIST_SLOT_MACROS,
             LIST_SLOT_OTHER,
+            LIST_SLOT_LEGEND,
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],
             LIST_SLOT_MODES,

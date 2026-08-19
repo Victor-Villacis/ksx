@@ -3978,6 +3978,18 @@ pub struct NocturneKeyRow {
     pub slot: String,
 }
 
+/// One chip of the board's colour legend: which colour speaks for which
+/// controller, and the door to muting it on the keys.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneLegendRow {
+    pub slot: String,
+    pub badge: String,
+    /// The persona label, so the chip says who as well as which colour.
+    pub name: String,
+    /// `n-lgd np{N}` — the chip wears the controller's own colour.
+    pub cls: String,
+}
+
 /// One controller for the stage's MULTI-PAD grid: everything the client
 /// needs to clone the right master art and dress it for this slot. Pure
 /// payload data — no template reads it, so it mints no slots.
@@ -3999,6 +4011,14 @@ pub struct NocturnePadView {
     pub fn_names: std::collections::BTreeMap<String, String>,
 }
 
+/// How many owner bands a keycap can carry before the last one becomes the
+/// neutral "and more" mark: four 6px bands is the legible floor at 30px, and
+/// no palette is readable past a handful of hues anyway.
+const BAND_MAX: usize = 4;
+
+/// The band class prefixes, in paint order (left to right).
+const BAND_KEYS: [&str; BAND_MAX] = ["ba", "bb", "bc", "bd"];
+
 /// One keycap on the standard board, dressed with its binding short.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyCell {
@@ -4011,13 +4031,6 @@ pub struct NocturneKeyCell {
     /// The hover sentence: which controls this key drives, in the persona's
     /// readable zone labels. Empty on an unbound cap.
     pub title: String,
-    /// Up to four owner strips: `n-strip s{N}` per controller this key
-    /// drives ANYWHERE in the setup (`n-strip none` when unused) — the
-    /// board's global colour read.
-    pub s1: String,
-    pub s2: String,
-    pub s3: String,
-    pub s4: String,
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
@@ -4163,6 +4176,10 @@ pub struct NocturneDerived {
     pub avail_num: Vec<NocturneKeyRow>,
     /// The multi-pad grid's controllers (payload data, no slots).
     pub pads: Vec<NocturnePadView>,
+    /// The board's colour legend, one chip per staged controller.
+    pub legend: Vec<NocturneLegendRow>,
+    /// The solo button's label — "Only P1", naming the selected controller.
+    pub solo_label: String,
     pub avail_main_head: String,
     pub avail_nav_head: String,
     pub avail_num_head: String,
@@ -4698,11 +4715,52 @@ impl NocturneDerived {
                 }
             }
         }
-        let strip = |owners: &[u8], at: usize| -> String {
-            match owners.get(at) {
-                Some(n) => format!("n-strip s{n}"),
-                None => "n-strip none".to_owned(),
+        // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
+        // paints that controller's colour; a key several controllers share
+        // splits into one band each. The SELECTED slot's band always leads,
+        // so "my territory" scans from the left edge whoever else is on the
+        // key — and four bands is the honest ceiling at 30px (past that the
+        // fourth turns neutral and says "and more"; the title names them all).
+        let bands = |owners: &[u8]| -> String {
+            if owners.is_empty() {
+                return String::new();
             }
+            let mut order: Vec<u8> = owners.to_vec();
+            order.sort_unstable();
+            if let Some(mine) = selected_number {
+                if let Some(at) = order.iter().position(|n| *n == mine) {
+                    let mine = order.remove(at);
+                    order.insert(0, mine);
+                }
+            }
+            let shown = order.len().min(BAND_MAX);
+            let mut cls = format!(" bn{shown}");
+            for (at, slot) in order.iter().take(shown).enumerate() {
+                cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
+            }
+            if order.len() > BAND_MAX {
+                // The last band stops being a player and starts being a
+                // count: "these three, and others".
+                cls.push_str(" bdmore");
+            }
+            cls
+        };
+        // The board's legend: every staged controller with its colour, so
+        // "which colour is who" is answerable without the left pane, and
+        // each chip is the door to muting that player on the keys.
+        let legend: Vec<NocturneLegendRow> = staged
+            .slots
+            .iter()
+            .map(|slot| NocturneLegendRow {
+                slot: slot.number.to_string(),
+                badge: format!("P{}", slot.number),
+                name: slot.persona_label.clone(),
+                cls: format!("n-lgd np{}", slot.number),
+            })
+            .collect();
+        let solo_label = match selected_number {
+            Some(number) => format!("Only P{number}"),
+            None => "Only this player".to_owned(),
         };
         // The multi-pad grid's data: every staged controller, its family,
         // its callout chips and its readable control names.
@@ -4814,16 +4872,7 @@ impl NocturneDerived {
             } else {
                 title.clone()
             };
-            // The territory read: the FIRST owner's colour fills the cap
-            // (an `own{N}` class; `owned` adds the fill to keys bound only
-            // on other slots), and the strips mark the REMAINING owners —
-            // a single-owner key needs no underline, its fill says it all.
-            if let Some(first) = owners.first() {
-                cls.push_str(&format!(" own{first}"));
-                if !cls.contains(" bound") {
-                    cls.push_str(" owned");
-                }
-            }
+            cls.push_str(&bands(owners));
             NocturneKeyCell {
                 cap: cell.cap.to_owned(),
                 key: cell.key.to_owned(),
@@ -4831,10 +4880,6 @@ impl NocturneDerived {
                 short,
                 title,
                 aria,
-                s1: strip(owners, 1),
-                s2: strip(owners, 2),
-                s3: strip(owners, 3),
-                s4: strip(owners, 4),
             }
         };
         let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
@@ -4862,6 +4907,17 @@ impl NocturneDerived {
                 let tray_owners = key_slots.get(*key).map(|v| v.as_slice()).unwrap_or(&[]);
                 let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
                 let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
+                // The board's cells name the other owners; so does the tray.
+                let others: Vec<String> = tray_owners
+                    .iter()
+                    .filter(|n| Some(**n) != selected_number)
+                    .map(|n| format!("P{n}"))
+                    .collect();
+                let title = if others.is_empty() {
+                    title
+                } else {
+                    format!("{title}; also bound on {}", others.join(" · "))
+                };
                 NocturneKeyCell {
                     cap: (*key).to_owned(),
                     key: (*key).to_owned(),
@@ -4871,18 +4927,12 @@ impl NocturneDerived {
                         } else {
                             "n-key tray bound".to_owned()
                         };
-                        if let Some(first) = tray_owners.first() {
-                            cls.push_str(&format!(" own{first}"));
-                        }
+                        cls.push_str(&bands(tray_owners));
                         cls
                     },
                     short: crate::keyboard_layout::short_for(persona, fns[0]),
                     aria: title.clone(),
                     title,
-                    s1: strip(tray_owners, 1),
-                    s2: strip(tray_owners, 2),
-                    s3: strip(tray_owners, 3),
-                    s4: strip(tray_owners, 4),
                 }
             })
             .collect();
@@ -5464,6 +5514,8 @@ impl NocturneDerived {
             avail_nav,
             avail_num,
             pads,
+            legend,
+            solo_label,
             avail_main_head,
             avail_nav_head,
             avail_num_head,

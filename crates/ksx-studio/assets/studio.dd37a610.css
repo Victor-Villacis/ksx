@@ -6267,14 +6267,14 @@ a.wsrow-title:hover {
      the island root from browser-kept state. Identity colours only — they
      never carry status meaning. */
   --pal1: #4da6ff;
-  --pal2: #ff6b5e;
-  --pal3: #45d05e;
+  --pal2: #ff7a4d;
+  --pal3: #2fd39b;
   --pal4: #ffd23e;
   --pal5: #a98ae0;
   --pal6: #35d1d1;
   --pal7: #e763e7;
   --pal8: #ff9636;
-  --pal9: #2ec59b;
+  --pal9: #63d13a;
   --pal10: #ff7fa6;
   --pal11: #a8e03e;
   --pal12: #7d8cff;
@@ -7514,89 +7514,39 @@ a.wsrow-title:hover {
   }
 }
 
-/* Bound caps wear the SELECTED player's ramp shade (--kbt, served on the
-   board wrapper as np1..np4); without a selection the accent stands in. */
+/* THE BOARD'S COLOUR LAYER. `--pcs{N}` is slot N's identity colour (the
+   badge, the pad card, the legend chip wear it). `--kb{N}` is what the KEYS
+   paint for slot N — normally the same, but a muted player or a solo swaps
+   just this layer to the neutral, so filtering never touches a single key
+   rule. `--kbt` survives as the fallback wash for a cap nobody owns. */
 .n-kb {
   --kbt: var(--n-accent);
+  --band-mute: #454956;
+  --kb1: var(--pcs1);
+  --kb2: var(--pcs2);
+  --kb3: var(--pcs3);
+  --kb4: var(--pcs4);
+  --kb5: var(--pcs5);
+  --kb6: var(--pcs6);
+  --kb7: var(--pcs7);
+  --kb8: var(--pcs8);
+  --kb9: var(--pcs9);
+  --kb10: var(--pcs10);
+  --kb11: var(--pcs11);
+  --kb12: var(--pcs12);
+  --kb13: var(--pcs13);
+  --kb14: var(--pcs14);
+  --kb15: var(--pcs15);
+  --kb16: var(--pcs16);
 }
 
-.n-kb.np1 {
-  --kbt: var(--pcs1);
-}
-
-.n-kb.np2 {
-  --kbt: var(--pcs2);
-}
-
-.n-kb.np3 {
-  --kbt: var(--pcs3);
-}
-
-.n-kb.np4 {
-  --kbt: var(--pcs4);
-}
-
-.n-kb.np5 {
-  --kbt: var(--pcs5);
-}
-
-.n-kb.np6 {
-  --kbt: var(--pcs6);
-}
-
-.n-kb.np7 {
-  --kbt: var(--pcs7);
-}
-
-.n-kb.np8 {
-  --kbt: var(--pcs8);
-}
-
-.n-kb.np9 {
-  --kbt: var(--pcs9);
-}
-
-.n-kb.np10 {
-  --kbt: var(--pcs10);
-}
-
-.n-kb.np11 {
-  --kbt: var(--pcs11);
-}
-
-.n-kb.np12 {
-  --kbt: var(--pcs12);
-}
-
-.n-kb.np13 {
-  --kbt: var(--pcs13);
-}
-
-.n-kb.np14 {
-  --kbt: var(--pcs14);
-}
-
-.n-kb.np15 {
-  --kbt: var(--pcs15);
-}
-
-.n-kb.np16 {
-  --kbt: var(--pcs16);
-}
-
-
+/* A key the SELECTED controller drives wears the ring — that, not the
+   colour, is what says "mine". The colour says WHOSE, and a key can be
+   owned by someone else entirely (see the band recipes below). */
 .n-key.bound::before {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--kbt) 34%, transparent),
-      color-mix(in srgb, var(--kbt) 20%, transparent) 65%,
-      color-mix(in srgb, var(--kbt) 16%, transparent)
-    ),
-    linear-gradient(180deg, #2e3142, #242737);
   box-shadow:
     inset 0 1px 0 rgba(233, 233, 237, 0.14),
-    inset 0 0 0 1px color-mix(in srgb, var(--kbt) 35%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--band-a, var(--kbt)) 55%, transparent);
 }
 
 .n-key.ghost {
@@ -9904,153 +9854,474 @@ button.n-keychip:hover {
   border-color: color-mix(in srgb, var(--pcs16) 55%, transparent);
 }
 
-/* The territory map: a key bound only on OTHER slots still shows its
-   owner's fill. Shares the bound recipe. */
-.n-key.owned::before {
+
+
+/* ═══ THE BOARD AS A TERRITORY MAP ════════════════════════════════════════
+   A key's cap IS its ownership: one controller fills it, several split it
+   into a band each, in slot order with the SELECTED controller's band
+   always first — so "my keys" scan from the left edge however many players
+   share them. Four bands is the ceiling (a fifth would be 6px of colour on
+   a 30px cap, and no palette is separable past a handful of hues); beyond
+   it the last band turns neutral and the cap's title names every owner in
+   words. The bands paint from `--kb{N}`, so muting a player or soloing one
+   is a variable swap on the board, never a rule per key. */
+
+.n-key.bn1::before {
   background:
     linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--kbt) 34%, transparent),
-      color-mix(in srgb, var(--kbt) 20%, transparent) 65%,
-      color-mix(in srgb, var(--kbt) 16%, transparent)
+      90deg,
+      color-mix(in srgb, var(--band-a) 30%, transparent) 0 100%
     ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
     linear-gradient(180deg, #2e3142, #242737);
-  box-shadow:
-    inset 0 1px 0 rgba(233, 233, 237, 0.14),
-    inset 0 0 0 1px color-mix(in srgb, var(--kbt) 35%, transparent);
 }
 
-.n-key.own1 {
-  --kbt: var(--pcs1);
+.n-key.bn2::before {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--band-a) 30%, transparent) 0 50%,
+      color-mix(in srgb, var(--band-b) 30%, transparent) 50% 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
+    linear-gradient(180deg, #2e3142, #242737);
 }
 
-.n-key.own2 {
-  --kbt: var(--pcs2);
+.n-key.bn3::before {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--band-a) 30%, transparent) 0 33.34%,
+      color-mix(in srgb, var(--band-b) 30%, transparent) 33.34% 66.67%,
+      color-mix(in srgb, var(--band-c) 30%, transparent) 66.67% 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
+    linear-gradient(180deg, #2e3142, #242737);
 }
 
-.n-key.own3 {
-  --kbt: var(--pcs3);
+.n-key.bn4::before {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--band-a) 30%, transparent) 0 25%,
+      color-mix(in srgb, var(--band-b) 30%, transparent) 25% 50%,
+      color-mix(in srgb, var(--band-c) 30%, transparent) 50% 75%,
+      color-mix(in srgb, var(--band-d) 30%, transparent) 75% 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
+    linear-gradient(180deg, #2e3142, #242737);
 }
 
-.n-key.own4 {
-  --kbt: var(--pcs4);
+/* The fourth band of a crowded key stops naming a player and starts
+   meaning "and others" — the honest end of a 30px cap. */
+.n-key.bdmore {
+  --band-d: var(--band-mute);
 }
 
-.n-key.own5 {
-  --kbt: var(--pcs5);
+.n-key.ba1 {
+  --band-a: var(--kb1);
 }
 
-.n-key.own6 {
-  --kbt: var(--pcs6);
+.n-key.ba2 {
+  --band-a: var(--kb2);
 }
 
-.n-key.own7 {
-  --kbt: var(--pcs7);
+.n-key.ba3 {
+  --band-a: var(--kb3);
 }
 
-.n-key.own8 {
-  --kbt: var(--pcs8);
+.n-key.ba4 {
+  --band-a: var(--kb4);
 }
 
-.n-key.own9 {
-  --kbt: var(--pcs9);
+.n-key.ba5 {
+  --band-a: var(--kb5);
 }
 
-.n-key.own10 {
-  --kbt: var(--pcs10);
+.n-key.ba6 {
+  --band-a: var(--kb6);
 }
 
-.n-key.own11 {
-  --kbt: var(--pcs11);
+.n-key.ba7 {
+  --band-a: var(--kb7);
 }
 
-.n-key.own12 {
-  --kbt: var(--pcs12);
+.n-key.ba8 {
+  --band-a: var(--kb8);
 }
 
-.n-key.own13 {
-  --kbt: var(--pcs13);
+.n-key.ba9 {
+  --band-a: var(--kb9);
 }
 
-.n-key.own14 {
-  --kbt: var(--pcs14);
+.n-key.ba10 {
+  --band-a: var(--kb10);
 }
 
-.n-key.own15 {
-  --kbt: var(--pcs15);
+.n-key.ba11 {
+  --band-a: var(--kb11);
 }
 
-.n-key.own16 {
-  --kbt: var(--pcs16);
+.n-key.ba12 {
+  --band-a: var(--kb12);
 }
 
-.n-center.hs1 .n-key.own1 {
-  --kbt: var(--n-accent);
+.n-key.ba13 {
+  --band-a: var(--kb13);
 }
 
-.n-center.hs2 .n-key.own2 {
-  --kbt: var(--n-accent);
+.n-key.ba14 {
+  --band-a: var(--kb14);
 }
 
-.n-center.hs3 .n-key.own3 {
-  --kbt: var(--n-accent);
+.n-key.ba15 {
+  --band-a: var(--kb15);
 }
 
-.n-center.hs4 .n-key.own4 {
-  --kbt: var(--n-accent);
+.n-key.ba16 {
+  --band-a: var(--kb16);
 }
 
-.n-center.hs5 .n-key.own5 {
-  --kbt: var(--n-accent);
+.n-key.bb1 {
+  --band-b: var(--kb1);
 }
 
-.n-center.hs6 .n-key.own6 {
-  --kbt: var(--n-accent);
+.n-key.bb2 {
+  --band-b: var(--kb2);
 }
 
-.n-center.hs7 .n-key.own7 {
-  --kbt: var(--n-accent);
+.n-key.bb3 {
+  --band-b: var(--kb3);
 }
 
-.n-center.hs8 .n-key.own8 {
-  --kbt: var(--n-accent);
+.n-key.bb4 {
+  --band-b: var(--kb4);
 }
 
-.n-center.hs9 .n-key.own9 {
-  --kbt: var(--n-accent);
+.n-key.bb5 {
+  --band-b: var(--kb5);
 }
 
-.n-center.hs10 .n-key.own10 {
-  --kbt: var(--n-accent);
+.n-key.bb6 {
+  --band-b: var(--kb6);
 }
 
-.n-center.hs11 .n-key.own11 {
-  --kbt: var(--n-accent);
+.n-key.bb7 {
+  --band-b: var(--kb7);
 }
 
-.n-center.hs12 .n-key.own12 {
-  --kbt: var(--n-accent);
+.n-key.bb8 {
+  --band-b: var(--kb8);
 }
 
-.n-center.hs13 .n-key.own13 {
-  --kbt: var(--n-accent);
+.n-key.bb9 {
+  --band-b: var(--kb9);
 }
 
-.n-center.hs14 .n-key.own14 {
-  --kbt: var(--n-accent);
+.n-key.bb10 {
+  --band-b: var(--kb10);
 }
 
-.n-center.hs15 .n-key.own15 {
-  --kbt: var(--n-accent);
+.n-key.bb11 {
+  --band-b: var(--kb11);
 }
 
-.n-center.hs16 .n-key.own16 {
-  --kbt: var(--n-accent);
+.n-key.bb12 {
+  --band-b: var(--kb12);
 }
 
-/* Colours off: every fill falls back to the neutral accent wash. */
-.n-center.nostrips .n-key {
-  --kbt: var(--n-accent);
+.n-key.bb13 {
+  --band-b: var(--kb13);
+}
+
+.n-key.bb14 {
+  --band-b: var(--kb14);
+}
+
+.n-key.bb15 {
+  --band-b: var(--kb15);
+}
+
+.n-key.bb16 {
+  --band-b: var(--kb16);
+}
+
+.n-key.bc1 {
+  --band-c: var(--kb1);
+}
+
+.n-key.bc2 {
+  --band-c: var(--kb2);
+}
+
+.n-key.bc3 {
+  --band-c: var(--kb3);
+}
+
+.n-key.bc4 {
+  --band-c: var(--kb4);
+}
+
+.n-key.bc5 {
+  --band-c: var(--kb5);
+}
+
+.n-key.bc6 {
+  --band-c: var(--kb6);
+}
+
+.n-key.bc7 {
+  --band-c: var(--kb7);
+}
+
+.n-key.bc8 {
+  --band-c: var(--kb8);
+}
+
+.n-key.bc9 {
+  --band-c: var(--kb9);
+}
+
+.n-key.bc10 {
+  --band-c: var(--kb10);
+}
+
+.n-key.bc11 {
+  --band-c: var(--kb11);
+}
+
+.n-key.bc12 {
+  --band-c: var(--kb12);
+}
+
+.n-key.bc13 {
+  --band-c: var(--kb13);
+}
+
+.n-key.bc14 {
+  --band-c: var(--kb14);
+}
+
+.n-key.bc15 {
+  --band-c: var(--kb15);
+}
+
+.n-key.bc16 {
+  --band-c: var(--kb16);
+}
+
+.n-key.bd1 {
+  --band-d: var(--kb1);
+}
+
+.n-key.bd2 {
+  --band-d: var(--kb2);
+}
+
+.n-key.bd3 {
+  --band-d: var(--kb3);
+}
+
+.n-key.bd4 {
+  --band-d: var(--kb4);
+}
+
+.n-key.bd5 {
+  --band-d: var(--kb5);
+}
+
+.n-key.bd6 {
+  --band-d: var(--kb6);
+}
+
+.n-key.bd7 {
+  --band-d: var(--kb7);
+}
+
+.n-key.bd8 {
+  --band-d: var(--kb8);
+}
+
+.n-key.bd9 {
+  --band-d: var(--kb9);
+}
+
+.n-key.bd10 {
+  --band-d: var(--kb10);
+}
+
+.n-key.bd11 {
+  --band-d: var(--kb11);
+}
+
+.n-key.bd12 {
+  --band-d: var(--kb12);
+}
+
+.n-key.bd13 {
+  --band-d: var(--kb13);
+}
+
+.n-key.bd14 {
+  --band-d: var(--kb14);
+}
+
+.n-key.bd15 {
+  --band-d: var(--kb15);
+}
+
+.n-key.bd16 {
+  --band-d: var(--kb16);
+}
+
+/* A muted controller keeps its keys — it just stops colouring them. */
+.n-center.mute1 .n-kb {
+  --kb1: var(--band-mute);
+}
+
+.n-center.mute2 .n-kb {
+  --kb2: var(--band-mute);
+}
+
+.n-center.mute3 .n-kb {
+  --kb3: var(--band-mute);
+}
+
+.n-center.mute4 .n-kb {
+  --kb4: var(--band-mute);
+}
+
+.n-center.mute5 .n-kb {
+  --kb5: var(--band-mute);
+}
+
+.n-center.mute6 .n-kb {
+  --kb6: var(--band-mute);
+}
+
+.n-center.mute7 .n-kb {
+  --kb7: var(--band-mute);
+}
+
+.n-center.mute8 .n-kb {
+  --kb8: var(--band-mute);
+}
+
+.n-center.mute9 .n-kb {
+  --kb9: var(--band-mute);
+}
+
+.n-center.mute10 .n-kb {
+  --kb10: var(--band-mute);
+}
+
+.n-center.mute11 .n-kb {
+  --kb11: var(--band-mute);
+}
+
+.n-center.mute12 .n-kb {
+  --kb12: var(--band-mute);
+}
+
+.n-center.mute13 .n-kb {
+  --kb13: var(--band-mute);
+}
+
+.n-center.mute14 .n-kb {
+  --kb14: var(--band-mute);
+}
+
+.n-center.mute15 .n-kb {
+  --kb15: var(--band-mute);
+}
+
+.n-center.mute16 .n-kb {
+  --kb16: var(--band-mute);
+}
+
+/* Solo: every controller greys out, then the selected one is given its
+   colour back. Nothing is hidden, so a key never looks unbound. */
+.n-center.solo .n-kb {
+  --kb1: var(--band-mute);
+  --kb2: var(--band-mute);
+  --kb3: var(--band-mute);
+  --kb4: var(--band-mute);
+  --kb5: var(--band-mute);
+  --kb6: var(--band-mute);
+  --kb7: var(--band-mute);
+  --kb8: var(--band-mute);
+  --kb9: var(--band-mute);
+  --kb10: var(--band-mute);
+  --kb11: var(--band-mute);
+  --kb12: var(--band-mute);
+  --kb13: var(--band-mute);
+  --kb14: var(--band-mute);
+  --kb15: var(--band-mute);
+  --kb16: var(--band-mute);
+}
+
+.n-center.solo .n-kb.np1 {
+  --kb1: var(--pcs1);
+}
+
+.n-center.solo .n-kb.np2 {
+  --kb2: var(--pcs2);
+}
+
+.n-center.solo .n-kb.np3 {
+  --kb3: var(--pcs3);
+}
+
+.n-center.solo .n-kb.np4 {
+  --kb4: var(--pcs4);
+}
+
+.n-center.solo .n-kb.np5 {
+  --kb5: var(--pcs5);
+}
+
+.n-center.solo .n-kb.np6 {
+  --kb6: var(--pcs6);
+}
+
+.n-center.solo .n-kb.np7 {
+  --kb7: var(--pcs7);
+}
+
+.n-center.solo .n-kb.np8 {
+  --kb8: var(--pcs8);
+}
+
+.n-center.solo .n-kb.np9 {
+  --kb9: var(--pcs9);
+}
+
+.n-center.solo .n-kb.np10 {
+  --kb10: var(--pcs10);
+}
+
+.n-center.solo .n-kb.np11 {
+  --kb11: var(--pcs11);
+}
+
+.n-center.solo .n-kb.np12 {
+  --kb12: var(--pcs12);
+}
+
+.n-center.solo .n-kb.np13 {
+  --kb13: var(--pcs13);
+}
+
+.n-center.solo .n-kb.np14 {
+  --kb14: var(--pcs14);
+}
+
+.n-center.solo .n-kb.np15 {
+  --kb15: var(--pcs15);
+}
+
+.n-center.solo .n-kb.np16 {
+  --kb16: var(--pcs16);
 }
 
 /* ── Controller colours: the dot, the picker, the cap strips ── */
@@ -10131,127 +10402,139 @@ button.n-keychip:hover {
   outline-offset: 2px;
 }
 
-/* The picker's per-player board switch. */
-.n-strows {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--n-line);
-  font-size: 11px;
-  color: var(--n-text-2);
-  white-space: nowrap;
-  cursor: pointer;
+
+
+.n-lgd.np1 .n-lgd-dot {
+  background: var(--pcs1);
 }
 
-.n-strows input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--n-accent);
+.n-lgd.np2 .n-lgd-dot {
+  background: var(--pcs2);
 }
 
-.n-strows input:not(:checked) + .n-strows-t {
-  color: var(--n-text-3);
+.n-lgd.np3 .n-lgd-dot {
+  background: var(--pcs3);
 }
 
-/* Per-player strip hiding, composed onto the centre's class list. */
-.n-center.hs1 .n-strip.s1 {
-  display: none;
+.n-lgd.np4 .n-lgd-dot {
+  background: var(--pcs4);
 }
 
-.n-center.hs2 .n-strip.s2 {
-  display: none;
+.n-lgd.np5 .n-lgd-dot {
+  background: var(--pcs5);
 }
 
-.n-center.hs3 .n-strip.s3 {
-  display: none;
+.n-lgd.np6 .n-lgd-dot {
+  background: var(--pcs6);
 }
 
-.n-center.hs4 .n-strip.s4 {
-  display: none;
+.n-lgd.np7 .n-lgd-dot {
+  background: var(--pcs7);
 }
 
-.n-center.hs5 .n-strip.s5 {
-  display: none;
+.n-lgd.np8 .n-lgd-dot {
+  background: var(--pcs8);
 }
 
-.n-center.hs6 .n-strip.s6 {
-  display: none;
+.n-lgd.np9 .n-lgd-dot {
+  background: var(--pcs9);
 }
 
-.n-center.hs7 .n-strip.s7 {
-  display: none;
+.n-lgd.np10 .n-lgd-dot {
+  background: var(--pcs10);
 }
 
-.n-center.hs8 .n-strip.s8 {
-  display: none;
+.n-lgd.np11 .n-lgd-dot {
+  background: var(--pcs11);
 }
 
-.n-center.hs9 .n-strip.s9 {
-  display: none;
+.n-lgd.np12 .n-lgd-dot {
+  background: var(--pcs12);
 }
 
-.n-center.hs10 .n-strip.s10 {
-  display: none;
+.n-lgd.np13 .n-lgd-dot {
+  background: var(--pcs13);
 }
 
-.n-center.hs11 .n-strip.s11 {
-  display: none;
+.n-lgd.np14 .n-lgd-dot {
+  background: var(--pcs14);
 }
 
-.n-center.hs12 .n-strip.s12 {
-  display: none;
+.n-lgd.np15 .n-lgd-dot {
+  background: var(--pcs15);
 }
 
-.n-center.hs13 .n-strip.s13 {
-  display: none;
-}
-
-.n-center.hs14 .n-strip.s14 {
-  display: none;
-}
-
-.n-center.hs15 .n-strip.s15 {
-  display: none;
-}
-
-.n-center.hs16 .n-strip.s16 {
-  display: none;
-}
-
-/* Cap owner strips: one segment per controller this key drives, anywhere
-   in the setup — the board's global colour read. Flex shares the width, so
-   one owner reads as a full underline, two as halves. */
-.n-strips {
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  bottom: 3px;
-  z-index: 3;
-  display: flex;
-  gap: 2px;
-  pointer-events: none;
-}
-
-.n-strip {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-}
-
-.n-strip.none {
-  display: none;
-}
-
-/* The board's colour switch: hide every owner strip when off. */
-.n-center.nostrips .n-strip {
-  display: none;
+.n-lgd.np16 .n-lgd-dot {
+  background: var(--pcs16);
 }
 
 /* Scripting-only chrome, like the auto-map button. */
 .nocturne:not(.js) .n-kbcolors {
+  display: none;
+}
+
+/* The board's legend: the key to its own map, and the mute control for
+   each controller's colour. */
+.n-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.n-lgd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 5px;
+  border: 1px solid var(--n-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--n-text-2);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n-lgd:hover {
+  border-color: var(--n-line-2);
+  color: var(--n-text);
+}
+
+.n-lgd-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--n-line-2);
+}
+
+.n-lgd-badge {
+  font-weight: 600;
+}
+
+.n-lgd-name {
+  color: var(--n-text-3);
+}
+
+/* A muted controller's chip goes quiet: hollow dot, dimmed text. */
+.n-lgd.muted {
+  border-style: dashed;
+  color: var(--n-text-3);
+}
+
+.n-lgd.muted .n-lgd-dot {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--n-line-2);
+}
+
+.n-lgd.muted .n-lgd-name {
+  text-decoration: line-through;
+}
+
+/* Scripting-only chrome: without it the chips cannot filter anything. */
+.nocturne:not(.js) .n-legend {
   display: none;
 }
 
@@ -10400,70 +10683,6 @@ button.n-keychip:hover {
 
 .n-swatch.pal16 {
   background: var(--pal16);
-}
-
-.n-strip.s1 {
-  background: var(--pcs1);
-}
-
-.n-strip.s2 {
-  background: var(--pcs2);
-}
-
-.n-strip.s3 {
-  background: var(--pcs3);
-}
-
-.n-strip.s4 {
-  background: var(--pcs4);
-}
-
-.n-strip.s5 {
-  background: var(--pcs5);
-}
-
-.n-strip.s6 {
-  background: var(--pcs6);
-}
-
-.n-strip.s7 {
-  background: var(--pcs7);
-}
-
-.n-strip.s8 {
-  background: var(--pcs8);
-}
-
-.n-strip.s9 {
-  background: var(--pcs9);
-}
-
-.n-strip.s10 {
-  background: var(--pcs10);
-}
-
-.n-strip.s11 {
-  background: var(--pcs11);
-}
-
-.n-strip.s12 {
-  background: var(--pcs12);
-}
-
-.n-strip.s13 {
-  background: var(--pcs13);
-}
-
-.n-strip.s14 {
-  background: var(--pcs14);
-}
-
-.n-strip.s15 {
-  background: var(--pcs15);
-}
-
-.n-strip.s16 {
-  background: var(--pcs16);
 }
 
 /* The relation's other voice: "driven by" before the chip, the mirror of
@@ -11040,7 +11259,11 @@ a.nm-link {
 
 .n-key.live::before {
   transform: translateY(3px);
-  background: linear-gradient(180deg, #b7abf3, var(--n-accent) 70%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--band-a, var(--n-accent)) 55%, #ffffff),
+    var(--band-a, var(--n-accent)) 70%
+  );
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
     0 0 14px rgba(150, 138, 224, 0.45);

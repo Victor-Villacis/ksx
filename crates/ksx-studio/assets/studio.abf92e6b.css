@@ -9976,98 +9976,119 @@ button.n-keychip:hover {
     linear-gradient(180deg, #2e3142, #242737);
 }
 
-/* THE CROWDED KEY. Past four owners the last band stops naming anyone: it
-   goes neutral AND hatched, so it can never be read as some player's grey,
-   and the cap prints how many owners it stands for — the one thing no
-   texture can carry. Every owner is still named in the cap's own sentence,
-   and the legend's filters are how you find a particular one. */
-/* Specific enough to beat the `bd{N}` ladder below: on a crowded key the
-   last band belongs to nobody, so it must not wear the fourth owner's
-   colour while the count says that owner is unnamed. */
-.n-key.bn4.bdmore {
-  --band-d: var(--band-mute);
-}
-
-.n-key.bn4.bdmore::before {
+/* THE STACK. Past four owners the cap stops naming anyone. Three colours
+   out of eight would be an arbitrary three, and a neutral band standing
+   beside a separate "+N" asked you to add two marks that meant the same
+   controllers — which is exactly how it read wrong. So the face becomes ONE
+   woven texture: fine crossed threads in four palette hues, saying
+   "crowded" without claiming to list anybody, and the cap carries the
+   TOTAL. The colour says that many are here; the number says how many.
+   Every owner is still named in the cap's own sentence, and the ring still
+   says whether one of them is yours. */
+.n-key.bstack::before {
   background:
     repeating-linear-gradient(
-        45deg,
-        rgba(233, 233, 237, 0.16) 0 2px,
-        rgba(233, 233, 237, 0) 2px 4px
-      )
-      no-repeat 100% 0 / 25% 100%,
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--band-a) 30%, transparent) 0 25%,
-      color-mix(in srgb, var(--band-b) 30%, transparent) 25% 50%,
-      color-mix(in srgb, var(--band-c) 30%, transparent) 50% 75%,
-      color-mix(in srgb, var(--band-d) 30%, transparent) 75% 100%
+      45deg,
+      rgba(233, 233, 237, 0.06) 0 1px,
+      rgba(0, 0, 0, 0.1) 1px 3px
+    ),
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--pal1) 30%, transparent) 0 2px,
+      color-mix(in srgb, var(--pal2) 30%, transparent) 2px 4px,
+      color-mix(in srgb, var(--pal3) 30%, transparent) 4px 6px,
+      color-mix(in srgb, var(--pal4) 30%, transparent) 6px 8px
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
     linear-gradient(180deg, #2e3142, #242737);
 }
 
-/* The count, in the one corner a keycap has left: the legend sits top
-   left, the binding short bottom right, the homing nubs bottom centre. */
-.n-key[class*="bmore"] .n-key-cap::after {
+/* Under the lens only one controller matters, so a "many players" weave
+   would argue with the button that is on. It falls back to the neutral
+   hatch every other player's key wears — the count stays, because how many
+   share a key is a fact, not a colour. */
+.n-center.solo .n-key.bstack::before {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(233, 233, 237, 0.16) 0 2px,
+      rgba(233, 233, 237, 0) 2px 4px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--band-mute) 30%, transparent) 0 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
+    linear-gradient(180deg, #2e3142, #242737);
+}
+
+/* The total, in the one corner a keycap has left: the legend sits top
+   left, the binding short bottom right, the homing nubs bottom centre. A
+   filled chip, not loose digits — it has to read as a deliberate mark. */
+.n-key[class*="bcount"] .n-key-cap::after {
   position: absolute;
-  top: 21px;
-  left: 0;
+  top: 15px;
+  left: -1px;
+  min-width: 8px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: #0d0f16;
+  box-shadow: inset 0 0 0 1px rgba(233, 233, 237, 0.3);
+  color: #f2f3f7;
   font-size: 7.5px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--n-text-3);
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+  font-weight: 800;
+  line-height: 10px;
+  letter-spacing: -0.02em;
+  text-align: center;
 }
 
-.n-key.bmore2 .n-key-cap::after {
-  content: "+2";
+.n-key.bcount5 .n-key-cap::after {
+  content: "5";
 }
 
-.n-key.bmore3 .n-key-cap::after {
-  content: "+3";
+.n-key.bcount6 .n-key-cap::after {
+  content: "6";
 }
 
-.n-key.bmore4 .n-key-cap::after {
-  content: "+4";
+.n-key.bcount7 .n-key-cap::after {
+  content: "7";
 }
 
-.n-key.bmore5 .n-key-cap::after {
-  content: "+5";
+.n-key.bcount8 .n-key-cap::after {
+  content: "8";
 }
 
-.n-key.bmore6 .n-key-cap::after {
-  content: "+6";
+.n-key.bcount9 .n-key-cap::after {
+  content: "9";
 }
 
-.n-key.bmore7 .n-key-cap::after {
-  content: "+7";
+.n-key.bcount10 .n-key-cap::after {
+  content: "10";
 }
 
-.n-key.bmore8 .n-key-cap::after {
-  content: "+8";
+.n-key.bcount11 .n-key-cap::after {
+  content: "11";
 }
 
-.n-key.bmore9 .n-key-cap::after {
-  content: "+9";
+.n-key.bcount12 .n-key-cap::after {
+  content: "12";
 }
 
-.n-key.bmore10 .n-key-cap::after {
-  content: "+10";
+.n-key.bcount13 .n-key-cap::after {
+  content: "13";
 }
 
-.n-key.bmore11 .n-key-cap::after {
-  content: "+11";
+.n-key.bcount14 .n-key-cap::after {
+  content: "14";
 }
 
-.n-key.bmore12 .n-key-cap::after {
-  content: "+12";
+.n-key.bcount15 .n-key-cap::after {
+  content: "15";
 }
 
-.n-key.bmore13 .n-key-cap::after {
-  content: "+13";
+.n-key.bcount16 .n-key-cap::after {
+  content: "16";
 }
-
 .n-key.ba1 {
   --band-a: var(--kb1);
 }
@@ -10665,6 +10686,47 @@ button.n-keychip:hover {
 }
 
 .n-lgd-name {
+  color: var(--n-text-3);
+}
+
+/* The key to a stacked cap. Not a button — it filters nothing; it says
+   what the weave means, in the one place the colours are already
+   explained. It paints only when some key is actually stacked. */
+.n-lgdmore {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 5px;
+  border: 1px dashed var(--n-line);
+  border-radius: 999px;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.n-lgdmore.none {
+  display: none;
+}
+
+.n-lgdmore-sw {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--pal1) 0 2px,
+    var(--pal2) 2px 4px,
+    var(--pal3) 4px 6px,
+    var(--pal4) 6px 8px
+  );
+}
+
+.n-lgdmore-lbl {
+  font-weight: 600;
+}
+
+.n-lgdmore-name {
   color: var(--n-text-3);
 }
 

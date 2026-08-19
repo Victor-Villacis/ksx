@@ -253,6 +253,7 @@ export interface NocturneView {
   kb_tray_head: string;
   kb_tray_cls: string;
   kb_note: string;
+  kb_more_cls: string;
   cfg_line: string;
   cfg_meta: string;
   cfg_cls: string;
@@ -398,6 +399,7 @@ const [nCtlSys, setNCtlSys] = createSignal<NocturneCtlChipView[]>([]);
 const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
+const [nKbMoreCls, setNKbMoreCls] = createSignal("n-lgdmore none");
 const [nCfgLine, setNCfgLine] = createSignal("");
 const [nCfgMeta, setNCfgMeta] = createSignal("");
 const [nCfgCls, setNCfgCls] = createSignal("nm-cfg");
@@ -525,6 +527,7 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTrayHead(v.kb_tray_head);
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
+  setNKbMoreCls(v.kb_more_cls);
   setNCfgLine(v.cfg_line);
   setNCfgMeta(v.cfg_meta);
   setNCfgCls(v.cfg_cls);
@@ -3898,6 +3901,20 @@ export function NocturneIsland() {
                   h("span", { class: "n-lgd-badge" }, r.badge),
                   h("span", { class: "n-lgd-name" }, r.name),
                 ),
+            ),
+            // ...and the key to a cap that names nobody. A mark nothing
+            // labels is a mark you have to guess at, so the weave gets its
+            // word right here, beside the colours it stands in for.
+            h(
+              "span",
+              {
+                title:
+                  "A key five or more controllers share shows how many, instead of their colours.",
+                class: () => nKbMoreCls(),
+              },
+              h("span", { class: "n-lgdmore-sw" }),
+              h("span", { class: "n-lgdmore-lbl" }, "5+"),
+              h("span", { class: "n-lgdmore-name" }, "share a key"),
             ),
           ),
           h("div", { class: "n-spring" }),

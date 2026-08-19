@@ -7578,11 +7578,12 @@ fn nocturne_paints_the_board_by_owner() {
     assert_eq!(api["view"]["solo_label"], "Only P1", "{api}");
 }
 
-/// **A crowded key stays honest**: four bands is the ceiling a 30px cap can
-/// carry, so a key five controllers share paints three of them, turns the
-/// last band neutral, and names every owner in words.
+/// **A crowded key stacks**: four bands is the ceiling a 30px cap can carry,
+/// so a key five controllers share stops naming anyone — one woven face, the
+/// TOTAL on the cap, and every owner still named in words. Nothing to add:
+/// no band class survives, so the number can only be read as "five".
 #[test]
-fn nocturne_caps_a_crowded_key_at_four_bands() {
+fn nocturne_stacks_a_key_five_controllers_share() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(Arc::clone(&control));
     assert!(
@@ -7641,25 +7642,60 @@ fn nocturne_caps_a_crowded_key_at_four_bands() {
     .expect("Q is on the board")
     .clone();
     let cls = q["cls"].as_str().expect("cls");
-    assert!(cls.contains(" bn4"), "four bands, never five: {q}");
     assert!(
-        cls.contains(" bdmore"),
-        "the last band says 'and others': {q}"
+        cls.contains(" bstack") && cls.contains(" bcount5"),
+        "past four owners the cap stacks and carries the TOTAL: {q}"
     );
     assert!(
-        cls.contains(" bmore2"),
-        "and the cap counts what no band could name — five owners, three \
-         of them named: {q}"
-    );
-    assert!(
-        cls.contains(" ba1") && cls.contains(" bb2") && cls.contains(" bc3"),
-        "slot order, whoever is selected — this page asked for slot 3: {q}"
+        !cls.contains(" bn") && !cls.contains(" ba1") && !cls.contains(" bb2"),
+        "and it names NOBODY — three colours out of five would be an \
+         arbitrary three, and a band beside a count is a sum to work out: {q}"
     );
     assert!(
         q["title"]
             .as_str()
             .is_some_and(|t| t.contains("P1") && t.contains("P5")),
-        "the words name every owner the bands cannot: {q}"
+        "the words still name every owner: {q}"
+    );
+    assert_eq!(
+        api["view"]["kb_more_cls"], "n-lgdmore",
+        "and the legend explains the stacked cap, since nothing else does: {api}"
+    );
+
+    // Exactly four owners is still four named bands: the stack begins where
+    // the colours run out, not before.
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 5 })
+            .ok
+    );
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let q = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "Q")
+    .expect("Q is on the board")
+    .clone();
+    let cls = q["cls"].as_str().expect("cls");
+    assert!(
+        cls.contains(" bn4")
+            && cls.contains(" ba1")
+            && cls.contains(" bb2")
+            && cls.contains(" bc3")
+            && cls.contains(" bd4"),
+        "four owners, four bands, slot order whoever is selected: {q}"
+    );
+    assert!(
+        !cls.contains(" bstack") && !cls.contains(" bcount"),
+        "nothing stacks while every owner has a colour: {q}"
+    );
+    assert_eq!(
+        api["view"]["kb_more_cls"], "n-lgdmore none",
+        "and the legend's key stays away until a cap actually stacks: {api}"
     );
 }
 

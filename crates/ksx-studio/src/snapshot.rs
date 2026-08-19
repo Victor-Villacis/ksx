@@ -4196,6 +4196,9 @@ pub struct NocturneDerived {
     pub kb_tray_head: String,
     pub kb_tray_cls: String,
     pub kb_note: String,
+    /// The legend's key to a STACKED cap, shown only when some key actually
+    /// carries more owners than the bands can name.
+    pub kb_more_cls: String,
     /// The configuration menu, served: the saved-config row, the load/start-
     /// over affordances, the games list, and the sign-in task's fold.
     pub cfg_line: String,
@@ -4722,28 +4725,37 @@ impl NocturneDerived {
         // you are editing, so the stripe itself tells you who is on it and
         // the map never rearranges under you. (Which of them is YOURS is
         // the ring's job — see `--mine` in the sheet.) Four bands is the
-        // honest ceiling at 30px; past it the fourth turns neutral and says
-        // "and others", and the cap's title names every owner in words.
+        // honest ceiling at 30px; past it the cap stops naming owners
+        // altogether and becomes a STACK.
         let bands = |owners: &[u8]| -> String {
             if owners.is_empty() {
                 return String::new();
             }
+            if owners.len() > BAND_MAX {
+                // THE STACK. Three colours out of eight would be an arbitrary
+                // three, and a band plus a separate "+N" makes you add two
+                // marks that stand for the same controllers. So past four the
+                // face becomes one woven texture that names NOBODY, and the
+                // cap carries the TOTAL: nothing to add, nothing to guess.
+                // (Every owner is still named in the cap's own sentence, and
+                // the ring still says whether one of them is yours.)
+                return format!(" bstack bcount{}", owners.len());
+            }
             let mut order: Vec<u8> = owners.to_vec();
             order.sort_unstable();
-            let shown = order.len().min(BAND_MAX);
-            let mut cls = format!(" bn{shown}");
-            for (at, slot) in order.iter().take(shown).enumerate() {
+            let mut cls = format!(" bn{}", order.len());
+            for (at, slot) in order.iter().enumerate() {
                 cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
             }
-            if order.len() > BAND_MAX {
-                // The last band stops being a player and starts standing
-                // for the rest — hatched so it cannot read as somebody's
-                // colour — and the cap says HOW MANY it stands for, which
-                // is the one thing no texture can carry.
-                cls.push_str(" bdmore");
-                cls.push_str(&format!(" bmore{}", order.len() - (BAND_MAX - 1)));
-            }
             cls
+        };
+        // Does any key carry more owners than the bands can name? Then the
+        // legend explains the stacked cap in words, beside the colours it
+        // stands in for — a mark nothing names is a mark you have to guess.
+        let kb_more_cls = if key_slots.values().any(|owners| owners.len() > BAND_MAX) {
+            "n-lgdmore".to_owned()
+        } else {
+            "n-lgdmore none".to_owned()
         };
         // The board's legend: every staged controller with its colour, so
         // "which colour is who" is answerable without the left pane, and
@@ -5538,6 +5550,7 @@ impl NocturneDerived {
             kb_tray_head,
             kb_tray_cls,
             kb_note,
+            kb_more_cls,
             cfg_line,
             cfg_meta,
             cfg_cls,

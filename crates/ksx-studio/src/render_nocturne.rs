@@ -125,6 +125,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayHead": payload.view.kb_tray_head,
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
+        "nKbMoreCls": payload.view.kb_more_cls,
         "nKeysNote": payload.view.keys_note,
         "nAvailMainHead": payload.view.avail_main_head,
         "nAvailNavHead": payload.view.avail_nav_head,
@@ -701,7 +702,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 83] = [
+        const SERVED_SLOTS: [&str; 84] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -742,6 +743,7 @@ mod tests {
             "nKbTrayHead",
             "nKbTrayCls",
             "nKbNote",
+            "nKbMoreCls",
             "nCfgLine",
             "nCfgMeta",
             "nCfgCls",

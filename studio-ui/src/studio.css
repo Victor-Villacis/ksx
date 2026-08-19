@@ -7540,13 +7540,77 @@ a.wsrow-title:hover {
   --kb16: var(--pcs16);
 }
 
-/* A key the SELECTED controller drives wears the ring — that, not the
-   colour, is what says "mine". The colour says WHOSE, and a key can be
-   owned by someone else entirely (see the band recipes below). */
+/* A key the SELECTED controller drives wears the ring, in that
+   controller's own colour — the ring says MINE, the bands say WHOSE. The
+   bands never reorder, so the ring is what moves as you change seats. */
 .n-key.bound::before {
   box-shadow:
     inset 0 1px 0 rgba(233, 233, 237, 0.14),
-    inset 0 0 0 1px color-mix(in srgb, var(--band-a, var(--kbt)) 55%, transparent);
+    inset 0 0 0 1.5px color-mix(in srgb, var(--mine, var(--n-accent)) 70%, transparent);
+}
+
+.n-kb.np1 {
+  --mine: var(--kb1);
+}
+
+.n-kb.np2 {
+  --mine: var(--kb2);
+}
+
+.n-kb.np3 {
+  --mine: var(--kb3);
+}
+
+.n-kb.np4 {
+  --mine: var(--kb4);
+}
+
+.n-kb.np5 {
+  --mine: var(--kb5);
+}
+
+.n-kb.np6 {
+  --mine: var(--kb6);
+}
+
+.n-kb.np7 {
+  --mine: var(--kb7);
+}
+
+.n-kb.np8 {
+  --mine: var(--kb8);
+}
+
+.n-kb.np9 {
+  --mine: var(--kb9);
+}
+
+.n-kb.np10 {
+  --mine: var(--kb10);
+}
+
+.n-kb.np11 {
+  --mine: var(--kb11);
+}
+
+.n-kb.np12 {
+  --mine: var(--kb12);
+}
+
+.n-kb.np13 {
+  --mine: var(--kb13);
+}
+
+.n-kb.np14 {
+  --mine: var(--kb14);
+}
+
+.n-kb.np15 {
+  --mine: var(--kb15);
+}
+
+.n-kb.np16 {
+  --mine: var(--kb16);
 }
 
 .n-key.ghost {

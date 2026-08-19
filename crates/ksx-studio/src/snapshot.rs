@@ -4717,22 +4717,19 @@ impl NocturneDerived {
         }
         // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
         // paints that controller's colour; a key several controllers share
-        // splits into one band each. The SELECTED slot's band always leads,
-        // so "my territory" scans from the left edge whoever else is on the
-        // key — and four bands is the honest ceiling at 30px (past that the
-        // fourth turns neutral and says "and more"; the title names them all).
+        // splits into one band each, ALWAYS in slot order. The order is
+        // stable on purpose: a key P1 and P2 share reads blue|coral whoever
+        // you are editing, so the stripe itself tells you who is on it and
+        // the map never rearranges under you. (Which of them is YOURS is
+        // the ring's job — see `--mine` in the sheet.) Four bands is the
+        // honest ceiling at 30px; past it the fourth turns neutral and says
+        // "and others", and the cap's title names every owner in words.
         let bands = |owners: &[u8]| -> String {
             if owners.is_empty() {
                 return String::new();
             }
             let mut order: Vec<u8> = owners.to_vec();
             order.sort_unstable();
-            if let Some(mine) = selected_number {
-                if let Some(at) = order.iter().position(|n| *n == mine) {
-                    let mine = order.remove(at);
-                    order.insert(0, mine);
-                }
-            }
             let shown = order.len().min(BAND_MAX);
             let mut cls = format!(" bn{shown}");
             for (at, slot) in order.iter().take(shown).enumerate() {

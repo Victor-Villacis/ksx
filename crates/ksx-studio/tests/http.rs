@@ -7643,8 +7643,8 @@ fn nocturne_caps_a_crowded_key_at_four_bands() {
         "the last band says 'and others': {q}"
     );
     assert!(
-        cls.contains(" ba3"),
-        "the SELECTED controller's band leads whoever else is on the key: {q}"
+        cls.contains(" ba1") && cls.contains(" bb2") && cls.contains(" bc3"),
+        "slot order, whoever is selected — this page asked for slot 3: {q}"
     );
     assert!(
         q["title"]

@@ -569,6 +569,7 @@ export function applyNocturne(p: NocturnePayload): void {
     syncPadGrid();
     // Reorders move controllers between seats: the identity colours, the
     // mute classes and the legend follow their presets to the new numbers.
+    pruneHiddenStrips();
     applySlotColors();
     applyNocturneUi();
     syncBoardFilter();
@@ -1023,6 +1024,37 @@ function syncLegend(): void {
       ? "Show this controller's colour on the keys"
       : "Hide this controller's colour on the keys";
   }
+}
+
+/** The presets the last payload carried, so an ARRIVING controller can be
+ *  told apart from one that was here all along. */
+let lastPresets = new Set<string>();
+
+/** A crossing belongs to the controller you crossed — not to its NAME. The
+ *  daemon recycles preset names ("Player 2" comes back the moment a seat
+ *  frees), so a crossing left behind by a removed controller would hide a
+ *  brand-new one the instant it arrives. Two rules keep that honest: drop
+ *  crossings whose controller is gone, and never let one apply to a
+ *  controller that just showed up. Colours are deliberately NOT pruned —
+ *  inheriting a colour hides nothing, and it means an undone removal comes
+ *  back wearing the colour you gave it. */
+function pruneHiddenStrips(): void {
+  const pads = lastBindView?.pads ?? [];
+  // An empty roster is a draft being discarded or adopted, not a removal:
+  // it must not wipe the crossings the next payload will need.
+  if (pads.length === 0) return;
+  const live = new Set(pads.map((pv) => pv.preset));
+  let changed = false;
+  for (const preset of [...hiddenStrips]) {
+    const gone = !live.has(preset);
+    const arrived = live.has(preset) && !lastPresets.has(preset);
+    if (gone || arrived) {
+      hiddenStrips.delete(preset);
+      changed = true;
+    }
+  }
+  lastPresets = live;
+  if (changed) saveHiddenStrips();
 }
 
 /** The lens closed and your own crossings returned: pulse them once, so
@@ -2358,6 +2390,19 @@ export function nocturneWire(root: HTMLElement): void {
     if (form && form.classList.contains("n-idform")) {
       ui.identify = true;
       applyNocturneUi();
+    }
+    if (
+      form instanceof HTMLFormElement &&
+      form.getAttribute("action") === "/nocturne/controller/remove"
+    ) {
+      // A crossing dies with the controller it was made for. Dropping it
+      // HERE, at the removal itself, is what saves the case a later look
+      // at the roster cannot: remove a crossed-out controller and add
+      // another inside one poll, and the newcomer would otherwise inherit
+      // the recycled preset name — and arrive hidden.
+      const number = form.querySelector<HTMLInputElement>('input[name="number"]')?.value ?? "";
+      const preset = presetOfSlot(Number(number));
+      if (preset !== undefined && hiddenStrips.delete(preset)) saveHiddenStrips();
     }
   });
   root.addEventListener("input", (ev) => {

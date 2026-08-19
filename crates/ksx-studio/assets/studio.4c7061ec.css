@@ -9976,10 +9976,96 @@ button.n-keychip:hover {
     linear-gradient(180deg, #2e3142, #242737);
 }
 
-/* The fourth band of a crowded key stops naming a player and starts
-   meaning "and others" — the honest end of a 30px cap. */
-.n-key.bdmore {
+/* THE CROWDED KEY. Past four owners the last band stops naming anyone: it
+   goes neutral AND hatched, so it can never be read as some player's grey,
+   and the cap prints how many owners it stands for — the one thing no
+   texture can carry. Every owner is still named in the cap's own sentence,
+   and the legend's filters are how you find a particular one. */
+/* Specific enough to beat the `bd{N}` ladder below: on a crowded key the
+   last band belongs to nobody, so it must not wear the fourth owner's
+   colour while the count says that owner is unnamed. */
+.n-key.bn4.bdmore {
   --band-d: var(--band-mute);
+}
+
+.n-key.bn4.bdmore::before {
+  background:
+    repeating-linear-gradient(
+        45deg,
+        rgba(233, 233, 237, 0.16) 0 2px,
+        rgba(233, 233, 237, 0) 2px 4px
+      )
+      no-repeat 100% 0 / 25% 100%,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--band-a) 30%, transparent) 0 25%,
+      color-mix(in srgb, var(--band-b) 30%, transparent) 25% 50%,
+      color-mix(in srgb, var(--band-c) 30%, transparent) 50% 75%,
+      color-mix(in srgb, var(--band-d) 30%, transparent) 75% 100%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
+    linear-gradient(180deg, #2e3142, #242737);
+}
+
+/* The count, in the one corner a keycap has left: the legend sits top
+   left, the binding short bottom right, the homing nubs bottom centre. */
+.n-key[class*="bmore"] .n-key-cap::after {
+  position: absolute;
+  top: 21px;
+  left: 0;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--n-text-3);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.n-key.bmore2 .n-key-cap::after {
+  content: "+2";
+}
+
+.n-key.bmore3 .n-key-cap::after {
+  content: "+3";
+}
+
+.n-key.bmore4 .n-key-cap::after {
+  content: "+4";
+}
+
+.n-key.bmore5 .n-key-cap::after {
+  content: "+5";
+}
+
+.n-key.bmore6 .n-key-cap::after {
+  content: "+6";
+}
+
+.n-key.bmore7 .n-key-cap::after {
+  content: "+7";
+}
+
+.n-key.bmore8 .n-key-cap::after {
+  content: "+8";
+}
+
+.n-key.bmore9 .n-key-cap::after {
+  content: "+9";
+}
+
+.n-key.bmore10 .n-key-cap::after {
+  content: "+10";
+}
+
+.n-key.bmore11 .n-key-cap::after {
+  content: "+11";
+}
+
+.n-key.bmore12 .n-key-cap::after {
+  content: "+12";
+}
+
+.n-key.bmore13 .n-key-cap::after {
+  content: "+13";
 }
 
 .n-key.ba1 {

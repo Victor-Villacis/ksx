@@ -7647,6 +7647,11 @@ fn nocturne_caps_a_crowded_key_at_four_bands() {
         "the last band says 'and others': {q}"
     );
     assert!(
+        cls.contains(" bmore2"),
+        "and the cap counts what no band could name — five owners, three \
+         of them named: {q}"
+    );
+    assert!(
         cls.contains(" ba1") && cls.contains(" bb2") && cls.contains(" bc3"),
         "slot order, whoever is selected — this page asked for slot 3: {q}"
     );

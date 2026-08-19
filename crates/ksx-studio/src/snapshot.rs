@@ -4736,9 +4736,12 @@ impl NocturneDerived {
                 cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
             }
             if order.len() > BAND_MAX {
-                // The last band stops being a player and starts being a
-                // count: "these three, and others".
+                // The last band stops being a player and starts standing
+                // for the rest — hatched so it cannot read as somebody's
+                // colour — and the cap says HOW MANY it stands for, which
+                // is the one thing no texture can carry.
                 cls.push_str(" bdmore");
+                cls.push_str(&format!(" bmore{}", order.len() - (BAND_MAX - 1)));
             }
             cls
         };

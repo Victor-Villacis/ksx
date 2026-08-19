@@ -6266,11 +6266,11 @@ a.wsrow-title:hover {
      colour, default = palette slot N); a user's pick overrides --pcs{N} on
      the island root from browser-kept state. Identity colours only — they
      never carry status meaning. */
-  --pal1: #a98ae0;
-  --pal2: #4da6ff;
-  --pal3: #ff6b5e;
-  --pal4: #45d05e;
-  --pal5: #ffd23e;
+  --pal1: #4da6ff;
+  --pal2: #ff6b5e;
+  --pal3: #45d05e;
+  --pal4: #ffd23e;
+  --pal5: #a98ae0;
   --pal6: #35d1d1;
   --pal7: #e763e7;
   --pal8: #ff9636;
@@ -6811,12 +6811,80 @@ a.wsrow-title:hover {
   cursor: grab;
 }
 
+/* The hole the dragged card left behind. */
 .n-slot.dragging {
-  opacity: 0.45;
+  border: 1px dashed var(--n-accent-line);
+  background: rgba(150, 138, 224, 0.05);
 }
 
-.n-slot.dropmark {
-  box-shadow: inset 0 2px 0 var(--n-accent);
+.n-slot.dragging > * {
+  opacity: 0.25;
+}
+
+/* The crisp card the pointer carries: rendered off-screen only long
+   enough for setDragImage to photograph it. */
+.n-dragghost {
+  position: fixed;
+  top: -400px;
+  left: 0;
+  z-index: -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 10px;
+  background: var(--n-panel-2);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.n-dragghost .n-sact-row,
+.n-dragghost .n-cpick {
+  display: none;
+}
+
+/* The insertion bar points at the exact seam the card will land in, and
+   the neighbour breathes aside to open the gap. */
+.n-slot.dropbefore,
+.n-slot.dropafter {
+  transition: transform 120ms ease;
+}
+
+.n-slot.dropbefore {
+  transform: translateY(3px);
+}
+
+.n-slot.dropafter {
+  transform: translateY(-3px);
+}
+
+.n-slot.dropbefore::before,
+.n-slot.dropafter::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--n-accent);
+  box-shadow: 0 0 8px rgba(150, 138, 224, 0.7);
+}
+
+.n-slot.dropbefore::before {
+  top: -5px;
+}
+
+.n-slot.dropafter::after {
+  bottom: -5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-slot.dropbefore,
+  .n-slot.dropafter {
+    transition: none;
+    transform: none;
+  }
 }
 
 .n-slot.on {
@@ -9837,6 +9905,22 @@ button.n-keychip:hover {
 
 .n-swatch:hover {
   transform: scale(1.15);
+}
+
+/* A colour another controller wears: visible, honest, unavailable. */
+.n-swatch.taken {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.n-swatch.taken:hover {
+  transform: none;
+}
+
+/* This controller's current colour. */
+.n-swatch.mine {
+  outline: 2px solid var(--n-text);
+  outline-offset: 2px;
 }
 
 /* Cap owner strips: one segment per controller this key drives, anywhere

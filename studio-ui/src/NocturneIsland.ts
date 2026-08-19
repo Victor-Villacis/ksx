@@ -828,6 +828,28 @@ function loadSlotColors(): void {
   }
 }
 
+/** Dress every open picker's swatches with the truth: the slot's own
+ *  colour ringed, colours worn by OTHER controllers disabled and named.
+ *  Runs when a picker opens and after a pick — never at hydration, so the
+ *  SSR paint stays byte-identical. */
+function refreshSwatches(): void {
+  const root = learnRoot;
+  if (!root) return;
+  const pads = lastBindView?.pads ?? [];
+  const effective = (n: number): number => slotColors[String(n)] ?? ((n - 1) % 16) + 1;
+  for (const pick of Array.from(root.querySelectorAll<HTMLElement>(".n-cpick[data-slot]"))) {
+    const slot = Number(pick.getAttribute("data-slot") ?? "");
+    for (const sw of Array.from(pick.querySelectorAll<HTMLButtonElement>(".n-swatch"))) {
+      const color = Number(sw.getAttribute("data-color") ?? "");
+      const owner = pads.find((pv) => pv.slot !== slot && effective(pv.slot) === color);
+      sw.disabled = Boolean(owner);
+      sw.classList.toggle("taken", Boolean(owner));
+      sw.classList.toggle("mine", color === effective(slot));
+      sw.title = owner ? `Worn by P${owner.slot}` : `Colour ${color}`;
+    }
+  }
+}
+
 function applySlotColors(): void {
   const root = learnRoot;
   if (!root) return;
@@ -1976,18 +1998,36 @@ export function nocturneWire(root: HTMLElement): void {
   // whole-order verb the ▴▾ twins post — the drop rewrites the dragged
   // row's own move form and submits it through the ordinary fetch path.
   let dragSlot: string | null = null;
+  let dropTarget: { slot: string; before: boolean } | null = null;
   const dropClean = (): void => {
+    dropTarget = null;
     for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-slot-row]"))) {
-      el.classList.remove("dragging", "dropmark");
+      el.classList.remove("dragging", "dropbefore", "dropafter");
     }
   };
   root.addEventListener("dragstart", (ev) => {
     const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
     if (!row) return;
     dragSlot = row.getAttribute("data-slot-row");
-    row.classList.add("dragging");
     ev.dataTransfer?.setData("text/plain", dragSlot ?? "");
-    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "move";
+      // The browser's default ghost is a washed-out smear of the whole
+      // row. Snapshot a CRISP card instead: a styled clone, rendered
+      // off-screen just long enough for setDragImage to photograph it.
+      const ghost = row.cloneNode(true) as HTMLElement;
+      ghost.classList.add("n-dragghost");
+      ghost.classList.remove("dragging", "on");
+      ghost.querySelector(".n-cpick-pop")?.remove();
+      ghost.style.width = `${row.offsetWidth}px`;
+      root.appendChild(ghost);
+      const box = row.getBoundingClientRect();
+      ev.dataTransfer.setDragImage(ghost, ev.clientX - box.left, ev.clientY - box.top);
+      window.setTimeout(() => ghost.remove(), 0);
+    }
+    // The row itself becomes the HOLE the card left behind — a tick
+    // later, so the drag image never photographs the hole state.
+    window.setTimeout(() => row.classList.add("dragging"), 0);
   });
   root.addEventListener("dragover", (ev) => {
     if (dragSlot === null) return;
@@ -1995,15 +2035,26 @@ export function nocturneWire(root: HTMLElement): void {
     if (!row) return;
     ev.preventDefault();
     if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    const slot = row.getAttribute("data-slot-row") ?? "";
+    const box = row.getBoundingClientRect();
+    const before = ev.clientY < box.top + box.height / 2;
+    if (slot === dragSlot) {
+      if (dropTarget !== null) dropClean();
+      return;
+    }
+    // Touch the DOM only when the answer changes — dragover fires in
+    // torrents and class churn would make the bar flicker.
+    if (dropTarget && dropTarget.slot === slot && dropTarget.before === before) return;
+    dropTarget = { slot, before };
     for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-slot-row]"))) {
-      el.classList.toggle(
-        "dropmark",
-        el === row && row.getAttribute("data-slot-row") !== dragSlot,
-      );
+      const here = el === row;
+      el.classList.toggle("dropbefore", here && before);
+      el.classList.toggle("dropafter", here && !before);
     }
   });
   root.addEventListener("drop", (ev) => {
     const from = dragSlot;
+    const target = dropTarget;
     dragSlot = null;
     const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
     if (from === null || !row) {
@@ -2016,12 +2067,15 @@ export function nocturneWire(root: HTMLElement): void {
     const to = row.getAttribute("data-slot-row") ?? "";
     dropClean();
     if (from === to) return;
-    // Dragging down lands AFTER the target, up lands BEFORE — the
-    // standard feel.
+    // The bar told the truth, so the drop honours it: above the target's
+    // midline inserts before it, below inserts after.
+    const before =
+      target && target.slot === to ? target.before : numbers.indexOf(from) > numbers.indexOf(to);
     const without = numbers.filter((n) => n !== from);
     let at = without.indexOf(to);
-    if (numbers.indexOf(from) < numbers.indexOf(to)) at += 1;
+    if (!before) at += 1;
     without.splice(at, 0, from);
+    if (without.join(" ") === numbers.join(" ")) return;
     const source = rows.find((el) => el.getAttribute("data-slot-row") === from);
     const form = source?.querySelector<HTMLFormElement>(
       'form[action="/nocturne/controller/move"]',
@@ -2041,6 +2095,11 @@ export function nocturneWire(root: HTMLElement): void {
     (ev) => {
       const el = ev.target;
       if (!(el instanceof HTMLDetailsElement)) return;
+      // A colour picker opening gets the current availability truth.
+      if (el.classList.contains("n-cpick") && el.open) {
+        refreshSwatches();
+        return;
+      }
       if (!el.closest(".n-right")) return;
       const fn = el.getAttribute("data-fn");
       if (!fn) return;
@@ -2376,16 +2435,15 @@ export function nocturneWire(root: HTMLElement): void {
       const slot = Number(pick?.getAttribute("data-slot") ?? "");
       const color = Number(btn?.getAttribute("data-color") ?? "");
       if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16) {
-        // No two controllers wear the same colour: picking one another
-        // slot already wears SWAPS the two.
+        // A colour another controller wears is UNAVAILABLE, never stolen:
+        // the swatch is disabled, and this guard backs the styling up. It
+        // frees the moment its owner moves off it.
         const effective = (n: number): number =>
           slotColors[String(n)] ?? ((n - 1) % 16) + 1;
-        const previous = effective(slot);
-        for (const pv of lastBindView?.pads ?? []) {
-          if (pv.slot !== slot && effective(pv.slot) === color) {
-            slotColors[String(pv.slot)] = previous;
-          }
-        }
+        const wornBy = (lastBindView?.pads ?? []).find(
+          (pv) => pv.slot !== slot && effective(pv.slot) === color,
+        );
+        if (wornBy) return;
         slotColors[String(slot)] = color;
         try {
           window.localStorage.setItem(COLOR_STORE, JSON.stringify(slotColors));
@@ -2393,6 +2451,7 @@ export function nocturneWire(root: HTMLElement): void {
           // The pick simply will not survive this session.
         }
         applySlotColors();
+        refreshSwatches();
         pick?.closest("details")?.removeAttribute("open");
       }
     } else if (hit === "key-remove") {

@@ -9763,6 +9763,7 @@ button.n-keychip:hover {
 
 .n-stage.multi {
   overflow-y: auto;
+  min-height: 300px;
 }
 
 .n-stage.multi .n-padgrid {
@@ -9770,6 +9771,7 @@ button.n-keychip:hover {
   width: 100%;
   grid-template-columns: repeat(auto-fill, var(--padw, 340px));
   justify-content: center;
+  padding-bottom: 16px;
   gap: 14px;
   align-content: start;
   align-self: stretch;

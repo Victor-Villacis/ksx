@@ -631,11 +631,15 @@ function fitPadWidth(grid: HTMLElement, count: number): number {
   const gap = 14;
   let best = 220;
   for (let cols = 1; cols <= count; cols += 1) {
-    const w = Math.floor((cw - gap * (cols - 1)) / cols);
-    if (w < 220) break;
     const rows = Math.ceil(count / cols);
-    const h = rows * w * ratio + gap * (rows - 1);
-    if (h <= ch) best = Math.max(best, Math.min(w, 820));
+    // Width capped by BOTH axes: the columns' share of the width AND the
+    // rows' share of the height — a wide short stage fits pads by height,
+    // not by collapsing to the floor.
+    const byWidth = (cw - gap * (cols - 1)) / cols;
+    const byHeight = (ch - gap * (rows - 1)) / rows / ratio;
+    const w = Math.floor(Math.min(byWidth, byHeight));
+    if (w < 220) continue;
+    best = Math.max(best, Math.min(w, 820));
   }
   return best;
 }
@@ -680,7 +684,10 @@ export function syncPadGrid(): void {
   if (!stage || !grid) return;
   const pads = v.pads ?? [];
   const on = ui.padsAll && pads.length > 0;
+  const was = stage.classList.contains("multi");
   stage.classList.toggle("multi", on);
+  // The board's height budget depends on this mode; refit it on a flip.
+  if (was !== on) scheduleKbFit();
   const btn = root.querySelector<HTMLElement>(".n-padsbtn");
   btn?.setAttribute("aria-pressed", on ? "true" : "false");
   if (!on) {
@@ -720,8 +727,20 @@ export function syncPadGrid(): void {
   }
   // Size the tracks AFTER the clones exist, so Fit can measure a real
   // card's aspect instead of guessing.
-  const width = ui.padZoom < 0 ? fitPadWidth(grid, pads.length) : (PAD_STEPS[ui.padZoom] ?? 340);
+  let width = ui.padZoom < 0 ? fitPadWidth(grid, pads.length) : (PAD_STEPS[ui.padZoom] ?? 340);
   grid.style.setProperty("--padw", `${width}px`);
+  if (ui.padZoom < 0) {
+    // The estimate can miss by a hair (constant card chrome, paddings):
+    // measure the real overflow and shrink once to guarantee the fit.
+    const stageBox = grid.closest<HTMLElement>(".n-stage");
+    if (stageBox && stageBox.scrollHeight > stageBox.clientHeight) {
+      width = Math.max(
+        220,
+        Math.floor((width * stageBox.clientHeight) / stageBox.scrollHeight) - 2,
+      );
+      grid.style.setProperty("--padw", `${width}px`);
+    }
+  }
   root
     .querySelector('[data-nx="pad-zoom-fit"]')
     ?.setAttribute("aria-pressed", ui.padZoom < 0 ? "true" : "false");
@@ -999,10 +1018,24 @@ function fitKeyboard(): void {
   const naturalW = kbcase.offsetWidth;
   const naturalH = kbcase.offsetHeight;
   if (available === 0 || naturalW === 0) return; // collapsed or not laid out
-  const f = Math.min(1.9, Math.max(0.55, available / naturalW));
-  kbcase.style.transform = "scale(" + f + ")";
+  // Width alone is not the fit: on a wide short window a width-scaled
+  // board balloons and starves the stage. The board's height is budgeted
+  // to a share of the centre column — tighter when the multi-pad grid is
+  // open, because the pads are the point of that view.
+  const center = root.querySelector<HTMLElement>(".n-center");
+  const multi = Boolean(root.querySelector(".n-stage.multi"));
+  const budget = center ? center.clientHeight * (multi ? 0.42 : 0.52) : Number.POSITIVE_INFINITY;
+  const byWidth = available / naturalW;
+  const byHeight = naturalH > 0 ? budget / naturalH : byWidth;
+  const f = Math.min(1.9, Math.max(0.45, Math.min(byWidth, byHeight)));
+  const next = "scale(" + f + ")";
+  const changed = kbcase.style.transform !== next;
+  kbcase.style.transform = next;
   kbcase.style.transformOrigin = "top left";
   kb.style.height = Math.ceil(naturalH * f) + "px";
+  // The stage's height just moved; a fitted pad grid re-solves against
+  // it. Converges: the second pass computes the same scale and stops.
+  if (changed && multi) schedulePadFit();
 }
 
 /** Close the configuration menu (a native details, not signal state). */

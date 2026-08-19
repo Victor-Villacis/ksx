@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "20607d3b55d62a7ef52fae96ca978a9df69a7916b48926f81a69e8a1322b719c",
+  "build_hash": "77473d1bf763efdeb412e2db316187e0ce5eea58fcf375ce977a5a679a104087",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -9,7 +9,7 @@
     "map.ir": "map.eb1d7603.ir",
     "map.js": "map.c744fd4d.js",
     "nocturne.ir": "nocturne.adec72ba.ir",
-    "nocturne.js": "nocturne.3826ac2d.js",
+    "nocturne.js": "nocturne.db673917.js",
     "pads.ir": "pads.69bd275e.ir",
     "pads.js": "pads.be7a85f6.js",
     "profiles.ir": "profiles.d349949d.ir",
@@ -20,7 +20,7 @@
     "start.js": "start.a5f93f92.js",
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
-    "studio.css": "studio.d0ce972e.css",
+    "studio.css": "studio.a7d4f87f.css",
     "workspace.ir": "workspace.a7e0bee7.ir",
     "workspace.js": "workspace.c5857a02.js"
   },
@@ -30,10 +30,10 @@
         "start.a5f93f92.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 60584,
+      "total_size_br": 60687,
       "budget_warn_threshold": 200000,
       "ir": "start.b0a4715d.ir"
     },
@@ -42,22 +42,22 @@
         "workspace.c5857a02.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 59214,
+      "total_size_br": 59317,
       "budget_warn_threshold": 200000,
       "ir": "workspace.a7e0bee7.ir"
     },
     "/nocturne": {
       "js": [
-        "nocturne.3826ac2d.js"
+        "nocturne.db673917.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 77865,
+      "total_size_br": 78110,
       "budget_warn_threshold": 200000,
       "ir": "nocturne.adec72ba.ir"
     },
@@ -66,10 +66,10 @@
         "status.fa50ec52.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 58083,
+      "total_size_br": 58186,
       "budget_warn_threshold": 200000,
       "ir": "status.cee9d0b7.ir"
     },
@@ -78,10 +78,10 @@
         "map.c744fd4d.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 85613,
+      "total_size_br": 85716,
       "budget_warn_threshold": 200000,
       "ir": "map.eb1d7603.ir"
     },
@@ -90,10 +90,10 @@
         "check.462901ec.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 57663,
+      "total_size_br": 57766,
       "budget_warn_threshold": 200000,
       "ir": "check.33266fab.ir"
     },
@@ -102,10 +102,10 @@
         "pads.be7a85f6.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 57777,
+      "total_size_br": 57880,
       "budget_warn_threshold": 200000,
       "ir": "pads.69bd275e.ir"
     },
@@ -114,10 +114,10 @@
         "devices.263a38f8.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 59256,
+      "total_size_br": 59359,
       "budget_warn_threshold": 200000,
       "ir": "devices.ba76544a.ir"
     },
@@ -126,10 +126,10 @@
         "profiles.fcb79b2f.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 58746,
+      "total_size_br": 58849,
       "budget_warn_threshold": 200000,
       "ir": "profiles.d349949d.ir"
     },
@@ -138,10 +138,10 @@
         "setup.aa677118.js"
       ],
       "css": [
-        "studio.d0ce972e.css"
+        "studio.a7d4f87f.css"
       ],
       "fonts": [],
-      "total_size_br": 58639,
+      "total_size_br": 58742,
       "budget_warn_threshold": 200000,
       "ir": "setup.69a0eb9c.ir"
     }

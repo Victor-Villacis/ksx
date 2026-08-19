@@ -3986,6 +3986,10 @@ pub struct NocturnePadView {
     pub slot: u8,
     /// "xbox" | "ps" — which master silhouette the client clones.
     pub family: String,
+    /// The slot's preset name — the controller's STABLE identity across
+    /// reorders (seats renumber, worksheets travel), which is what the
+    /// client keys its identity colours by.
+    pub preset: String,
     pub title: String,
     /// Canonical fn → its key chip ("G · H"), for the clone's callouts.
     pub fn_keys: std::collections::BTreeMap<String, String>,
@@ -4726,6 +4730,7 @@ impl NocturneDerived {
                 NocturnePadView {
                     slot: slot.number,
                     family: if slot.is_xinput { "xbox" } else { "ps" }.to_owned(),
+                    preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
                     fn_names,

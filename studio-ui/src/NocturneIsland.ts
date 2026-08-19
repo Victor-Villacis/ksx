@@ -230,6 +230,7 @@ export interface NocturneView {
   pads: {
     slot: number;
     family: string;
+    preset: string;
     title: string;
     fn_keys: Record<string, string>;
     fn_names: Record<string, string>;
@@ -553,6 +554,10 @@ export function applyNocturne(p: NocturnePayload): void {
   if (learnRoot) {
     paintStageCallouts();
     syncPadGrid();
+    // Reorders move controllers between seats: the identity colours and
+    // the hidden-strip classes follow their presets to the new numbers.
+    applySlotColors();
+    applyNocturneUi();
   }
 }
 
@@ -827,11 +832,15 @@ function applyNocturneUi(): void {
   setNRightCls(
     "n-right" + (ui.rightRail ? " rail" : "") + (ui.rightView === "keys" ? " keys-mode" : ""),
   );
+  const pads = lastBindView?.pads ?? [];
   setNCenterCls(
     "n-center" +
       (ui.kbClosed ? " kb-closed" : "") +
       (ui.kbColors ? "" : " nostrips") +
-      [...hiddenStrips].map((n) => ` hs${n}`).join(""),
+      pads
+        .filter((pv) => hiddenStrips.has(pv.preset))
+        .map((pv) => ` hs${pv.slot}`)
+        .join(""),
   );
   // Any pane change resizes the center: the board refits.
   scheduleKbFit();
@@ -877,23 +886,64 @@ function loadUiPrefs(): void {
   }
 }
 
-/** Per-slot colour overrides (slot number → palette index 1..16), kept in
- *  this browser: identity colours are a viewing aid, not daemon state. The
- *  defaults live in CSS (`--pcs{N}: var(--pal{N})`); an override writes the
- *  variable on the island root — absent entirely until a user picks one, so
- *  the parity gate's empty-storage run never sees a style attribute. */
-const COLOR_STORE = "ksx-nocturne-colors";
-let slotColors: Record<string, number> = {};
-/** Slots whose colour strips are hidden on the BOARD (browser-kept, like
- *  the colours themselves). The kbhead's "Colours" button stays the master
- *  switch over all of them. */
-const STRIPS_STORE = "ksx-nocturne-strips";
-let hiddenStrips = new Set<number>();
+/** Identity colours, keyed by PRESET NAME — the controller's stable
+ *  identity: seats renumber on reorder, worksheets travel, and the colour
+ *  travels with them. First-seen defaults are made STICKY (persisted), so
+ *  even a never-touched controller keeps its colour wherever it moves;
+ *  new controllers take the first free colour. Browser-kept, never daemon
+ *  state; with an empty store the assignment equals the CSS defaults and
+ *  no style attribute is written (the parity gate's rule). */
+const COLOR_STORE = "ksx-nocturne-colors2";
+let padColors: Record<string, number> = {};
+/** Presets whose colour strips are hidden on the BOARD (same identity
+ *  rule). The kbhead's "Colours" button stays the master switch. */
+const STRIPS_STORE = "ksx-nocturne-strips2";
+let hiddenStrips = new Set<string>();
+
+function saveSlotColors(): void {
+  try {
+    window.localStorage.setItem(COLOR_STORE, JSON.stringify(padColors));
+  } catch {
+    // The preference simply will not survive this session.
+  }
+}
+
+/** Every current pad's colour, resolved: picks first, then seat defaults
+ *  skipping taken colours; unseen presets get their default PERSISTED so
+ *  it sticks to the controller from now on. */
+function colourAssignments(): Map<number, number> {
+  const pads = lastBindView?.pads ?? [];
+  const out = new Map<number, number>();
+  const taken = new Set<number>();
+  let learned = false;
+  for (const pv of pads) {
+    const pick = padColors[pv.preset];
+    if (typeof pick === "number" && pick >= 1 && pick <= 16 && !taken.has(pick)) {
+      out.set(pv.slot, pick);
+      taken.add(pick);
+    }
+  }
+  for (const pv of pads) {
+    if (out.has(pv.slot)) continue;
+    let idx = ((pv.slot - 1) % 16) + 1;
+    while (taken.has(idx)) idx = (idx % 16) + 1;
+    out.set(pv.slot, idx);
+    taken.add(idx);
+    padColors[pv.preset] = idx;
+    learned = true;
+  }
+  if (learned) saveSlotColors();
+  return out;
+}
+
+function presetOfSlot(slot: number): string | undefined {
+  return (lastBindView?.pads ?? []).find((pv) => pv.slot === slot)?.preset;
+}
 
 function loadHiddenStrips(): void {
   try {
     const raw = window.localStorage.getItem(STRIPS_STORE);
-    hiddenStrips = new Set(raw ? (JSON.parse(raw) as number[]) : []);
+    hiddenStrips = new Set(raw ? (JSON.parse(raw) as string[]) : []);
   } catch {
     hiddenStrips = new Set();
   }
@@ -910,9 +960,9 @@ function saveHiddenStrips(): void {
 function loadSlotColors(): void {
   try {
     const raw = window.localStorage.getItem(COLOR_STORE);
-    slotColors = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    padColors = raw ? (JSON.parse(raw) as Record<string, number>) : {};
   } catch {
-    slotColors = {};
+    padColors = {};
   }
 }
 
@@ -924,31 +974,33 @@ function refreshSwatches(): void {
   const root = learnRoot;
   if (!root) return;
   const pads = lastBindView?.pads ?? [];
-  const effective = (n: number): number => slotColors[String(n)] ?? ((n - 1) % 16) + 1;
+  const assigned = colourAssignments();
   for (const pick of Array.from(root.querySelectorAll<HTMLElement>(".n-cpick[data-slot]"))) {
     const slot = Number(pick.getAttribute("data-slot") ?? "");
     for (const sw of Array.from(pick.querySelectorAll<HTMLButtonElement>(".n-swatch"))) {
       const color = Number(sw.getAttribute("data-color") ?? "");
-      const owner = pads.find((pv) => pv.slot !== slot && effective(pv.slot) === color);
+      const owner = pads.find((pv) => pv.slot !== slot && assigned.get(pv.slot) === color);
       sw.disabled = Boolean(owner);
       sw.classList.toggle("taken", Boolean(owner));
-      sw.classList.toggle("mine", color === effective(slot));
+      sw.classList.toggle("mine", color === assigned.get(slot));
       sw.title = owner ? `Worn by P${owner.slot}` : `Colour ${color}`;
     }
     const box = pick.querySelector<HTMLInputElement>(".n-strows input");
-    if (box) box.checked = !hiddenStrips.has(slot);
+    const preset = presetOfSlot(slot);
+    if (box) box.checked = !(preset !== undefined && hiddenStrips.has(preset));
   }
 }
 
 function applySlotColors(): void {
   const root = learnRoot;
   if (!root) return;
-  for (const [slot, idx] of Object.entries(slotColors)) {
-    const n = Number(slot);
-    const i = Number(idx);
-    if (n >= 1 && n <= 16 && i >= 1 && i <= 16) {
-      root.style.setProperty(`--pcs${n}`, `var(--pal${i})`);
-    }
+  const assigned = colourAssignments();
+  for (const [slot, idx] of assigned) {
+    const fallback = ((slot - 1) % 16) + 1;
+    // Write only where the truth differs from the CSS default (and clear
+    // where it no longer does): an untouched setup writes nothing.
+    if (idx !== fallback) root.style.setProperty(`--pcs${slot}`, `var(--pal${idx})`);
+    else root.style.removeProperty(`--pcs${slot}`);
   }
 }
 
@@ -2560,9 +2612,10 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "slot-strips") {
       const box = target?.closest<HTMLInputElement>('input[data-nx="slot-strips"]');
       const slot = Number(box?.closest("[data-slot]")?.getAttribute("data-slot") ?? "");
-      if (box && slot >= 1 && slot <= 16) {
-        if (box.checked) hiddenStrips.delete(slot);
-        else hiddenStrips.add(slot);
+      const preset = presetOfSlot(slot);
+      if (box && preset !== undefined) {
+        if (box.checked) hiddenStrips.delete(preset);
+        else hiddenStrips.add(preset);
         saveHiddenStrips();
         applyNocturneUi();
       }
@@ -2571,22 +2624,18 @@ export function nocturneWire(root: HTMLElement): void {
       const pick = btn?.closest<HTMLElement>("[data-slot]");
       const slot = Number(pick?.getAttribute("data-slot") ?? "");
       const color = Number(btn?.getAttribute("data-color") ?? "");
-      if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16) {
+      const preset = presetOfSlot(slot);
+      if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16 && preset !== undefined) {
         // A colour another controller wears is UNAVAILABLE, never stolen:
         // the swatch is disabled, and this guard backs the styling up. It
         // frees the moment its owner moves off it.
-        const effective = (n: number): number =>
-          slotColors[String(n)] ?? ((n - 1) % 16) + 1;
+        const assigned = colourAssignments();
         const wornBy = (lastBindView?.pads ?? []).find(
-          (pv) => pv.slot !== slot && effective(pv.slot) === color,
+          (pv) => pv.slot !== slot && assigned.get(pv.slot) === color,
         );
         if (wornBy) return;
-        slotColors[String(slot)] = color;
-        try {
-          window.localStorage.setItem(COLOR_STORE, JSON.stringify(slotColors));
-        } catch {
-          // The pick simply will not survive this session.
-        }
+        padColors[preset] = color;
+        saveSlotColors();
         applySlotColors();
         refreshSwatches();
         pick?.closest("details")?.removeAttribute("open");

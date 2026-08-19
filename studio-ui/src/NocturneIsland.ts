@@ -612,6 +612,44 @@ export function paintStageCallouts(): void {
  *  only when the pad roster changes. */
 let padGridPrint = "";
 
+/** The zoom ladder: EXACT pad widths (fixed tracks, so every step is a
+ *  visible size change; auto-fill wraps the columns). `padZoom` of -1 is
+ *  FIT: the largest width that shows every pad without scrolling, solved
+ *  against the stage's box and re-solved on resize. */
+const PAD_STEPS = [240, 300, 380, 480, 600, 760];
+
+function fitPadWidth(grid: HTMLElement, count: number): number {
+  const stage = grid.closest<HTMLElement>(".n-stage");
+  const cw = grid.clientWidth - 20;
+  const ch = (stage?.clientHeight ?? 0) - 24;
+  if (cw <= 0 || ch <= 0 || count === 0) return 340;
+  // A card's height follows its width; measure a real card when one
+  // exists, else start from the art's rough aspect.
+  const sample = grid.querySelector<HTMLElement>(".n-mini");
+  const ratio =
+    sample && sample.offsetWidth > 0 ? sample.offsetHeight / sample.offsetWidth : 0.95;
+  const gap = 14;
+  let best = 220;
+  for (let cols = 1; cols <= count; cols += 1) {
+    const w = Math.floor((cw - gap * (cols - 1)) / cols);
+    if (w < 220) break;
+    const rows = Math.ceil(count / cols);
+    const h = rows * w * ratio + gap * (rows - 1);
+    if (h <= ch) best = Math.max(best, Math.min(w, 820));
+  }
+  return best;
+}
+
+let padFitQueued = false;
+function schedulePadFit(): void {
+  if (padFitQueued) return;
+  padFitQueued = true;
+  window.requestAnimationFrame(() => {
+    padFitQueued = false;
+    if (ui.padsAll) syncPadGrid();
+  });
+}
+
 function calloutText(chip: string, capFor: (name: string) => string): string {
   let text = chip
     .split(" \u00b7 ")
@@ -653,9 +691,6 @@ export function syncPadGrid(): void {
     }
     return;
   }
-  // The zoom ladder: the pads' MINIMUM width; the grid refills columns.
-  const PAD_ZOOM = [260, 340, 450, 580];
-  grid.style.setProperty("--padmin", `${PAD_ZOOM[ui.padZoom] ?? 340}px`);
   const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.title).join("|");
   if (print !== padGridPrint) {
     padGridPrint = print;
@@ -683,6 +718,13 @@ export function syncPadGrid(): void {
     }
     liveFnNodes = null;
   }
+  // Size the tracks AFTER the clones exist, so Fit can measure a real
+  // card's aspect instead of guessing.
+  const width = ui.padZoom < 0 ? fitPadWidth(grid, pads.length) : (PAD_STEPS[ui.padZoom] ?? 340);
+  grid.style.setProperty("--padw", `${width}px`);
+  root
+    .querySelector('[data-nx="pad-zoom-fit"]')
+    ?.setAttribute("aria-pressed", ui.padZoom < 0 ? "true" : "false");
   // Dress every clone's callouts from ITS slot's own table.
   const capFor = capForBoard(root);
   for (const wrap of Array.from(grid.querySelectorAll<HTMLElement>("[data-pad-slot]"))) {
@@ -756,7 +798,7 @@ const ui: {
   identify: false,
   rightView: "controls",
   padsAll: false,
-  padZoom: 1,
+  padZoom: -1,
   kbColors: true,
 };
 
@@ -807,7 +849,9 @@ function loadUiPrefs(): void {
     ui.kbClosed = saved.kbClosed === true;
     ui.padsAll = saved.padsAll === true;
     ui.padZoom =
-      typeof saved.padZoom === "number" ? Math.min(3, Math.max(0, Math.round(saved.padZoom))) : 1;
+      typeof saved.padZoom === "number"
+        ? Math.min(5, Math.max(-1, Math.round(saved.padZoom)))
+        : -1;
     ui.kbColors = saved.kbColors !== false;
   } catch {
     // A blocked or corrupt store reads as the defaults.
@@ -2022,6 +2066,7 @@ export function nocturneWire(root: HTMLElement): void {
     .querySelector(".n-kbcolors")
     ?.setAttribute("aria-pressed", ui.kbColors ? "true" : "false");
   window.addEventListener("resize", scheduleKbFit);
+  window.addEventListener("resize", schedulePadFit);
   // Drag-to-reorder on the rack: a pointer enhancement over the SAME
   // whole-order verb the ▴▾ twins post — the drop rewrites the dragged
   // row's own move form and submits it through the ordinary fetch path.
@@ -2379,8 +2424,30 @@ export function nocturneWire(root: HTMLElement): void {
       // the submit event so the ordinary fetch path handles the form.
       ev.preventDefault();
       target?.closest("form")?.requestSubmit();
-    } else if (hit === "pad-zoom-in" || hit === "pad-zoom-out") {
-      ui.padZoom = Math.min(3, Math.max(0, ui.padZoom + (hit.endsWith("in") ? 1 : -1)));
+    } else if (hit === "pad-zoom-in" || hit === "pad-zoom-out" || hit === "pad-zoom-fit") {
+      const grid = root.querySelector<HTMLElement>(".n-padgrid");
+      const currentW = parseFloat(grid?.style.getPropertyValue("--padw") || "") || 340;
+      if (hit === "pad-zoom-fit") {
+        ui.padZoom = -1;
+      } else if (hit === "pad-zoom-in") {
+        // From Fit, step to the first ladder rung ABOVE the fitted size.
+        ui.padZoom =
+          ui.padZoom >= 0
+            ? Math.min(PAD_STEPS.length - 1, ui.padZoom + 1)
+            : PAD_STEPS.findIndex((w) => w > currentW + 1) === -1
+              ? PAD_STEPS.length - 1
+              : PAD_STEPS.findIndex((w) => w > currentW + 1);
+      } else {
+        ui.padZoom =
+          ui.padZoom >= 0
+            ? Math.max(0, ui.padZoom - 1)
+            : (() => {
+                for (let i = PAD_STEPS.length - 1; i >= 0; i -= 1) {
+                  if (PAD_STEPS[i] < currentW - 1) return i;
+                }
+                return 0;
+              })();
+      }
       saveUiPrefs();
       syncPadGrid();
     } else if (hit === "kb-colors") {
@@ -3181,6 +3248,17 @@ export function NocturneIsland() {
                 { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
                 h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
               ),
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                "data-nx": "pad-zoom-fit",
+                "aria-pressed": "true",
+                title: "Fit every pad on screen",
+                class: "n-sact n-zfit",
+              },
+              "Fit",
             ),
             h(
               "button",

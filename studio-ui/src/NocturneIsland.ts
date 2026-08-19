@@ -324,6 +324,8 @@ export interface NocturneView {
     back_cls: string;
     name: string;
     slot: string;
+    preset: string;
+    table: MacroDraftTable | null;
     head: string;
     trigger: string;
     note: string;
@@ -497,6 +499,7 @@ const [nKbMoreCls, setNKbMoreCls] = createSignal("n-lgdmore none");
 const [nMacBackCls, setNMacBackCls] = createSignal("nd-back none");
 const [nMacName, setNMacName] = createSignal("");
 const [nMacSlot, setNMacSlot] = createSignal("");
+const [nMacPreset, setNMacPreset] = createSignal("");
 const [nMacHead, setNMacHead] = createSignal("");
 const [nMacTrigger, setNMacTrigger] = createSignal("");
 const [nMacNote, setNMacNote] = createSignal("");
@@ -516,6 +519,181 @@ const [nMacRows, setNMacRows] = createSignal<NocturneMacRowView[]>([]);
 const [nMacCells, setNMacCells] = createSignal<NocturneMacCellView[]>([]);
 const [nMacPols, setNMacPols] = createSignal<NocturneMacPolView[]>([]);
 const [nMacMotions, setNMacMotions] = createSignal<NocturneMacMotionView[]>([]);
+
+/** Dress the roll from one view — the SAME shape whether it arrived on a
+ *  payload or as the answer to an edit, so there is one way for the editor to
+ *  look right and no second derivation to drift. */
+function applyMacView(v: NocturnePayload["view"]["mac"]): void {
+  setNMacBackCls(v.back_cls);
+  setNMacName(v.name);
+  setNMacSlot(v.slot);
+  setNMacPreset(v.preset);
+  setNMacHead(v.head);
+  setNMacTrigger(v.trigger);
+  setNMacNote(v.note);
+  setNMacGridCls(v.grid_cls);
+  setNMacClose(v.close_href);
+  setNMacMapHref(v.map_href);
+  setNMacMotionLine(v.motion_line);
+  setNMacPolicyLine(v.policy_line);
+  setNMacRing(v.ring);
+  setNMacRule(v.rule);
+  setNMacToml(v.toml);
+  setNMacRateCls(v.turbo_cls);
+  setNMacRateVal(v.turbo_val);
+  setNMacCols(v.cols);
+  setNMacGroups(v.groups);
+  setNMacRows(v.rows);
+  setNMacCells(v.cells);
+  setNMacPols(v.pols);
+  setNMacMotions(v.motions);
+}
+
+// ── THE DRAFT. The browser holds the `[macros.<name>]` table it is editing;
+// every verb is the server's. An act posts the whole table and one word, and
+// the answer is the new table plus the roll that draws it — so the diagonal
+// lens, the sampling floor and every sentence come from the one place that
+// already paints them on the server.
+interface MacroDraftStep {
+  hold: string[];
+  ms: number | null;
+  frames: number | null;
+  allow_short: boolean;
+}
+
+interface MacroDraftTable {
+  name: string;
+  steps: MacroDraftStep[];
+  on_release: string;
+  retrigger: string;
+  interrupt: string;
+  repeat: string;
+  turbo_hz: number | null;
+  gap_ms: number | null;
+  triggers: string[];
+  disabled: boolean;
+}
+
+let macDraft: MacroDraftTable | null = null;
+let macDirty = false;
+let macBusy = false;
+/** Has the short-step question already been asked for THIS save? */
+let macAskedShort = false;
+/** The row the author last touched — what "allow a short step" is about. */
+let macShortRow: number | null = null;
+
+/** Seed the draft from the staged macro the page just served. Never over an
+ *  edit in flight, and never when the dialog is closed. */
+function seedMacDraft(p: NocturnePayload): void {
+  if (macDirty) return;
+  const open = p.view.mac.open;
+  if (!open) {
+    macDraft = null;
+    macAskedShort = false;
+    return;
+  }
+  macDraft = (p.view.mac.table ?? null) as MacroDraftTable | null;
+}
+
+function macDirtyMark(): void {
+  const el = learnRoot?.querySelector<HTMLElement>(".n-macdirty");
+  if (el) el.textContent = macDirty ? "Unsaved changes" : "";
+}
+
+/** One act, applied by the server, answered with the whole roll. */
+async function macAct(act: string): Promise<void> {
+  if (!macDraft || macBusy) return;
+  macBusy = true;
+  // Which duration box has the caret, so the rebuild can hand it back.
+  const focused = document.activeElement as HTMLElement | null;
+  const keepRow = focused?.dataset?.macdur ?? null;
+  try {
+    const res = await fetch("/nocturne/api/macro/edit", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ slot: Number(nMacSlot()) || 0, act, draft: macDraft }),
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const out = (await res.json()) as {
+      ok: boolean;
+      said: string;
+      draft: MacroDraftTable;
+      view: NocturnePayload["view"]["mac"];
+    };
+    if (!out.ok) return;
+    macDraft = out.draft;
+    macDirty = true;
+    macAskedShort = false;
+    applyMacView(out.view);
+    macDirtyMark();
+    if (out.said) applyFlash(out.said);
+    if (keepRow !== null) {
+      const back = learnRoot?.querySelector<HTMLInputElement>(
+        `[data-macdur="${keepRow}"]`,
+      );
+      back?.focus();
+    }
+  } catch {
+    applyFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    macBusy = false;
+  }
+}
+
+/** Write the whole table, through the same verb the CLI uses. A step under
+ *  the sampling floor is never refused and never written silently: the first
+ *  Save asks, and says which steps it is about. */
+async function macSave(): Promise<void> {
+  if (!macDraft || macBusy) return;
+  const short = nMacRows().filter((r) => r.warn !== "");
+  const btn = learnRoot?.querySelector<HTMLButtonElement>(".n-macsave");
+  if (short.length > 0 && !macAskedShort) {
+    macAskedShort = true;
+    if (btn) btn.textContent = "Save it anyway";
+    applyFlash(
+      `${short.length === 1 ? "Step" : "Steps"} ${short
+        .map((r) => r.n)
+        .join(", ")} ${short.length === 1 ? "is" : "are"} shorter than the 60 Hz floor. ` +
+        "ksx will raise them to 33 ms unless the step allows a short one — press Save again to write it.",
+    );
+    return;
+  }
+  macBusy = true;
+  try {
+    const res = await fetch("/api/macro/save", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        target: "stage",
+        slot: Number(nMacSlot()) || 0,
+        preset: nMacPreset(),
+        name: macDraft.name,
+        steps: macDraft.steps,
+        on_release: macDraft.on_release,
+        retrigger: macDraft.retrigger,
+        interrupt: macDraft.interrupt,
+        repeat: macDraft.repeat,
+        turbo_hz: macDraft.turbo_hz,
+        gap_ms: macDraft.gap_ms,
+      }),
+    });
+    const out = (await res.json()) as { ok: boolean; said?: string; error?: string };
+    if (out.ok) {
+      macDirty = false;
+      macAskedShort = false;
+      if (btn) btn.textContent = "Save this macro";
+      macDirtyMark();
+      applyFlash(`Saved “${macDraft.name}”.`);
+      nocturnePollFn();
+    } else {
+      applyFlash(`error: ${out.error ?? "the macro was refused"}`);
+    }
+  } catch {
+    applyFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    macBusy = false;
+  }
+}
 const [nCfgLine, setNCfgLine] = createSignal("");
 const [nCfgMeta, setNCfgMeta] = createSignal("");
 const [nCfgCls, setNCfgCls] = createSignal("nm-cfg");
@@ -644,28 +822,12 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
   setNKbMoreCls(v.kb_more_cls);
-  setNMacBackCls(v.mac.back_cls);
-  setNMacName(v.mac.name);
-  setNMacSlot(v.mac.slot);
-  setNMacHead(v.mac.head);
-  setNMacTrigger(v.mac.trigger);
-  setNMacNote(v.mac.note);
-  setNMacGridCls(v.mac.grid_cls);
-  setNMacClose(v.mac.close_href);
-  setNMacMapHref(v.mac.map_href);
-  setNMacMotionLine(v.mac.motion_line);
-  setNMacPolicyLine(v.mac.policy_line);
-  setNMacRing(v.mac.ring);
-  setNMacRule(v.mac.rule);
-  setNMacToml(v.mac.toml);
-  setNMacRateCls(v.mac.turbo_cls);
-  setNMacRateVal(v.mac.turbo_val);
-  setNMacCols(v.mac.cols);
-  setNMacGroups(v.mac.groups);
-  setNMacRows(v.mac.rows);
-  setNMacCells(v.mac.cells);
-  setNMacPols(v.mac.pols);
-  setNMacMotions(v.mac.motions);
+  // The DRAFT wins over the payload: a 2 s poll must never wipe an edit
+  // nobody has saved yet. Everything else on the page keeps refreshing.
+  if (!macDirty) {
+    applyMacView(v.mac);
+    seedMacDraft(p);
+  }
   setNCfgLine(v.cfg_line);
   setNCfgMeta(v.cfg_meta);
   setNCfgCls(v.cfg_cls);
@@ -2396,6 +2558,72 @@ export function nocturneWire(root: HTMLElement): void {
       el.classList.remove("dragging", "dropbefore", "dropafter");
     }
   };
+  // THE MACRO EDITOR. Every control is one act, applied by the server and
+  // answered with the whole roll — so the browser never has to know what a
+  // diagonal is, only how to draw the answer.
+  root.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement | null;
+    if (!target) return;
+    const cell = target.closest<HTMLElement>("[data-maccell]");
+    if (cell) {
+      ev.preventDefault();
+      void macAct(`cell|${cell.dataset.maccell}`);
+      return;
+    }
+    const motion = target.closest<HTMLElement>("[data-macmotion]");
+    if (motion) {
+      ev.preventDefault();
+      void macAct(`motion|${motion.dataset.macmotion}`);
+      return;
+    }
+    const pol = target.closest<HTMLElement>("[data-macpol]");
+    if (pol) {
+      ev.preventDefault();
+      void macAct(`pol|${pol.dataset.macpol}`);
+      return;
+    }
+    const act = target.closest<HTMLElement>("[data-macact]");
+    if (!act) return;
+    ev.preventDefault();
+    const verb = act.dataset.macact ?? "";
+    if (verb === "save") {
+      void macSave();
+      return;
+    }
+    if (verb === "short") {
+      // The flag belongs to a STEP, so it needs one: the row whose duration
+      // box was last touched, else the first row that is actually short.
+      const row =
+        macShortRow ??
+        nMacRows().findIndex((r) => r.warn !== "");
+      if (row < 0) {
+        applyFlash("No step here is shorter than the 33 ms floor.");
+        return;
+      }
+      void macAct(`short|${row}`);
+      return;
+    }
+    void macAct(verb);
+  });
+  // A duration is committed when the author leaves it or presses Enter —
+  // never on every keystroke, so typing is never interrupted by a round trip.
+  root.addEventListener("change", (ev) => {
+    const box = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>("[data-macdur]");
+    if (box) {
+      macShortRow = Number(box.dataset.macdur);
+      void macAct(`dur|${box.dataset.macdur}|${box.value}`);
+      return;
+    }
+    const rate = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>("[data-macrate]");
+    if (rate) void macAct(`rate|${rate.value}`);
+  });
+  root.addEventListener("keydown", (ev) => {
+    const box = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>("[data-macdur]");
+    if (box && (ev as KeyboardEvent).key === "Enter") {
+      ev.preventDefault();
+      box.blur();
+    }
+  });
   root.addEventListener("dragstart", (ev) => {
     // Only the grip starts a reorder — a text selection dragged from the
     // row body must not.
@@ -6149,6 +6377,31 @@ export function NocturneIsland() {
               ),
             ),
         ),
+        h(
+          "details",
+          { class: "n-macnew" },
+          h("summary", null, "New macro\u2026"),
+          h(
+            "form",
+            { class: "n-macnewform", method: "post", action: "/nocturne/macro/new" },
+            h("input", { type: "hidden", name: "slot", value: () => nSlotVal() }),
+            h("input", {
+              class: "n-macnewin",
+              type: "text",
+              name: "name",
+              required: "",
+              maxlength: "40",
+              placeholder: "hadouken",
+              "aria-label": "What to call the macro",
+            }),
+            h("button", { type: "submit", class: "n-bbtn" }, "Create"),
+          ),
+          h(
+            "span",
+            { class: "n-macnewnote" },
+            "It starts with one empty step. The name becomes the table\u2019s, and \u2018macro.\u2019 plus it is the control a key can drive.",
+          ),
+        ),
         h("p", { class: "n-devnote" }, () => nMacrosNote()),
         ),
         h("div", { class: "n-right-foot" }, () => nBindFoot()),
@@ -6364,11 +6617,6 @@ export function NocturneIsland() {
           "div",
           { class: "n-macfoot" },
           h("span", { class: "n-macdirty" }, ""),
-          h(
-            "a",
-            { class: "n-bbtn ghost", href: () => nMacMapHref() },
-            "Open in Controls",
-          ),
           h("button", { type: "button", "data-macact": "save", class: "n-bbtn n-macsave" }, "Save this macro"),
           h("a", { class: "n-bbtn ghost", href: () => nMacClose() }, "Close"),
         ),

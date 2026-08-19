@@ -158,6 +158,9 @@ pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys
      nothing to hold. Bind a key first; nothing was changed.";
 
 pub(super) const N_MACRO_OK: &str = "Macro updated. Nothing has been saved or started.";
+pub(super) const N_MACRO_NEW: &str = "Macro created with one empty step — open it and write the sequence. Nothing has been saved or started.";
+pub(super) const N_MACRO_NAME: &str =
+    "error: a macro needs a name — the table is called after it, so it cannot be blank.";
 
 pub(super) const N_MACRO_DELETED: &str = "Macro removed from this draft — its trigger keys are \
      unbound with it. Nothing saved was touched.";
@@ -195,7 +198,7 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 56] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 58] = [
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
@@ -208,6 +211,8 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 56] = [
     N_APPLY_RESTART,
     N_APPLY_ERROR,
     N_MACRO_OK,
+    N_MACRO_NEW,
+    N_MACRO_NAME,
     N_MACRO_DELETED,
     N_ADOPT_OK,
     N_ADOPT_BLOCKED,
@@ -1330,6 +1335,66 @@ pub(super) async fn api_learn_cancel(
 /// replaces it. A cross-slot duplicate on replace comes back as the typed
 /// `conflicts` rows for the consequence dialog; resubmitting with
 /// `force: true` is the dialog's "Use here too".
+/// POST /nocturne/api/macro/edit. The BROWSER holds the draft: it posts the
+/// whole `[macros.<name>]` table it is editing plus ONE act, and gets the new
+/// table and the recomposed roll back. Nothing half-edited is ever kept on
+/// this side, so a reload, a poll or a second tab cannot find one.
+#[derive(Deserialize)]
+pub(super) struct NocturneMacroEditBody {
+    slot: u8,
+    act: String,
+    draft: ksx_api::MacroView,
+}
+
+#[derive(serde::Serialize)]
+struct NocturneMacroEditOutcome {
+    ok: bool,
+    /// What to say about the act — the diagonal reports, the motion's
+    /// teaching, the last-step clear. Empty when the cell is its own report.
+    said: String,
+    draft: ksx_api::MacroView,
+    view: crate::macro_editor::NocturneMacroEditor,
+}
+
+pub(super) async fn nocturne_api_macro_edit(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturneMacroEditBody>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let slot = staged.slots.iter().find(|s| s.number == body.slot);
+        let keyboard = staged
+            .device
+            .as_ref()
+            .map(|d| d.alias.as_str())
+            .unwrap_or("");
+        let mapper = slot.and_then(|s| ksx_api::staged_mapper_slot(s, keyboard).ok());
+        let mut draft = body.draft;
+        let said = crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref());
+        let view = crate::macro_editor::NocturneMacroEditor::compose(
+            &draft,
+            mapper.as_ref(),
+            body.slot,
+            None,
+        );
+        NocturneMacroEditOutcome {
+            ok: true,
+            said: said.unwrap_or_default(),
+            draft,
+            view,
+        }
+    })
+    .await;
+    match outcome {
+        Ok(outcome) => axum::Json(serde_json::json!(outcome)).into_response(),
+        Err(_) => axum::Json(serde_json::json!({
+            "ok": false,
+            "said": "the macro edit panicked — nothing was changed",
+        }))
+        .into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct NocturneBindBody {
     slot: u8,
@@ -1690,6 +1755,36 @@ pub(super) async fn nocturne_form_macro_toggle(
             ..crate::control::MacroWrite::default()
         },
         N_MACRO_OK,
+    )
+    .await
+}
+
+/// POST /nocturne/macro/new — author one empty-stepped table in THIS DRAFT,
+/// so a sequence can be started without leaving the page that owns it. One
+/// step, holding nothing, is the smallest thing `save_macro` accepts; the
+/// editor opens on it.
+pub(super) async fn nocturne_form_macro_new(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneMacroForm>,
+) -> Response {
+    let name = form.name.trim().to_owned();
+    if name.is_empty() {
+        return nocturne_redirect(N_MACRO_NAME);
+    }
+    nocturne_macro_write(
+        state,
+        form.slot,
+        crate::control::MacroWrite {
+            name,
+            steps: vec![ksx_api::MacroStepView {
+                hold: Vec::new(),
+                ms: Some(50),
+                frames: None,
+                allow_short: false,
+            }],
+            ..crate::control::MacroWrite::default()
+        },
+        N_MACRO_NEW,
     )
     .await
 }

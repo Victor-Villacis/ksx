@@ -6972,6 +6972,108 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
 
 /// **The MIGRATED macro lifecycle, over HTTP.** The macro rows are the
 /// staged authoring's own facts; the moved /api/macro/save authors into the
+/// **A macro is authored and edited without leaving the page**: the New twin
+/// writes the smallest table `save_macro` accepts, and the edit door applies
+/// ONE act to a draft the browser is holding and hands back the roll that
+/// draws it — the same composition SSR paints, so the two cannot drift.
+#[test]
+fn nocturne_authors_and_edits_a_macro_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // A name is what the table is CALLED, so a blank one is refused in words.
+    let blank = post_form(addr, "/nocturne/macro/new", "slot=1&name=%20%20");
+    assert!(
+        blank.contains("flash=error"),
+        "a blank name is answered, not swallowed: {blank}"
+    );
+
+    let made = post_form(addr, "/nocturne/macro/new", "slot=1&name=combo");
+    assert!(made.contains("flash="), "{made}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    let mac = api["view"]["mac"].clone();
+    assert_eq!(mac["open"], true, "the editor opens on what was just made");
+    assert_eq!(
+        mac["rows"].as_array().expect("rows").len(),
+        1,
+        "one step, holding nothing — the smallest legal table: {mac}"
+    );
+    assert_eq!(
+        mac["table"]["steps"][0]["hold"]
+            .as_array()
+            .expect("hold")
+            .len(),
+        0
+    );
+
+    // ONE act, applied to the draft the browser holds.
+    let draft = mac["table"].clone();
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"cell|0|diag:dpad:dr\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert_eq!(
+        edited["draft"]["steps"][0]["hold"],
+        serde_json::json!(["dpad.down", "dpad.right"]),
+        "a diagonal pick writes the PAIR, because that is what a diagonal is          in the file: {edited}"
+    );
+    assert!(
+        edited["said"]
+            .as_str()
+            .is_some_and(|s| s.contains("dpad.down + dpad.right")),
+        "…and it says so, naming both halves: {edited}"
+    );
+    // The roll that comes back is the SAME composition SSR paints.
+    let lit: Vec<&str> = edited["view"]["cells"]
+        .as_array()
+        .expect("cells")
+        .iter()
+        .filter(|c| {
+            c["cls"]
+                .as_str()
+                .is_some_and(|cls| cls.split(' ').any(|one| one == "on"))
+        })
+        .filter_map(|c| c["cell"].as_str())
+        .collect();
+    assert_eq!(lit, vec!["0|diag:dpad:dr"], "{edited}");
+    assert!(
+        edited["view"]["rows"][0]["exp"]
+            .as_str()
+            .is_some_and(|e| e.contains("dpad.down")),
+        "and the row still spells what the file stores: {edited}"
+    );
+
+    // A word this editor does not know changes nothing, exactly like every
+    // other door here.
+    let junk: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"pol|on_release|explode\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(junk["draft"]["on_release"], "finish", "{junk}");
+    assert_eq!(junk["said"], "", "nothing happened, so nothing is said");
+}
+
 /// **The macro STEP editor is served**: a macro is addressed by NAME on the
 /// selected controller, and the whole roll — columns, bands, steps, cells,
 /// policies — arrives composed. The two things worth pinning are the ones the

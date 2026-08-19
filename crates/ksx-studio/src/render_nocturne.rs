@@ -135,6 +135,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nMacBackCls": payload.view.mac.back_cls,
         "nMacName": payload.view.mac.name,
         "nMacSlot": payload.view.mac.slot,
+        "nMacPreset": payload.view.mac.preset,
         "nMacHead": payload.view.mac.head,
         "nMacTrigger": payload.view.mac.trigger,
         "nMacNote": payload.view.mac.note,
@@ -848,7 +849,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 100] = [
+        const SERVED_SLOTS: [&str; 101] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -893,6 +894,7 @@ mod tests {
             "nMacBackCls",
             "nMacName",
             "nMacSlot",
+            "nMacPreset",
             "nMacHead",
             "nMacTrigger",
             "nMacNote",

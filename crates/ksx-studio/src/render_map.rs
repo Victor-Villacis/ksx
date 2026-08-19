@@ -2179,9 +2179,10 @@ pub(crate) enum Mechanism {
 impl Mechanism {
     /// Canonical order — the order a coalesced diagonal lists its mechanisms in
     /// and the order the grid draws its direction groups in.
-    const ALL: [Mechanism; 3] = [Mechanism::Dpad, Mechanism::LeftStick, Mechanism::RightStick];
+    pub(crate) const ALL: [Mechanism; 3] =
+        [Mechanism::Dpad, Mechanism::LeftStick, Mechanism::RightStick];
 
-    fn of(function: &str) -> Option<Self> {
+    pub(crate) fn of(function: &str) -> Option<Self> {
         let f = function.to_ascii_lowercase();
         if f.starts_with("dpad.") {
             Some(Mechanism::Dpad)
@@ -2194,7 +2195,7 @@ impl Mechanism {
         }
     }
 
-    const fn describe(self) -> &'static str {
+    pub(crate) const fn describe(self) -> &'static str {
         match self {
             Mechanism::Dpad => "the dpad",
             Mechanism::LeftStick => "the left stick (lx/ly)",
@@ -2204,7 +2205,7 @@ impl Mechanism {
 
     /// The prefix a flat list needs to keep three identical arrow runs apart —
     /// the same one [`legend_group`] writes.
-    const fn group(self) -> &'static str {
+    pub(crate) const fn group(self) -> &'static str {
         match self {
             Mechanism::Dpad => "D-pad ",
             Mechanism::LeftStick => "LS ",
@@ -2222,7 +2223,7 @@ impl Mechanism {
     }
 
     /// The half of a diagonal cell token that names the mechanism.
-    const fn token(self) -> &'static str {
+    pub(crate) const fn token(self) -> &'static str {
         match self {
             Mechanism::Dpad => "dpad",
             Mechanism::LeftStick => "ls",
@@ -2232,7 +2233,7 @@ impl Mechanism {
 
     /// The canonical function name for one polarity of one axis of this
     /// mechanism — what picking a direction WRITES.
-    const fn function(self, vertical: bool, positive: bool) -> &'static str {
+    pub(crate) const fn function(self, vertical: bool, positive: bool) -> &'static str {
         match (self, vertical, positive) {
             (Mechanism::Dpad, true, true) => "dpad.up",
             (Mechanism::Dpad, true, false) => "dpad.down",
@@ -2282,7 +2283,8 @@ pub(crate) enum Diag {
 }
 
 impl Diag {
-    const ALL: [Diag; 4] = [Diag::UpLeft, Diag::UpRight, Diag::DownLeft, Diag::DownRight];
+    pub(crate) const ALL: [Diag; 4] =
+        [Diag::UpLeft, Diag::UpRight, Diag::DownLeft, Diag::DownRight];
 
     /// ARROW is the glyph. Screens speak arrows in this genre — SF6's input
     /// history, every Capcom move list, every arcade instruction card.
@@ -2299,7 +2301,7 @@ impl Diag {
     /// never the label. It is how the input is written in text (Dustloop,
     /// SuperCombo) and it is already in a cab owner's `mame.ini`
     /// (`-joystick_map` uses the numpad mapping).
-    const fn numpad(self) -> u8 {
+    pub(crate) const fn numpad(self) -> u8 {
         match self {
             Diag::UpLeft => 7,
             Diag::UpRight => 9,
@@ -2311,7 +2313,7 @@ impl Diag {
     /// The name, in words. COMPASS, not forward/back — ksx offers the mirrored
     /// spelling of every motion because player 2 is not an edge case, and
     /// "down-forward" is only true for a character facing right.
-    const fn words(self) -> &'static str {
+    pub(crate) const fn words(self) -> &'static str {
         match self {
             Diag::UpLeft => "up-left",
             Diag::UpRight => "up-right",
@@ -2332,7 +2334,7 @@ impl Diag {
     }
 
     /// `(up, right)`.
-    const fn halves(self) -> (bool, bool) {
+    pub(crate) const fn halves(self) -> (bool, bool) {
         match self {
             Diag::UpLeft => (true, false),
             Diag::UpRight => (true, true),
@@ -2350,7 +2352,7 @@ impl Diag {
         }
     }
 
-    const fn token(self) -> &'static str {
+    pub(crate) const fn token(self) -> &'static str {
         match self {
             Diag::UpLeft => "ul",
             Diag::UpRight => "ur",
@@ -2393,13 +2395,13 @@ const fn cardinal_numpad(vertical: bool, positive: bool) -> u8 {
 /// Mirror of `ksx_core::socd::Pointing`, over a FUNCTION NAME.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pointing {
-    mechanism: Mechanism,
-    vertical: bool,
+    pub(crate) mechanism: Mechanism,
+    pub(crate) vertical: bool,
     /// Right for a horizontal control, UP for a vertical one.
-    positive: bool,
+    pub(crate) positive: bool,
     /// Is this the canonical extreme (`min`/`max`), or a hand-written partial
     /// deflection like `ly.-16384`?
-    exact: bool,
+    pub(crate) exact: bool,
 }
 
 /// Where this function name points, or `None` when it points nowhere.
@@ -2714,7 +2716,7 @@ pub(crate) fn macro_columns(persona: &str) -> Vec<MacroColumn> {
 /// Every mechanism THIS SLOT's own bound direction keys drive. An inert `None`
 /// row does not count: a placeholder is a function the preset lists, not a
 /// direction the player can produce (same rule as `driven_mechanisms` there).
-fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
+pub(crate) fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
     let mut out: Vec<Mechanism> = Vec::new();
     let Some(slot) = slot else {
         return out;

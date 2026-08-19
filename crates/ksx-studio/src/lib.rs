@@ -97,6 +97,7 @@ mod error;
 mod guard;
 mod keyboard_layout;
 mod live;
+mod macro_draft;
 mod macro_editor;
 mod render;
 mod render_check;

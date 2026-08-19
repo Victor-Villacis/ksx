@@ -8760,6 +8760,15 @@ button.n-keychip:hover {
   background: rgba(13, 14, 22, 0.55);
 }
 
+/* ⚠️ The macro dialog is ALWAYS in the DOM wearing a class — its roll has to
+   be SSR markup so a page with no scripting can read a sequence. A backdrop
+   is `position: fixed; inset: 0`, so its own `display: grid` outranking the
+   shared `.none` left an invisible sheet over the whole studio swallowing
+   every click. Modifier and component must be spelled together. */
+.nd-back.none {
+  display: none;
+}
+
 .nd {
   width: min(560px, 100%);
   max-height: calc(100vh - 40px);
@@ -11280,6 +11289,42 @@ button.n-keychip:hover {
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre;
+}
+
+.n-macnew {
+  margin-top: 6px;
+}
+
+.n-macnew > summary {
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-macnewform {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.n-macnewin {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 7px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 12px;
+}
+
+.n-macnewnote {
+  display: block;
+  margin-top: 4px;
+  color: var(--n-text-3);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .n-macfoot {

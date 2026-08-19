@@ -127,6 +127,13 @@ pub struct NocturneMacroEditor {
     pub back_cls: String,
     pub name: String,
     pub slot: String,
+    /// The worksheet the table is written into — `save_macro`'s own
+    /// identity for it.
+    pub preset: String,
+    /// The table ITSELF, so the browser has something to edit and post
+    /// back. Payload data only — it mints no slot, exactly like the pad
+    /// grid's rows.
+    pub table: Option<MacroView>,
     /// "6 steps · 320 ms" — the shape of the sequence before its detail.
     pub head: String,
     pub trigger: String,
@@ -548,6 +555,8 @@ impl NocturneMacroEditor {
             back_cls: "nd-back".to_owned(),
             name: mac.name.clone(),
             slot: number.to_string(),
+            preset: slot.map(|s| s.preset.clone()).unwrap_or_default(),
+            table: Some(mac.clone()),
             head: format!("{steps} · {} ms", macro_total_ms(mac)),
             trigger: macro_trigger_line(Some(mac)),
             note: if mac.disabled {

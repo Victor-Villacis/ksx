@@ -3015,8 +3015,6 @@ export function NocturneIsland() {
             "|" +
             r.badge_cls +
             "|" +
-            r.dot_cls +
-            "|" +
             r.name +
             "|" +
             r.meta +
@@ -3053,28 +3051,21 @@ export function NocturneIsland() {
               // Clicking the row's identity SELECTS it: a server-resolved
               // link (?slot=N), so every pane follows with no JavaScript;
               // with it, the wire swaps the URL and polls in place.
+              // The P-badge IS the colour control: it already wears the
+              // controller's colour, so clicking it opens the picker. The
+              // name and meta stay the selection link.
               h(
-                "a",
-                { class: "n-slot-sel", href: r.href },
-                h("span", { class: r.badge_cls }, r.badge),
+                "details",
+                { class: "n-cpick", "data-slot": r.number },
                 h(
-                  "span",
-                  { class: "n-slot-txt" },
-                  h("span", { class: "n-slot-name" }, r.name),
-                  h("span", { class: "n-slot-meta" }, r.meta),
+                  "summary",
+                  { title: "Pick this controller's colour", class: r.badge_cls },
+                  r.badge,
                 ),
-              ),
               // The action corner: the colour dot rides the row always;
               // the verbs reveal on hover (always under a coarse pointer).
               // The whole row DRAGS to reorder — the ▴▾ forms below are the
               // no-JS and keyboard twins the drop submits through.
-              h(
-                "div",
-                { class: "n-sacts" },
-                h(
-                  "details",
-                { class: "n-cpick", "data-slot": r.number },
-                h("summary", { class: r.dot_cls, title: "Pick this controller's colour" }),
                 h(
                   "div",
                   { class: "n-cpick-pop", "data-nx": "menu-noop" },
@@ -3105,6 +3096,19 @@ export function NocturneIsland() {
                   ),
                 ),
               ),
+              h(
+                "a",
+                { class: "n-slot-sel", href: r.href },
+                h(
+                  "span",
+                  { class: "n-slot-txt" },
+                  h("span", { class: "n-slot-name" }, r.name),
+                  h("span", { class: "n-slot-meta" }, r.meta),
+                ),
+              ),
+              h(
+                "div",
+                { class: "n-sacts" },
                 // One whole-order reorder per click; an end row's order
                 // is empty and the server answers the honest sentence.
                 h(

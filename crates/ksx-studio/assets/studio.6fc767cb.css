@@ -7092,10 +7092,6 @@ a.wsrow-title:hover {
   color: #e79aa6;
 }
 
-/* Room for the corner dot; the meta line runs the full width below. */
-.n-slot-name {
-  padding-right: 22px;
-}
 
 .n-foot {
   margin-top: 10px;
@@ -9915,14 +9911,21 @@ button.n-keychip:hover {
   align-self: center;
 }
 
+/* The summary IS the P-badge (it carries the n-pbadge classes): only the
+   marker and the affordance need styling here. */
 .n-cpick > summary {
   list-style: none;
-  display: block;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.35);
   cursor: pointer;
+}
+
+.n-cpick > summary:hover {
+  outline: 2px solid var(--n-line-2);
+  outline-offset: 2px;
+}
+
+.n-cpick[open] > summary {
+  outline: 2px solid var(--n-accent-line);
+  outline-offset: 2px;
 }
 
 .n-cpick > summary::-webkit-details-marker {
@@ -9931,7 +9934,7 @@ button.n-keychip:hover {
 
 .n-cpick-pop {
   position: absolute;
-  top: 16px;
+  top: 32px;
   left: -4px;
   z-index: 40;
   display: grid;

@@ -4818,7 +4818,6 @@ impl NocturneDerived {
             // (an `own{N}` class; `owned` adds the fill to keys bound only
             // on other slots), and the strips mark the REMAINING owners —
             // a single-owner key needs no underline, its fill says it all.
-            let mut cls = cls;
             if let Some(first) = owners.first() {
                 cls.push_str(&format!(" own{first}"));
                 if !cls.contains(" bound") {

@@ -2606,8 +2606,13 @@ export function nocturneWire(root: HTMLElement): void {
         // becomes the real mute set, then this chip toggles inside it.
         if (ui.kbSolo) {
           ui.kbSolo = false;
+          // Write down EXACTLY what the lens was showing — the selected
+          // controller visible, everyone else crossed — including undoing
+          // a cross the lens was overriding. Anything less and turning the
+          // lens off would contradict the screen it was just showing.
           for (const pv of lastBindView?.pads ?? []) {
-            if (!isSelectedPreset(pv.preset)) hiddenStrips.add(pv.preset);
+            if (isSelectedPreset(pv.preset)) hiddenStrips.delete(pv.preset);
+            else hiddenStrips.add(pv.preset);
           }
           saveUiPrefs();
         }

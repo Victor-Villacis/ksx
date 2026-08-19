@@ -6266,22 +6266,22 @@ a.wsrow-title:hover {
      color, default = palette slot N); a user's pick overrides --pcs{N} on
      the island root from browser-kept state. Identity colors only — they
      never carry status meaning. */
-  --pal1: #4da6ff;
-  --pal2: #ff7a4d;
-  --pal3: #2fd39b;
-  --pal4: #ffd23e;
-  --pal5: #a98ae0;
-  --pal6: #35d1d1;
-  --pal7: #e763e7;
-  --pal8: #ff9636;
-  --pal9: #63d13a;
-  --pal10: #ff7fa6;
-  --pal11: #a8e03e;
-  --pal12: #7d8cff;
-  --pal13: #d8a86a;
-  --pal14: #9fb4cc;
-  --pal15: #b06ef5;
-  --pal16: #6fe6b8;
+  --pal1: #2986ff;    /* blue — arcade P1 blue / N64 A-button */
+  --pal2: #ff3344;    /* red — arcade P2 red, lifted off SNES #C1121C */
+  --pal3: #00ff33;    /* green — Xbox green, lifted off #107C10 */
+  --pal4: #ffe500;    /* yellow — N64 C-buttons #F5B201 / SNES #F7BA0B */
+  --pal5: #ff00d4;    /* magenta — Game Boy Color berry */
+  --pal6: #00e1ff;    /* cyan — Dreamcast blue */
+  --pal7: #ffaa00;    /* gold — Zelda cartridge gold */
+  --pal8: #00ffdd;    /* teal — PlayStation circle #1FAA8C */
+  --pal9: #d738ff;    /* violet — SNES face violet / GBC grape */
+  --pal10: #b2ff00;   /* lime — Game Boy DMG screen #9BBC0F */
+  --pal11: #ab61ff;   /* purple — Game Boy Color atomic purple */
+  --pal12: #00ffa2;   /* spring — Xbox 360 dashboard green */
+  --pal13: #ff247f;   /* pink — Kirby pink / PS cross #E83287 */
+  --pal14: #00a6ff;   /* sky — N64 clear-blue shell */
+  --pal15: #ff6600;   /* orange — Dreamcast orange #F96900 */
+  --pal16: #7777fe;   /* indigo — PlayStation blue, lifted off #003791 */
   --pcs1: var(--pal1);
   --pcs2: var(--pal2);
   --pcs3: var(--pal3);

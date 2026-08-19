@@ -3770,6 +3770,10 @@ pub struct NocturnePayload {
     /// The binding filter (`?q=`), server-resolved like the selection.
     #[serde(default)]
     pub q: Option<String>,
+    /// Which macro the step editor is open on — a SERVED selection, like
+    /// the slot, so the dialog survives a reload and a reader with no
+    /// scripting can still open a sequence and read it.
+    pub macro_selected: Option<String>,
     /// The undo chip's sentence while the server still holds a removed
     /// controller's resurrection material (`server/nocturne.rs` stash).
     #[serde(default)]
@@ -4199,6 +4203,8 @@ pub struct NocturneDerived {
     /// The legend's key to a STACKED cap, shown only when some key actually
     /// carries more owners than the bands can name.
     pub kb_more_cls: String,
+    /// The macro step editor, composed whole (see [`crate::macro_editor`]).
+    pub mac: crate::macro_editor::NocturneMacroEditor,
     /// The configuration menu, served: the saved-config row, the load/start-
     /// over affordances, the games list, and the sign-in task's fold.
     pub cfg_line: String,
@@ -5054,6 +5060,28 @@ impl NocturneDerived {
         } else {
             "n-kbtray".to_owned()
         };
+        // ── The macro STEP editor, when one is open ───────────────────────
+        // A macro is addressed by NAME on the selected controller; an unknown
+        // name simply leaves the dialog closed rather than inventing a macro.
+        let mac = match (selected, p.macro_selected.as_deref()) {
+            (Some(slot), Some(name)) if !name.is_empty() => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                snap.macros
+                    .iter()
+                    .find(|m| m.name == name)
+                    .map(|m| {
+                        crate::macro_editor::NocturneMacroEditor::compose(
+                            m,
+                            mapper.as_ref(),
+                            slot.number,
+                            p.q.as_deref(),
+                        )
+                    })
+                    .unwrap_or_else(crate::macro_editor::NocturneMacroEditor::closed)
+            }
+            _ => crate::macro_editor::NocturneMacroEditor::closed(),
+        };
+
         let kb_note = match selected {
             Some(slot) if mapper.is_some() => format!(
                 "Key shorts show what drives P{} · {} — on a standard board layout.",
@@ -5437,7 +5465,7 @@ impl NocturneDerived {
                                 },
                                 slot: slot.number.to_string(),
                                 edit_href: format!(
-                                    "/map?target=stage&slot={}&macro={}",
+                                    "/nocturne?slot={}&macro={}",
                                     slot.number, mac.name
                                 ),
                                 toggle_label: if mac.disabled {
@@ -5551,6 +5579,7 @@ impl NocturneDerived {
             kb_tray_cls,
             kb_note,
             kb_more_cls,
+            mac,
             cfg_line,
             cfg_meta,
             cfg_cls,

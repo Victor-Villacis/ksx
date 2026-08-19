@@ -281,6 +281,7 @@ pub(super) async fn collect_nocturne(
     state: &Arc<AppState>,
     slot: Option<u8>,
     q: Option<String>,
+    macro_selected: Option<String>,
 ) -> NocturnePayload {
     let state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
@@ -330,6 +331,7 @@ pub(super) async fn collect_nocturne(
             unavailable,
             selected: slot,
             q,
+            macro_selected,
             undo_label,
             setup,
             setup_error,
@@ -357,6 +359,7 @@ pub(super) async fn collect_nocturne(
             autostart_error: "the sign-in read panicked".to_owned(),
             selected: None,
             q: None,
+            macro_selected: None,
             undo_label: None,
             view: Default::default(),
         }
@@ -378,6 +381,10 @@ pub(super) struct NocturneQuery {
     /// Rescan's cache-bust: a fresh read IS the promise, so the machine
     /// cache is dropped before this request collects.
     fresh: Option<String>,
+    /// Which macro the step editor is open on. `macro` is a Rust keyword, so
+    /// the field is spelled out and renamed for the wire.
+    #[serde(rename = "macro")]
+    macro_name: Option<String>,
 }
 
 pub(super) async fn nocturne_page_handler(
@@ -387,7 +394,13 @@ pub(super) async fn nocturne_page_handler(
     if query.fresh.is_some() {
         state.machine_cache.invalidate();
     }
-    let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
+    let payload = collect_nocturne(
+        &state,
+        query.slot,
+        query.q.clone(),
+        query.macro_name.clone(),
+    )
+    .await;
     let flash = nocturne_flash_from_query(query.flash.as_deref());
     let out = render_nocturne(&state.nocturne_page, &payload, flash.as_deref());
     (
@@ -417,7 +430,13 @@ pub(super) async fn api_nocturne(
     if query.fresh.is_some() {
         state.machine_cache.invalidate();
     }
-    let payload = collect_nocturne(&state, query.slot, query.q.clone()).await;
+    let payload = collect_nocturne(
+        &state,
+        query.slot,
+        query.q.clone(),
+        query.macro_name.clone(),
+    )
+    .await;
     // ETag over the serialized payload: an unchanged answer costs a header
     // comparison instead of a body — `no-cache` (NOT no-store) so the
     // browser revalidates with If-None-Match and reuses its held copy.

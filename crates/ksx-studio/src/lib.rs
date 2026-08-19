@@ -90,13 +90,14 @@
 // (render_map.rs `scalar_slots`), and that macro recurses once per field. The
 // object is deliberately flat and deliberately long — every state on the page
 // is a named scalar — so it outgrew the default 128.
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 mod control;
 mod error;
 mod guard;
 mod keyboard_layout;
 mod live;
+mod macro_editor;
 mod render;
 mod render_check;
 mod render_devices;

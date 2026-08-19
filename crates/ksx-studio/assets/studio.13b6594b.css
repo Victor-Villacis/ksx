@@ -10644,6 +10644,656 @@ button.n-keychip:hover {
   display: none;
 }
 
+
+/* ═══ THE MACRO STEP EDITOR ════════════════════════════════════════════════
+   Rows are steps, columns are this pad's controls, a cell is held or not
+   (docs/INPUT-TRANSFORMS.md §6.2). Two aligned halves: a step bar that never
+   scrolls (number, what the step holds IN WORDS, its time, its verbs) and the
+   matrix beside it, under bands that are NAMED and counted. Thirty-seven
+   columns is a lot to scan; the count on each band says where the content is
+   before you read a single cell. */
+
+.nd-mac {
+  width: min(1180px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  gap: 18px;
+}
+
+/* Every section keeps the height its content needs: the panel scrolls, its
+   parts do not squash. */
+.nd-mac > * {
+  flex: none;
+}
+
+/* The shared kicker sorts itself LAST (`.n-kick { order: 1 }`, so it can
+   trail a row); here it leads its section. */
+.n-macmotions .n-kick,
+.n-macpols .n-kick {
+  order: 0;
+}
+
+.n-machd {
+  position: relative;
+  display: grid;
+  gap: 3px;
+}
+
+.n-macmeta {
+  color: var(--n-text-2);
+  font-size: 12px;
+}
+
+.n-macdis {
+  color: var(--n-warn);
+  font-size: 12px;
+}
+
+.n-macdis:empty {
+  display: none;
+}
+
+.n-macx {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--n-text-3);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.n-macx:hover {
+  background: var(--n-panel-3);
+  color: var(--n-text);
+}
+
+/* ── The roll ── */
+
+.n-macroll {
+  --macrow-h: 26px;
+  --maccol-w: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 12px;
+  background: var(--n-panel-2);
+  overflow: hidden;
+}
+
+/* No steps is a STATE, and it says what to do about it. */
+.n-macroll.empty {
+  justify-content: center;
+  padding: 28px 16px;
+  border-style: dashed;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 12px;
+}
+
+.n-macroll.empty::after {
+  content: "This macro has no steps yet \2014 Add step starts it.";
+}
+
+.n-macroll.empty > * {
+  display: none;
+}
+
+.n-macbar {
+  flex: none;
+  display: grid;
+  gap: 2px;
+}
+
+.n-macbarhd {
+  height: 35px;
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 3px;
+  color: var(--n-text-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.n-macrow {
+  height: var(--macrow-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.n-macrow:nth-child(even) {
+  background: var(--n-panel-3);
+}
+
+/* A step the 60 Hz poller cannot see is flagged where it is read, in the
+   unit it was authored in \2014 never silently accepted, never silently
+   rewritten. */
+.n-macrow.short {
+  box-shadow: inset 2px 0 0 var(--n-warn);
+}
+
+.n-macn {
+  width: 16px;
+  color: var(--n-text-3);
+  font-size: 10px;
+  text-align: right;
+}
+
+.n-machold {
+  min-width: 104px;
+  max-width: 104px;
+  overflow: hidden;
+  color: var(--n-text-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+/* Several controls at once is the thing worth noticing on a roll. */
+.n-machold.both {
+  color: var(--n-accent-2);
+}
+
+.n-machold.none {
+  color: var(--n-text-3);
+  font-style: italic;
+}
+
+.n-macexp {
+  min-width: 96px;
+  max-width: 96px;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.n-macexp.none {
+  display: block;
+  visibility: hidden;
+}
+
+/* The duration, on the row it belongs to: the words are the no-JS readout,
+   the box takes over the moment the island marks the page scripted. */
+.n-macdurw {
+  min-width: 52px;
+  color: var(--n-text-2);
+  font-size: 11px;
+}
+
+.n-macdured {
+  display: none;
+  align-items: center;
+  gap: 3px;
+}
+
+.nocturne.js .n-macdurw {
+  display: none;
+}
+
+.nocturne.js .n-macdured {
+  display: flex;
+}
+
+.n-macroll .n-macdur {
+  width: 46px;
+  height: 20px;
+  padding: 2px 4px;
+  border: 1px solid var(--n-line);
+  border-radius: 5px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.n-macroll .n-macdur.short {
+  border-color: var(--n-warn);
+  color: var(--n-warn);
+}
+
+.n-macroll .n-macunit {
+  min-width: 24px;
+  height: 20px;
+  padding: 2px 4px;
+  border: 1px solid var(--n-line);
+  border-radius: 5px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.n-macroll .n-macunit:hover {
+  border-color: var(--n-line-2);
+  color: var(--n-text);
+}
+
+.n-macwarn {
+  color: var(--n-warn);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.n-macwarn.none {
+  display: none;
+}
+
+.n-macverbs {
+  display: none;
+  margin-left: auto;
+  gap: 2px;
+}
+
+.nocturne.js .n-macverbs {
+  display: flex;
+}
+
+.n-macbtn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-macbtn:hover {
+  border-color: var(--n-line-2);
+  color: var(--n-text);
+}
+
+.n-macbtn.del:hover {
+  border-color: var(--n-danger-line);
+  color: var(--n-danger);
+}
+
+.n-macbtn.off {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+/* ── The matrix ── */
+
+.n-macscroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.n-macgrps,
+.n-maccols,
+.n-macmatrix {
+  display: grid;
+  grid-template-columns: repeat(37, var(--maccol-w));
+  width: max-content;
+}
+
+/* The two header rows are FIXED, because the step bar beside them has to
+   line up with the matrix row for row. Left to size themselves they take
+   their height from whatever the tallest label happens to be. */
+.n-macgrps {
+  height: 17px;
+  grid-auto-rows: 17px;
+}
+
+.n-maccols {
+  height: 18px;
+  grid-auto-rows: 18px;
+}
+
+/* THE BAND, NAMED AND COUNTED. Without the name this is three identical runs
+   of eight arrows told apart by a tooltip; without the count you have to read
+   every cell to find out where the macro actually lives. */
+.n-macgrp {
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--n-line);
+  color: var(--n-text-3);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  overflow: hidden;
+}
+
+.n-macgrp.g1 {
+  grid-column: span 1;
+}
+
+.n-macgrp.g2 {
+  grid-column: span 2;
+}
+
+.n-macgrp.g3 {
+  grid-column: span 3;
+}
+
+.n-macgrp.g4 {
+  grid-column: span 4;
+}
+
+.n-macgrp.g5 {
+  grid-column: span 5;
+}
+
+.n-macgrp.g6 {
+  grid-column: span 6;
+}
+
+.n-macgrp.g7 {
+  grid-column: span 7;
+}
+
+.n-macgrp.g8 {
+  grid-column: span 8;
+}
+
+.n-macgrp.g9 {
+  grid-column: span 9;
+}
+
+.n-macgrp.g10 {
+  grid-column: span 10;
+}
+
+.n-macgrp.g11 {
+  grid-column: span 11;
+}
+
+.n-macgrp.g12 {
+  grid-column: span 12;
+}
+
+.n-macgrp-l {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-macgrp-n {
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.n-macgrp-n.none {
+  display: none;
+}
+
+.n-maccol {
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+/* A diagonal is a control you can point at, not a pair you have to know how
+   to build \2014 so its column reads brighter than the two it stores. */
+.n-maccol.diag {
+  color: var(--n-accent-2);
+}
+
+.n-maccol.cardinal {
+  color: var(--n-text-2);
+}
+
+.n-macmatrix {
+  grid-auto-rows: var(--macrow-h);
+  gap: 2px 0;
+}
+
+.n-maccell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--n-line);
+  margin: -0.5px;
+  background: none;
+  color: var(--n-accent-2);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.nocturne.js .n-maccell {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nocturne.js .n-maccell:hover {
+  background: var(--n-panel-3);
+}
+
+.n-maccell.on {
+  background: var(--n-accent-dim);
+  color: var(--n-accent);
+}
+
+/* Held as HALF of a folded diagonal: a subordinate tick, because pretending
+   the cardinal is not in the file would be the lens lying about the store. */
+.n-maccell.part {
+  color: var(--n-text-3);
+}
+
+.n-maccell.on.approx {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--n-accent-dim) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.n-maccell.isdiag {
+  border-color: var(--n-line-2);
+}
+
+/* ── What the ring means, and the rule behind the flag ── */
+
+.n-machelp > summary {
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-macring,
+.n-macrule {
+  margin: 8px 0 0;
+  color: var(--n-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ── Editing: only ever rendered to a page that can actually do it ── */
+
+.n-macedit,
+.n-macverbs,
+.n-macfoot .n-bbtn,
+.n-macmotions,
+.n-macpols {
+  display: none;
+}
+
+.nocturne.js .n-macedit,
+.nocturne.js .n-macmotions,
+.nocturne.js .n-macpols {
+  display: grid;
+  gap: 8px;
+}
+
+.nocturne.js .n-macedit {
+  display: flex;
+  gap: 8px;
+}
+
+.nocturne.js .n-macfoot .n-bbtn {
+  display: inline-flex;
+}
+
+/* ── The motion writer: a shape AND its name, never a bare glyph ── */
+
+.n-macmotline,
+.n-macpolline {
+  margin: 0;
+  color: var(--n-text-3);
+  font-size: 11px;
+}
+
+.n-macmotrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.n-macmot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
+.n-macmot:hover {
+  border-color: var(--n-accent-line);
+  background: var(--n-panel-3);
+}
+
+.n-macmot-s {
+  color: var(--n-text);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.n-macmot-l {
+  color: var(--n-text-3);
+  font-size: 10px;
+}
+
+/* ── The policies: every option visible, every option saying what it does ── */
+
+.n-macpolw {
+  display: contents;
+}
+
+.n-macpol-head {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  color: var(--n-text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.n-macpol-note {
+  grid-column: 1 / -1;
+  color: var(--n-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.n-macpol-head.none,
+.n-macpol-note.none {
+  display: none;
+}
+
+.nocturne.js .n-macpols {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  align-items: start;
+}
+
+.n-macpols .n-kick,
+.n-macpolline {
+  grid-column: 1 / -1;
+}
+
+.n-macrate {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--n-text-2);
+  font-size: 11px;
+}
+
+.n-macrate.none {
+  display: none;
+}
+
+.n-macrate input {
+  width: 68px;
+  padding: 3px 6px;
+  border: 1px solid var(--n-line);
+  border-radius: 6px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 11px;
+}
+
+/* ── The table this writes: the sharing path, folded away ── */
+
+.n-mactoml > summary {
+  color: var(--n-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.n-mactomlbox {
+  margin: 6px 0 0;
+  padding: 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel-2);
+  color: var(--n-text-2);
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.n-macfoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.n-macdirty {
+  margin-right: auto;
+  color: var(--n-warn);
+  font-size: 11px;
+}
+
 /* The board's legend: the key to its own map, and the mute control for
    each controller's colour. */
 .n-legend {

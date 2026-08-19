@@ -6972,6 +6972,181 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
 
 /// **The MIGRATED macro lifecycle, over HTTP.** The macro rows are the
 /// staged authoring's own facts; the moved /api/macro/save authors into the
+/// **The macro STEP editor is served**: a macro is addressed by NAME on the
+/// selected controller, and the whole roll — columns, bands, steps, cells,
+/// policies — arrives composed. The two things worth pinning are the ones the
+/// editor exists for: a hand-written direction PAIR reads back as ONE diagonal
+/// with the file's own spelling beside it, and a step under the sampling floor
+/// is flagged in the unit it was authored in.
+#[test]
+fn nocturne_serves_the_macro_step_editor() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    // Step 1 is written as a PAIR, by hand, the way a preset file does it.
+    // Step 2 is one frame — shorter than a 60 Hz poller can see.
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\"steps\":[\
+         {\"hold\":[\"dpad.down\",\"dpad.right\"],\"ms\":50},{\"hold\":[\"A\"],\"frames\":1}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    // Closed until a macro is named — and an unknown name opens nothing.
+    for query in ["", "?macro=nosuchmacro"] {
+        let api: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, &format!("/api/nocturne{query}"))))
+                .expect("payload");
+        assert_eq!(api["view"]["mac"]["open"], false, "{query}: {api}");
+        assert_eq!(api["view"]["mac"]["back_cls"], "nd-back none", "{query}");
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    let mac = api["view"]["mac"].clone();
+    assert_eq!(mac["open"], true, "{mac}");
+    assert_eq!(mac["name"], "combo", "{mac}");
+    assert_eq!(
+        mac["head"], "2 steps \u{b7} 83 ms",
+        "the shape before the detail: {mac}"
+    );
+    assert_eq!(mac["close_href"], "/nocturne?slot=1", "{mac}");
+    // 25 zones become 37 columns: three rings of eight, so a diagonal is a
+    // thing you point at instead of a thing you know how to build.
+    assert_eq!(mac["cols"].as_array().expect("cols").len(), 37, "{mac}");
+    assert_eq!(mac["cells"].as_array().expect("cells").len(), 74, "{mac}");
+    assert_eq!(mac["rows"].as_array().expect("rows").len(), 2, "{mac}");
+
+    // THE LENS: the pair reads as one control, and the file's spelling is
+    // beside it rather than hidden in the TOML.
+    let first = mac["rows"][0].clone();
+    assert!(
+        first["hold"]
+            .as_str()
+            .is_some_and(|h| h.contains('\u{2198}')),
+        "a written pair reads back as the diagonal it is: {first}"
+    );
+    assert!(
+        first["exp"]
+            .as_str()
+            .is_some_and(|e| e.contains("dpad.down") && e.contains("dpad.right")),
+        "and the row still spells what the file stores: {first}"
+    );
+    let lit: Vec<&str> = mac["cells"]
+        .as_array()
+        .expect("cells")
+        .iter()
+        .filter(|c| {
+            c["cls"]
+                .as_str()
+                .is_some_and(|cls| cls.split(' ').any(|one| one == "on"))
+        })
+        .filter_map(|c| c["cell"].as_str())
+        .collect();
+    assert_eq!(lit, vec!["0|diag:dpad:dr", "1|A"], "{mac}");
+    assert!(
+        mac["cells"]
+            .as_array()
+            .expect("cells")
+            .iter()
+            .filter(|c| c["cls"].as_str().is_some_and(|cls| cls.contains(" part")))
+            .count()
+            == 2,
+        "the two cardinals stay ticked underneath — the lens never hides the store: {mac}"
+    );
+
+    // THE FLOOR: flagged where it is read, in the unit it was authored in.
+    let second = mac["rows"][1].clone();
+    assert!(
+        second["cls"].as_str().is_some_and(|c| c.contains("short")),
+        "{second}"
+    );
+    assert!(
+        second["warn"].as_str().is_some_and(|w| w.contains("fr")),
+        "the flag counts frames, because that is how the step was written: {second}"
+    );
+    assert_eq!(second["unit"], "fr", "{second}");
+
+    // The bands are NAMED and COUNTED: where a macro lives, before you read a
+    // single cell.
+    let bands: Vec<(String, String)> = mac["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|g| {
+            (
+                g["label"].as_str().unwrap_or_default().to_owned(),
+                g["count"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        bands.contains(&("D-pad".to_owned(), "1".to_owned()))
+            && bands.contains(&("Face buttons".to_owned(), "1".to_owned())),
+        "{bands:?}"
+    );
+    assert!(
+        bands
+            .iter()
+            .any(|(label, count)| label == "Right stick" && count.is_empty()),
+        "a band this macro never touches counts nothing: {bands:?}"
+    );
+
+    // Every policy option is visible, and the current one is marked.
+    let on: Vec<&str> = mac["pols"]
+        .as_array()
+        .expect("pols")
+        .iter()
+        .filter(|o| o["cls"] == "n-bpill on")
+        .filter_map(|o| o["act"].as_str())
+        .collect();
+    assert_eq!(
+        on,
+        vec![
+            "on_release|finish",
+            "retrigger|ignore",
+            "interrupt|none",
+            "repeat|once"
+        ],
+        "{mac}"
+    );
+    assert_eq!(
+        mac["turbo_cls"], "n-macrate none",
+        "no turbo, no rate: {mac}"
+    );
+    assert_eq!(
+        mac["motions"].as_array().expect("motions").len(),
+        8,
+        "{mac}"
+    );
+    assert!(
+        mac["motions"][0]["label"]
+            .as_str()
+            .is_some_and(|l| !l.is_empty()),
+        "every motion carries its NAME, not just its shape: {mac}"
+    );
+
+    // …and the row that opens it points at this page, not at Controls.
+    let row = api["view"]["macro_rows"][0].clone();
+    assert_eq!(row["edit_href"], "/nocturne?slot=1&macro=combo", "{row}");
+}
+
 /// draft; the trigger rebinds through the SAME staged bind verb as any
 /// control; the toggle keeps every step; delete removes table and triggers
 /// together — and every twin refuses junk in allowlisted words.

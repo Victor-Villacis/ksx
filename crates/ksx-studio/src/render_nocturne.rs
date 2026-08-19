@@ -54,6 +54,12 @@ const LIST_SLOT_CTL_LS: &str = "list:nCtlLs:array";
 const LIST_SLOT_CTL_RS: &str = "list:nCtlRs:array";
 const LIST_SLOT_CTL_SYS: &str = "list:nCtlSys:array";
 const LIST_SLOT_LEGEND: &str = "list:nLegend:array";
+const LIST_SLOT_MAC_COLS: &str = "list:nMacCols:array";
+const LIST_SLOT_MAC_GROUPS: &str = "list:nMacGroups:array";
+const LIST_SLOT_MAC_ROWS: &str = "list:nMacRows:array";
+const LIST_SLOT_MAC_CELLS: &str = "list:nMacCells:array";
+const LIST_SLOT_MAC_POLS: &str = "list:nMacPols:array";
+const LIST_SLOT_MAC_MOTIONS: &str = "list:nMacMotions:array";
 const LIST_SLOT_KB: [&str; 7] = [
     "list:nKbRow1:array",
     "list:nKbRow2:array",
@@ -126,6 +132,22 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nKbTrayCls": payload.view.kb_tray_cls,
         "nKbNote": payload.view.kb_note,
         "nKbMoreCls": payload.view.kb_more_cls,
+        "nMacBackCls": payload.view.mac.back_cls,
+        "nMacName": payload.view.mac.name,
+        "nMacSlot": payload.view.mac.slot,
+        "nMacHead": payload.view.mac.head,
+        "nMacTrigger": payload.view.mac.trigger,
+        "nMacNote": payload.view.mac.note,
+        "nMacGridCls": payload.view.mac.grid_cls,
+        "nMacClose": payload.view.mac.close_href,
+        "nMacMapHref": payload.view.mac.map_href,
+        "nMacMotionLine": payload.view.mac.motion_line,
+        "nMacPolicyLine": payload.view.mac.policy_line,
+        "nMacRing": payload.view.mac.ring,
+        "nMacRule": payload.view.mac.rule,
+        "nMacToml": payload.view.mac.toml,
+        "nMacRateCls": payload.view.mac.turbo_cls,
+        "nMacRateVal": payload.view.mac.turbo_val,
         "nKeysNote": payload.view.keys_note,
         "nAvailMainHead": payload.view.avail_main_head,
         "nAvailNavHead": payload.view.avail_nav_head,
@@ -266,6 +288,99 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
     ])
 }
 
+fn mac_col(row: &crate::macro_editor::NocturneMacCol) -> SlotValue {
+    SlotValue::object(vec![
+        ("id".to_owned(), SlotValue::Text(row.id.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+    ])
+}
+
+fn mac_group(row: &crate::macro_editor::NocturneMacGroup) -> SlotValue {
+    SlotValue::object(vec![
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("count".to_owned(), SlotValue::Text(row.count.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        (
+            "count_cls".to_owned(),
+            SlotValue::Text(row.count_cls.clone()),
+        ),
+    ])
+}
+
+fn mac_row(row: &crate::macro_editor::NocturneMacRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("n".to_owned(), SlotValue::Text(row.n.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("hold".to_owned(), SlotValue::Text(row.hold.clone())),
+        ("hold_cls".to_owned(), SlotValue::Text(row.hold_cls.clone())),
+        ("exp".to_owned(), SlotValue::Text(row.exp.clone())),
+        ("exp_cls".to_owned(), SlotValue::Text(row.exp_cls.clone())),
+        ("dur".to_owned(), SlotValue::Text(row.dur.clone())),
+        ("dur_val".to_owned(), SlotValue::Text(row.dur_val.clone())),
+        ("dur_row".to_owned(), SlotValue::Text(row.dur_row.clone())),
+        ("dur_cls".to_owned(), SlotValue::Text(row.dur_cls.clone())),
+        (
+            "dur_title".to_owned(),
+            SlotValue::Text(row.dur_title.clone()),
+        ),
+        ("unit".to_owned(), SlotValue::Text(row.unit.clone())),
+        ("unit_act".to_owned(), SlotValue::Text(row.unit_act.clone())),
+        (
+            "unit_title".to_owned(),
+            SlotValue::Text(row.unit_title.clone()),
+        ),
+        ("warn".to_owned(), SlotValue::Text(row.warn.clone())),
+        ("warn_cls".to_owned(), SlotValue::Text(row.warn_cls.clone())),
+        (
+            "warn_title".to_owned(),
+            SlotValue::Text(row.warn_title.clone()),
+        ),
+        ("up_cls".to_owned(), SlotValue::Text(row.up_cls.clone())),
+        ("dn_cls".to_owned(), SlotValue::Text(row.dn_cls.clone())),
+        ("up_act".to_owned(), SlotValue::Text(row.up_act.clone())),
+        ("dn_act".to_owned(), SlotValue::Text(row.dn_act.clone())),
+        ("ia_act".to_owned(), SlotValue::Text(row.ia_act.clone())),
+        ("ib_act".to_owned(), SlotValue::Text(row.ib_act.clone())),
+        ("del_act".to_owned(), SlotValue::Text(row.del_act.clone())),
+        (
+            "del_title".to_owned(),
+            SlotValue::Text(row.del_title.clone()),
+        ),
+    ])
+}
+
+fn mac_cell(row: &crate::macro_editor::NocturneMacCell) -> SlotValue {
+    SlotValue::object(vec![
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("cell".to_owned(), SlotValue::Text(row.cell.clone())),
+        ("mark".to_owned(), SlotValue::Text(row.mark.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+    ])
+}
+
+fn mac_pol(row: &crate::macro_editor::NocturneMacPol) -> SlotValue {
+    SlotValue::object(vec![
+        ("act".to_owned(), SlotValue::Text(row.act.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("head".to_owned(), SlotValue::Text(row.head.clone())),
+        ("head_cls".to_owned(), SlotValue::Text(row.head_cls.clone())),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
+        ("note_cls".to_owned(), SlotValue::Text(row.note_cls.clone())),
+    ])
+}
+
+fn mac_motion(row: &crate::macro_editor::NocturneMacMotion) -> SlotValue {
+    SlotValue::object(vec![
+        ("act".to_owned(), SlotValue::Text(row.act.clone())),
+        ("shape".to_owned(), SlotValue::Text(row.shape.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+    ])
+}
+
 fn legend_row(row: &NocturneLegendRow) -> SlotValue {
     SlotValue::object(vec![
         ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
@@ -346,7 +461,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 36] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 42] {
     let view = &payload.view;
     [
         (
@@ -356,6 +471,30 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 36] {
         (
             LIST_SLOT_LEGEND,
             SlotValue::array(view.legend.iter().map(legend_row).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_COLS,
+            SlotValue::array(view.mac.cols.iter().map(mac_col).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_GROUPS,
+            SlotValue::array(view.mac.groups.iter().map(mac_group).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_ROWS,
+            SlotValue::array(view.mac.rows.iter().map(mac_row).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_CELLS,
+            SlotValue::array(view.mac.cells.iter().map(mac_cell).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_POLS,
+            SlotValue::array(view.mac.pols.iter().map(mac_pol).collect()),
+        ),
+        (
+            LIST_SLOT_MAC_MOTIONS,
+            SlotValue::array(view.mac.motions.iter().map(mac_motion).collect()),
         ),
         (
             LIST_SLOT_KEYROWS,
@@ -605,6 +744,7 @@ mod tests {
         NocturnePayload {
             staged,
             scan,
+            macro_selected: None,
             session: crate::control::SessionView {
                 reachable: true,
                 running: false,
@@ -664,7 +804,7 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 36] = [
+        const SERVED_LIST_PREFIXES: [&str; 42] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -687,6 +827,12 @@ mod tests {
             "list:nGameRows:",
             "list:nMacroRows:",
             "list:nLegend:",
+            "list:nMacCols:",
+            "list:nMacGroups:",
+            "list:nMacRows:",
+            "list:nMacCells:",
+            "list:nMacPols:",
+            "list:nMacMotions:",
             "list:nKbRow1:",
             "list:nKbRow2:",
             "list:nKbRow3:",
@@ -702,7 +848,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 84] = [
+        const SERVED_SLOTS: [&str; 100] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -744,6 +890,22 @@ mod tests {
             "nKbTrayCls",
             "nKbNote",
             "nKbMoreCls",
+            "nMacBackCls",
+            "nMacName",
+            "nMacSlot",
+            "nMacHead",
+            "nMacTrigger",
+            "nMacNote",
+            "nMacGridCls",
+            "nMacClose",
+            "nMacMapHref",
+            "nMacMotionLine",
+            "nMacPolicyLine",
+            "nMacRing",
+            "nMacRule",
+            "nMacToml",
+            "nMacRateCls",
+            "nMacRateVal",
             "nCfgLine",
             "nCfgMeta",
             "nCfgCls",
@@ -866,6 +1028,12 @@ mod tests {
             LIST_SLOT_MACROS,
             LIST_SLOT_OTHER,
             LIST_SLOT_LEGEND,
+            LIST_SLOT_MAC_COLS,
+            LIST_SLOT_MAC_GROUPS,
+            LIST_SLOT_MAC_ROWS,
+            LIST_SLOT_MAC_CELLS,
+            LIST_SLOT_MAC_POLS,
+            LIST_SLOT_MAC_MOTIONS,
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],
             LIST_SLOT_MODES,

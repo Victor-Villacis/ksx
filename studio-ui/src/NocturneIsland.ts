@@ -95,7 +95,73 @@ export interface NocturneKeyCellView {
   title: string;
 }
 
-export interface NocturneLegendRowView {
+export interface NocturneMacColView {
+  id: string;
+  cls: string;
+  title: string;
+}
+
+interface NocturneMacGroupView {
+  label: string;
+  count: string;
+  cls: string;
+  count_cls: string;
+}
+
+interface NocturneMacRowView {
+  n: string;
+  cls: string;
+  hold: string;
+  hold_cls: string;
+  exp: string;
+  exp_cls: string;
+  dur: string;
+  dur_val: string;
+  dur_row: string;
+  dur_cls: string;
+  dur_title: string;
+  unit: string;
+  unit_act: string;
+  unit_title: string;
+  warn: string;
+  warn_cls: string;
+  warn_title: string;
+  up_cls: string;
+  dn_cls: string;
+  up_act: string;
+  dn_act: string;
+  ia_act: string;
+  ib_act: string;
+  del_act: string;
+  del_title: string;
+}
+
+interface NocturneMacCellView {
+  cls: string;
+  cell: string;
+  mark: string;
+  title: string;
+}
+
+interface NocturneMacPolView {
+  act: string;
+  label: string;
+  title: string;
+  cls: string;
+  head: string;
+  head_cls: string;
+  note: string;
+  note_cls: string;
+}
+
+interface NocturneMacMotionView {
+  act: string;
+  shape: string;
+  label: string;
+  title: string;
+}
+
+interface NocturneLegendRowView {
   slot: string;
   badge: string;
   name: string;
@@ -254,6 +320,30 @@ export interface NocturneView {
   kb_tray_cls: string;
   kb_note: string;
   kb_more_cls: string;
+  mac: {
+    back_cls: string;
+    name: string;
+    slot: string;
+    head: string;
+    trigger: string;
+    note: string;
+    grid_cls: string;
+    close_href: string;
+    map_href: string;
+    cols: NocturneMacColView[];
+    groups: NocturneMacGroupView[];
+    rows: NocturneMacRowView[];
+    cells: NocturneMacCellView[];
+    pols: NocturneMacPolView[];
+    motions: NocturneMacMotionView[];
+    motion_line: string;
+    policy_line: string;
+    ring: string;
+    rule: string;
+    toml: string;
+    turbo_cls: string;
+    turbo_val: string;
+  };
   cfg_line: string;
   cfg_meta: string;
   cfg_cls: string;
@@ -400,6 +490,32 @@ const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
 const [nKbMoreCls, setNKbMoreCls] = createSignal("n-lgdmore none");
+// ── The macro step editor. Its data is SERVED, so a reader with no
+// scripting can open a macro by link and read every step; only the editing
+// controls are gated on `.js`, because a control that cannot do anything is
+// the one thing this page never renders.
+const [nMacBackCls, setNMacBackCls] = createSignal("nd-back none");
+const [nMacName, setNMacName] = createSignal("");
+const [nMacSlot, setNMacSlot] = createSignal("");
+const [nMacHead, setNMacHead] = createSignal("");
+const [nMacTrigger, setNMacTrigger] = createSignal("");
+const [nMacNote, setNMacNote] = createSignal("");
+const [nMacGridCls, setNMacGridCls] = createSignal("n-macroll empty");
+const [nMacClose, setNMacClose] = createSignal("/nocturne");
+const [nMacMapHref, setNMacMapHref] = createSignal("");
+const [nMacMotionLine, setNMacMotionLine] = createSignal("");
+const [nMacPolicyLine, setNMacPolicyLine] = createSignal("");
+const [nMacRing, setNMacRing] = createSignal("");
+const [nMacRule, setNMacRule] = createSignal("");
+const [nMacToml, setNMacToml] = createSignal("");
+const [nMacRateCls, setNMacRateCls] = createSignal("n-macrate none");
+const [nMacRateVal, setNMacRateVal] = createSignal("");
+const [nMacCols, setNMacCols] = createSignal<NocturneMacColView[]>([]);
+const [nMacGroups, setNMacGroups] = createSignal<NocturneMacGroupView[]>([]);
+const [nMacRows, setNMacRows] = createSignal<NocturneMacRowView[]>([]);
+const [nMacCells, setNMacCells] = createSignal<NocturneMacCellView[]>([]);
+const [nMacPols, setNMacPols] = createSignal<NocturneMacPolView[]>([]);
+const [nMacMotions, setNMacMotions] = createSignal<NocturneMacMotionView[]>([]);
 const [nCfgLine, setNCfgLine] = createSignal("");
 const [nCfgMeta, setNCfgMeta] = createSignal("");
 const [nCfgCls, setNCfgCls] = createSignal("nm-cfg");
@@ -528,6 +644,28 @@ export function applyNocturne(p: NocturnePayload): void {
   setNKbTrayCls(v.kb_tray_cls);
   setNKbNote(v.kb_note);
   setNKbMoreCls(v.kb_more_cls);
+  setNMacBackCls(v.mac.back_cls);
+  setNMacName(v.mac.name);
+  setNMacSlot(v.mac.slot);
+  setNMacHead(v.mac.head);
+  setNMacTrigger(v.mac.trigger);
+  setNMacNote(v.mac.note);
+  setNMacGridCls(v.mac.grid_cls);
+  setNMacClose(v.mac.close_href);
+  setNMacMapHref(v.mac.map_href);
+  setNMacMotionLine(v.mac.motion_line);
+  setNMacPolicyLine(v.mac.policy_line);
+  setNMacRing(v.mac.ring);
+  setNMacRule(v.mac.rule);
+  setNMacToml(v.mac.toml);
+  setNMacRateCls(v.mac.turbo_cls);
+  setNMacRateVal(v.mac.turbo_val);
+  setNMacCols(v.mac.cols);
+  setNMacGroups(v.mac.groups);
+  setNMacRows(v.mac.rows);
+  setNMacCells(v.mac.cells);
+  setNMacPols(v.mac.pols);
+  setNMacMotions(v.mac.motions);
   setNCfgLine(v.cfg_line);
   setNCfgMeta(v.cfg_meta);
   setNCfgCls(v.cfg_cls);
@@ -5984,7 +6122,7 @@ export function NocturneIsland() {
                   h(
                     "a",
                     { class: "n-bbtn n-bbtn-link", href: r.edit_href },
-                    "Edit steps in Controls",
+                    "Edit steps…",
                   ),
                   h(
                     "details",
@@ -6014,6 +6152,226 @@ export function NocturneIsland() {
         h("p", { class: "n-devnote" }, () => nMacrosNote()),
         ),
         h("div", { class: "n-right-foot" }, () => nBindFoot()),
+      ),
+    ),
+    // ═══ The macro STEP editor ═══════════════════════════════════════════
+    // Rows are steps, columns are this pad's controls, a cell is held or not
+    // (docs/INPUT-TRANSFORMS.md §6.2). Everything here is SERVED markup wearing
+    // a class — never a createShow — so the dialog opens by link, survives a
+    // reload, and reads without scripting.
+    h(
+      "div",
+      { "data-nx": "mac-close", class: () => nMacBackCls() },
+      h(
+        "div",
+        {
+          "data-nx": "dlg-noop",
+          role: "dialog",
+          tabindex: "-1",
+          "aria-label": "Macro steps",
+          class: "nd nd-mac",
+        },
+        h(
+          "div",
+          { class: "n-machd" },
+          h("div", { class: "nd-kick" }, "Macro"),
+          h("div", { class: "nd-title" }, () => nMacName()),
+          h("div", { class: "nd-lede" }, () => nMacTrigger()),
+          h("div", { class: "n-macmeta" }, () => nMacHead()),
+          h("div", { class: "n-macdis" }, () => nMacNote()),
+          h("a", { class: "n-macx", "aria-label": "Close the macro editor", href: () => nMacClose() }, "\u2715"),
+        ),
+        // THE ROLL. Two aligned columns: the step bar (number, what the step
+        // holds in words, its time and its verbs) and the scrolling matrix
+        // under its own labelled bands.
+        h(
+          "div",
+          { class: () => nMacGridCls() },
+          h(
+            "div",
+            { class: "n-macbar" },
+            h("div", { class: "n-macbarhd" }, "step"),
+            createList(
+              () => nMacRows(),
+              (r) =>
+                r.n + "|" + r.cls + "|" + r.dur + "|" + r.unit + "|" + r.del_title +
+                "|" + r.warn + "|" + r.hold + "|" + r.hold_cls + "|" + r.exp,
+              (r) =>
+                h(
+                  "div",
+                  { title: r.dur_title, class: r.cls },
+                  h("span", { class: "n-macn" }, r.n),
+                  // WHAT THIS ROW HOLDS, before its timing — reading the roll
+                  // must never mean decoding which of 37 columns are lit. A
+                  // diagonal reads as ONE control, because that is what was
+                  // picked and what it means.
+                  h("span", { class: r.hold_cls }, r.hold),
+                  // …and the ledger beside it: the two names the FILE carries
+                  // for that diagonal.
+                  h("span", { title: r.exp, class: r.exp_cls }, r.exp),
+                  h("span", { class: "n-macdurw" }, r.dur),
+                  h(
+                    "span",
+                    { class: "n-macdured" },
+                    h("input", {
+                      type: "number",
+                      min: "1",
+                      step: "1",
+                      value: r.dur_val,
+                      title: r.dur_title,
+                      "data-macdur": r.dur_row,
+                      class: r.dur_cls,
+                    }),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        title: r.unit_title,
+                        "data-macact": r.unit_act,
+                        class: "n-macunit",
+                      },
+                      r.unit,
+                    ),
+                  ),
+                  h("span", { title: r.warn_title, class: r.warn_cls }, r.warn),
+                  h(
+                    "span",
+                    { class: "n-macverbs" },
+                    h("button", { type: "button", title: "Move this step up", "aria-label": "Move this step up", "data-macact": r.up_act, class: r.up_cls }, "\u25B4"),
+                    h("button", { type: "button", title: "Move this step down", "aria-label": "Move this step down", "data-macact": r.dn_act, class: r.dn_cls }, "\u25BE"),
+                    h("button", { type: "button", title: "Insert a step above this one", "aria-label": "Insert a step above this one", "data-macact": r.ia_act, class: "n-macbtn" }, "\u2912"),
+                    h("button", { type: "button", title: "Insert a step below this one", "aria-label": "Insert a step below this one", "data-macact": r.ib_act, class: "n-macbtn" }, "\u2913"),
+                    h("button", { type: "button", title: r.del_title, "aria-label": r.del_title, "data-macact": r.del_act, class: "n-macbtn del" }, "\u2715"),
+                  ),
+                ),
+            ),
+          ),
+          h(
+            "div",
+            { class: "n-macscroll" },
+            // THE BANDS, each NAMED and each carrying how many holds live
+            // under it — with 37 columns, "where is this macro's content"
+            // must be answerable before you read a single cell.
+            h(
+              "div",
+              { class: "n-macgrps" },
+              createList(
+                () => nMacGroups(),
+                (g) => g.label + "|" + g.cls + "|" + g.count,
+                (g) =>
+                  h(
+                    "span",
+                    { class: g.cls },
+                    h("span", { class: "n-macgrp-l" }, g.label),
+                    h("span", { class: g.count_cls }, g.count),
+                  ),
+              ),
+            ),
+            h(
+              "div",
+              { class: "n-maccols" },
+              createList(
+                () => nMacCols(),
+                (c) => c.id + "|" + c.cls + "|" + c.title,
+                (c) => h("span", { title: c.title, class: c.cls }, c.id),
+              ),
+            ),
+            h(
+              "div",
+              { class: "n-macmatrix" },
+              createList(
+                () => nMacCells(),
+                (c) => c.cell + "|" + c.cls,
+                (c) =>
+                  h(
+                    "button",
+                    { type: "button", title: c.title, "data-maccell": c.cell, class: c.cls },
+                    c.mark,
+                  ),
+              ),
+            ),
+          ),
+        ),
+        h(
+          "details",
+          { class: "n-machelp" },
+          h("summary", null, "How to read this roll"),
+          h("p", { class: "n-macring" }, () => nMacRing()),
+          h("p", { class: "n-macrule" }, () => nMacRule()),
+        ),
+        h(
+          "div",
+          { class: "n-macedit" },
+          h("button", { type: "button", "data-macact": "add", class: "n-bbtn" }, "Add step"),
+          h("button", { type: "button", "data-macact": "short", class: "n-bbtn ghost" }, "Allow a short step"),
+        ),
+        // THE MOTION WRITER. Each button carries the SHAPE a player already
+        // knows and its NAME beside it — never a bare glyph.
+        h(
+          "div",
+          { class: "n-macmotions" },
+          h("div", { class: "n-kick" }, "Common motions"),
+          h("p", { class: "n-macmotline" }, () => nMacMotionLine()),
+          h(
+            "div",
+            { class: "n-macmotrow" },
+            createList(
+              () => nMacMotions(),
+              (m) => m.act + "|" + m.shape + "|" + m.label,
+              (m) =>
+                h(
+                  "button",
+                  { type: "button", title: m.title, "data-macmotion": m.act, class: "n-macmot" },
+                  h("span", { class: "n-macmot-s" }, m.shape),
+                  h("span", { class: "n-macmot-l" }, m.label),
+                ),
+            ),
+          ),
+        ),
+        // THE POLICIES. Every option is visible and says what choosing it
+        // does — a select hides the alternatives behind a click.
+        h(
+          "div",
+          { class: "n-macpols" },
+          h("div", { class: "n-kick" }, "Behaviour"),
+          h("p", { class: "n-macpolline" }, () => nMacPolicyLine()),
+          createList(
+            () => nMacPols(),
+            (o) => o.act + "|" + o.cls + "|" + o.head_cls,
+            (o) =>
+              h(
+                "span",
+                { class: "n-macpolw" },
+                h("span", { class: o.head_cls }, o.head),
+                h("span", { class: o.note_cls }, o.note),
+                h("button", { type: "button", title: o.title, "data-macpol": o.act, class: o.cls }, o.label),
+              ),
+          ),
+          h(
+            "label",
+            { class: () => nMacRateCls() },
+            h("span", { class: "n-macratel" }, "Auto-fire rate, in full cycles a second"),
+            h("input", { type: "number", min: "1", max: "60", step: "1", "data-macrate": "1", value: () => nMacRateVal() }),
+          ),
+        ),
+        h(
+          "details",
+          { class: "n-mactoml" },
+          h("summary", null, "The table this writes"),
+          h("pre", { class: "n-mactomlbox" }, () => nMacToml()),
+        ),
+        h(
+          "div",
+          { class: "n-macfoot" },
+          h("span", { class: "n-macdirty" }, ""),
+          h(
+            "a",
+            { class: "n-bbtn ghost", href: () => nMacMapHref() },
+            "Open in Controls",
+          ),
+          h("button", { type: "button", "data-macact": "save", class: "n-bbtn n-macsave" }, "Save this macro"),
+          h("a", { class: "n-bbtn ghost", href: () => nMacClose() }, "Close"),
+        ),
       ),
     ),
     // ═══ Create-controller dialog — REAL personas, layouts, SOCD ═══════════

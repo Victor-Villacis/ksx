@@ -1126,14 +1126,14 @@ pub(crate) const TURBO_MAX_HZ: u32 = 30;
 
 /// 60 Hz frames → ms, rounded to nearest ONCE — `ksx_core::StepDuration::ms`.
 /// Rounded once so three frames is 50 ms and not 3 × 17 = 51.
-fn frames_ms(frames: u32) -> u32 {
+pub(crate) fn frames_ms(frames: u32) -> u32 {
     (frames.saturating_mul(1000) + 30) / 60
 }
 
 /// The duration a step ASKS for, in ms. `None` when the file says both units
 /// or neither — which is a fault, not a number to guess (`MacroStepFile::
 /// duration`), and is reported as one.
-fn requested_ms(step: &MacroStepView) -> Option<u32> {
+pub(crate) fn requested_ms(step: &MacroStepView) -> Option<u32> {
     match (step.ms, step.frames) {
         (Some(ms), None) => Some(ms),
         (None, Some(frames)) => Some(frames_ms(frames)),
@@ -1143,7 +1143,7 @@ fn requested_ms(step: &MacroStepView) -> Option<u32> {
 
 /// What the engine would actually hold this step for: below the floor is
 /// RAISED unless the author opted out (`MacroStep::effective_ms`).
-fn effective_ms(step: &MacroStepView) -> u32 {
+pub(crate) fn effective_ms(step: &MacroStepView) -> u32 {
     match requested_ms(step) {
         Some(ms) if step.allow_short || ms >= MIN_STEP_MS => ms,
         Some(_) => MIN_STEP_MS,
@@ -1153,7 +1153,7 @@ fn effective_ms(step: &MacroStepView) -> u32 {
 
 /// "50 ms" / "3 fr · 50 ms" / "—" — the row's own duration, in the unit it was
 /// authored in (a sequence written in frames must still read in frames).
-fn duration_text(step: &MacroStepView) -> String {
+pub(crate) fn duration_text(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(ms), None) => format!("{ms} ms"),
         (None, Some(frames)) => format!("{frames} fr · {} ms", frames_ms(frames)),
@@ -1162,7 +1162,7 @@ fn duration_text(step: &MacroStepView) -> String {
 }
 
 /// Is this step below the sampling floor at all? (Both spellings, one rule.)
-fn step_is_short(step: &MacroStepView) -> bool {
+pub(crate) fn step_is_short(step: &MacroStepView) -> bool {
     requested_ms(step).is_some_and(|ms| ms < MIN_STEP_MS)
 }
 
@@ -1171,7 +1171,7 @@ fn step_is_short(step: &MacroStepView) -> bool {
 /// difference the client alone can have: the client also remembers a unit the
 /// AUTHOR picked for a step whose value has not been retyped yet, and an SSR
 /// paint has no author to remember.
-fn dur_value(step: &MacroStepView) -> String {
+pub(crate) fn dur_value(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (_, Some(frames)) if step.ms.is_none() => frames.to_string(),
         (Some(ms), _) => ms.to_string(),
@@ -1186,7 +1186,7 @@ fn dur_value(step: &MacroStepView) -> String {
 /// a select inside a list item cannot be given its value by an attribute
 /// binding (map.ts would have to write every one of them by hand after every
 /// poll), and a button's label is its own readout.
-fn unit_tag(step: &MacroStepView) -> String {
+pub(crate) fn unit_tag(step: &MacroStepView) -> String {
     if step.frames.is_some() && step.ms.is_none() {
         "fr".to_owned()
     } else {
@@ -1194,7 +1194,7 @@ fn unit_tag(step: &MacroStepView) -> String {
     }
 }
 
-fn unit_title(step: &MacroStepView, i: usize) -> String {
+pub(crate) fn unit_title(step: &MacroStepView, i: usize) -> String {
     if unit_tag(step) == "fr" {
         format!(
             "step {} is authored in FRAMES — click to switch it to ms (the length is converted, \
@@ -1214,7 +1214,7 @@ fn unit_title(step: &MacroStepView, i: usize) -> String {
 /// duration, because a truncated warning is a warning nobody reads. The rule
 /// it is short for is stated once, in full, in the card's own note; the whole
 /// sentence rides the row's `title` ([`step_warning_long`]).
-fn step_warning(step: &MacroStepView) -> String {
+pub(crate) fn step_warning(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(_), Some(_)) => "two units".to_owned(),
         (None, None) => "no duration".to_owned(),
@@ -1246,7 +1246,7 @@ fn step_warning(step: &MacroStepView) -> String {
 /// The same flag, in full — never a silent acceptance and never a silent
 /// rewrite (§1c "the sampling rule, enforced": both outcomes are advisories,
 /// and neither is ever quiet). Empty = nothing to say.
-fn step_warning_long(step: &MacroStepView) -> String {
+pub(crate) fn step_warning_long(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(_), Some(_)) => {
             "uses both milliseconds and frames — choose exactly one timing method".to_owned()
@@ -1453,7 +1453,7 @@ const SSR_RATE_HZ: f64 = 60.0;
 
 /// `macro.<name>` — the function name the `map` verb takes for a TRIGGER.
 /// Same spelling `ksx_config::macro_function_name` writes into the file.
-fn macro_function(name: &str) -> String {
+pub(crate) fn macro_function(name: &str) -> String {
     format!("macro.{name}")
 }
 
@@ -1622,7 +1622,7 @@ fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
 /// and [`hold_expand`] says, beside it, exactly which two names the file
 /// carries. Nothing is hidden and nothing has to be decoded from lit cells
 /// twelve columns apart.
-fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
+pub(crate) fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
     if hold.is_empty() {
         return "(nothing — neutral gap)".to_owned();
     }
@@ -1642,7 +1642,7 @@ fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
 /// storage says "two holds"; this line says both at once, on the row itself, so
 /// nobody has to open the TOML to find out what a pick wrote. Empty when the
 /// step holds no diagonal.
-fn hold_expand(hold: &[String]) -> String {
+pub(crate) fn hold_expand(hold: &[String]) -> String {
     fold(hold)
         .iter()
         .filter_map(|h| match h {
@@ -1673,7 +1673,7 @@ fn hold_expand(hold: &[String]) -> String {
 /// place on the card that cannot be truncated. So the title carries it too, and
 /// the narrow-width drop of the span becomes a deliberate layout choice rather
 /// than the quiet loss of the only statement of what a pick wrote.
-fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> String {
+pub(crate) fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> String {
     let base = format!(
         "step {} holds {} for {} (the engine runs it for {} ms)",
         i + 1,
@@ -1689,7 +1689,7 @@ fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> Strin
     }
 }
 
-fn hold_expand_cls(hold: &[String]) -> &'static str {
+pub(crate) fn hold_expand_cls(hold: &[String]) -> &'static str {
     if hold_expand(hold).is_empty() {
         "macexp off"
     } else {
@@ -1700,7 +1700,7 @@ fn hold_expand_cls(hold: &[String]) -> &'static str {
 /// The hold readout's own class, over PRESENTED controls rather than stored
 /// ones: a diagonal is one control, so `↓ + →` no longer reads as two.
 /// The accent is for a row that really does hold several things at once.
-fn hold_cls(hold: &[String]) -> &'static str {
+pub(crate) fn hold_cls(hold: &[String]) -> &'static str {
     match fold(hold).len() {
         0 => "machold none",
         1 => "machold",
@@ -1841,8 +1841,82 @@ fn macro_rows(
     )
 }
 
+/// Every column's state for ONE step, in column order, with the "written, but
+/// not at full deflection" flag beside it.
+///
+/// THE DIAGONAL LENS LIVES HERE, once. `/map` and `/nocturne` draw different
+/// grids out of the same answer, because the rule that folds `ly.min + lx.max`
+/// into a single `↘` — and still ticks the two cardinals underneath it — is the
+/// one piece of this editor that must never have two versions to disagree.
+pub(crate) fn step_cell_states(
+    step: &MacroStepView,
+    columns: &[MacroColumn],
+) -> Vec<(CellState, bool)> {
+    let view = fold(&step.hold);
+    // Which diagonal (if any) each held entry was folded into, and which
+    // (mechanism, diagonal) pairs are lit.
+    let mut member_of: Vec<Option<Diag>> = vec![None; step.hold.len()];
+    let mut lit: Vec<(Mechanism, Diag, bool)> = Vec::new();
+    for held in &view {
+        if let Held::Diagonal {
+            diag,
+            mechanisms,
+            members,
+            exact,
+        } = held
+        {
+            for &m in members {
+                member_of[m] = Some(*diag);
+            }
+            for &mechanism in mechanisms {
+                lit.push((mechanism, *diag, *exact));
+            }
+        }
+    }
+    columns
+        .iter()
+        .map(|column| {
+            let state = match parse_diag_token(&column.token) {
+                Some((mechanism, diag)) => lit
+                    .iter()
+                    .find(|(m, d, _)| *m == mechanism && *d == diag)
+                    .map_or(CellState::Off, |_| CellState::On),
+                // A direction column matches by WHERE IT POINTS, not by
+                // spelling: `ly.-16384` is the down half of this pad's left
+                // stick however the file spells it.
+                None => match pointing(&column.token) {
+                    Some(want) => step
+                        .hold
+                        .iter()
+                        .position(|f| points_same_way(f, want))
+                        .map_or(CellState::Off, |at| match member_of[at] {
+                            Some(diag) => CellState::Part(diag),
+                            None => CellState::On,
+                        }),
+                    None => {
+                        if step
+                            .hold
+                            .iter()
+                            .any(|f| f.eq_ignore_ascii_case(&column.token))
+                        {
+                            CellState::On
+                        } else {
+                            CellState::Off
+                        }
+                    }
+                },
+            };
+            let approx = matches!(state, CellState::On)
+                && lit
+                    .iter()
+                    .any(|(m, d, exact)| !exact && diag_token(*m, *d) == column.token);
+            (state, approx)
+        })
+        .collect()
+}
+
 /// What one column says about one step.
-enum CellState {
+pub(crate) enum CellState {
     /// Not held.
     Off,
     /// Held, and this column is the whole of it.
@@ -1878,62 +1952,8 @@ fn macro_cells(
     let zones = zones_for(persona);
     let mut cells = Vec::with_capacity(mac.steps.len() * columns.len());
     for (i, step) in mac.steps.iter().enumerate() {
-        let view = fold(&step.hold);
-        // Which diagonal (if any) each held entry was folded into, and which
-        // (mechanism, diagonal) pairs are lit.
-        let mut member_of: Vec<Option<Diag>> = vec![None; step.hold.len()];
-        let mut lit: Vec<(Mechanism, Diag, bool)> = Vec::new();
-        for held in &view {
-            if let Held::Diagonal {
-                diag,
-                mechanisms,
-                members,
-                exact,
-            } = held
-            {
-                for &m in members {
-                    member_of[m] = Some(*diag);
-                }
-                for &mechanism in mechanisms {
-                    lit.push((mechanism, *diag, *exact));
-                }
-            }
-        }
-        for column in &columns {
-            let state = match parse_diag_token(&column.token) {
-                Some((mechanism, diag)) => lit
-                    .iter()
-                    .find(|(m, d, _)| *m == mechanism && *d == diag)
-                    .map_or(CellState::Off, |_| CellState::On),
-                // A direction column matches by WHERE IT POINTS, not by
-                // spelling: `ly.-16384` is the down half of this pad's left
-                // stick however the file spells it.
-                None => match pointing(&column.token) {
-                    Some(want) => step
-                        .hold
-                        .iter()
-                        .position(|f| points_same_way(f, want))
-                        .map_or(CellState::Off, |at| match member_of[at] {
-                            Some(diag) => CellState::Part(diag),
-                            None => CellState::On,
-                        }),
-                    None => {
-                        if step
-                            .hold
-                            .iter()
-                            .any(|f| f.eq_ignore_ascii_case(&column.token))
-                        {
-                            CellState::On
-                        } else {
-                            CellState::Off
-                        }
-                    }
-                },
-            };
-            let approx = matches!(state, CellState::On)
-                && lit
-                    .iter()
-                    .any(|(m, d, exact)| !exact && diag_token(*m, *d) == column.token);
+        let states = step_cell_states(step, &columns);
+        for (column, (state, approx)) in columns.iter().zip(states) {
             let mut cls = String::from("maccell");
             match state {
                 CellState::On => cls.push_str(" on"),
@@ -1995,14 +2015,14 @@ fn macro_cells(
 /// left stick just as `ly.min` is, and a grid that only lit the canonical
 /// spelling would leave a hand-written step looking unheld. Mirrored in
 /// MapIsland.ts `pointsSameWay`.
-fn points_same_way(function: &str, want: Pointing) -> bool {
+pub(crate) fn points_same_way(function: &str, want: Pointing) -> bool {
     pointing(function).is_some_and(|p| {
         p.mechanism == want.mechanism && p.vertical == want.vertical && p.positive == want.positive
     })
 }
 
 /// `diag:<mech>:<diag>` back into its two halves, or `None` for a function name.
-fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
+pub(crate) fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
     let rest = token.strip_prefix("diag:")?;
     let (mech, diag) = rest.split_once(':')?;
     let mechanism = Mechanism::ALL.into_iter().find(|m| m.token() == mech)?;
@@ -2012,7 +2032,7 @@ fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
 
 /// What a column is called in a sentence — "D-pad ↘ (down-right)", "LS ↓",
 /// "✕ (A)".
-fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
+pub(crate) fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
     match parse_diag_token(&column.token) {
         Some((mechanism, diag)) => {
             format!("{}{} ({})", mechanism.group(), diag.glyph(), diag.words())
@@ -2056,7 +2076,7 @@ fn toml_str(text: &str) -> String {
 /// the key that starts it. When there is no trigger yet the row is COMMENTED
 /// OUT rather than filled with a placeholder, because a pasted
 /// `macro.x = "<KEY>"` would not load.
-fn macro_toml(mac: &MacroView) -> String {
+pub(crate) fn macro_toml(mac: &MacroView) -> String {
     let mut out = format!("[macros.{}]\n", mac.name);
     if mac.on_release != "finish" {
         out.push_str(&format!("on_release = {}\n", toml_str(&mac.on_release)));
@@ -2118,7 +2138,7 @@ fn macro_toml(mac: &MacroView) -> String {
 }
 
 /// Which keys start this macro, in words.
-fn macro_trigger_line(mac: Option<&MacroView>) -> String {
+pub(crate) fn macro_trigger_line(mac: Option<&MacroView>) -> String {
     let Some(mac) = mac else {
         return String::new();
     };
@@ -2266,7 +2286,7 @@ impl Diag {
 
     /// ARROW is the glyph. Screens speak arrows in this genre — SF6's input
     /// history, every Capcom move list, every arcade instruction card.
-    const fn glyph(self) -> &'static str {
+    pub(crate) const fn glyph(self) -> &'static str {
         match self {
             Diag::UpLeft => "↖",
             Diag::UpRight => "↗",
@@ -2387,7 +2407,7 @@ pub(crate) struct Pointing {
 /// A CENTRED AXIS IS NEVER A DIRECTION (`lx.0`) — the same rule
 /// `ksx_core::socd::pointing` and `ksx_config::validate` state, which is why it
 /// is never half of a diagonal either.
-fn pointing(function: &str) -> Option<Pointing> {
+pub(crate) fn pointing(function: &str) -> Option<Pointing> {
     let lower = function.to_ascii_lowercase();
     let (base, rest) = lower.split_once('.')?;
     match base {
@@ -2542,7 +2562,7 @@ pub(crate) fn fold(hold: &[String]) -> Vec<Held> {
 /// The cell token for a diagonal column. Contains a `:`, which no function name
 /// ever does, so a diagonal pick can never be mistaken for one — the client
 /// EXPANDS it to the pair before anything is stored.
-fn diag_token(mechanism: Mechanism, diag: Diag) -> String {
+pub(crate) fn diag_token(mechanism: Mechanism, diag: Diag) -> String {
     format!("diag:{}:{}", mechanism.token(), diag.token())
 }
 
@@ -2592,14 +2612,14 @@ const MACRO_COLUMN_COUNT: usize = 37;
 
 /// One grid column: what it is called, what a click on it means, and which
 /// band it sits under.
-struct MacroColumn {
+pub(crate) struct MacroColumn {
     /// The cell token — a function name, or `diag:<mech>:<diag>`.
-    token: String,
-    glyph: String,
+    pub(crate) token: String,
+    pub(crate) glyph: String,
     /// `maccolid`, plus `card` / `diag` for the two direction kinds.
-    idcls: &'static str,
-    title: String,
-    band: &'static str,
+    pub(crate) idcls: &'static str,
+    pub(crate) title: String,
+    pub(crate) band: &'static str,
 }
 
 /// Which band a control sits under. The band is not decoration — it fixes a
@@ -2622,7 +2642,7 @@ fn band_of(fn_name: &str) -> &'static str {
 /// 25 zones → 37 columns. The twelve cardinal-only direction zones become three
 /// rings of eight, so the four diagonals are things you can point at instead of
 /// things you have to know how to build.
-fn macro_columns(persona: &str) -> Vec<MacroColumn> {
+pub(crate) fn macro_columns(persona: &str) -> Vec<MacroColumn> {
     let mut out: Vec<MacroColumn> = Vec::new();
     let mut rung: Vec<Mechanism> = Vec::new();
     for z in zones_for(persona).iter() {
@@ -2717,7 +2737,7 @@ fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
 
 /// The sentence above the motion buttons: which mechanism they will write, and
 /// why that is the one.
-fn macro_motion_line(slot: Option<&MapperSlot>) -> String {
+pub(crate) fn macro_motion_line(slot: Option<&MapperSlot>) -> String {
     let driven = driven_mechanisms(slot);
     let pick = driven.first().copied().unwrap_or(Mechanism::Dpad);
     let tail = "Each one appends its steps to the macro below — the MIDDLE step of a \
@@ -2806,7 +2826,7 @@ fn preset_name(payload: &MapPayload, selected: Option<&MapperSlot>) -> String {
 /// The three policies, as the file holds them right now — the READABLE half of
 /// the three selects beside them (those are draft controls and are hidden
 /// without JavaScript, this line never is).
-fn macro_policy_line(mac: Option<&MacroView>) -> String {
+pub(crate) fn macro_policy_line(mac: Option<&MacroView>) -> String {
     match mac {
         Some(mac) => {
             let release = if mac.on_release == "abort" {
@@ -2885,7 +2905,7 @@ fn turbo_math(mac: Option<&MacroView>) -> String {
 }
 
 /// The macro's whole run at the durations the engine will really use.
-fn macro_total_ms(mac: &MacroView) -> u32 {
+pub(crate) fn macro_total_ms(mac: &MacroView) -> u32 {
     mac.steps.iter().map(effective_ms).sum()
 }
 

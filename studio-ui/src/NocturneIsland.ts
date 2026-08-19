@@ -767,7 +767,10 @@ function applyNocturneUi(): void {
     "n-right" + (ui.rightRail ? " rail" : "") + (ui.rightView === "keys" ? " keys-mode" : ""),
   );
   setNCenterCls(
-    "n-center" + (ui.kbClosed ? " kb-closed" : "") + (ui.kbColors ? "" : " nostrips"),
+    "n-center" +
+      (ui.kbClosed ? " kb-closed" : "") +
+      (ui.kbColors ? "" : " nostrips") +
+      [...hiddenStrips].map((n) => ` hs${n}`).join(""),
   );
   // Any pane change resizes the center: the board refits.
   scheduleKbFit();
@@ -818,6 +821,28 @@ function loadUiPrefs(): void {
  *  the parity gate's empty-storage run never sees a style attribute. */
 const COLOR_STORE = "ksx-nocturne-colors";
 let slotColors: Record<string, number> = {};
+/** Slots whose colour strips are hidden on the BOARD (browser-kept, like
+ *  the colours themselves). The kbhead's "Colours" button stays the master
+ *  switch over all of them. */
+const STRIPS_STORE = "ksx-nocturne-strips";
+let hiddenStrips = new Set<number>();
+
+function loadHiddenStrips(): void {
+  try {
+    const raw = window.localStorage.getItem(STRIPS_STORE);
+    hiddenStrips = new Set(raw ? (JSON.parse(raw) as number[]) : []);
+  } catch {
+    hiddenStrips = new Set();
+  }
+}
+
+function saveHiddenStrips(): void {
+  try {
+    window.localStorage.setItem(STRIPS_STORE, JSON.stringify([...hiddenStrips]));
+  } catch {
+    // The preference simply will not survive this session.
+  }
+}
 
 function loadSlotColors(): void {
   try {
@@ -847,6 +872,8 @@ function refreshSwatches(): void {
       sw.classList.toggle("mine", color === effective(slot));
       sw.title = owner ? `Worn by P${owner.slot}` : `Colour ${color}`;
     }
+    const box = pick.querySelector<HTMLInputElement>(".n-strows input");
+    if (box) box.checked = !hiddenStrips.has(slot);
   }
 }
 
@@ -1984,6 +2011,7 @@ export function nocturneWire(root: HTMLElement): void {
   // first), so the hydrated first paint already has the panes the user left.
   loadUiPrefs();
   loadSlotColors();
+  loadHiddenStrips();
   applyNocturneUi();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
@@ -2429,6 +2457,15 @@ export function nocturneWire(root: HTMLElement): void {
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
       applyNocturneUi();
+    } else if (hit === "slot-strips") {
+      const box = target?.closest<HTMLInputElement>('input[data-nx="slot-strips"]');
+      const slot = Number(box?.closest("[data-slot]")?.getAttribute("data-slot") ?? "");
+      if (box && slot >= 1 && slot <= 16) {
+        if (box.checked) hiddenStrips.delete(slot);
+        else hiddenStrips.add(slot);
+        saveHiddenStrips();
+        applyNocturneUi();
+      }
     } else if (hit === "slot-color") {
       const btn = target?.closest<HTMLElement>("[data-color]");
       const pick = btn?.closest<HTMLElement>("[data-slot]");
@@ -2887,6 +2924,15 @@ export function NocturneIsland() {
                 h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
                 h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
                 h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
+                  // Per-player board visibility: this controller's colour
+                  // strips on the keys, on or off. The kbhead "Colours"
+                  // button stays the master switch over all of them.
+                  h(
+                    "label",
+                    { class: "n-strows" },
+                    h("input", { type: "checkbox", checked: "checked", "data-nx": "slot-strips" }),
+                    "Show on keyboard",
+                  ),
                 ),
               ),
                 // One whole-order reorder per click; an end row's order

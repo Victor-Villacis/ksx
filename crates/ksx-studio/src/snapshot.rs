@@ -4443,8 +4443,11 @@ impl NocturneDerived {
                     badge_cls: format!("n-pbadge np{}", slot.number),
                     dot_cls: format!("n-cdot np{}", slot.number),
                     name: slot.persona_label.clone(),
+                    // The quoted name is the PRESET, not the seat: a
+                    // reorder renumbers P{n} but the worksheet travels with
+                    // its controller — the label keeps that readable.
                     meta: format!(
-                        "\"{}\" · {} bound · SOCD {}",
+                        "\"{}\" preset · {} bound · SOCD {}",
                         slot.preset, slot.bindings, slot.socd_label
                     ),
                     cls: if selected_number == Some(slot.number) {
@@ -4635,7 +4638,7 @@ impl NocturneDerived {
             Some(slot) => (
                 format!("P{}", slot.number),
                 slot.persona_label.clone(),
-                format!("\"{}\" · SOCD {}", slot.preset, slot.socd_label),
+                format!("\"{}\" preset · SOCD {}", slot.preset, slot.socd_label),
             ),
             None => (String::new(), String::new(), String::new()),
         };
@@ -4723,7 +4726,7 @@ impl NocturneDerived {
                 NocturnePadView {
                     slot: slot.number,
                     family: if slot.is_xinput { "xbox" } else { "ps" }.to_owned(),
-                    title: format!("{} — \"{}\"", slot.persona_label, slot.preset),
+                    title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
                     fn_names,
                 }

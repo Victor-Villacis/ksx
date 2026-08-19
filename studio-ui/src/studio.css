@@ -9923,6 +9923,90 @@ button.n-keychip:hover {
   outline-offset: 2px;
 }
 
+/* The picker's per-player board switch. */
+.n-strows {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--n-line);
+  font-size: 11px;
+  color: var(--n-text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n-strows input {
+  accent-color: var(--n-accent);
+}
+
+/* Per-player strip hiding, composed onto the centre's class list. */
+.n-center.hs1 .n-strip.s1 {
+  display: none;
+}
+
+.n-center.hs2 .n-strip.s2 {
+  display: none;
+}
+
+.n-center.hs3 .n-strip.s3 {
+  display: none;
+}
+
+.n-center.hs4 .n-strip.s4 {
+  display: none;
+}
+
+.n-center.hs5 .n-strip.s5 {
+  display: none;
+}
+
+.n-center.hs6 .n-strip.s6 {
+  display: none;
+}
+
+.n-center.hs7 .n-strip.s7 {
+  display: none;
+}
+
+.n-center.hs8 .n-strip.s8 {
+  display: none;
+}
+
+.n-center.hs9 .n-strip.s9 {
+  display: none;
+}
+
+.n-center.hs10 .n-strip.s10 {
+  display: none;
+}
+
+.n-center.hs11 .n-strip.s11 {
+  display: none;
+}
+
+.n-center.hs12 .n-strip.s12 {
+  display: none;
+}
+
+.n-center.hs13 .n-strip.s13 {
+  display: none;
+}
+
+.n-center.hs14 .n-strip.s14 {
+  display: none;
+}
+
+.n-center.hs15 .n-strip.s15 {
+  display: none;
+}
+
+.n-center.hs16 .n-strip.s16 {
+  display: none;
+}
+
 /* Cap owner strips: one segment per controller this key drives, anywhere
    in the setup — the board's global colour read. Flex shares the width, so
    one owner reads as a full underline, two as halves. */

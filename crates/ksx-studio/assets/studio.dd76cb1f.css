@@ -9911,21 +9911,25 @@ button.n-keychip:hover {
   align-self: center;
 }
 
-/* The summary IS the P-badge (it carries the n-pbadge classes): only the
-   marker and the affordance need styling here. */
+/* The palette verb in the pill: a details summary dressed as an n-sact. */
 .n-cpick > summary {
   list-style: none;
   cursor: pointer;
 }
 
-.n-cpick > summary:hover {
-  outline: 2px solid var(--n-line-2);
-  outline-offset: 2px;
+.n-cpick > summary::-webkit-details-marker {
+  display: none;
 }
 
-.n-cpick[open] > summary {
-  outline: 2px solid var(--n-accent-line);
-  outline-offset: 2px;
+.n-cpick[open] > summary.n-csum {
+  background: var(--n-panel-2);
+  color: var(--n-text);
+}
+
+/* The pill must stay while its picker is open. */
+.n-sact-row:has(.n-cpick[open]) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .n-cpick > summary::-webkit-details-marker {
@@ -9934,8 +9938,8 @@ button.n-keychip:hover {
 
 .n-cpick-pop {
   position: absolute;
-  top: 32px;
-  left: -4px;
+  top: 28px;
+  right: -6px;
   z-index: 40;
   display: grid;
   grid-template-columns: repeat(8, 18px);

@@ -3048,57 +3048,13 @@ export function NocturneIsland() {
                   h("path", { d: "M108,60A16,16,0,1,1,92,44,16,16,0,0,1,108,60Zm56,16a16,16,0,1,0-16-16A16,16,0,0,0,164,76ZM92,112a16,16,0,1,0,16,16A16,16,0,0,0,92,112Zm72,0a16,16,0,1,0,16,16A16,16,0,0,0,164,112ZM92,180a16,16,0,1,0,16,16A16,16,0,0,0,92,180Zm72,0a16,16,0,1,0,16,16A16,16,0,0,0,164,180Z" }),
                 ),
               ),
-              // Clicking the row's identity SELECTS it: a server-resolved
-              // link (?slot=N), so every pane follows with no JavaScript;
-              // with it, the wire swaps the URL and polls in place.
-              // The P-badge IS the colour control: it already wears the
-              // controller's colour, so clicking it opens the picker. The
-              // name and meta stay the selection link.
-              h(
-                "details",
-                { class: "n-cpick", "data-slot": r.number },
-                h(
-                  "summary",
-                  { title: "Pick this controller's colour", class: r.badge_cls },
-                  r.badge,
-                ),
-              // The action corner: the colour dot rides the row always;
-              // the verbs reveal on hover (always under a coarse pointer).
-              // The whole row DRAGS to reorder — the ▴▾ forms below are the
-              // no-JS and keyboard twins the drop submits through.
-                h(
-                  "div",
-                  { class: "n-cpick-pop", "data-nx": "menu-noop" },
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "1", title: "Colour 1", "aria-label": "Colour 1 for this controller", class: "n-swatch pal1" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "2", title: "Colour 2", "aria-label": "Colour 2 for this controller", class: "n-swatch pal2" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "3", title: "Colour 3", "aria-label": "Colour 3 for this controller", class: "n-swatch pal3" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "4", title: "Colour 4", "aria-label": "Colour 4 for this controller", class: "n-swatch pal4" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "5", title: "Colour 5", "aria-label": "Colour 5 for this controller", class: "n-swatch pal5" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "6", title: "Colour 6", "aria-label": "Colour 6 for this controller", class: "n-swatch pal6" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "7", title: "Colour 7", "aria-label": "Colour 7 for this controller", class: "n-swatch pal7" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "8", title: "Colour 8", "aria-label": "Colour 8 for this controller", class: "n-swatch pal8" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "9", title: "Colour 9", "aria-label": "Colour 9 for this controller", class: "n-swatch pal9" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "10", title: "Colour 10", "aria-label": "Colour 10 for this controller", class: "n-swatch pal10" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "11", title: "Colour 11", "aria-label": "Colour 11 for this controller", class: "n-swatch pal11" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "12", title: "Colour 12", "aria-label": "Colour 12 for this controller", class: "n-swatch pal12" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "13", title: "Colour 13", "aria-label": "Colour 13 for this controller", class: "n-swatch pal13" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
-                h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
-                  // Per-player board visibility: this controller's colour
-                  // strips on the keys, on or off. The kbhead "Colours"
-                  // button stays the master switch over all of them.
-                  h(
-                    "label",
-                    { class: "n-strows" },
-                    h("input", { type: "checkbox", checked: "checked", "data-nx": "slot-strips" }),
-                    "Show on keyboard",
-                  ),
-                ),
-              ),
+              // "Select player one" = click ANYTHING in the row: badge and
+              // text are ONE selection link. The badge wears the colour;
+              // picking one is the palette verb in the pill.
               h(
                 "a",
                 { class: "n-slot-sel", href: r.href },
+                h("span", { class: r.badge_cls }, r.badge),
                 h(
                   "span",
                   { class: "n-slot-txt" },
@@ -3109,11 +3065,59 @@ export function NocturneIsland() {
               h(
                 "div",
                 { class: "n-sacts" },
-                // One whole-order reorder per click; an end row's order
-                // is empty and the server answers the honest sentence.
                 h(
                   "div",
                   { class: "n-sact-row" },
+                  // The colour picker, as a verb: presentation state, kept
+                  // in this browser, keyed to the controller's identity.
+                  h(
+                    "details",
+                    { class: "n-cpick", "data-slot": r.number },
+                    h(
+                      "summary",
+                      {
+                        title: "Pick this controller's colour",
+                        "aria-label": "Pick this controller's colour",
+                        class: "n-sact n-csum",
+                      },
+                      h(
+                        "svg",
+                        { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
+                        h("path", { d: "M203.57,51A107.9,107.9,0,0,0,20,128c0,44.72,27.6,82.25,72,97.94A36,36,0,0,0,140,192a12,12,0,0,1,12-12h46.21a35.79,35.79,0,0,0,35.1-28A108.6,108.6,0,0,0,236,127.09,107.23,107.23,0,0,0,203.57,51Zm6.34,95.67a11.91,11.91,0,0,1-11.7,9.3H152a36,36,0,0,0-36,36,12,12,0,0,1-16,11.3c-16.65-5.88-30.65-15.76-40.48-28.56A76,76,0,0,1,44,128a84,84,0,0,1,83.13-84H128a84.35,84.35,0,0,1,84,83.29A84.72,84.72,0,0,1,209.91,146.71ZM144,76a16,16,0,1,1-16-16A16,16,0,0,1,144,76Zm-44,24A16,16,0,1,1,84,84,16,16,0,0,1,100,100Zm0,56a16,16,0,1,1-16-16A16,16,0,0,1,100,156Zm88-56a16,16,0,1,1-16-16A16,16,0,0,1,188,100Z" }),
+                      ),
+                    ),
+                    h(
+                      "div",
+                      { class: "n-cpick-pop", "data-nx": "menu-noop" },
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "1", title: "Colour 1", "aria-label": "Colour 1 for this controller", class: "n-swatch pal1" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "2", title: "Colour 2", "aria-label": "Colour 2 for this controller", class: "n-swatch pal2" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "3", title: "Colour 3", "aria-label": "Colour 3 for this controller", class: "n-swatch pal3" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "4", title: "Colour 4", "aria-label": "Colour 4 for this controller", class: "n-swatch pal4" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "5", title: "Colour 5", "aria-label": "Colour 5 for this controller", class: "n-swatch pal5" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "6", title: "Colour 6", "aria-label": "Colour 6 for this controller", class: "n-swatch pal6" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "7", title: "Colour 7", "aria-label": "Colour 7 for this controller", class: "n-swatch pal7" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "8", title: "Colour 8", "aria-label": "Colour 8 for this controller", class: "n-swatch pal8" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "9", title: "Colour 9", "aria-label": "Colour 9 for this controller", class: "n-swatch pal9" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "10", title: "Colour 10", "aria-label": "Colour 10 for this controller", class: "n-swatch pal10" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "11", title: "Colour 11", "aria-label": "Colour 11 for this controller", class: "n-swatch pal11" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "12", title: "Colour 12", "aria-label": "Colour 12 for this controller", class: "n-swatch pal12" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "13", title: "Colour 13", "aria-label": "Colour 13 for this controller", class: "n-swatch pal13" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
+                      // Per-player board visibility: this controller's
+                      // colour strips on the keys, on or off. The kbhead
+                      // "Colours" button stays the master switch.
+                      h(
+                        "label",
+                        { class: "n-strows" },
+                        h("input", { type: "checkbox", checked: "checked", "data-nx": "slot-strips" }),
+                        "Show on keyboard",
+                      ),
+                    ),
+                  ),
+                  // One whole-order reorder per click; an end row's order
+                  // is empty and the server answers the honest sentence.
                   h(
                     "form",
                     { class: "n-inline first", method: "post", action: "/nocturne/controller/move" },

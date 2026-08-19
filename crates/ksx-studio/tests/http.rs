@@ -6972,6 +6972,111 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
 
 /// **The MIGRATED macro lifecycle, over HTTP.** The macro rows are the
 /// staged authoring's own facts; the moved /api/macro/save authors into the
+/// **A MACRO TRIGGER IS A BINDING TOO.** `MapperSlot.bindings` is built from
+/// the preset's CONTROL entries, and a trigger lives in a different table with
+/// no `Binding` variant — so every read that inverted `bindings` was blind to
+/// triggers. Two things broke on that: "add another trigger key" appended to a
+/// list it could not see, which is a REPLACE, and the key that starts a macro
+/// painted unbound on a board that shows every other binding.
+#[test]
+fn nocturne_treats_a_macro_trigger_as_a_binding() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\
+         \"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    let bind = |key: &str, mode: &str| -> serde_json::Value {
+        serde_json::from_str(body_of(&post_json(
+            addr,
+            "/nocturne/api/bind",
+            &format!(
+                "{{\"slot\":1,\"function\":\"macro.combo\",\"key\":\"{key}\",\"mode\":\"{mode}\"}}"
+            ),
+        )))
+        .expect("bind")
+    };
+    let triggers = || -> String {
+        let api: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+        api["view"]["macro_rows"][0]["chip"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    assert_eq!(bind("P", "replace")["ok"], true);
+    assert_eq!(triggers(), "P");
+    // THE REPORT: `add` must JOIN the list, not stand in for it.
+    assert_eq!(bind("O", "add")["ok"], true);
+    assert_eq!(triggers(), "P · O", "a second trigger key JOINS the first");
+    // …and one can be taken off again without losing the other.
+    assert_eq!(bind("P", "remove")["ok"], true);
+    assert_eq!(triggers(), "O");
+    assert_eq!(bind("P", "add")["ok"], true);
+
+    // THE BOARD: a key that starts a macro is bound like any other.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let cell = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "O")
+    .expect("O is on the board")
+    .clone();
+    let cls = cell["cls"].as_str().unwrap_or_default();
+    assert!(cls.contains("bound"), "a trigger key paints bound: {cell}");
+    assert!(
+        cls.contains(" bn1"),
+        "and wears its controller's colour: {cell}"
+    );
+    assert_eq!(cell["short"], "M", "{cell}");
+    assert!(
+        cell["title"].as_str().is_some_and(|t| t.contains("combo")),
+        "and says WHICH macro it starts: {cell}"
+    );
+    // …so it is no longer offered as a key nobody is using.
+    for grid in ["avail_main", "avail_nav", "avail_num"] {
+        let free = api["view"][grid].as_array().cloned().unwrap_or_default();
+        assert!(
+            !free.iter().any(|c| c["cap"] == "O" || c["key"] == "O"),
+            "{grid} still offers a bound trigger key as free"
+        );
+    }
+
+    // THE PER-KEY CLEAR acts on what the row says it drives.
+    let cleared = post_form(addr, "/nocturne/key/clear", "number=1&key=O");
+    assert!(!cleared.contains("flash=error"), "{cleared}");
+    assert_eq!(
+        triggers(),
+        "P",
+        "the ✕ took the trigger off, and only that one"
+    );
+}
+
 /// **A macro is authored and edited without leaving the page**: the New twin
 /// writes the smallest table `save_macro` accepts, and the edit door applies
 /// ONE act to a draft the browser is holding and hands back the roll that
@@ -7064,7 +7169,7 @@ fn nocturne_authors_and_edits_a_macro_over_http() {
 
     // A REFUSAL IS SAID OUT LOUD. Answering a rejected act with `ok: true`
     // and an empty sentence let the browser mark the macro dirty over a
-    // change that never happened \u2014 the number in the box and the number
+    // change that never happened — the number in the box and the number
     // that would be saved disagreeing, in silence.
     for (act, expect) in [
         ("pol|on_release|explode", "not a setting"),
@@ -7088,7 +7193,7 @@ fn nocturne_authors_and_edits_a_macro_over_http() {
         assert_eq!(junk["draft"], draft, "{act} changed the draft");
     }
 
-    // \u2026and a malformed index is answered rather than suffered: `down` used to
+    // …and a malformed index is answered rather than suffered: `down` used to
     // do its arithmetic before its range test, so an unparseable index
     // overflowed and panicked the request.
     let dead: serde_json::Value = serde_json::from_str(body_of(&post_json(

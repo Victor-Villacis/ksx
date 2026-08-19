@@ -4696,6 +4696,22 @@ impl NocturneDerived {
             .unwrap_or("(none)");
         let mapper =
             selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+        // ⚠️ A MACRO TRIGGER IS A BINDING TOO. `MapperSlot.bindings` is built
+        // from the preset's CONTROL entries only — a macro trigger lives in a
+        // separate table with no `Binding` variant — so every inversion built
+        // on it alone was blind to them: the key that starts a macro painted
+        // UNBOUND on the board, and "add another trigger key" appended to a
+        // list it could not see, which is a replace.
+        let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
+            ksx_api::staged_macro_snapshot(slot)
+                .macros
+                .into_iter()
+                .filter(|m| !m.triggers.is_empty())
+                .map(|m| (format!("macro.{}", m.name), m.triggers))
+                .collect()
+        };
+        let selected_triggers: Vec<(String, Vec<String>)> =
+            selected.map(trigger_keys).unwrap_or_default();
         let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
             std::collections::BTreeMap::new();
         if let Some(mapper) = mapper.as_ref() {
@@ -4708,19 +4724,36 @@ impl NocturneDerived {
                 }
             }
         }
+        for (fn_name, keys) in &selected_triggers {
+            for key in keys {
+                key_fns
+                    .entry(key.as_str())
+                    .or_default()
+                    .push(fn_name.as_str());
+            }
+        }
         // The GLOBAL ownership read: which controllers each key drives,
         // across EVERY staged slot — the board's colour strips wear it.
         let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
             std::collections::BTreeMap::new();
         for slot in &staged.slots {
+            let mut own = |key: &String| {
+                let owners = key_slots.entry(key.clone()).or_default();
+                if !owners.contains(&slot.number) {
+                    owners.push(slot.number);
+                }
+            };
             if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
                 for keys in m.bindings.values() {
                     for key in keys {
-                        let owners = key_slots.entry(key.clone()).or_default();
-                        if !owners.contains(&slot.number) {
-                            owners.push(slot.number);
-                        }
+                        own(key);
                     }
+                }
+            }
+            // …and the keys that START a macro on this controller.
+            for (_, keys) in trigger_keys(slot) {
+                for key in &keys {
+                    own(key);
                 }
             }
         }

@@ -1198,19 +1198,30 @@ pub(super) async fn nocturne_form_key_clear(
         let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
             return N_EDIT_ERROR;
         };
-        let driven: Vec<(String, Vec<String>)> = mapper
+        let without = |keys: &[String]| -> Vec<String> {
+            keys.iter()
+                .filter(|k| !k.eq_ignore_ascii_case(&key))
+                .cloned()
+                .collect()
+        };
+        let mut driven: Vec<(String, Vec<String>)> = mapper
             .bindings
             .iter()
             .filter(|(_, keys)| keys.iter().any(|k| k.eq_ignore_ascii_case(&key)))
-            .map(|(function, keys)| {
-                let rest: Vec<String> = keys
-                    .iter()
-                    .filter(|k| !k.eq_ignore_ascii_case(&key))
-                    .cloned()
-                    .collect();
-                (function.clone(), rest)
-            })
+            .map(|(function, keys)| (function.clone(), without(keys)))
             .collect();
+        // ⚠️ AND THE MACROS THIS KEY STARTS. A trigger is not in
+        // `MapperSlot.bindings` — that table is built from the preset's CONTROL
+        // entries — so the ✕ answered "nothing to clear" on a key whose own row
+        // says it drives a macro. The board shows triggers now; every per-key
+        // affordance has to act on them.
+        driven.extend(
+            ksx_api::staged_macro_snapshot(slot)
+                .macros
+                .into_iter()
+                .filter(|m| m.triggers.iter().any(|k| k.eq_ignore_ascii_case(&key)))
+                .map(|m| (format!("macro.{}", m.name), without(&m.triggers))),
+        );
         if driven.is_empty() {
             return N_KEY_CLEAR_NONE;
         }
@@ -1522,6 +1533,19 @@ fn nocturne_current_keys(
     slot: &ksx_api::StagedSlotView,
     function: &str,
 ) -> Vec<String> {
+    // ⚠️ A MACRO TRIGGER IS NOT IN `MapperSlot.bindings`. That table is built
+    // from the preset's CONTROL entries; a trigger lives in the macro table.
+    // Reading the control table for `macro.<name>` returned NOTHING, so
+    // "add another trigger key" appended to an empty list — which is a
+    // replace, and lost the key that was already there.
+    if let Some(name) = function.strip_prefix("macro.") {
+        return ksx_api::staged_macro_snapshot(slot)
+            .macros
+            .into_iter()
+            .find(|m| m.name.eq_ignore_ascii_case(name))
+            .map(|m| m.triggers)
+            .unwrap_or_default();
+    }
     let keyboard = staged
         .device
         .as_ref()

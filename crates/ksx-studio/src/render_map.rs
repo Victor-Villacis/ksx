@@ -16,7 +16,7 @@
 //! v7 — **every zone wears its own IDENTITY** (requirement: "I can see G is mapped
 //! to A but I can't see the A xbox button"). The vendored art is a line
 //! drawing with no letters on it, so the zone renders the control's name
-//! itself: a persona-aware glyph in the canonical colours (A green, B red,
+//! itself: a persona-aware glyph in the canonical colors (A green, B red,
 //! X blue, Y amber; ✕ blue, ○ red, △ green, □ pink), LB/RB/LT/RT and
 //! view/menu/guide as text chips, arrows for the dpad and the stick wedges.
 //!
@@ -153,7 +153,7 @@ pub(crate) struct Zone {
     /// art ("A", "✕", "LB", "▲", "menu").
     pub label: &'static str,
     /// Identity palette class suffix (`id-<idk>` in studio.css): the Xbox face
-    /// colours `xa`/`xb`/`xx`/`xy`, the Sony glyphs `pc`/`po`/`pt`/`psq`,
+    /// colors `xa`/`xb`/`xx`/`xy`, the Sony glyphs `pc`/`po`/`pt`/`psq`,
     /// `dir` (dpad + stick arrows), `hub` (L3/R3), `txt` (view/menu/guide,
     /// share/options/PS), `sh` (shoulders).
     pub idk: &'static str,
@@ -205,7 +205,7 @@ pub(crate) const ZONE_XBOX: [Zone; 25] = [
     zone("rb", "RB", "sh", [66.0, 10.9, 11.0, 5.2], "bumper"),
     zone("rt", "RT", "sh", [69.0, 4.6, 10.0, 5.2], "trigger"),
     // Face cluster (diamond — boxes trimmed to the drawn Ø7.3×9.1 circles so
-    // the diagonal neighbours stay disjoint). Canonical Xbox colours.
+    // the diagonal neighbours stay disjoint). Canonical Xbox colors.
     zone("Y", "Y", "xy", [75.2, 31.1, 7.2, 8.4], "round"),
     zone("B", "B", "xb", [82.0, 39.6, 7.2, 8.4], "round"),
     zone("A", "A", "xa", [75.3, 48.3, 7.2, 8.4], "round"),
@@ -247,7 +247,7 @@ pub(crate) const ZONE_DS4: [Zone; 25] = [
     zone("rb", "R1", "sh", [80.5, 10.9, 10.5, 5.2], "bumper"),
     zone("rt", "R2", "sh", [83.0, 4.6, 9.5, 5.2], "trigger"),
     // Face cluster (✕○△□ mapped onto A/B/Y/X), trimmed to the Ø6.9×9.2
-    // drawn circles. Sony glyph colours.
+    // drawn circles. Sony glyph colors.
     zone("Y", "△", "pt", [81.2, 29.2, 7.0, 9.0], "round"),
     zone("B", "○", "po", [88.4, 38.8, 7.0, 9.0], "round"),
     zone("A", "✕", "pc", [81.3, 48.1, 7.0, 9.0], "round"),
@@ -1539,10 +1539,10 @@ fn macro_cols(slot: Option<&MapperSlot>) -> SlotValue {
                 SlotValue::object(vec![
                     ("fn".to_owned(), SlotValue::Text(c.token)),
                     ("id".to_owned(), SlotValue::Text(c.glyph)),
-                    // UNIFORM colour, deliberately: the grid header carries one
+                    // UNIFORM color, deliberately: the grid header carries one
                     // of these per control at column width, and a row of
-                    // coloured discs that narrow is noise rather than
-                    // information. The identity colours earn their place on the
+                    // colored discs that narrow is noise rather than
+                    // information. The identity colors earn their place on the
                     // controller art, where they map to physical buttons, and in
                     // the legend beside it — here the column is NAMED, not
                     // badged. `card`/`diag` are TYPE, not palette: the cardinals
@@ -3827,7 +3827,7 @@ mod tests {
     }
 
     /// FEATURE 1, Xbox. The vendored art is a line drawing with no letters on
-    /// it, so every zone must say what it IS — in the canonical colours, and
+    /// it, so every zone must say what it IS — in the canonical colors, and
     /// whether or not anything is bound to it. Requirement: "I can see G is mapped
     /// to A but I can't see the A xbox button".
     #[test]
@@ -5389,7 +5389,7 @@ mod tests {
         // The digits are a LOOKUP KEY, not a label: no numpad digit reaches the
         // glyph row. Every direction header is one arrow and nothing else — a
         // second line of digits under only 24 of 37 columns would make the
-        // header ragged and re-introduce exactly the ornament the coloured
+        // header ragged and re-introduce exactly the ornament the colored
         // discs were stripped for. (`L3`/`R3` are the controls' own names.)
         for column in macro_columns("xbox360") {
             if Mechanism::of(&column.token).is_none() && !column.token.starts_with("diag:") {
@@ -5539,7 +5539,7 @@ mod tests {
             "the authored unit survives: {html}"
         );
         // Columns: the persona's identity GLYPHS, but UNIFORM — no `id-*`
-        // accent class reaches a grid header, so the coloured discs the art and
+        // accent class reaches a grid header, so the colored discs the art and
         // the legend wear cannot follow the glyph in here (a header row of them
         // at column width is noise, not information).
         assert!(html.contains(r#"class="maccolid""#), "{html}");

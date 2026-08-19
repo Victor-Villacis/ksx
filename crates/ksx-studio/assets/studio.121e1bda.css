@@ -86,7 +86,7 @@
   --ctl-h-lg: 2.75rem; /* 44 — the primary action of a screen */
 
   /* ── Workspace geometry (§8): the Nocturne shell's frame. Dimensions, not
-     colours, so no contrast entry — but they are tokens for the same reason
+     colors, so no contrast entry — but they are tokens for the same reason
      every size is: the three-pane grid, the collapse rails and the coarse
      re-ladder all read ONE declaration. ─────────────────────────────────── */
   --tbar-h: 52px; /* title bar */
@@ -106,12 +106,12 @@
   --z-modal: 20;
 
   /* ── Hardware markings ────────────────────────────────────────────────
-     The colours PRINTED ON THE PHYSICAL PADS, reproduced on the controller
+     The colors PRINTED ON THE PHYSICAL PADS, reproduced on the controller
      art. Theme-independent on purpose: a real Xbox B is that red under any
      stylesheet, so these do not belong in either theme block.
 
      These are NOT the palette and NOT slot identity. Slot identity is
-     `--cool` and only `--cool` — colouring slot 2 red because P2 is red on
+     `--cool` and only `--cool` — coloring slot 2 red because P2 is red on
      the mark would read as "slot 2 has failed", since red means danger
      everywhere else in this app.
 
@@ -132,8 +132,8 @@
   --hw-xbox-y-on: #201603;
   --hw-xbox-on: #ffffff; /* B and X take white, as the hardware does */
 
-  /* The DS4 prints coloured SHAPES on grey plastic, so the glyph carries the
-     colour and the disc stays neutral. The disc is the one value here that is
+  /* The DS4 prints colored SHAPES on grey plastic, so the glyph carries the
+     color and the disc stays neutral. The disc is the one value here that is
      ours rather than the hardware's — it was blue-grey (#2b3346), which read
      as a second hue against a violet ground; it is now the same violet-grey
      family as the rest of the page. All four glyphs gained contrast on it
@@ -145,7 +145,7 @@
   --hw-ps-square: #f083c6;
 }
 
-/* ── Dark: the default. A deep violet ground — the app's own colour, taken
+/* ── Dark: the default. A deep violet ground — the app's own color, taken
    from the mark; surfaces climb by LIGHTNESS, borders do the separating,
    shadows only mark true depth.
 
@@ -227,7 +227,7 @@
 }
 
 /* ── Light: warm paper, not cool grey — the same violet family read as a
-   tint rather than a ground. Every coloured role here is DARKER than its
+   tint rather than a ground. Every colored role here is DARKER than its
    pre-purple value, because a cream ground has less luminance headroom than
    the blue-white one it replaces; the numbers are in DESIGN-SYSTEM §3. ─── */
 @media (prefers-color-scheme: light) {
@@ -1345,7 +1345,7 @@ input[type="checkbox"] {
    coarse declaration an unconditional rule cancels that way. */
 
 /* ── 4.5 Pills & badges ─────────────────────────────────────────────────
-   A pill is a STATE. It carries a dot so the meaning survives a colour-blind
+   A pill is a STATE. It carries a dot so the meaning survives a color-blind
    reader and a bad cabinet panel; the word carries it for everyone else. */
 
 .pill {
@@ -1533,10 +1533,10 @@ input[type="checkbox"] {
    selected / the current binding).
 
    It was `--accent`, which is only defensible for the "yes" case: the same
-   rule painted "no" and "unknown" in the primary-action colour, so on the
+   rule painted "no" and "unknown" in the primary-action color, so on the
    no-daemon page a red banner reading "No daemon — ksx Studio can see your
    config but cannot change anything" sat directly above the word "no" in
-   the brightest, most alive colour on the page. Colour has to mean the same
+   the brightest, most alive color on the page. Color has to mean the same
    thing every time it appears or it means nothing. Weight and the mono face
    still make this the value in its row. */
 .dvalue {
@@ -1615,9 +1615,9 @@ input[type="checkbox"] {
 }
 
 /* ── 4.9 Callouts / banners (`.alarm`, `.warnbox`, `.flash`) ─────────────
-   A banner is a STATE with a way out. Left rule in the state colour, tinted
-   ground, title in the state colour, body in normal text — never a wall of
-   coloured prose. */
+   A banner is a STATE with a way out. Left rule in the state color, tinted
+   ground, title in the state color, body in normal text — never a wall of
+   colored prose. */
 
 .alarm {
   border-color: var(--danger-line);
@@ -3044,7 +3044,7 @@ details.card[open] > summary::before,
   pointer-events: none;
 }
 
-/* Face buttons — the four canonical colours, drawn as the filled discs the
+/* Face buttons — the four canonical colors, drawn as the filled discs the
    hardware prints. */
 .id-xa,
 .id-xb,
@@ -3084,8 +3084,8 @@ details.card[open] > summary::before,
   color: var(--hw-xbox-y-on);
 }
 
-/* Sony glyph colours: the DS4 prints coloured shapes on grey buttons, so the
-   glyph carries the colour and the disc stays neutral. */
+/* Sony glyph colors: the DS4 prints colored shapes on grey buttons, so the
+   glyph carries the color and the disc stays neutral. */
 .id-pc,
 .id-po,
 .id-pt,
@@ -4352,7 +4352,7 @@ a.strow:hover {
 .macgrp.g8 { grid-column: span 8; }
 .macgrp.g9 { grid-column: span 9; }
 
-/* UNIFORM by design: the identity colours earn their place on the art and in
+/* UNIFORM by design: the identity colors earn their place on the art and in
    the legend; here the column is NAMED, in one type treatment. */
 .maccolid {
   height: var(--macrow);
@@ -4744,7 +4744,7 @@ a.strow:hover {
      LAST      the inventory, quiet, with the config root in small print
 
    A path is never a control on this screen. `.smallprint` is the one place one
-   appears, at the bottom, sized and coloured so it reads as a support detail
+   appears, at the bottom, sized and colored so it reads as a support detail
    rather than as somewhere to go. */
 
 .setupcard .state {
@@ -5617,7 +5617,7 @@ a.strow:hover {
 }
 
 /* Which BOARD it came from. `--cool` because that is this design system's
- * identity colour — a device name is an identity, not a state. */
+ * identity color — a device name is an identity, not a state. */
 .check .keyfrom {
   font-size: var(--fs-micro);
   color: var(--cool);
@@ -5665,11 +5665,11 @@ a.strow:hover {
   overflow-wrap: anywhere;
 }
 
-/* HELD, and FLASHED-and-already-released, are the same colour on purpose:
+/* HELD, and FLASHED-and-already-released, are the same color on purpose:
  * they answer one question ("did this control fire?") and the difference
  * between them is a fact about timing, not about wiring. What separates them
  * is duration — a hold stays lit while the button is down, a flash is 140 ms —
- * and that reads correctly without needing a second colour to decode. */
+ * and that reads correctly without needing a second color to decode. */
 .check .chip.down,
 .check .chip.flash {
   background: var(--accent-dim-2);
@@ -5690,7 +5690,7 @@ a.strow:hover {
   }
 }
 
-/* Loss and off-panel keys are REPORTED, in the warning colour, above the grid.
+/* Loss and off-panel keys are REPORTED, in the warning color, above the grid.
  * Hiding either is the failure this whole stream is built to avoid. */
 .check .warnline {
   margin: 0;
@@ -6073,7 +6073,7 @@ a.strow:hover {
 }
 
 /* The selected rack row: selection tint + identity line, and the title link
-   inherits the row's colours rather than the default link blue. */
+   inherits the row's colors rather than the default link blue. */
 .wsrow.on {
   background: var(--sel-tint);
   border-color: var(--cool-line);
@@ -6263,8 +6263,8 @@ a.wsrow-title:hover {
   --np4: #e4d9f6;
   /* The 16-slot identity palette: mid-bright pastels, dark badge text
      stays readable on every one. --pcs{N} is what surfaces WEAR (slot N's
-     colour, default = palette slot N); a user's pick overrides --pcs{N} on
-     the island root from browser-kept state. Identity colours only — they
+     color, default = palette slot N); a user's pick overrides --pcs{N} on
+     the island root from browser-kept state. Identity colors only — they
      never carry status meaning. */
   --pal1: #4da6ff;
   --pal2: #ff7a4d;
@@ -7044,7 +7044,7 @@ a.wsrow-title:hover {
   color: var(--n-text-3);
 }
 
-/* The action corner: the colour dot always, the verbs on hover. */
+/* The action corner: the color dot always, the verbs on hover. */
 .n-sacts {
   position: absolute;
   top: -12px;
@@ -7289,7 +7289,7 @@ a.wsrow-title:hover {
   position: absolute;
 }
 
-/* The photoreal Xbox's face letters: colour rides the element (the real
+/* The photoreal Xbox's face letters: color rides the element (the real
    ABXY palette); this rule carries only the type. */
 .n-stage .nxr-face {
   font-size: 4.2px;
@@ -7523,7 +7523,7 @@ a.wsrow-title:hover {
   }
 }
 
-/* THE BOARD'S COLOUR LAYER. `--pcs{N}` is slot N's identity colour (the
+/* THE BOARD'S COLOUR LAYER. `--pcs{N}` is slot N's identity color (the
    badge, the pad card, the legend chip wear it). `--kb{N}` is what the KEYS
    paint for slot N — normally the same, but a muted player or a solo swaps
    just this layer to the neutral, so filtering never touches a single key
@@ -7550,7 +7550,7 @@ a.wsrow-title:hover {
 }
 
 /* A key the SELECTED controller drives wears the ring, in that
-   controller's own colour — the ring says MINE, the bands say WHOSE. The
+   controller's own color — the ring says MINE, the bands say WHOSE. The
    bands never reorder, so the ring is what moves as you change seats. */
 .n-key.bound::before {
   box-shadow:
@@ -9942,7 +9942,7 @@ button.n-keychip:hover {
    A key's cap IS its ownership: one controller fills it, several split it
    into a band each, in slot order with the SELECTED controller's band
    always first — so "my keys" scan from the left edge however many players
-   share them. Four bands is the ceiling (a fifth would be 6px of colour on
+   share them. Four bands is the ceiling (a fifth would be 6px of color on
    a 30px cap, and no palette is separable past a handful of hues); beyond
    it the last band turns neutral and the cap's title names every owner in
    words. The bands paint from `--kb{N}`, so muting a player or soloing one
@@ -9994,13 +9994,13 @@ button.n-keychip:hover {
     linear-gradient(180deg, #2e3142, #242737);
 }
 
-/* THE STACK. Past four owners the cap stops naming anyone. Three colours
+/* THE STACK. Past four owners the cap stops naming anyone. Three colors
    out of eight would be an arbitrary three, and a neutral band standing
    beside a separate "+N" asked you to add two marks that meant the same
    controllers — which is exactly how it read wrong. So the face becomes ONE
    woven texture: fine crossed threads in four palette hues, saying
    "crowded" without claiming to list anybody, and the cap carries the
-   TOTAL. The colour says that many are here; the number says how many.
+   TOTAL. The color says that many are here; the number says how many.
    Every owner is still named in the cap's own sentence, and the ring still
    says whether one of them is yours. */
 .n-key.bstack::before {
@@ -10024,7 +10024,7 @@ button.n-keychip:hover {
 /* Under the lens only one controller matters, so a "many players" weave
    would argue with the button that is on. It falls back to the neutral
    hatch every other player's key wears — the count stays, because how many
-   share a key is a fact, not a colour. */
+   share a key is a fact, not a color. */
 .n-center.solo .n-key.bstack::before {
   background:
     repeating-linear-gradient(
@@ -10363,7 +10363,7 @@ button.n-keychip:hover {
   --band-d: var(--kb16);
 }
 
-/* A muted controller keeps its keys — it just stops colouring them. */
+/* A muted controller keeps its keys — it just stops coloring them. */
 .n-center.mute1 .n-kb {
   --kb1: var(--band-mute);
 }
@@ -10429,7 +10429,7 @@ button.n-keychip:hover {
 }
 
 /* Solo: every controller greys out, then the selected one is given its
-   colour back. Nothing is hidden, so a key never looks unbound. */
+   color back. Nothing is hidden, so a key never looks unbound. */
 .n-center.solo .n-kb {
   --kb1: var(--band-mute);
   --kb2: var(--band-mute);
@@ -10513,7 +10513,7 @@ button.n-keychip:hover {
   --kb16: var(--pcs16);
 }
 
-/* ── Controller colours: the dot, the picker, the cap strips ── */
+/* ── Controller colors: the dot, the picker, the cap strips ── */
 
 .n-cpick {
   position: relative;
@@ -10575,7 +10575,7 @@ button.n-keychip:hover {
   transform: scale(1.15);
 }
 
-/* A colour another controller wears: visible, honest, unavailable. */
+/* A color another controller wears: visible, honest, unavailable. */
 .n-swatch.taken {
   opacity: 0.25;
   cursor: not-allowed;
@@ -10585,7 +10585,7 @@ button.n-keychip:hover {
   transform: none;
 }
 
-/* This controller's current colour. */
+/* This controller's current color. */
 .n-swatch.mine {
   outline: 2px solid var(--n-text);
   outline-offset: 2px;
@@ -11419,7 +11419,7 @@ button.n-keychip:hover {
 }
 
 /* The board's legend: the key to its own map, and the mute control for
-   each controller's colour. */
+   each controller's color. */
 .n-legend {
   display: flex;
   flex-wrap: wrap;
@@ -11464,7 +11464,7 @@ button.n-keychip:hover {
 }
 
 /* The key to a stacked cap. Not a button — it filters nothing; it says
-   what the weave means, in the one place the colours are already
+   what the weave means, in the one place the colors are already
    explained. It paints only when some key is actually stacked. */
 .n-lgdmore {
   display: flex;
@@ -11504,7 +11504,7 @@ button.n-keychip:hover {
   color: var(--n-text-3);
 }
 
-/* A controller whose colour is off the keys is CROSSED OUT — whether you
+/* A controller whose color is off the keys is CROSSED OUT — whether you
    crossed it yourself or "Only P{n}" did it for you. One look, one
    meaning: the shortcut leaves exactly the state your own clicks would. */
 .n-lgd.muted,

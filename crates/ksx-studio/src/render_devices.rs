@@ -96,7 +96,7 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 /// The pill class for a value `ksx_api` has already judged.
 ///
 /// The level word travels; the class is built from it, so adding a level in the
-/// backend cannot leave a surface silently rendering the wrong colour — it
+/// backend cannot leave a surface silently rendering the wrong color — it
 /// renders `pill pill-<level>`, and an unstyled level is visible rather than
 /// wrong. `pill-none` is the hidden one (studio.css).
 fn pill_of(level: &str) -> String {

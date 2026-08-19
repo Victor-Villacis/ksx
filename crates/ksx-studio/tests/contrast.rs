@@ -13,7 +13,7 @@
 //!
 //! # What it checks, and why those pairs
 //!
-//! Not the cartesian product of colours and grounds — that would fail on
+//! Not the cartesian product of colors and grounds — that would fail on
 //! combinations the app never draws and force the palette darker than the
 //! design needs. The ground sets below are the ones that **actually compose**
 //! in `studio.css`:
@@ -23,7 +23,7 @@
 //!   `:hover` rule that sets it also sets one of those two
 //!   (`.btn:hover`, `.tab:hover`, `.navlink:active`), so `--text-3` is not
 //!   checked against it.
-//! - **Coloured roles** sit on the four panel grounds — including
+//! - **Colored roles** sit on the four panel grounds — including
 //!   `--bg-2`, which is a real card ground (`.legendcard`, `.macrocard`,
 //!   `.hint`, `.grid .card`, `.strow.sthead`), not just a page wash. They are
 //!   never drawn on `--panel-3`.
@@ -61,7 +61,7 @@ const NON_TEXT_FLOOR: f64 = 3.0;
 /// See the module docs: calibrated to the outgoing theme, not to WCAG.
 const SEPARATOR_FLOOR: f64 = 1.12;
 
-// ── colour ───────────────────────────────────────────────────────────────
+// ── color ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Rgba {
@@ -83,7 +83,7 @@ impl Rgba {
 
     /// Composite `self` over `bg`. The tint tokens are the whole reason this
     /// exists: `--accent-dim` is `rgba(accent, 0.13)`, and what a reader sees
-    /// is that *over a ground*, which is neither of the two colours named.
+    /// is that *over a ground*, which is neither of the two colors named.
     fn over(self, bg: Rgba) -> Rgba {
         Rgba {
             r: self.r * self.a + bg.r * (1.0 - self.a),
@@ -113,7 +113,7 @@ fn ratio(fg: Rgba, bg: Rgba) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-fn parse_colour(raw: &str) -> Option<Rgba> {
+fn parse_color(raw: &str) -> Option<Rgba> {
     let raw = raw.trim();
     if let Some(h) = raw.strip_prefix('#') {
         let h = h.trim();
@@ -181,7 +181,7 @@ fn split_themes(css: &str) -> (String, String) {
     (css[..start].to_owned(), after[open..=end].to_owned())
 }
 
-/// Every `--name: <colour>` declaration in `block`. Non-colour custom
+/// Every `--name: <color>` declaration in `block`. Non-color custom
 /// properties (`--macrow: 1.9rem`) simply do not parse and are skipped.
 fn tokens(block: &str) -> BTreeMap<String, Rgba> {
     let mut out = BTreeMap::new();
@@ -198,7 +198,7 @@ fn tokens(block: &str) -> BTreeMap<String, Rgba> {
         // comment has to come off before the semicolon does.
         let value = value.split("/*").next().unwrap_or(value);
         let value = value.trim().trim_end_matches(';').trim();
-        if let Some(c) = parse_colour(value) {
+        if let Some(c) = parse_color(value) {
             out.insert(name.trim().to_owned(), c);
         }
     }
@@ -218,7 +218,7 @@ impl Theme {
             .unwrap_or_else(|| panic!("{}: token --{name} is missing from studio.css", self.name))
     }
 
-    /// The four grounds a panel-level colour can legitimately sit on.
+    /// The four grounds a panel-level color can legitimately sit on.
     fn panel_grounds(&self) -> Vec<(&'static str, Rgba)> {
         vec![
             ("--bg (surface)", self.get("bg")),
@@ -330,9 +330,9 @@ fn text_tiers_clear_the_floor_on_every_ground() {
     r.finish("text tiers");
 }
 
-/// Accent, identity and the three state colours, drawn as text.
+/// Accent, identity and the three state colors, drawn as text.
 #[test]
-fn coloured_roles_clear_the_floor_as_text() {
+fn colored_roles_clear_the_floor_as_text() {
     let mut r = Report::default();
     for t in themes() {
         for (gn, g) in t.panel_grounds() {
@@ -347,7 +347,7 @@ fn coloured_roles_clear_the_floor_as_text() {
             }
         }
     }
-    r.finish("coloured roles as text");
+    r.finish("colored roles as text");
 }
 
 /// The state triad: full-strength text on its own tint, over each ground.
@@ -583,7 +583,7 @@ fn placeholder_text_clears_the_text_floor() {
 ///
 /// What must NOT be dimmed is the reason: the `<p class="warn">` in the same
 /// block is deliberately outside both selectors, and is checked at full
-/// strength by `coloured_roles_clear_the_floor_as_text`.
+/// strength by `colored_roles_clear_the_floor_as_text`.
 #[test]
 fn disabled_controls_are_a_pinned_exemption() {
     /// `.controls.off .btn` / `.controls.off select`.
@@ -646,7 +646,7 @@ fn disabled_controls_are_a_pinned_exemption() {
 }
 
 /// The anti-flash `<style>` is a hand copy of `--bg`/`--text`, so it drifts
-/// silently: a wrong anti-flash colour looks exactly like the flash it exists
+/// silently: a wrong anti-flash color looks exactly like the flash it exists
 /// to prevent. It HAD drifted before this test existed (`#0b0e14` against a
 /// stylesheet that had moved to `#0a0d13`).
 #[test]
@@ -713,8 +713,8 @@ fn pad_art_palette_stays_separable() {
         let after = &block[block
             .find(prop)
             .unwrap_or_else(|| panic!("PAD_SHEET's {class} (occurrence {nth}) must set {prop}"))..];
-        let hex_start = after.find('#').expect("declaration must use a hex colour");
-        parse_colour(&after[hex_start..hex_start + 7]).expect("valid hex colour")
+        let hex_start = after.find('#').expect("declaration must use a hex color");
+        parse_color(&after[hex_start..hex_start + 7]).expect("valid hex color")
     };
 
     let mut r = Report::default();
@@ -761,7 +761,7 @@ fn pad_art_palette_stays_separable() {
     // to `#685c7a` — the art kept the old tertiary, and nothing noticed.
     //
     // Only the values that really ARE token mirrors are pinned. The dark
-    // body fill, dark detail and both insets are bespoke art colours chosen
+    // body fill, dark detail and both insets are bespoke art colors chosen
     // against the silhouette, not copies of anything, so asserting them
     // would be inventing a contract that was never there.
     let themes = themes();

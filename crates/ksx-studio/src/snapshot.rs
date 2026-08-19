@@ -3835,11 +3835,11 @@ pub struct NocturneChoiceRow {
 pub struct NocturneRackRow {
     pub number: String,
     pub badge: String,
-    /// The controller's identity colour class: `n-pbadge np1..np16` by
-    /// slot number — each of the 16 slots owns a distinct default colour
-    /// (`--pcs1..16`), user-overridable from the rack's colour dot.
+    /// The controller's identity color class: `n-pbadge np1..np16` by
+    /// slot number — each of the 16 slots owns a distinct default color
+    /// (`--pcs1..16`), user-overridable from the rack's color dot.
     pub badge_cls: String,
-    /// The colour dot that opens the picker: `n-cdot np{N}`.
+    /// The color dot that opens the picker: `n-cdot np{N}`.
     pub dot_cls: String,
     pub name: String,
     pub meta: String,
@@ -3982,15 +3982,15 @@ pub struct NocturneKeyRow {
     pub slot: String,
 }
 
-/// One chip of the board's colour legend: which colour speaks for which
+/// One chip of the board's color legend: which color speaks for which
 /// controller, and the door to muting it on the keys.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneLegendRow {
     pub slot: String,
     pub badge: String,
-    /// The persona label, so the chip says who as well as which colour.
+    /// The persona label, so the chip says who as well as which color.
     pub name: String,
-    /// `n-lgd np{N}` — the chip wears the controller's own colour.
+    /// `n-lgd np{N}` — the chip wears the controller's own color.
     pub cls: String,
 }
 
@@ -4004,7 +4004,7 @@ pub struct NocturnePadView {
     pub family: String,
     /// The slot's preset name — the controller's STABLE identity across
     /// reorders (seats renumber, worksheets travel), which is what the
-    /// client keys its identity colours by.
+    /// client keys its identity colors by.
     pub preset: String,
     pub title: String,
     /// Canonical fn → its key chip ("G · H"), for the clone's callouts.
@@ -4180,7 +4180,7 @@ pub struct NocturneDerived {
     pub avail_num: Vec<NocturneKeyRow>,
     /// The multi-pad grid's controllers (payload data, no slots).
     pub pads: Vec<NocturnePadView>,
-    /// The board's colour legend, one chip per staged controller.
+    /// The board's color legend, one chip per staged controller.
     pub legend: Vec<NocturneLegendRow>,
     /// The solo button's label — "Only P1", naming the selected controller.
     pub solo_label: String,
@@ -4733,7 +4733,7 @@ impl NocturneDerived {
             }
         }
         // The GLOBAL ownership read: which controllers each key drives,
-        // across EVERY staged slot — the board's colour strips wear it.
+        // across EVERY staged slot — the board's color strips wear it.
         let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
             std::collections::BTreeMap::new();
         for slot in &staged.slots {
@@ -4758,7 +4758,7 @@ impl NocturneDerived {
             }
         }
         // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
-        // paints that controller's colour; a key several controllers share
+        // paints that controller's color; a key several controllers share
         // splits into one band each, ALWAYS in slot order. The order is
         // stable on purpose: a key P1 and P2 share reads blue|coral whoever
         // you are editing, so the stripe itself tells you who is on it and
@@ -4771,7 +4771,7 @@ impl NocturneDerived {
                 return String::new();
             }
             if owners.len() > BAND_MAX {
-                // THE STACK. Three colours out of eight would be an arbitrary
+                // THE STACK. Three colors out of eight would be an arbitrary
                 // three, and a band plus a separate "+N" makes you add two
                 // marks that stand for the same controllers. So past four the
                 // face becomes one woven texture that names NOBODY, and the
@@ -4789,15 +4789,15 @@ impl NocturneDerived {
             cls
         };
         // Does any key carry more owners than the bands can name? Then the
-        // legend explains the stacked cap in words, beside the colours it
+        // legend explains the stacked cap in words, beside the colors it
         // stands in for — a mark nothing names is a mark you have to guess.
         let kb_more_cls = if key_slots.values().any(|owners| owners.len() > BAND_MAX) {
             "n-lgdmore".to_owned()
         } else {
             "n-lgdmore none".to_owned()
         };
-        // The board's legend: every staged controller with its colour, so
-        // "which colour is who" is answerable without the left pane, and
+        // The board's legend: every staged controller with its color, so
+        // "which color is who" is answerable without the left pane, and
         // each chip is the door to muting that player on the keys.
         let legend: Vec<NocturneLegendRow> = staged
             .slots

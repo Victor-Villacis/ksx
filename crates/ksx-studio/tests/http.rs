@@ -4985,7 +4985,7 @@ fn spawning_pads_passes_the_whole_spec_through_and_303s_back() {
     );
 }
 
-/// A refusal flashes too, prefixed `error:` so the page colours it — never a
+/// A refusal flashes too, prefixed `error:` so the page colors it — never a
 /// silent failure and never an error page dead-ending the no-JS loop.
 #[test]
 fn a_refused_spawn_flashes_the_refusal() {
@@ -7051,7 +7051,7 @@ fn nocturne_treats_a_macro_trigger_as_a_binding() {
     assert!(cls.contains("bound"), "a trigger key paints bound: {cell}");
     assert!(
         cls.contains(" bn1"),
-        "and wears its controller's colour: {cell}"
+        "and wears its controller's color: {cell}"
     );
     assert_eq!(cell["short"], "M", "{cell}");
     assert!(
@@ -7907,7 +7907,7 @@ fn nocturne_clears_one_key_everywhere_it_drives() {
 }
 
 /// **The board is a territory map**: every owned key's cap carries its
-/// FIRST owner's colour class (`own{N}`, plus `owned` when the key belongs
+/// FIRST owner's color class (`own{N}`, plus `owned` when the key belongs
 /// to another controller entirely), and the strips mark only the REMAINING
 /// owners — so a key with one owner needs no underline, and a shared key
 /// wears the second owner's mark over the first owner's fill.
@@ -7989,7 +7989,7 @@ fn nocturne_paints_the_board_by_owner() {
         "the words name the other owner: {g}"
     );
 
-    // Owned by another controller only: one band in ITS colour, and no
+    // Owned by another controller only: one band in ITS color, and no
     // ring — the selected slot does not drive this key.
     let f6 = cell("F6");
     let f6_cls = f6["cls"].as_str().expect("cls");
@@ -8001,7 +8001,7 @@ fn nocturne_paints_the_board_by_owner() {
     let z_cls = z["cls"].as_str().expect("cls");
     assert!(!z_cls.contains(" bn") && !z_cls.contains(" bound"), "{z}");
 
-    // The legend names every controller in its own colour.
+    // The legend names every controller in its own color.
     let legend = api["view"]["legend"].as_array().expect("legend");
     assert_eq!(legend.len(), 2, "{api}");
     assert_eq!(legend[0]["badge"], "P1", "{api}");
@@ -8083,7 +8083,7 @@ fn nocturne_stacks_a_key_five_controllers_share() {
     );
     assert!(
         !cls.contains(" bn") && !cls.contains(" ba1") && !cls.contains(" bb2"),
-        "and it names NOBODY — three colours out of five would be an \
+        "and it names NOBODY — three colors out of five would be an \
          arbitrary three, and a band beside a count is a sum to work out: {q}"
     );
     assert!(
@@ -8098,7 +8098,7 @@ fn nocturne_stacks_a_key_five_controllers_share() {
     );
 
     // Exactly four owners is still four named bands: the stack begins where
-    // the colours run out, not before.
+    // the colors run out, not before.
     assert!(
         control
             .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 5 })
@@ -8126,7 +8126,7 @@ fn nocturne_stacks_a_key_five_controllers_share() {
     );
     assert!(
         !cls.contains(" bstack") && !cls.contains(" bcount"),
-        "nothing stacks while every owner has a colour: {q}"
+        "nothing stacks while every owner has a color: {q}"
     );
     assert_eq!(
         api["view"]["kb_more_cls"], "n-lgdmore none",

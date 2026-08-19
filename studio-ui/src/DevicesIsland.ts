@@ -323,7 +323,7 @@ function optionalLine(text: string, cls: string): [string, string] {
 }
 
 /** `pill pill-<level>` — the level word travels from the backend, so a level it
- *  adds cannot leave this page rendering the wrong colour. `pill-none` is the
+ *  adds cannot leave this page rendering the wrong color. `pill-none` is the
  *  hidden one (studio.css). */
 function pillOf(level: string): string {
   return `pill pill-${level}`;

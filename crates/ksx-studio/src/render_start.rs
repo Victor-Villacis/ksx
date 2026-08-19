@@ -1845,7 +1845,7 @@ mod tests {
             missing.html
         );
 
-        // (2) THE READ FAILED. Different heading, different colour, and it must
+        // (2) THE READ FAILED. Different heading, different color, and it must
         // never borrow (1)'s claim about the machine.
         let unread = render_start(
             &page,

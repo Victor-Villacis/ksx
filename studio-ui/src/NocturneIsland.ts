@@ -920,7 +920,7 @@ export function applyNocturne(p: NocturnePayload): void {
   if (learnRoot) {
     paintStageCallouts();
     syncPadGrid();
-    // Reorders move controllers between seats: the identity colours, the
+    // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
     pruneHiddenStrips();
     applySlotColors();
@@ -979,7 +979,7 @@ export function paintStageCallouts(): void {
 }
 
 /** The multi-pad grid: every staged controller cloned from its family's
- *  master art, colour-framed, slot-stamped — all mappable at once. Clones
+ *  master art, color-framed, slot-stamped — all mappable at once. Clones
  *  are built imperatively AFTER hydration from browser-kept preference
  *  (the parity gate's empty-storage run stays single-pad), and rebuilt
  *  only when the pad roster changes. */
@@ -1254,17 +1254,17 @@ function loadUiPrefs(): void {
   }
 }
 
-/** Identity colours, keyed by PRESET NAME — the controller's stable
- *  identity: seats renumber on reorder, worksheets travel, and the colour
+/** Identity colors, keyed by PRESET NAME — the controller's stable
+ *  identity: seats renumber on reorder, worksheets travel, and the color
  *  travels with them. First-seen defaults are made STICKY (persisted), so
- *  even a never-touched controller keeps its colour wherever it moves;
- *  new controllers take the first free colour. Browser-kept, never daemon
+ *  even a never-touched controller keeps its color wherever it moves;
+ *  new controllers take the first free color. Browser-kept, never daemon
  *  state; with an empty store the assignment equals the CSS defaults and
  *  no style attribute is written (the parity gate's rule). */
 const COLOR_STORE = "ksx-nocturne-colors2";
 let padColors: Record<string, number> = {};
-/** Presets whose colour strips are hidden on the BOARD (same identity
- *  rule). The kbhead's "Colours" button stays the master switch. */
+/** Presets whose color strips are hidden on the BOARD (same identity
+ *  rule). The kbhead's "Colors" button stays the master switch. */
 const STRIPS_STORE = "ksx-nocturne-strips2";
 let hiddenStrips = new Set<string>();
 
@@ -1276,10 +1276,10 @@ function saveSlotColors(): void {
   }
 }
 
-/** Every current pad's colour, resolved: picks first, then seat defaults
- *  skipping taken colours; unseen presets get their default PERSISTED so
+/** Every current pad's color, resolved: picks first, then seat defaults
+ *  skipping taken colors; unseen presets get their default PERSISTED so
  *  it sticks to the controller from now on. */
-function colourAssignments(): Map<number, number> {
+function colorAssignments(): Map<number, number> {
   const pads = lastBindView?.pads ?? [];
   const out = new Map<number, number>();
   const taken = new Set<number>();
@@ -1335,14 +1335,14 @@ function loadSlotColors(): void {
 }
 
 /** Dress every open picker's swatches with the truth: the slot's own
- *  colour ringed, colours worn by OTHER controllers disabled and named.
+ *  color ringed, colors worn by OTHER controllers disabled and named.
  *  Runs when a picker opens and after a pick — never at hydration, so the
  *  SSR paint stays byte-identical. */
 function refreshSwatches(): void {
   const root = learnRoot;
   if (!root) return;
   const pads = lastBindView?.pads ?? [];
-  const assigned = colourAssignments();
+  const assigned = colorAssignments();
   for (const pick of Array.from(root.querySelectorAll<HTMLElement>(".n-cpick[data-slot]"))) {
     const slot = Number(pick.getAttribute("data-slot") ?? "");
     for (const sw of Array.from(pick.querySelectorAll<HTMLButtonElement>(".n-swatch"))) {
@@ -1351,7 +1351,7 @@ function refreshSwatches(): void {
       sw.disabled = Boolean(owner);
       sw.classList.toggle("taken", Boolean(owner));
       sw.classList.toggle("mine", color === assigned.get(slot));
-      sw.title = owner ? `Worn by P${owner.slot}` : `Colour ${color}`;
+      sw.title = owner ? `Worn by P${owner.slot}` : `Color ${color}`;
     }
   }
 }
@@ -1374,8 +1374,8 @@ function syncLegend(): void {
     chip.setAttribute("aria-pressed", off ? "false" : "true");
     chip.classList.toggle("muted", !ui.kbSolo && byHand);
     chip.title = off
-      ? "Show this controller's colour on the keys"
-      : "Hide this controller's colour on the keys";
+      ? "Show this controller's color on the keys"
+      : "Hide this controller's color on the keys";
   }
 }
 
@@ -1388,9 +1388,9 @@ let lastPresets = new Set<string>();
  *  frees), so a crossing left behind by a removed controller would hide a
  *  brand-new one the instant it arrives. Two rules keep that honest: drop
  *  crossings whose controller is gone, and never let one apply to a
- *  controller that just showed up. Colours are deliberately NOT pruned —
- *  inheriting a colour hides nothing, and it means an undone removal comes
- *  back wearing the colour you gave it. */
+ *  controller that just showed up. Colors are deliberately NOT pruned —
+ *  inheriting a color hides nothing, and it means an undone removal comes
+ *  back wearing the color you gave it. */
 function pruneHiddenStrips(): void {
   const pads = lastBindView?.pads ?? [];
   // An empty roster is a draft being discarded or adopted, not a removal:
@@ -1441,7 +1441,7 @@ function isSelectedPreset(preset: string): boolean {
 function applySlotColors(): void {
   const root = learnRoot;
   if (!root) return;
-  const assigned = colourAssignments();
+  const assigned = colorAssignments();
   for (const [slot, idx] of assigned) {
     const fallback = ((slot - 1) % 16) + 1;
     // Write only where the truth differs from the CSS default (and clear
@@ -2834,7 +2834,7 @@ export function nocturneWire(root: HTMLElement): void {
     (ev) => {
       const el = ev.target;
       if (!(el instanceof HTMLDetailsElement)) return;
-      // A colour picker opening gets the current availability truth.
+      // A color picker opening gets the current availability truth.
       if (el.classList.contains("n-cpick") && el.open) {
         refreshSwatches();
         return;
@@ -2905,7 +2905,7 @@ export function nocturneWire(root: HTMLElement): void {
   });
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
-    // An open colour picker closes on any click outside itself.
+    // An open color picker closes on any click outside itself.
     for (const pick of Array.from(root.querySelectorAll<HTMLElement>(".n-cpick[open]"))) {
       if (target && !pick.contains(target)) pick.removeAttribute("open");
     }
@@ -3174,8 +3174,8 @@ export function nocturneWire(root: HTMLElement): void {
       // chips that came back say so once.
       if (leaving) flashRestoredChips();
     } else if (hit === "legend-mute") {
-      // One chip, one player's colour on the keys. Keyed by PRESET like
-      // the colours themselves, so muting follows a controller through a
+      // One chip, one player's color on the keys. Keyed by PRESET like
+      // the colors themselves, so muting follows a controller through a
       // reorder.
       const chip = target?.closest<HTMLElement>("[data-slot]");
       const preset = presetOfSlot(Number(chip?.getAttribute("data-slot") ?? ""));
@@ -3275,10 +3275,10 @@ export function nocturneWire(root: HTMLElement): void {
       const color = Number(btn?.getAttribute("data-color") ?? "");
       const preset = presetOfSlot(slot);
       if (slot >= 1 && slot <= 16 && color >= 1 && color <= 16 && preset !== undefined) {
-        // A colour another controller wears is UNAVAILABLE, never stolen:
+        // A color another controller wears is UNAVAILABLE, never stolen:
         // the swatch is disabled, and this guard backs the styling up. It
         // frees the moment its owner moves off it.
-        const assigned = colourAssignments();
+        const assigned = colorAssignments();
         const wornBy = (lastBindView?.pads ?? []).find(
           (pv) => pv.slot !== slot && assigned.get(pv.slot) === color,
         );
@@ -3695,7 +3695,7 @@ export function NocturneIsland() {
                 ),
               ),
               // "Select player one" = click ANYTHING in the row: badge and
-              // text are ONE selection link. The badge wears the colour;
+              // text are ONE selection link. The badge wears the color;
               // picking one is the palette verb in the pill.
               h(
                 "a",
@@ -3714,7 +3714,7 @@ export function NocturneIsland() {
                 h(
                   "div",
                   { class: "n-sact-row" },
-                  // The colour picker, as a verb: presentation state, kept
+                  // The color picker, as a verb: presentation state, kept
                   // in this browser, keyed to the controller's identity.
                   h(
                     "details",
@@ -3722,8 +3722,8 @@ export function NocturneIsland() {
                     h(
                       "summary",
                       {
-                        title: "Pick this controller's colour",
-                        "aria-label": "Pick this controller's colour",
+                        title: "Pick this controller's color",
+                        "aria-label": "Pick this controller's color",
                         class: "n-sact n-csum",
                       },
                       h(
@@ -3735,22 +3735,22 @@ export function NocturneIsland() {
                     h(
                       "div",
                       { class: "n-cpick-pop", "data-nx": "menu-noop" },
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "1", title: "Colour 1", "aria-label": "Colour 1 for this controller", class: "n-swatch pal1" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "2", title: "Colour 2", "aria-label": "Colour 2 for this controller", class: "n-swatch pal2" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "3", title: "Colour 3", "aria-label": "Colour 3 for this controller", class: "n-swatch pal3" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "4", title: "Colour 4", "aria-label": "Colour 4 for this controller", class: "n-swatch pal4" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "5", title: "Colour 5", "aria-label": "Colour 5 for this controller", class: "n-swatch pal5" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "6", title: "Colour 6", "aria-label": "Colour 6 for this controller", class: "n-swatch pal6" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "7", title: "Colour 7", "aria-label": "Colour 7 for this controller", class: "n-swatch pal7" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "8", title: "Colour 8", "aria-label": "Colour 8 for this controller", class: "n-swatch pal8" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "9", title: "Colour 9", "aria-label": "Colour 9 for this controller", class: "n-swatch pal9" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "10", title: "Colour 10", "aria-label": "Colour 10 for this controller", class: "n-swatch pal10" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "11", title: "Colour 11", "aria-label": "Colour 11 for this controller", class: "n-swatch pal11" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "12", title: "Colour 12", "aria-label": "Colour 12 for this controller", class: "n-swatch pal12" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "13", title: "Colour 13", "aria-label": "Colour 13 for this controller", class: "n-swatch pal13" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Colour 14", "aria-label": "Colour 14 for this controller", class: "n-swatch pal14" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Colour 15", "aria-label": "Colour 15 for this controller", class: "n-swatch pal15" }),
-                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Colour 16", "aria-label": "Colour 16 for this controller", class: "n-swatch pal16" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "1", title: "Color 1", "aria-label": "Color 1 for this controller", class: "n-swatch pal1" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "2", title: "Color 2", "aria-label": "Color 2 for this controller", class: "n-swatch pal2" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "3", title: "Color 3", "aria-label": "Color 3 for this controller", class: "n-swatch pal3" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "4", title: "Color 4", "aria-label": "Color 4 for this controller", class: "n-swatch pal4" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "5", title: "Color 5", "aria-label": "Color 5 for this controller", class: "n-swatch pal5" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "6", title: "Color 6", "aria-label": "Color 6 for this controller", class: "n-swatch pal6" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "7", title: "Color 7", "aria-label": "Color 7 for this controller", class: "n-swatch pal7" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "8", title: "Color 8", "aria-label": "Color 8 for this controller", class: "n-swatch pal8" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "9", title: "Color 9", "aria-label": "Color 9 for this controller", class: "n-swatch pal9" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "10", title: "Color 10", "aria-label": "Color 10 for this controller", class: "n-swatch pal10" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "11", title: "Color 11", "aria-label": "Color 11 for this controller", class: "n-swatch pal11" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "12", title: "Color 12", "aria-label": "Color 12 for this controller", class: "n-swatch pal12" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "13", title: "Color 13", "aria-label": "Color 13 for this controller", class: "n-swatch pal13" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "14", title: "Color 14", "aria-label": "Color 14 for this controller", class: "n-swatch pal14" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "15", title: "Color 15", "aria-label": "Color 15 for this controller", class: "n-swatch pal15" }),
+                        h("button", { type: "button", "data-nx": "slot-color", "data-color": "16", title: "Color 16", "aria-label": "Color 16 for this controller", class: "n-swatch pal16" }),
                     ),
                   ),
                   // One whole-order reorder per click; an end row's order
@@ -4095,7 +4095,7 @@ export function NocturneIsland() {
                 h("filter", { id: "x360a-soft" }, h("feGaussianBlur", { stdDeviation: "16" })),
               ),
               // ── SCENARIO A: the CC0 Open Clip Art Xbox 360 gamepad
-              // (Grumbel, public domain), recoloured to the carbon palette.
+              // (Grumbel, public domain), recolored to the carbon palette.
               // The trigger/bumper pills stay ours, scaled into this file's
               // coordinate space; a transparent overlay carries the data-fn
               // hooks so the live echo lights the art untouched.
@@ -4390,9 +4390,9 @@ export function NocturneIsland() {
             h("span", null, () => nKeyCueText()),
           ),
                   h("span", { class: "n-kick" }, () => nKbTitle()),
-          // The board's key to its own map: which colour speaks for which
-          // controller. Each chip mutes that player's colour on the keys —
-          // the visibility control lives WITH the colour it explains.
+          // The board's key to its own map: which color speaks for which
+          // controller. Each chip mutes that player's color on the keys —
+          // the visibility control lives WITH the color it explains.
           h(
             "div",
             { class: "n-legend" },
@@ -4407,7 +4407,7 @@ export function NocturneIsland() {
                     "data-nx": "legend-mute",
                     "data-slot": r.slot,
                     "aria-pressed": "true",
-                    title: "Hide this controller's colour on the keys",
+                    title: "Hide this controller's color on the keys",
                     class: r.cls,
                   },
                   h("span", { class: "n-lgd-dot" }),
@@ -4417,12 +4417,12 @@ export function NocturneIsland() {
             ),
             // ...and the key to a cap that names nobody. A mark nothing
             // labels is a mark you have to guess at, so the weave gets its
-            // word right here, beside the colours it stands in for.
+            // word right here, beside the colors it stands in for.
             h(
               "span",
               {
                 title:
-                  "A key five or more controllers share shows how many, instead of their colours.",
+                  "A key five or more controllers share shows how many, instead of their colors.",
                 class: () => nKbMoreCls(),
               },
               h("span", { class: "n-lgdmore-sw" }),
@@ -4432,7 +4432,7 @@ export function NocturneIsland() {
           ),
           h("div", { class: "n-spring" }),
           // Focus the board on the controller you are editing: everyone
-          // else's colour greys out — nothing is hidden, so a key never
+          // else's color greys out — nothing is hidden, so a key never
           // looks unbound when it is not. Default ships in the markup
           // (the parity gate's rule).
           h(
@@ -4442,7 +4442,7 @@ export function NocturneIsland() {
               "data-nx": "kb-colors",
               "aria-pressed": "false",
               title:
-                "Show only this controller's colour on the keys. Switch it off and your own crossings come back; click a chip while it is on to keep what you see.",
+                "Show only this controller's color on the keys. Switch it off and your own crossings come back; click a chip while it is on to keep what you see.",
               class: "n-kbcolors",
             },
             () => nSoloLbl(),

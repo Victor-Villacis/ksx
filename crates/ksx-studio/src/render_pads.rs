@@ -920,7 +920,7 @@ mod tests {
         assert!(out.html.contains("&lt;script&gt;"), "{}", out.html);
     }
 
-    /// An error flash colours the error side of the pair, and only that side.
+    /// An error flash colors the error side of the pair, and only that side.
     #[test]
     fn an_error_flash_picks_the_error_variant() {
         let shows = |flash: Option<&str>| {

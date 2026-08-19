@@ -125,7 +125,7 @@ pub(crate) struct BrandAssets;
 ///   carries eight size-specific entries and the consumer reads the ICO
 ///   directory to choose. A hand-written list here could only ever go stale
 ///   against `tools/icongen`'s table.
-/// - **`apple-touch-icon.png`** — 180 px, flattened onto the plate colour, so
+/// - **`apple-touch-icon.png`** — 180 px, flattened onto the plate color, so
 ///   iOS's home-screen mask has no transparent corners to composite black.
 ///
 /// # Why this is spliced in rather than passed to `render_page`
@@ -274,8 +274,8 @@ pub(crate) const REFRESH_SECS: u32 = 5;
 /// This is a HAND COPY of two tokens, so it drifts silently — and it had:
 /// before the Street Fighter palette pass these read `#0b0e14`/`#dbe2ef`
 /// while studio.css had moved to `#0a0d13`/`#e3e9f4`, i.e. the first paint
-/// was a *different colour* from the stylesheet that replaced it. Nothing
-/// could catch that, because a wrong anti-flash colour looks like a flash.
+/// was a *different color* from the stylesheet that replaced it. Nothing
+/// could catch that, because a wrong anti-flash color looks like a flash.
 /// `ksx-studio/tests/contrast.rs` now parses studio.css and pins both.
 /// `pub(crate)` so a THIRD page reuses this copy instead of minting another
 /// one. `render_map.rs` keeps a byte-identical copy from before the rule was

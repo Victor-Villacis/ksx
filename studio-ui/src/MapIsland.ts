@@ -41,7 +41,7 @@ import {
 // PadForge rule: derive layout from art with a script).
 //
 // Each zone wears its own identity. The vendored art draws no letters, so
-// the zone renders the control's name itself in the canonical colours (A
+// the zone renders the control's name itself in the canonical colors (A
 // green / B red / X blue / Y amber; ✕ ○ △ □ in the Sony hues), with the bound
 // key as the small mono tag underneath. Unbound controls still show their
 // identity — the pad reads like a controller with nothing mapped at all.
@@ -3349,8 +3349,8 @@ function macroColsFor(slot: MapperSlot | null): MacroCol[] {
   return macroColumns(slot).map((c) => ({
     fn: c.token,
     id: c.glyph,
-    // UNIFORM colour, deliberately: a header row of coloured discs at column
-    // width is noise rather than information. The identity colours earn their
+    // UNIFORM color, deliberately: a header row of colored discs at column
+    // width is noise rather than information. The identity colors earn their
     // place on the controller art (where they map to physical buttons) and in
     // the legend beside it — here the column is NAMED, not badged.
     // `card`/`diag` are TYPE, not palette.
@@ -4590,7 +4590,7 @@ export function MapIsland() {
             "Save macro",
           ),
           // The same fact in words, AFTER the button on purpose: CSS can then
-          // colour it from the button's own dirty class (`.macsave.dirty +
+          // color it from the button's own dirty class (`.macsave.dirty +
           // .macdirty`), so "unsaved" is amber and "saved" is quiet without a
           // second signal.
           h("span", { class: "macdirty mono" }, () => macroDirtyLine()),

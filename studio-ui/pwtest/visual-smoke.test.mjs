@@ -279,7 +279,7 @@ for (const config of CONTEXTS) {
           assert.equal(
             layout.light,
             config.options.colorScheme === "light",
-            `${config.name} did not expose the intended colour scheme`,
+            `${config.name} did not expose the intended color scheme`,
           );
           assert.deepEqual(diagnostics, [], `${route.path} emitted browser errors on ${config.name}`);
         } catch (error) {

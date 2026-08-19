@@ -2164,6 +2164,9 @@ export function nocturneWire(root: HTMLElement): void {
     }
   };
   root.addEventListener("dragstart", (ev) => {
+    // Only the grip starts a reorder — a text selection dragged from the
+    // row body must not.
+    if (!(ev.target as HTMLElement | null)?.closest?.(".n-grip")) return;
     const row = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-slot-row]");
     if (!row) return;
     dragSlot = row.getAttribute("data-slot-row");
@@ -3028,7 +3031,25 @@ export function NocturneIsland() {
           (r) =>
             h(
               "div",
-              { draggable: "true", "data-slot-row": r.number, class: r.cls },
+              { "data-slot-row": r.number, class: r.cls },
+              // The drag GRIP: reordering starts here and only here — the
+              // row body keeps plain click-to-select, and the keyboard's
+              // path stays the ▴▾ twins in the verb pill. Pointer-only
+              // chrome, so assistive tech never meets it.
+              h(
+                "div",
+                {
+                  draggable: "true",
+                  "aria-hidden": "true",
+                  title: "Drag to reorder",
+                  class: "n-grip",
+                },
+                h(
+                  "svg",
+                  { class: "n-ico", viewBox: "0 0 256 256" },
+                  h("path", { d: "M108,60A16,16,0,1,1,92,44,16,16,0,0,1,108,60Zm56,16a16,16,0,1,0-16-16A16,16,0,0,0,164,76ZM92,112a16,16,0,1,0,16,16A16,16,0,0,0,92,112Zm72,0a16,16,0,1,0,16,16A16,16,0,0,0,164,112ZM92,180a16,16,0,1,0,16,16A16,16,0,0,0,92,180Zm72,0a16,16,0,1,0,16,16A16,16,0,0,0,164,180Z" }),
+                ),
+              ),
               // Clicking the row's identity SELECTS it: a server-resolved
               // link (?slot=N), so every pane follows with no JavaScript;
               // with it, the wire swaps the URL and polls in place.

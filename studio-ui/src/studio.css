@@ -6807,8 +6807,45 @@ a.wsrow-title:hover {
   margin-bottom: 6px;
 }
 
-.n-slot:not(.empty) {
+.n-slot:not(.empty):hover {
+  background: var(--n-panel);
+}
+
+/* The drag grip: a reserved gutter, revealed on hover (always under a
+   coarse pointer) — the ONLY place the grab hand appears. */
+.n-grip {
+  flex: none;
+  width: 14px;
+  height: 26px;
+  margin-right: -4px;
+  display: grid;
+  place-items: center;
+  color: var(--n-text-3);
+  opacity: 0;
   cursor: grab;
+}
+
+.n-grip:active {
+  cursor: grabbing;
+}
+
+.n-grip .n-ico {
+  width: 13px;
+  height: 13px;
+}
+
+.n-slot:hover .n-grip {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .n-grip {
+    opacity: 1;
+  }
+}
+
+.n-dragghost .n-grip {
+  display: none;
 }
 
 /* The hole the dragged card left behind. */

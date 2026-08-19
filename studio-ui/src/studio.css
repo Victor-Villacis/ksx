@@ -10604,6 +10604,19 @@ button.n-keychip:hover {
   text-decoration: line-through;
 }
 
+/* Closing the lens gives your own crossings back — they pulse once so
+   the handover is seen. (The board's one shared keyframe.) */
+.n-lgd.back {
+  animation: noct-pulse 0.65s ease-in-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-lgd.back {
+    animation: none;
+    border-color: var(--n-accent-line);
+  }
+}
+
 /* ...and the one still speaking stands out while it is alone. */
 .n-center.solo .n-lgd.on {
   border-color: var(--n-accent-line);

@@ -1025,6 +1025,19 @@ function syncLegend(): void {
   }
 }
 
+/** The lens closed and your own crossings returned: pulse them once, so
+ *  the state you get back is SEEN rather than discovered later. */
+function flashRestoredChips(): void {
+  const root = learnRoot;
+  if (!root) return;
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>(".n-lgd.muted"))) {
+    chip.classList.remove("back");
+    void chip.offsetWidth;
+    chip.classList.add("back");
+    window.setTimeout(() => chip.classList.remove("back"), 1300);
+  }
+}
+
 /** ONE place where the board's filter chrome learns the state: the solo
  *  button's pressed flag and every legend chip, together — so the two can
  *  never disagree about what the keys are showing. */
@@ -2590,10 +2603,15 @@ export function nocturneWire(root: HTMLElement): void {
       saveUiPrefs();
       syncPadGrid();
     } else if (hit === "kb-colors") {
+      const leaving = ui.kbSolo;
       ui.kbSolo = !ui.kbSolo;
       saveUiPrefs();
       applyNocturneUi();
       syncBoardFilter();
+      // Closing the lens hands back the crossings YOU set — the solo
+      // convention every editor keeps. It is silent by nature, so the
+      // chips that came back say so once.
+      if (leaving) flashRestoredChips();
     } else if (hit === "legend-mute") {
       // One chip, one player's colour on the keys. Keyed by PRESET like
       // the colours themselves, so muting follows a controller through a
@@ -3849,7 +3867,7 @@ export function NocturneIsland() {
               "data-nx": "kb-colors",
               "aria-pressed": "false",
               title:
-                "Grey out every other controller's colour, so only the selected one is coloured on the keys",
+                "Show only this controller's colour on the keys. Switch it off and your own crossings come back; click a chip while it is on to keep what you see.",
               class: "n-kbcolors",
             },
             () => nSoloLbl(),

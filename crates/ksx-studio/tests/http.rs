@@ -7471,6 +7471,101 @@ fn nocturne_clears_one_key_everywhere_it_drives() {
     assert!(none.contains("not%20driving%20anything"), "{none}");
 }
 
+/// **The board is a territory map**: every owned key's cap carries its
+/// FIRST owner's colour class (`own{N}`, plus `owned` when the key belongs
+/// to another controller entirely), and the strips mark only the REMAINING
+/// owners — so a key with one owner needs no underline, and a shared key
+/// wears the second owner's mark over the first owner's fill.
+#[test]
+fn nocturne_paints_the_board_by_owner() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let staged = control.staged();
+    let p1 = staged.slots[0].preset.clone();
+    let p2 = staged.slots[1].preset.clone();
+    for (number, preset, function, key) in [
+        (1, p1.clone(), "A", "G"),
+        (2, p2.clone(), "B", "G"),
+        (2, p2, "lb", "F6"),
+    ] {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number,
+                    preset,
+                    function: function.into(),
+                    keys: vec![key.into()],
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let cell = |key: &str| -> serde_json::Value {
+        [
+            "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+        ]
+        .iter()
+        .filter_map(|row| api["view"][row].as_array())
+        .flatten()
+        .find(|c| c["key"] == key)
+        .unwrap_or_else(|| panic!("{key} is not on the board"))
+        .clone()
+    };
+
+    // Shared: P1 fills it (bound on the selected slot), P2 marks it.
+    let g = cell("G");
+    let g_cls = g["cls"].as_str().expect("cls");
+    assert!(g_cls.contains(" bound"), "{g}");
+    assert!(g_cls.contains(" own1"), "{g}");
+    assert_eq!(
+        g["s1"], "n-strip s2",
+        "the SECOND owner takes the first mark"
+    );
+    assert_eq!(g["s2"], "n-strip none", "{g}");
+
+    // Owned by another controller only: filled, marked, but not "bound"
+    // here — the selected slot does not drive it.
+    let f6 = cell("F6");
+    let f6_cls = f6["cls"].as_str().expect("cls");
+    assert!(
+        f6_cls.contains(" own2") && f6_cls.contains(" owned"),
+        "{f6}"
+    );
+    assert!(!f6_cls.contains(" bound"), "{f6}");
+    assert_eq!(f6["s1"], "n-strip none", "one owner needs no underline");
+
+    // Untouched keys stay plain.
+    let z = cell("Z");
+    let z_cls = z["cls"].as_str().expect("cls");
+    assert!(!z_cls.contains("own") && !z_cls.contains(" bound"), "{z}");
+}
+
 /// **The multi-pad payload**: every staged controller serves its family,
 /// title, callout chips and readable control names — the clone grid's whole
 /// diet, pure payload data that mints no slots.

@@ -7038,8 +7038,9 @@ a.wsrow-title:hover {
 /* The action corner: the colour dot always, the verbs on hover. */
 .n-sacts {
   position: absolute;
-  top: 7px;
+  top: -12px;
   right: 8px;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -9903,6 +9904,155 @@ button.n-keychip:hover {
   border-color: color-mix(in srgb, var(--pcs16) 55%, transparent);
 }
 
+/* The territory map: a key bound only on OTHER slots still shows its
+   owner's fill. Shares the bound recipe. */
+.n-key.owned::before {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--kbt) 34%, transparent),
+      color-mix(in srgb, var(--kbt) 20%, transparent) 65%,
+      color-mix(in srgb, var(--kbt) 16%, transparent)
+    ),
+    linear-gradient(180deg, #2e3142, #242737);
+  box-shadow:
+    inset 0 1px 0 rgba(233, 233, 237, 0.14),
+    inset 0 0 0 1px color-mix(in srgb, var(--kbt) 35%, transparent);
+}
+
+.n-key.own1 {
+  --kbt: var(--pcs1);
+}
+
+.n-key.own2 {
+  --kbt: var(--pcs2);
+}
+
+.n-key.own3 {
+  --kbt: var(--pcs3);
+}
+
+.n-key.own4 {
+  --kbt: var(--pcs4);
+}
+
+.n-key.own5 {
+  --kbt: var(--pcs5);
+}
+
+.n-key.own6 {
+  --kbt: var(--pcs6);
+}
+
+.n-key.own7 {
+  --kbt: var(--pcs7);
+}
+
+.n-key.own8 {
+  --kbt: var(--pcs8);
+}
+
+.n-key.own9 {
+  --kbt: var(--pcs9);
+}
+
+.n-key.own10 {
+  --kbt: var(--pcs10);
+}
+
+.n-key.own11 {
+  --kbt: var(--pcs11);
+}
+
+.n-key.own12 {
+  --kbt: var(--pcs12);
+}
+
+.n-key.own13 {
+  --kbt: var(--pcs13);
+}
+
+.n-key.own14 {
+  --kbt: var(--pcs14);
+}
+
+.n-key.own15 {
+  --kbt: var(--pcs15);
+}
+
+.n-key.own16 {
+  --kbt: var(--pcs16);
+}
+
+.n-center.hs1 .n-key.own1 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs2 .n-key.own2 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs3 .n-key.own3 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs4 .n-key.own4 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs5 .n-key.own5 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs6 .n-key.own6 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs7 .n-key.own7 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs8 .n-key.own8 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs9 .n-key.own9 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs10 .n-key.own10 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs11 .n-key.own11 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs12 .n-key.own12 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs13 .n-key.own13 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs14 .n-key.own14 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs15 .n-key.own15 {
+  --kbt: var(--n-accent);
+}
+
+.n-center.hs16 .n-key.own16 {
+  --kbt: var(--n-accent);
+}
+
+/* Colours off: every fill falls back to the neutral accent wash. */
+.n-center.nostrips .n-key {
+  --kbt: var(--n-accent);
+}
+
 /* ── Controller colours: the dot, the picker, the cap strips ── */
 
 .n-cpick {
@@ -9938,11 +10088,11 @@ button.n-keychip:hover {
 
 .n-cpick-pop {
   position: absolute;
-  top: 28px;
+  top: 30px;
   right: -6px;
   z-index: 40;
   display: grid;
-  grid-template-columns: repeat(8, 18px);
+  grid-template-columns: repeat(4, 18px);
   gap: 5px;
   padding: 8px;
   border: 1px solid var(--n-line-2);
@@ -9997,7 +10147,13 @@ button.n-keychip:hover {
 }
 
 .n-strows input {
+  width: 14px;
+  height: 14px;
   accent-color: var(--n-accent);
+}
+
+.n-strows input:not(:checked) + .n-strows-t {
+  color: var(--n-text-3);
 }
 
 /* Per-player strip hiding, composed onto the centre's class list. */

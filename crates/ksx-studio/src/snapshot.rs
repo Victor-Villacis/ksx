@@ -4814,6 +4814,17 @@ impl NocturneDerived {
             } else {
                 title.clone()
             };
+            // The territory read: the FIRST owner's colour fills the cap
+            // (an `own{N}` class; `owned` adds the fill to keys bound only
+            // on other slots), and the strips mark the REMAINING owners —
+            // a single-owner key needs no underline, its fill says it all.
+            let mut cls = cls;
+            if let Some(first) = owners.first() {
+                cls.push_str(&format!(" own{first}"));
+                if !cls.contains(" bound") {
+                    cls.push_str(" owned");
+                }
+            }
             NocturneKeyCell {
                 cap: cell.cap.to_owned(),
                 key: cell.key.to_owned(),
@@ -4821,10 +4832,10 @@ impl NocturneDerived {
                 short,
                 title,
                 aria,
-                s1: strip(owners, 0),
-                s2: strip(owners, 1),
-                s3: strip(owners, 2),
-                s4: strip(owners, 3),
+                s1: strip(owners, 1),
+                s2: strip(owners, 2),
+                s3: strip(owners, 3),
+                s4: strip(owners, 4),
             }
         };
         let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
@@ -4855,18 +4866,24 @@ impl NocturneDerived {
                 NocturneKeyCell {
                     cap: (*key).to_owned(),
                     key: (*key).to_owned(),
-                    cls: if fns.len() > 1 {
-                        "n-key tray bound shared".to_owned()
-                    } else {
-                        "n-key tray bound".to_owned()
+                    cls: {
+                        let mut cls = if fns.len() > 1 {
+                            "n-key tray bound shared".to_owned()
+                        } else {
+                            "n-key tray bound".to_owned()
+                        };
+                        if let Some(first) = tray_owners.first() {
+                            cls.push_str(&format!(" own{first}"));
+                        }
+                        cls
                     },
                     short: crate::keyboard_layout::short_for(persona, fns[0]),
                     aria: title.clone(),
                     title,
-                    s1: strip(tray_owners, 0),
-                    s2: strip(tray_owners, 1),
-                    s3: strip(tray_owners, 2),
-                    s4: strip(tray_owners, 3),
+                    s1: strip(tray_owners, 1),
+                    s2: strip(tray_owners, 2),
+                    s3: strip(tray_owners, 3),
+                    s4: strip(tray_owners, 4),
                 }
             })
             .collect();

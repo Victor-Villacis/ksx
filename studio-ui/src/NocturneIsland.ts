@@ -987,7 +987,10 @@ function refreshSwatches(): void {
     }
     const box = pick.querySelector<HTMLInputElement>(".n-strows input");
     const preset = presetOfSlot(slot);
-    if (box) box.checked = !(preset !== undefined && hiddenStrips.has(preset));
+    const hidden = preset !== undefined && hiddenStrips.has(preset);
+    if (box) box.checked = !hidden;
+    const stateText = pick.querySelector<HTMLElement>(".n-strows-t");
+    if (stateText) stateText.textContent = hidden ? "Hidden on the keys" : "Shown on the keys";
   }
 }
 
@@ -2314,6 +2317,10 @@ export function nocturneWire(root: HTMLElement): void {
   });
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
+    // An open colour picker closes on any click outside itself.
+    for (const pick of Array.from(root.querySelectorAll<HTMLElement>(".n-cpick[open]"))) {
+      if (target && !pick.contains(target)) pick.removeAttribute("open");
+    }
     // Slot selection: enhance the server-resolved ?slot=N link into an
     // in-place URL swap + immediate poll — no full reload, same truth.
     const sel = target?.closest<HTMLAnchorElement>("a.n-slot-sel");
@@ -2621,6 +2628,7 @@ export function nocturneWire(root: HTMLElement): void {
         else hiddenStrips.add(preset);
         saveHiddenStrips();
         applyNocturneUi();
+        refreshSwatches();
       }
     } else if (hit === "slot-color") {
       const btn = target?.closest<HTMLElement>("[data-color]");
@@ -3112,7 +3120,7 @@ export function NocturneIsland() {
                         "label",
                         { class: "n-strows" },
                         h("input", { type: "checkbox", checked: "checked", "data-nx": "slot-strips" }),
-                        "Show on keyboard",
+                        h("span", { class: "n-strows-t" }, "Shown on the keys"),
                       ),
                     ),
                   ),

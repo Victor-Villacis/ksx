@@ -126,6 +126,7 @@ interface NocturneMacRowView {
   warn: string;
   warn_cls: string;
   warn_title: string;
+  short: boolean;
   up_cls: string;
   dn_cls: string;
   up_act: string;
@@ -141,6 +142,8 @@ interface NocturneMacCellView {
   cell: string;
   mark: string;
   title: string;
+  on: string;
+  tab: string;
 }
 
 interface NocturneMacPolView {
@@ -345,6 +348,7 @@ export interface NocturneView {
     toml: string;
     turbo_cls: string;
     turbo_val: string;
+    turbo_label: string;
   };
   cfg_line: string;
   cfg_meta: string;
@@ -500,6 +504,11 @@ const [nMacBackCls, setNMacBackCls] = createSignal("nd-back none");
 const [nMacName, setNMacName] = createSignal("");
 const [nMacSlot, setNMacSlot] = createSignal("");
 const [nMacPreset, setNMacPreset] = createSignal("");
+// What the editor just did. `.n-flash` lives under the title bar, BEHIND
+// this dialog's own scrim, so a sentence routed there is unreadable
+// exactly when it matters most.
+const [nMacSay, setNMacSay] = createSignal("");
+const [nMacSayCls, setNMacSayCls] = createSignal("n-macsay none");
 const [nMacHead, setNMacHead] = createSignal("");
 const [nMacTrigger, setNMacTrigger] = createSignal("");
 const [nMacNote, setNMacNote] = createSignal("");
@@ -513,6 +522,7 @@ const [nMacRule, setNMacRule] = createSignal("");
 const [nMacToml, setNMacToml] = createSignal("");
 const [nMacRateCls, setNMacRateCls] = createSignal("n-macrate none");
 const [nMacRateVal, setNMacRateVal] = createSignal("");
+const [nMacRateLbl, setNMacRateLbl] = createSignal("");
 const [nMacCols, setNMacCols] = createSignal<NocturneMacColView[]>([]);
 const [nMacGroups, setNMacGroups] = createSignal<NocturneMacGroupView[]>([]);
 const [nMacRows, setNMacRows] = createSignal<NocturneMacRowView[]>([]);
@@ -541,6 +551,7 @@ function applyMacView(v: NocturnePayload["view"]["mac"]): void {
   setNMacToml(v.toml);
   setNMacRateCls(v.turbo_cls);
   setNMacRateVal(v.turbo_val);
+  setNMacRateLbl(v.turbo_label);
   setNMacCols(v.cols);
   setNMacGroups(v.groups);
   setNMacRows(v.rows);
@@ -581,6 +592,10 @@ let macBusy = false;
 let macAskedShort = false;
 /** The row the author last touched — what "allow a short step" is about. */
 let macShortRow: number | null = null;
+/** Has a close been warned about already? The warning must not pretend the
+ *  work is saved — the draft stays dirty and the label stays honest; this is
+ *  what makes the SECOND press go through. */
+let macCloseArmed = false;
 
 /** Seed the draft from the staged macro the page just served. Never over an
  *  edit in flight, and never when the dialog is closed. */
@@ -593,6 +608,16 @@ function seedMacDraft(p: NocturnePayload): void {
     return;
   }
   macDraft = (p.view.mac.table ?? null) as MacroDraftTable | null;
+}
+
+/** The editor's answer, inside the panel the reader is looking at. */
+function macSay(text: string, kind: "" | "warn" | "err"): void {
+  setNMacSay(text);
+  setNMacSayCls(text ? `n-macsay${kind ? " " + kind : ""}` : "n-macsay none");
+}
+
+function macSayReset(): void {
+  macSay("", "");
 }
 
 function macDirtyMark(): void {
@@ -620,13 +645,26 @@ async function macAct(act: string): Promise<void> {
       draft: MacroDraftTable;
       view: NocturnePayload["view"]["mac"];
     };
-    if (!out.ok) return;
+    // A REFUSED ACT CHANGED NOTHING. Marking the macro dirty over a
+    // rejected duration left the number in the box disagreeing with the
+    // number Save would write, and the refusal itself was never spoken.
+    if (!out.ok) {
+      macSay(out.said, "err");
+      if (keepRow !== null) {
+        const box = learnRoot?.querySelector<HTMLInputElement>(`[data-macdur="${keepRow}"]`);
+        const row = nMacRows()[Number(keepRow)];
+        if (box && row) box.value = row.dur_val;
+      }
+      return;
+    }
     macDraft = out.draft;
     macDirty = true;
     macAskedShort = false;
+    macCloseArmed = false;
+    macSayReset();
     applyMacView(out.view);
     macDirtyMark();
-    if (out.said) applyFlash(out.said);
+    if (out.said) macSay(out.said, "");
     if (keepRow !== null) {
       const back = learnRoot?.querySelector<HTMLInputElement>(
         `[data-macdur="${keepRow}"]`,
@@ -634,7 +672,7 @@ async function macAct(act: string): Promise<void> {
       back?.focus();
     }
   } catch {
-    applyFlash("error: request failed — is ksx studio still running?");
+    macSay("The studio did not answer — is ksx still running?", "err");
   } finally {
     macBusy = false;
   }
@@ -645,16 +683,19 @@ async function macAct(act: string): Promise<void> {
  *  Save asks, and says which steps it is about. */
 async function macSave(): Promise<void> {
   if (!macDraft || macBusy) return;
-  const short = nMacRows().filter((r) => r.warn !== "");
+  // `warn` is ALSO non-empty for a step naming two units or none — faults,
+  // not short steps. The row now carries the answer itself.
+  const short = nMacRows().filter((r) => r.short);
   const btn = learnRoot?.querySelector<HTMLButtonElement>(".n-macsave");
   if (short.length > 0 && !macAskedShort) {
     macAskedShort = true;
     if (btn) btn.textContent = "Save it anyway";
-    applyFlash(
+    macSay(
       `${short.length === 1 ? "Step" : "Steps"} ${short
         .map((r) => r.n)
         .join(", ")} ${short.length === 1 ? "is" : "are"} shorter than the 60 Hz floor. ` +
         "ksx will raise them to 33 ms unless the step allows a short one — press Save again to write it.",
+      "warn",
     );
     return;
   }
@@ -675,21 +716,30 @@ async function macSave(): Promise<void> {
         repeat: macDraft.repeat,
         turbo_hz: macDraft.turbo_hz,
         gap_ms: macDraft.gap_ms,
+        // ⚠️ THE WHOLE TABLE MEANS THE WHOLE TABLE. Omitting this rewrote a
+        // DISABLED macro with the default, so editing one duration on a
+        // macro you had switched off started it firing again.
+        enabled: !macDraft.disabled,
       }),
     });
-    const out = (await res.json()) as { ok: boolean; said?: string; error?: string };
+    const out = (await res.json()) as {
+      ok: boolean;
+      error?: string;
+      problems?: string[];
+    };
     if (out.ok) {
       macDirty = false;
       macAskedShort = false;
       if (btn) btn.textContent = "Save this macro";
       macDirtyMark();
-      applyFlash(`Saved “${macDraft.name}”.`);
+      macSay(`Saved “${macDraft.name}”.`, "");
       nocturnePollFn();
     } else {
-      applyFlash(`error: ${out.error ?? "the macro was refused"}`);
+      const why = [out.error ?? "The macro was refused.", ...(out.problems ?? [])].join(" ");
+      macSay(why, "err");
     }
   } catch {
-    applyFlash("error: request failed — is ksx studio still running?");
+    macSay("The studio did not answer — is ksx still running?", "err");
   } finally {
     macBusy = false;
   }
@@ -2477,11 +2527,44 @@ function cancelAssign(): void {
  *  Escape while a capture is armed.) */
 let dialogReturnFocus: HTMLElement | null = null;
 
+function macroDialogOpen(): boolean {
+  return !nMacBackCls().includes("none");
+}
+
 function anyDialogOpen(): boolean {
-  return ui.dlg || nConfOpen() || nApplyOpen();
+  return ui.dlg || nConfOpen() || nApplyOpen() || macroDialogOpen();
+}
+
+/** Leave the macro editor the way its ✕ does — the dialog's open state IS
+ *  the URL, so closing is a navigation, enhanced here into a URL swap.
+ *
+ *  Unsaved work is never dropped on the first press: the editor says what
+ *  closing would cost, and a second press closes anyway. */
+function closeMacroDialog(): void {
+  if (macDirty && macDraft && !macCloseArmed) {
+    macSay(
+      `“${macDraft.name}” has unsaved changes — closing discards them. Press Save first, ` +
+        "or close again to discard.",
+      "warn",
+    );
+    macCloseArmed = true;
+    return;
+  }
+  macDirty = false;
+  macCloseArmed = false;
+  macDraft = null;
+  macDirtyMark();
+  mergeQuery({ macro: null });
+  nocturnePollFn();
 }
 
 function closeOpenDialog(): void {
+  // The macro panel is the outermost of the four, so it yields to any
+  // dialog opened on top of it.
+  if (!nApplyOpen() && !nConfOpen() && !ui.dlg && macroDialogOpen()) {
+    closeMacroDialog();
+    return;
+  }
   if (nApplyOpen()) setNApplyOpen(false);
   else if (nConfOpen()) {
     pendingConflict = null;
@@ -2497,7 +2580,11 @@ function focusDialog(): void {
   dialogReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   // The createShow branch attaches on the next microtask; focus one frame on.
   window.requestAnimationFrame(() => {
-    learnRoot?.querySelector<HTMLElement>(".nd")?.focus();
+    // ⚠️ THE VISIBLE ONE. The macro panel is always in the DOM and comes
+    // FIRST in document order, so a bare `.nd` sent every other dialog's
+    // focus into a display:none node — and then trapped Tab there, leaving
+    // the create dialog's own controls keyboard-unreachable.
+    learnRoot?.querySelector<HTMLElement>(".nd-back:not(.none) .nd")?.focus();
   });
 }
 
@@ -2508,7 +2595,7 @@ function restoreDialogFocus(): void {
 }
 
 function trapDialogTab(ev: KeyboardEvent): void {
-  const dlg = learnRoot?.querySelector<HTMLElement>(".nd");
+  const dlg = learnRoot?.querySelector<HTMLElement>(".nd-back:not(.none) .nd");
   if (!dlg) return;
   const focusables = Array.from(
     dlg.querySelectorAll<HTMLElement>("button, input, select, a[href], [tabindex]"),
@@ -2593,11 +2680,14 @@ export function nocturneWire(root: HTMLElement): void {
     if (verb === "short") {
       // The flag belongs to a STEP, so it needs one: the row whose duration
       // box was last touched, else the first row that is actually short.
-      const row =
-        macShortRow ??
-        nMacRows().findIndex((r) => r.warn !== "");
+      // The flag belongs to a STEP, so it needs one that the floor would
+      // really raise: the row whose duration was last touched IF that row is
+      // short, else the first row that is.
+      const rows = nMacRows();
+      const touched = macShortRow !== null && rows[macShortRow]?.short ? macShortRow : null;
+      const row = touched ?? rows.findIndex((r) => r.short);
       if (row < 0) {
-        applyFlash("No step here is shorter than the 33 ms floor.");
+        macSay("No step here is shorter than the 33 ms floor \u2014 there is nothing to allow.", "warn");
         return;
       }
       void macAct(`short|${row}`);
@@ -2622,7 +2712,34 @@ export function nocturneWire(root: HTMLElement): void {
     if (box && (ev as KeyboardEvent).key === "Enter") {
       ev.preventDefault();
       box.blur();
+      return;
     }
+    // THE MATRIX IS A GRID, not a tab sequence. One cell is in the tab order
+    // and the arrows walk the rest — 37 columns times N steps is not
+    // something anyone can Tab through, and the cells are useless to a
+    // keyboard user without a way in.
+    const cell = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-maccell]");
+    if (!cell) return;
+    const key = (ev as KeyboardEvent).key;
+    const dx = key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0;
+    const dy = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
+    if (dx === 0 && dy === 0) return;
+    ev.preventDefault();
+    const all = Array.from(root.querySelectorAll<HTMLElement>("[data-maccell]"));
+    const at = all.indexOf(cell);
+    if (at < 0) return;
+    const cols = nMacCols().length || 1;
+    const row = Math.floor(at / cols);
+    const col = at % cols;
+    const rows = Math.ceil(all.length / cols);
+    const want =
+      Math.min(Math.max(row + dy, 0), rows - 1) * cols + Math.min(Math.max(col + dx, 0), cols - 1);
+    const next = all[want];
+    if (!next || next === cell) return;
+    cell.setAttribute("tabindex", "-1");
+    next.setAttribute("tabindex", "0");
+    next.focus();
+    next.scrollIntoView({ block: "nearest", inline: "nearest" });
   });
   root.addEventListener("dragstart", (ev) => {
     // Only the grip starts a reorder — a text selection dragged from the
@@ -2794,6 +2911,14 @@ export function nocturneWire(root: HTMLElement): void {
     }
     // Slot selection: enhance the server-resolved ?slot=N link into an
     // in-place URL swap + immediate poll — no full reload, same truth.
+    // The macro dialog's own doors: enhanced so unsaved work gets a word
+    // before it is dropped, and so closing is a URL swap rather than a load.
+    const macDoor = target?.closest<HTMLAnchorElement>(".n-macx, .n-macfoot a");
+    if (macDoor) {
+      ev.preventDefault();
+      closeMacroDialog();
+      return;
+    }
     const sel = target?.closest<HTMLAnchorElement>("a.n-slot-sel");
     if (sel) {
       ev.preventDefault();
@@ -2802,7 +2927,27 @@ export function nocturneWire(root: HTMLElement): void {
       const chosen = new URL(sel.href, window.location.origin).searchParams.get("slot");
       // The walk was built for one slot's controls: changing slots ends it.
       autoMap = null;
-      mergeQuery({ slot: chosen });
+      // ⚠️ A MACRO BELONGS TO ONE CONTROLLER. Carrying `?macro=` across a
+      // seat change left the dialog showing the OLD seat's draft over the new
+      // seat's page — and, because a dirty draft blocks the repaint, the two
+      // disagreed silently. The editor closes with the controller it was for,
+      // and says so when that costs unsaved work.
+      if (macroDialogOpen()) {
+        if (macDirty && macDraft && !macCloseArmed) {
+          macSay(
+            `“${macDraft.name}” belongs to this controller and has unsaved changes. Save it, ` +
+              "or press the seat again to leave them behind.",
+            "warn",
+          );
+          macCloseArmed = true;
+          return;
+        }
+        macDraft = null;
+        macDirty = false;
+        macCloseArmed = false;
+        macDirtyMark();
+      }
+      mergeQuery({ slot: chosen, macro: null });
       nocturnePollFn();
       return;
     }
@@ -2945,7 +3090,9 @@ export function nocturneWire(root: HTMLElement): void {
       // controls in it keep working — never preventDefault here.
       return;
     }
-    if (hit === "slot-new") {
+    if (hit === "mac-close") {
+      closeMacroDialog();
+    } else if (hit === "slot-new") {
       ui.dlg = true;
       focusDialog();
     } else if (hit === "dlg-close") {
@@ -3173,7 +3320,7 @@ export function nocturneWire(root: HTMLElement): void {
       // panel contains real form controls.
       return;
     }
-    if (hit === "slot-new" || hit === "dlg-close" || hit === "pane-left" || hit === "pane-right" || hit === "pane-bottom" || hit === "filter-reset") {
+    if (hit === "slot-new" || hit === "dlg-close" || hit === "mac-close" || hit === "pane-left" || hit === "pane-right" || hit === "pane-bottom" || hit === "filter-reset") {
       ev.preventDefault();
     }
     applyNocturneUi();
@@ -6432,6 +6579,7 @@ export function NocturneIsland() {
           h("div", { class: "nd-lede" }, () => nMacTrigger()),
           h("div", { class: "n-macmeta" }, () => nMacHead()),
           h("div", { class: "n-macdis" }, () => nMacNote()),
+          h("div", { role: "status", class: () => nMacSayCls() }, () => nMacSay()),
           h("a", { class: "n-macx", "aria-label": "Close the macro editor", href: () => nMacClose() }, "\u2715"),
         ),
         // THE ROLL. Two aligned columns: the step bar (number, what the step
@@ -6448,7 +6596,10 @@ export function NocturneIsland() {
               () => nMacRows(),
               (r) =>
                 r.n + "|" + r.cls + "|" + r.dur + "|" + r.unit + "|" + r.del_title +
-                "|" + r.warn + "|" + r.hold + "|" + r.hold_cls + "|" + r.exp,
+                "|" + r.warn + "|" + r.hold + "|" + r.hold_cls + "|" + r.exp +
+                // The arrows' own classes: without them a row kept a dead
+                // ▾ after an insert, or a live-looking one after a delete.
+                "|" + r.up_cls + "|" + r.dn_cls,
               (r) =>
                 h(
                   "div",
@@ -6531,14 +6682,22 @@ export function NocturneIsland() {
             ),
             h(
               "div",
-              { class: "n-macmatrix" },
+              { role: "grid", "aria-label": "Steps by control", class: "n-macmatrix" },
               createList(
                 () => nMacCells(),
-                (c) => c.cell + "|" + c.cls,
+                (c) => c.cell + "|" + c.cls + "|" + c.tab,
                 (c) =>
                   h(
                     "button",
-                    { type: "button", title: c.title, "data-maccell": c.cell, class: c.cls },
+                    {
+                      type: "button",
+                      title: c.title,
+                      "aria-label": c.title,
+                      "aria-pressed": c.on,
+                      tabindex: c.tab,
+                      "data-maccell": c.cell,
+                      class: c.cls,
+                    },
                     c.mark,
                   ),
               ),
@@ -6603,8 +6762,14 @@ export function NocturneIsland() {
           h(
             "label",
             { class: () => nMacRateCls() },
-            h("span", { class: "n-macratel" }, "Auto-fire rate, in full cycles a second"),
-            h("input", { type: "number", min: "1", max: "60", step: "1", "data-macrate": "1", value: () => nMacRateVal() }),
+            h("span", { class: "n-macratel" }, () => nMacRateLbl()),
+            h("input", {
+              type: "number",
+              min: "1",
+              step: "1",
+              "data-macrate": "1",
+              value: () => nMacRateVal(),
+            }),
           ),
         ),
         h(

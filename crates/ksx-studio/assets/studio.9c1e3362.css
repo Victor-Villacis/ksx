@@ -6310,6 +6310,15 @@ a.wsrow-title:hover {
   --n-accent-2: #a7a1db;
   --n-accent-tint: rgba(150, 138, 224, 0.14);
   --n-accent-line: rgba(150, 138, 224, 0.45);
+  /* One step above --n-panel-2: the zebra stripe and every hover ground. */
+  --n-panel-3: #2b2d3c;
+  /* A fill strong enough to read as HELD behind a mark. */
+  --n-accent-dim: rgba(150, 138, 224, 0.26);
+  /* Amber and rose, matching the two pre-existing uses that carried these
+     exact values as fallbacks. */
+  --n-warn: #edbb46;
+  --n-danger: #e79aa6;
+  --n-danger-line: rgba(231, 154, 166, 0.5);
   /* A fixed-viewport app frame, like the prototype: the panes scroll
      INTERNALLY and the stage absorbs the leftover height. Without the hard
      height the right pane's content stretches the page and pushes the
@@ -10688,6 +10697,33 @@ button.n-keychip:hover {
   gap: 3px;
 }
 
+/* What the editor just did, said INSIDE the dialog. `.n-flash` lives under
+   the title bar, behind this panel's own scrim, so anything routed there is
+   unreadable exactly when it matters. */
+.n-macsay {
+  padding: 6px 9px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 8px;
+  background: var(--n-accent-tint);
+  color: var(--n-text);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.n-macsay.none {
+  display: none;
+}
+
+.n-macsay.warn {
+  border-color: var(--n-warn);
+  background: rgba(237, 187, 70, 0.12);
+}
+
+.n-macsay.err {
+  border-color: var(--n-danger-line);
+  background: rgba(231, 154, 166, 0.12);
+}
+
 .n-macmeta {
   color: var(--n-text-2);
   font-size: 12px;
@@ -10762,7 +10798,7 @@ button.n-keychip:hover {
 }
 
 .n-macbarhd {
-  height: 35px;
+  height: 33px;
   display: flex;
   align-items: flex-end;
   padding-bottom: 3px;
@@ -10814,7 +10850,11 @@ button.n-keychip:hover {
   color: var(--n-accent-2);
 }
 
+/* ⚠️ The shared `.none { display: none }` would take the span AND its flex
+   gap with it, sliding a cleared step's ledger, duration and verbs left of
+   every other row. A modifier is spelled together with its component. */
 .n-machold.none {
+  display: block;
   color: var(--n-text-3);
   font-style: italic;
 }
@@ -10858,6 +10898,7 @@ button.n-keychip:hover {
 .n-macroll .n-macdur {
   width: 46px;
   height: 20px;
+  min-height: 0;
   padding: 2px 4px;
   border: 1px solid var(--n-line);
   border-radius: 5px;
@@ -10875,6 +10916,7 @@ button.n-keychip:hover {
 .n-macroll .n-macunit {
   min-width: 24px;
   height: 20px;
+  min-height: 0;
   padding: 2px 4px;
   border: 1px solid var(--n-line);
   border-radius: 5px;
@@ -10912,6 +10954,7 @@ button.n-keychip:hover {
 .n-macbtn {
   width: 20px;
   height: 20px;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11081,6 +11124,7 @@ button.n-keychip:hover {
 }
 
 .n-maccell {
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11131,6 +11175,41 @@ button.n-keychip:hover {
   color: var(--n-text-3);
   font-size: 11px;
   cursor: pointer;
+}
+
+/* A coarse pointer gets a 40px row: the bar and the matrix read the same
+   variable, so the pitch grows on both sides together and the roll stays in
+   register. The blanket `.nocturne button { min-height: 40px }` then fits
+   inside the row instead of overflowing into the next one. */
+@media (pointer: coarse) {
+  .n-macroll {
+    --macrow-h: 40px;
+  }
+
+  .n-macroll .n-macdur,
+  .n-macroll .n-macunit {
+    height: 32px;
+  }
+
+  .n-macbtn {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* On a phone the roll cannot be two columns: the step bar alone is wider
+   than the viewport, and `flex: none` beside `min-width: 0` collapsed the
+   matrix to zero width — no scrollbar, no reachable cells, and the verbs
+   clipped off the edge. The whole roll scrolls instead. */
+@media (max-width: 40rem) {
+  .n-macroll {
+    overflow-x: auto;
+  }
+
+  .n-macscroll {
+    flex: none;
+    overflow: visible;
+  }
 }
 
 .n-macring,

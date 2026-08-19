@@ -149,6 +149,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nMacToml": payload.view.mac.toml,
         "nMacRateCls": payload.view.mac.turbo_cls,
         "nMacRateVal": payload.view.mac.turbo_val,
+        "nMacRateLbl": payload.view.mac.turbo_label,
         "nKeysNote": payload.view.keys_note,
         "nAvailMainHead": payload.view.avail_main_head,
         "nAvailNavHead": payload.view.avail_nav_head,
@@ -357,6 +358,8 @@ fn mac_cell(row: &crate::macro_editor::NocturneMacCell) -> SlotValue {
         ("cell".to_owned(), SlotValue::Text(row.cell.clone())),
         ("mark".to_owned(), SlotValue::Text(row.mark.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("on".to_owned(), SlotValue::Text(row.on.clone())),
+        ("tab".to_owned(), SlotValue::Text(row.tab.clone())),
     ])
 }
 
@@ -849,7 +852,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 101] = [
+        const SERVED_SLOTS: [&str; 102] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -908,6 +911,7 @@ mod tests {
             "nMacToml",
             "nMacRateCls",
             "nMacRateVal",
+            "nMacRateLbl",
             "nCfgLine",
             "nCfgMeta",
             "nCfgCls",
@@ -954,7 +958,9 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 27] = [
+        const CLIENT_ONLY_SLOTS: [&str; 29] = [
+            "nMacSay",
+            "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
             // — SSR paints it hidden. (The auto-map button itself is static
             // markup revealed by the wire's js marker class.)

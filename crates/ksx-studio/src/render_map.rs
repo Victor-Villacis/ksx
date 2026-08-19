@@ -1127,7 +1127,10 @@ pub(crate) const TURBO_MAX_HZ: u32 = 30;
 /// 60 Hz frames → ms, rounded to nearest ONCE — `ksx_core::StepDuration::ms`.
 /// Rounded once so three frames is 50 ms and not 3 × 17 = 51.
 pub(crate) fn frames_ms(frames: u32) -> u32 {
-    (frames.saturating_mul(1000) + 30) / 60
+    // Saturating on BOTH terms: the studio now hands this unsaved
+    // browser drafts on every act, so a frame count near u32::MAX must
+    // clamp rather than panic the request.
+    frames.saturating_mul(1000).saturating_add(30) / 60
 }
 
 /// The duration a step ASKS for, in ms. `None` when the file says both units
@@ -1321,7 +1324,10 @@ pub(crate) const MACRO_RING_LINE: &str =
 
 /// A macro's run length at the durations the engine will use.
 fn total_ms(mac: &MacroView) -> u32 {
-    mac.steps.iter().map(effective_ms).sum()
+    mac.steps
+        .iter()
+        .map(effective_ms)
+        .fold(0u32, u32::saturating_add)
 }
 
 /// The macro the page paints: the payload's `macro_selected` if the preset has
@@ -2908,7 +2914,10 @@ fn turbo_math(mac: Option<&MacroView>) -> String {
 
 /// The macro's whole run at the durations the engine will really use.
 pub(crate) fn macro_total_ms(mac: &MacroView) -> u32 {
-    mac.steps.iter().map(effective_ms).sum()
+    mac.steps
+        .iter()
+        .map(effective_ms)
+        .fold(0u32, u32::saturating_add)
 }
 
 /// The neutral window between two turbo runs, and WHY it is that number.

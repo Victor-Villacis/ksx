@@ -818,7 +818,7 @@ async fn apple_touch_icon() -> Response {
 
 /// Query-string percent-encoding (RFC 3986 unreserved set kept literal).
 /// Local, tiny, and total — not worth a dependency.
-fn urlencode(text: &str) -> String {
+pub(crate) fn urlencode(text: &str) -> String {
     // The flash is a one-line human sentence; cap it (on a char boundary, so
     // the encoded query decodes as valid UTF-8) so a pathological daemon
     // error cannot mint an absurd URL.

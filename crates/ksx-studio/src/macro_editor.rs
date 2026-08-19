@@ -69,6 +69,10 @@ pub struct NocturneMacRow {
     pub warn: String,
     pub warn_cls: String,
     pub warn_title: String,
+    /// Is this step under the sampling floor? `warn` is ALSO non-empty
+    /// for a step that names two units or none, and those are faults,
+    /// not short steps — so the consent gate needs its own answer.
+    pub short: bool,
     pub up_cls: String,
     pub dn_cls: String,
     pub up_act: String,
@@ -86,6 +90,14 @@ pub struct NocturneMacCell {
     pub cell: String,
     pub mark: String,
     pub title: String,
+    /// `"true"` / `"false"` — held or not, for a reader who cannot see the
+    /// fill. A mark alone tells a screen reader nothing.
+    pub on: String,
+    /// ONE cell of the whole matrix is in the tab order (`"0"`), the rest are
+    /// `"-1"` and reached with the arrow keys. Thirty-seven columns times N
+    /// steps is not a tab sequence anyone can use, and with scripting off it
+    /// was 111 stops that could not do anything at all.
+    pub tab: String,
 }
 
 /// One policy option, as a pill that says what choosing it does.
@@ -156,6 +168,12 @@ pub struct NocturneMacroEditor {
     pub toml: String,
     pub turbo_cls: String,
     pub turbo_val: String,
+    /// What the rate box is asking for. A table spells its auto-fire
+    /// EITHER as cycles a second or as the neutral gap between runs,
+    /// and the daemon deliberately does not convert one into the other
+    /// — so the caption follows the number rather than assuming.
+    pub turbo_label: String,
+    pub turbo_max: String,
 }
 
 /// The eight motions the writer appends, each as a shape AND a name.
@@ -361,9 +379,12 @@ impl NocturneMacroEditor {
                     ),
                     CellState::Off => format!("step {} does not hold {name}", i + 1),
                 };
+                let first = cells.is_empty();
                 cells.push(NocturneMacCell {
                     cls,
                     cell: format!("{i}|{}", column.token),
+                    on: matches!(state, CellState::On).to_string(),
+                    tab: if first { "0" } else { "-1" }.to_owned(),
                     mark: match state {
                         CellState::On => "●".to_owned(),
                         CellState::Part(_) => "·".to_owned(),
@@ -457,6 +478,7 @@ impl NocturneMacroEditor {
                     },
                     warn_title: step_warning_long(step),
                     warn,
+                    short: step_is_short(step),
                     up_cls: if i == 0 {
                         "n-macbtn off".to_owned()
                     } else {
@@ -570,7 +592,9 @@ impl NocturneMacroEditor {
                 "n-macroll".to_owned()
             },
             close_href: match q {
-                Some(q) if !q.is_empty() => format!("/nocturne?slot={number}&q={q}"),
+                Some(q) if !q.is_empty() => {
+                    format!("/nocturne?slot={number}&q={}", crate::server::urlencode(q))
+                }
                 _ => format!("/nocturne?slot={number}"),
             },
             map_href: format!("/map?target=stage&slot={number}&macro={}", mac.name),
@@ -594,6 +618,16 @@ impl NocturneMacroEditor {
                 (Some(hz), _) => hz.to_string(),
                 (_, Some(gap)) => gap.to_string(),
                 _ => String::new(),
+            },
+            turbo_label: if mac.turbo_hz.is_none() && mac.gap_ms.is_some() {
+                "Neutral gap between runs, in milliseconds".to_owned()
+            } else {
+                "Auto-fire rate, in full cycles a second".to_owned()
+            },
+            turbo_max: if mac.turbo_hz.is_none() && mac.gap_ms.is_some() {
+                "5000".to_owned()
+            } else {
+                "60".to_owned()
             },
         }
     }

@@ -75,6 +75,7 @@ const ROUTES = [
   "/start",
   "/workspace",
   "/nocturne",
+  "/nocturne?slot=1&macro=hadouken",
   "/",
   "/map",
   "/map?slot=1",

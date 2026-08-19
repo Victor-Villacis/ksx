@@ -161,6 +161,12 @@ pub(super) const N_MACRO_OK: &str = "Macro updated. Nothing has been saved or st
 pub(super) const N_MACRO_NEW: &str = "Macro created with one empty step — open it and write the sequence. Nothing has been saved or started.";
 pub(super) const N_MACRO_NAME: &str =
     "error: a macro needs a name — the table is called after it, so it cannot be blank.";
+pub(super) const N_MACRO_TAKEN: &str =
+    "error: this layout already has a macro by that name. Open it to edit its steps, or pick \
+     another name.";
+pub(super) const N_MACRO_BADNAME: &str =
+    "error: a macro name may use letters, digits, dot, dash and underscore only — it becomes a \
+     table name and part of a link.";
 
 pub(super) const N_MACRO_DELETED: &str = "Macro removed from this draft — its trigger keys are \
      unbound with it. Nothing saved was touched.";
@@ -198,7 +204,7 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 58] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 60] = [
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
@@ -213,6 +219,8 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 58] = [
     N_MACRO_OK,
     N_MACRO_NEW,
     N_MACRO_NAME,
+    N_MACRO_TAKEN,
+    N_MACRO_BADNAME,
     N_MACRO_DELETED,
     N_ADOPT_OK,
     N_ADOPT_BLOCKED,
@@ -1370,7 +1378,15 @@ pub(super) async fn nocturne_api_macro_edit(
             .unwrap_or("");
         let mapper = slot.and_then(|s| ksx_api::staged_mapper_slot(s, keyboard).ok());
         let mut draft = body.draft;
-        let said = crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref());
+        // A REFUSAL IS NOT A QUIET SUCCESS. `apply` answers three ways, and
+        // the middle one used to be lost: a rejected act came back `ok: true`
+        // with an empty sentence and an unchanged draft, so the browser marked
+        // the macro dirty over a change that never happened and the number in
+        // the box disagreed with the number that would be saved.
+        let (ok, said) = match crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref()) {
+            Ok(said) => (true, said.unwrap_or_default()),
+            Err(why) => (false, why),
+        };
         let view = crate::macro_editor::NocturneMacroEditor::compose(
             &draft,
             mapper.as_ref(),
@@ -1378,8 +1394,8 @@ pub(super) async fn nocturne_api_macro_edit(
             None,
         );
         NocturneMacroEditOutcome {
-            ok: true,
-            said: said.unwrap_or_default(),
+            ok,
+            said,
             draft,
             view,
         }
@@ -1770,6 +1786,45 @@ pub(super) async fn nocturne_form_macro_new(
     let name = form.name.trim().to_owned();
     if name.is_empty() {
         return nocturne_redirect(N_MACRO_NAME);
+    }
+    // THE NAME BECOMES TWO THINGS: a TOML table key, and the `macro=` half of
+    // this row's own edit link. A name carrying `&`, `#`, a space or a
+    // separator produced a link that silently opened nothing, so it is
+    // refused here rather than minted and then found broken.
+    if name.len() > 64
+        || !name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return nocturne_redirect(N_MACRO_BADNAME);
+    }
+    // NEW MEANS NEW. `stage_macro` resolves a name case-insensitively and
+    // writes over what it finds, so "New macro" on an existing name silently
+    // replaced a whole authored table — steps, policies, enabled flag — with
+    // one empty step, and said "Macro created".
+    let taken = {
+        let state = Arc::clone(&state);
+        let slot = form.slot;
+        let want = name.clone();
+        tokio::task::spawn_blocking(move || {
+            let staged = state.control.staged();
+            let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
+                return false;
+            };
+            ksx_api::staged_macro_snapshot(found)
+                .macros
+                .iter()
+                .any(|m| m.name.eq_ignore_ascii_case(&want))
+        })
+        .await
+        .unwrap_or(false)
+    };
+    if taken {
+        return nocturne_redirect(N_MACRO_TAKEN);
     }
     nocturne_macro_write(
         state,

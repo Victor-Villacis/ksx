@@ -7062,16 +7062,69 @@ fn nocturne_authors_and_edits_a_macro_over_http() {
         "and the row still spells what the file stores: {edited}"
     );
 
-    // A word this editor does not know changes nothing, exactly like every
-    // other door here.
-    let junk: serde_json::Value = serde_json::from_str(body_of(&post_json(
+    // A REFUSAL IS SAID OUT LOUD. Answering a rejected act with `ok: true`
+    // and an empty sentence let the browser mark the macro dirty over a
+    // change that never happened \u2014 the number in the box and the number
+    // that would be saved disagreeing, in silence.
+    for (act, expect) in [
+        ("pol|on_release|explode", "not a setting"),
+        ("dur|0|0", "not a length"),
+        ("dur|0|abc", "not a length"),
+        ("down|x", "bottom"),
+        ("short|0", "long enough"),
+        ("wat", "not something this editor does"),
+    ] {
+        let junk: serde_json::Value = serde_json::from_str(body_of(&post_json(
+            addr,
+            "/nocturne/api/macro/edit",
+            &format!("{{\"slot\":1,\"act\":\"{act}\",\"draft\":{draft}}}"),
+        )))
+        .expect("edit");
+        assert_eq!(junk["ok"], false, "{act} should be refused: {junk}");
+        assert!(
+            junk["said"].as_str().is_some_and(|w| w.contains(expect)),
+            "{act} must say why: {junk}"
+        );
+        assert_eq!(junk["draft"], draft, "{act} changed the draft");
+    }
+
+    // \u2026and a malformed index is answered rather than suffered: `down` used to
+    // do its arithmetic before its range test, so an unparseable index
+    // overflowed and panicked the request.
+    let dead: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/macro/edit",
-        &format!("{{\"slot\":1,\"act\":\"pol|on_release|explode\",\"draft\":{draft}}}"),
+        &format!("{{\"slot\":1,\"act\":\"down|-1\",\"draft\":{draft}}}"),
     )))
     .expect("edit");
-    assert_eq!(junk["draft"]["on_release"], "finish", "{junk}");
-    assert_eq!(junk["said"], "", "nothing happened, so nothing is said");
+    assert_eq!(dead["ok"], false, "{dead}");
+    assert!(
+        !dead["said"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("panicked"),
+        "it refuses, it does not crash: {dead}"
+    );
+
+    // NEW MEANS NEW. `stage_macro` resolves a name case-insensitively and
+    // writes over what it finds, so "New macro" on an existing name silently
+    // replaced a whole authored table with one empty step.
+    let taken = post_form(addr, "/nocturne/macro/new", "slot=1&name=COMBO");
+    assert!(taken.contains("flash=error"), "{taken}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    assert_eq!(
+        api["view"]["mac"]["rows"].as_array().expect("rows").len(),
+        1,
+        "the table that was already there is untouched: {api}"
+    );
+
+    // A name becomes a TOML key and the `macro=` half of its own edit link,
+    // so one that cannot survive either is refused rather than minted.
+    for bad in ["punch%26kick", "a%20b", "%2Eleading", "%23hash"] {
+        let out = post_form(addr, "/nocturne/macro/new", &format!("slot=1&name={bad}"));
+        assert!(out.contains("flash=error"), "{bad}: {out}");
+    }
 }
 
 /// **The macro STEP editor is served**: a macro is addressed by NAME on the

@@ -46,8 +46,14 @@ async function poll(fresh = false): Promise<void> {
   // with fresh=1, which drops the server's machine-read cache first — a
   // fresh read IS that button's promise.
   const params = new URLSearchParams();
-  const slot = new URLSearchParams(window.location.search).get("slot");
+  const here = new URLSearchParams(window.location.search);
+  const slot = here.get("slot");
   if (slot) params.set("slot", slot);
+  // ⚠️ THE MACRO SELECTION IS PART OF THE SELECTION. Without it the payload
+  // composes a CLOSED editor, so an open roll vanished two seconds after it
+  // was opened and every control in it went inert.
+  const macro = here.get("macro");
+  if (macro) params.set("macro", macro);
   if (fresh) params.set("fresh", "1");
   const qs = params.toString();
   const url = qs ? `/api/nocturne?${qs}` : "/api/nocturne";

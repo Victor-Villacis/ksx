@@ -1012,12 +1012,13 @@ function syncLegend(): void {
   for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'))) {
     const preset = presetOfSlot(Number(chip.getAttribute("data-slot") ?? ""));
     const byHand = preset !== undefined && hiddenStrips.has(preset);
-    // Solo crosses out every OTHER chip — the same state, said the same
-    // way, so the shortcut is never a hidden mode.
-    const bySolo = ui.kbSolo && !chip.classList.contains("on");
-    const off = byHand || bySolo;
+    // Solo is a LENS, not a merge: while it is on, the board shows the
+    // selected controller and nobody else, so that is exactly what the
+    // chips say — including when you had hand-crossed the selected one
+    // (soloing brings it back; turning solo off returns your own state).
+    const off = ui.kbSolo ? !chip.classList.contains("on") : byHand;
     chip.setAttribute("aria-pressed", off ? "false" : "true");
-    chip.classList.toggle("muted", byHand);
+    chip.classList.toggle("muted", !ui.kbSolo && byHand);
     chip.title = off
       ? "Show this controller's colour on the keys"
       : "Hide this controller's colour on the keys";

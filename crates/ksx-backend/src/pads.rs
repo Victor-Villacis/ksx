@@ -1298,7 +1298,7 @@ pub mod surface {
         /// problem (the same ordering `run` keeps).
         #[test]
         fn the_vigem_page_offers_only_implemented_vigem_personas() {
-            let plan = plan_spawn(1, Persona::SwitchPro, 30, false, IDLE.0, IDLE.1);
+            let plan = plan_spawn(1, Persona::XboxSeries, 30, false, IDLE.0, IDLE.1);
             assert_eq!(plan.code(), Some("persona-not-implemented"));
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
                 .personas

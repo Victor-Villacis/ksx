@@ -423,10 +423,10 @@ mod tests {
             Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
         }));
 
-        let err = r.plug_persona(Persona::SwitchPro).unwrap_err();
+        let err = r.plug_persona(Persona::XboxSeries).unwrap_err();
         assert!(matches!(
             err,
-            OutputError::PersonaNotImplemented(Persona::SwitchPro)
+            OutputError::PersonaNotImplemented(Persona::XboxSeries)
         ));
         assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
         assert!(!r.vigem_started());
@@ -493,7 +493,8 @@ mod tests {
     #[test]
     fn the_production_router_refuses_unbuildable_personas_without_probing() {
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
+        {
+            let persona = Persona::XboxSeries;
             let err = r.plug_persona(persona).unwrap_err();
             assert!(
                 matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),

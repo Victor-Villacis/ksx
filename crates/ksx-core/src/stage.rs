@@ -1018,18 +1018,16 @@ mod tests {
         );
     }
 
-    /// The two unfinished HIDMaestro personas are refused in `Persona::gap()`'s own
-    /// words — including the half that closes off the wrong fix.
+    /// The still-unfinished HIDMaestro persona is refused in `Persona::gap()`'s
+    /// own words — including the half that closes off the wrong fix.
     ///
-    /// Breaks against a stage that accepted them: the user picks DualSense, the
+    /// Breaks against a stage that accepted it: the user picks the persona, the
     /// screen says ready, and the pad never appears — with a driver install as
     /// the obvious and useless next step.
     #[test]
     fn a_persona_this_build_cannot_plug_is_refused_with_a_way_out() {
-        for (persona, instead) in [
-            (Persona::SwitchPro, Persona::Xbox360),
-            (Persona::XboxSeries, Persona::Xbox360),
-        ] {
+        {
+            let (persona, instead) = (Persona::XboxSeries, Persona::Xbox360);
             let refused = staged().add_slot(2, persona, preset("P2")).unwrap_err();
             assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
             let message = refused.to_string();

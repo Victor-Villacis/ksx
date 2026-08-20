@@ -148,7 +148,13 @@ impl PadBackend {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
             (PadBackend::HidMaestro, Persona::DualSense) => true,
-            (PadBackend::HidMaestro, Persona::SwitchPro) => false,
+            // HARDWARE SESSION 2026-08-20: enabled for the supervised
+            // measurement on Victor's machine — the SDK-lane host serves this
+            // persona through the pinned official SDK. If the session fails to
+            // produce a working device, this flips back.
+            (PadBackend::HidMaestro, Persona::SwitchPro) => true,
+            // Stays false: the Xbox Series create path needs the SWD companion
+            // flow (hmswd.exe placement unmeasured); it is the next session.
             (PadBackend::HidMaestro, Persona::XboxSeries) => false,
             _ => false,
         }
@@ -346,13 +352,16 @@ impl Persona {
     /// an unfinished profile can name a working compatibility persona in the
     /// same breath.
     pub const fn nearest_pluggable(self) -> Persona {
+        // A persona this build can plug is always its own answer — derived
+        // from the gate, so flipping a persona live can never leave a stale
+        // fallback suggesting something else.
+        if self.can_plug() {
+            return self;
+        }
         match self {
-            // The production HIDMaestro host now materializes one exact USB
-            // DualSense, so a DualSense request needs no fallback.
-            Persona::DualSense => Persona::DualSense,
-            // Nintendo has no ViGEmBus equivalent at all, and Xbox Series is an
-            // XInput pad, so both land on the most compatible pad there is —
-            // Nintendo prompts then need a remap in the emulator.
+            // Xbox Series is an XInput pad, so it lands on the most
+            // compatible pad there is while its SWD companion lane is
+            // unfinished.
             Persona::SwitchPro | Persona::XboxSeries => Persona::Xbox360,
             already => already,
         }
@@ -539,11 +548,16 @@ mod tests {
     }
 
     #[test]
-    fn only_the_independently_finished_hidmaestro_persona_can_plug() {
+    fn only_the_enabled_hidmaestro_personas_can_plug() {
         assert!(Persona::DualSense.can_plug());
-        for p in [Persona::SwitchPro, Persona::XboxSeries] {
-            assert!(!p.can_plug(), "{p} must not be offered");
-        }
+        // Enabled 2026-08-20 for the supervised hardware session: the SDK-lane
+        // host serves it through the pinned official SDK.
+        assert!(Persona::SwitchPro.can_plug());
+        // Still gated: the SWD companion lane is unmeasured.
+        assert!(
+            !Persona::XboxSeries.can_plug(),
+            "XboxSeries must not be offered"
+        );
         // ...and the two the cabinet actually runs on are unaffected.
         assert!(Persona::Xbox360.can_plug());
         assert!(Persona::PlayStation.can_plug());
@@ -567,11 +581,11 @@ mod tests {
         // Deleting the variant, or making it stop parsing, would turn every
         // existing `persona = "dualsense"` into "unknown persona" — which is
         // false, and points the reader at a typo they did not make.
-        let p: Persona = "switchpro".parse().unwrap();
-        assert_eq!(p, Persona::SwitchPro);
+        let p: Persona = "xboxseries".parse().unwrap();
+        assert_eq!(p, Persona::XboxSeries);
         assert!(!p.can_plug());
         assert!(Persona::ALL.contains(&p));
-        assert_eq!(p.as_str(), "switchpro");
+        assert_eq!(p.as_str(), "xboxseries");
     }
 
     #[test]
@@ -587,10 +601,10 @@ mod tests {
                 assert_eq!(instead, p, "{p} works; nothing to suggest");
             }
         }
-        // The two suggestions that carry meaning: Sony stays Sony (✕○△□ is
-        // what the user wanted), Nintendo/Series fall back to XInput.
+        // The suggestions that carry meaning: a pluggable persona is its own
+        // answer; the one still-gated persona falls back to XInput.
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
-        assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::Xbox360);
+        assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::Xbox360);
     }
 
@@ -603,8 +617,8 @@ mod tests {
         }
         assert_eq!(PadBackend::HidMaestro.gap(), None);
         let gap = PadBackend::HidMaestro
-            .gap_for(Persona::SwitchPro)
-            .expect("Switch Pro remains unimplemented");
+            .gap_for(Persona::XboxSeries)
+            .expect("Xbox Series remains unimplemented");
         assert!(
             gap.contains("has not yet completed its independent production runtime"),
             "{gap}"

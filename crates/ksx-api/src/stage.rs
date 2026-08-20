@@ -2296,7 +2296,7 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
 
         let refused = StageEdit::AddSlot {
             number: None,
-            persona: "switchpro".into(),
+            persona: "xboxseries".into(),
             preset: "P1".into(),
             layout: None,
         }

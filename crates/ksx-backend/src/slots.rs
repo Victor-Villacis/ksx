@@ -1198,10 +1198,8 @@ mod tests {
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
-        for (persona, instead) in [
-            (Persona::SwitchPro, "xbox360"),
-            (Persona::XboxSeries, "xbox360"),
-        ] {
+        {
+            let (persona, instead) = (Persona::XboxSeries, "xbox360");
             let err = assign(&store, &persona_spec(1, persona)).unwrap_err();
             assert_eq!(err.code(), "persona-not-implemented", "{persona}");
             let message = err.to_string();

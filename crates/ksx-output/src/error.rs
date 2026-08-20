@@ -188,9 +188,9 @@ mod tests {
 
     #[test]
     fn a_persona_this_build_cannot_make_is_refused_with_a_way_out() {
-        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::SwitchPro);
+        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::XboxSeries);
         let msg = err.to_string();
-        assert!(msg.contains("switchpro"), "{msg}");
+        assert!(msg.contains("xboxseries"), "{msg}");
         // It must not read as an install problem...
         assert!(!err.is_hidmaestro_missing(), "{msg}");
         assert!(err.is_not_implemented());

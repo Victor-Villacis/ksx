@@ -51,9 +51,8 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             severity: Severity::Info,
             code: "personas-not-implemented",
             message: format!(
-                "The {} personas have not completed their independent production runtimes. \
-                 DualSense is the enabled HIDMaestro persona; use xbox360 for the unfinished \
-                 profiles.",
+                "The {} personas have not completed their independent production runtimes; \
+                 use xbox360 for those.",
                 gated.join("/"),
             ),
         });

@@ -820,6 +820,7 @@ mod tests {
             ("xbox360", "Xbox 360"),
             ("playstation", "PlayStation"),
             ("dualsense", "DualSense"),
+            ("switchpro", "Switch Pro"),
         ] {
             let at = form
                 .find(&format!(r#"value="{name}""#))
@@ -832,7 +833,9 @@ mod tests {
             form.contains("DualSense · HIDMaestro · one per session"),
             "{form}"
         );
-        assert!(!form.contains(r#"value="switchpro""#), "{form}");
+        // Switch Pro is enabled (2026-08-20 hardware session); the one
+        // still-gated persona must not be offered.
+        assert!(form.contains("Switch Pro · HIDMaestro"), "{form}");
         assert!(!form.contains(r#"value="xboxseries""#), "{form}");
     }
 

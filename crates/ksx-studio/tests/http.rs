@@ -4425,7 +4425,8 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
         serde_json::json!([
             {"value": "xbox360", "label": "Xbox 360 · ViGEmBus"},
             {"value": "playstation", "label": "PlayStation · ViGEmBus"},
-            {"value": "dualsense", "label": "DualSense · HIDMaestro · one per session"}
+            {"value": "dualsense", "label": "DualSense · HIDMaestro · one per session"},
+            {"value": "switchpro", "label": "Switch Pro · HIDMaestro"}
         ]),
         "the form rows contain every live persona and no gated one"
     );

@@ -6354,7 +6354,7 @@ mod tests {
                 .iter()
                 .map(|option| option.value.as_str())
                 .collect::<Vec<_>>(),
-            ["xbox360", "playstation", "dualsense"],
+            ["xbox360", "playstation", "dualsense", "switchpro"],
             "the maintenance menu offers every live persona and no gated one"
         );
         assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");

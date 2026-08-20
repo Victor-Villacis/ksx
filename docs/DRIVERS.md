@@ -21,7 +21,7 @@ Deep dives: [`research/virtual-gamepad-2026.md`](research/virtual-gamepad-2026.m
   one of the two places it is run from.
 - **ViGEmBus remains the compatibility foundation/fallback**, not the only future
   backend. Its shipped X360 and DS4 paths stay supported while they work.
-- **HIDMaestro is the live rich-profile Windows backend.** The current release
+- **HIDMaestro is the chosen rich-profile Windows backend — implemented, not yet observed.** No HIDMaestro device has ever been created on any machine; see [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md). The current release
   packages a fixed NativeAOT privileged host and an explicit v1.6.1
   installer-only bootstrap. The checked setup task discloses its network use,
   downloads the exact official archive, verifies pinned lengths and SHA-256

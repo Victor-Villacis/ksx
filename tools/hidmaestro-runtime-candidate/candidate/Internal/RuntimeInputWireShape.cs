@@ -109,12 +109,14 @@ internal readonly struct RuntimeInputWireShape
     /// </summary>
     /// <remarks>
     /// Encoding a report and creating the device that carries it are two
-    /// different problems. An Xbox pad presents to Windows as an XUSB device,
-    /// which needs the installed, identity-verified <c>hmswd.exe</c> companion
-    /// and a create result retaining every exact SWD, HID and XUSB companion
-    /// id. This candidate has no such companion, so it refuses that lane
-    /// explicitly rather than attempting a plain-HID creation that would either
-    /// fail obscurely or produce a device no game reads as a controller.
+    /// different problems. A profile whose <c>driverMode</c> is
+    /// <c>xinputhid</c> is created as a single software-device companion, which
+    /// Windows' own INBOX <c>xinputhid</c> driver then binds — there is no main
+    /// HID node and no XUSB companion on that path. Creating it needs the
+    /// <c>hmswd.exe</c> helper, which this candidate does not carry, so it
+    /// refuses that lane explicitly rather than attempting a plain-HID creation
+    /// that would either fail obscurely or produce a device no game reads as a
+    /// controller.
     /// </remarks>
     internal bool RequiresSoftwareDeviceCompanion { get; }
 

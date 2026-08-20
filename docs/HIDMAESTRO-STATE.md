@@ -49,7 +49,10 @@ Pro and Xbox Series and must stay false until a device is observed.
 ever existed on this machine — present or ghost.
 `Get-PnpDevice | Where-Object { $_.InstanceId -match 'HIDMAESTRO' }` → empty.
 
-`[SOURCE docs/HIDMAESTRO.md:125]` Physical release acceptance is **Pending**.
+`[SOURCE docs/HIDMAESTRO.md "Delivery state" table]` Physical release
+acceptance is **Pending**. (Cited by section, not line — a banner I added to
+that file already shifted its line numbers, which is the exact fragility the
+repo's docs test guards against for section numbers.)
 `[SOURCE ci.yml artifact observation]` The build-twice job records
 `candidateLoaded: false` — it compiles and byte-inspects, it never loads.
 
@@ -126,7 +129,8 @@ we compile it.
 
 ## Why the driver package cannot be bundled
 
-`[SOURCE docs/HIDMAESTRO.md:59-62]` HIDMaestro is MIT and redistributable, but
+`[SOURCE docs/HIDMAESTRO.md "Reproducible upstream pin"]` HIDMaestro is MIT and
+redistributable, but
 its release archive embeds WDK tooling, and **Microsoft documents SignTool as
 non-redistributable**. So ksx ships a bootstrap containing no SignTool, Inf2Cat,
 SDK or WDK payload; the opt-in setup task downloads the pinned archive
@@ -166,6 +170,47 @@ Nothing here may be written into a contract as a fact until it is measured.
 - `[SOURCE driver/hidmaestro.inf:~60]` (pinned upstream) lists "Xbox Series BT"
   among *non-companion* profiles. It is stale — that profile is
   `driverMode: xinputhid`, hence companion-only. Do not use that comment.
+
+---
+
+## Known-stale, not yet fixed
+
+A sweep on 2026-08-20 found 54 contradicted claims. The mechanical ones (stale
+counts, "live" overstatements, the XUSB-vs-inbox-`xinputhid` mechanism error)
+are fixed. These are not, and each says why.
+
+**The Switch Pro `0x3F` lane is wrong and is frozen into eight places.** It is
+not a prose fix — the encoder has to be rewritten to the 48-byte `0x30` body
+first, and the contracts regenerated with it. Until then these all assert the
+wrong lane, and this file is the correction of record:
+
+- `tools/hidmaestro-input-contract-switch-pro/contract.json` — the contract id
+  itself (`…-bt-3f`), `activePath.name`, `reportSelectionReason`,
+  `integrationRule`, and the verdict (the lane defect is not in
+  `unresolvedFields`)
+- `candidate/Internal/RuntimeSwitchProInputEncoder.cs` — the "only `0x3F` can be
+  derived" justification. Derivability from the descriptor was never the
+  selection criterion; the driver decides, and it early-returns
+- `candidate/Internal/RuntimeInputWireShape.cs` — the `SwitchPro` shape's
+  `sharedDataOffset 1 / sharedDataLength 11` hands the endpoint exactly the
+  slice the driver misparses
+- `candidate-contract.json` — the aggregate freezes "encode a complete 12-byte
+  report `0x3F`" as a requirement
+- `s1_5d/contract.lock.json` — `vectorEnvelope {hexLength: 24, prefix: "3F"}`
+  and `sharedSlice {offset: 1, length: 11}` pin the wrong lane in the gate
+  itself, so the gate would currently *reject* a correct encoder
+
+**`s1_5e/README.md` still says "241 input files" and "12 source-candidate
+files"** (measured: 244 and 15). It cannot be edited alone:
+`s1_5e/verify-source-contract.ps1:955` pins the literal `'241 input files'` in
+its README anchor list, and `s1_5e/contract.lock.json` pins the README's hash,
+and `ci.yml` pins both of those files' hashes. Correcting it is a coordinated
+five-file edit in a fixed order — see the `hidmaestro-contract-refreeze` note.
+
+**`docs/HANDOFF.md` is stale in the opposite direction** — it says there is "no
+production adapter", but `crates/ksx-output/src/hidmaestro.rs` exists and is
+wired through `router.rs`. What is actually outstanding is the physical
+lifecycle, not the adapter.
 
 ---
 

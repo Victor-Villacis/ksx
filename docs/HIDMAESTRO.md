@@ -125,7 +125,7 @@ missing product code.
 
 | Product slice | State |
 |---|---|
-| One USB DualSense persona | **Implemented.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are live. |
+| One USB DualSense persona | **Implemented, never observed.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are written and CI-proven; no device has ever been created. |
 | Privileged host | **Implemented.** Fixed installed NativeAOT executable, UAC launch, authenticated one-use pipe, exact process/session checks and bounded protocol. |
 | Device ownership | **Implemented.** One preinstalled-package proof, one exact root, captured child identities, neutralize-before-remove and no Play-time global sweep. |
 | Capacity and configuration | **Implemented.** The one-controller ceiling is enforced by setup, validation, game profiles, slot mutation, pad testing, routing and host dispatch. |
@@ -241,11 +241,11 @@ The green S1.5c gate records four completed source-only facts:
 
 The green [S1.5d Actions gate](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
 validates the complete inert managed-source candidate named by those
-contracts: 10 candidate C# units, one explicit project, and one staging
-ignore. The project lists exactly 11 compile inputs and 228 profile resources,
+contracts: 13 candidate C# units, one explicit project, and one staging
+ignore. The project lists exactly 14 compile inputs and 228 profile resources,
 disables default item discovery, and references only a fixed, deliberately
 absent `.pinned-upstream-v1.6.1` staging directory. Its source verifier freezes
-the 12-file tree and 453 static relationships without invoking MSBuild or
+the 15-file tree and 605 static relationships without invoking MSBuild or
 loading the candidate.
 
 The same checkpoint adds a source-derived DualSense input contract over 12

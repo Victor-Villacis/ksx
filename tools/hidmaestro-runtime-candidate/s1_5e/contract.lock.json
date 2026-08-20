@@ -154,7 +154,7 @@
   "sourceCandidate": {
     "relativeProject": "candidate/HIDMaestro.Core.csproj",
     "treeFraming": "ordinal candidate-relative path, NUL, normalized UTF-8 bytes, NUL",
-    "normalizedTreeSha256": "BCF2FEB3B10F5072E20A3B4BA4020657C9A24F450F9772F5D6C2750D3DCA4EA9",
+    "normalizedTreeSha256": "975C5855D9F8DBE34FB1B8504B0B213324036CF07D913F93C397A7D35FEB2EFD",
     "candidateFileCount": 15,
     "compileItemCount": 14,
     "embeddedResourceCount": 228,
@@ -268,7 +268,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json",
-      "sha256": "A71AC7DF93F16EFF883226CD92B255B9C088EB6A064A2182A36F44D3450338AE"
+      "sha256": "3861C2B19DC92D1F5F84723118B968CBF9B780AAA984AB3E6BCD3E437239FD78"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
@@ -306,7 +306,7 @@
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "9F5CD23370551565ECE805DA3021EE78505C4880BC997B6FB50110F6B81DCF0A"
+      "sha256": "4FFA667CEB1B75327FC3BF17697F28F0BEA8C8F7D07E8FA503152027662EA93F"
     }
   ],
   "gateState": {

@@ -351,7 +351,7 @@ fn render_hidmaestro(doc: &mut Doc, hm: &ksx_platform::HidMaestroReport) {
         }
         return;
     }
-    doc.line("  [OK]   installed — production DualSense runtime is available");
+    doc.line("  [OK]   installed — production DualSense package is staged");
     match &hm.driver_file {
         Some(file) => render_driver_file(doc, file),
         None => doc.line("  [WARN] driver file present but unreadable"),

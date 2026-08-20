@@ -6,7 +6,7 @@
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
   "expectedVerifierCheckCount": 605,
   "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
-  "candidateTreeSha256": "BCF2FEB3B10F5072E20A3B4BA4020657C9A24F450F9772F5D6C2750D3DCA4EA9",
+  "candidateTreeSha256": "975C5855D9F8DBE34FB1B8504B0B213324036CF07D913F93C397A7D35FEB2EFD",
   "expectedCounts": {
     "candidateFileCount": 15,
     "compileItemCount": 14,
@@ -158,7 +158,7 @@
     },
     {
       "path": "candidate/Internal/RuntimeInputWireShape.cs",
-      "sha256": "C0E90E8F9F025893E93FB7B2637347E835B8D6CB53D90E4D4DC13978C0A06681"
+      "sha256": "E356ABD0FD6022CAA53A7CF962D0A2DAFE3DECC140349B2EF068FFA997B4A0B3"
     },
     {
       "path": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
@@ -166,7 +166,7 @@
     },
     {
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
-      "sha256": "80482D78CD7AED0D20D883C6B65A1BA42790A4ED19803DD324974325CD880096"
+      "sha256": "96A2703A0ABFB355D322F64279D8EEDEAB1A35FD9FFEA1FD24DDC67588D60033"
     },
     {
       "path": "candidate/Internal/RuntimeProfileCatalog.cs",

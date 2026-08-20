@@ -128,7 +128,8 @@ Two things must be said on that screen, not buried:
   A failure here **never** fails the install: a machine with no ViGEmBus still
   wants the ksx that configures and maps, so the wizard says what happened,
   names the way back, and carries on.
-  HIDMaestro is a second checked task for the one live DualSense persona. It
+  HIDMaestro is a second checked task for the one enabled DualSense persona
+  (enabled in code; no device has been observed yet). It
   runs an installer-only, version- and hash-pinned bootstrap from the protected
   installed directory. Its label discloses that internet is required; it
   downloads the exact official release only during setup, verifies every

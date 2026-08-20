@@ -20,9 +20,10 @@ golden vectors, and S1.5d verifies each encoder against its own contract rather
 than holding one persona's grammar over all three. Encoding a report and
 creating the device that carries it are separate problems, and only the first
 is solved here. Switch Pro is structurally plain HID and is the next lifecycle
-candidate. Xbox Series presents as an XUSB device: it needs the SWD companion
-described under "Broader runtime after S2", so the device lifecycle refuses it
-by name rather than attempting a plain-HID creation that cannot work. Composite
+candidate. Xbox Series is created as a single software-device companion bound
+by Windows' own inbox `xinputhid` driver — not as a plain-HID node, and not as
+an XUSB companion — so the device lifecycle refuses it by name rather than
+attempting a creation that cannot work. Composite
 profiles still need the USB/IP lane. The ksx build gate keeps both personas off
 until a built artifact drives a real pad.
 
@@ -110,9 +111,9 @@ and `artifactPublicApiAllowlistFrozen` remains false.
 
 The source-disposition contract classifies all 51 upstream `.cs`/`.csproj`
 units exactly once: one may remain byte-for-byte unchanged, 13 require narrowed
-replacement, and 37 are excluded. S1.5d now contains ten candidate C# files,
+replacement, and 37 are excluded. S1.5d now contains thirteen candidate C# files,
 one explicit project, and a `.gitignore` for the deliberately absent fixed
-upstream staging directory. The project names exactly 11 compile inputs and
+upstream staging directory. The project names exactly 14 compile inputs and
 228 literal resource inputs with default item discovery disabled. This is
 source/project closure only: `artifactCompileAllowlistFrozen` remains false
 before the isolated observation build, and an observation result will still require
@@ -181,10 +182,11 @@ place. Its `inputReportSize` of 362 is the length of its LARGEST declared
 report (`0x31`/`0x32`/`0x33`, 361 data bytes plus an ID), not of the one this
 candidate encodes; a shorter submission is ordinary because the shared section
 carries an explicit `DataSize` field, as DualSense's 63 bytes already show. Xbox Series must wait for a fixed, installed,
-identity-verified `hmswd.exe` and a create result that retains every exact SWD,
-HID and XUSB companion ID; its encoder and input contract are likewise in
-place, and `RuntimeInputWireShape` marks it as requiring that companion so the
-refusal names the missing piece. The helper must be resolved from one ACL-protected
+identity-verified `hmswd.exe` — which upstream ships only as
+`driver/hmswd/hmswd.c`, so we compile it ourselves. Its encoder and input
+contract are in place, and `RuntimeInputWireShape` marks it as requiring that
+helper so the refusal names the missing piece. No XInput INF needs shipping:
+`xinputhid` is genuine Microsoft inbox. The helper must be resolved from one ACL-protected
 installed location, never an embedded resource, `%TEMP%`, `PATH`, the working
 directory, an environment variable, or IPC input; its own temporary self-log
 must also be removed.
@@ -205,7 +207,7 @@ run on an isolated disposable machine.
 ## GitHub Actions plan
 
 [Actions run 31863647868](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
-passed the complete S1.5d source-only gate, including all 453 inert-candidate
+passed the complete S1.5d source-only gate, including all 605 inert-candidate
 checks. It did not build or load this candidate.
 
 Keep all expensive and mutating work off the development PC:

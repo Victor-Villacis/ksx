@@ -294,10 +294,10 @@ internal sealed class RuntimePlainHidLifecycle
         if (shape.RequiresSoftwareDeviceCompanion)
         {
             throw new NotSupportedException(
-                $"The '{profile.Id}' persona presents as an XUSB device and requires the " +
-                "installed, identity-verified hmswd.exe software-device companion, which " +
-                "this plain-HID candidate does not provide. Its input encoder and frozen " +
-                "input contract exist; the device-creation lane does not.");
+                $"The '{profile.Id}' persona is created as a software-device companion " +
+                "that Windows' own inbox xinputhid driver binds, not as a plain-HID node. " +
+                "That lane needs the hmswd.exe helper, which this candidate does not carry. " +
+                "Its input encoder and frozen input contract exist; the creation lane does not.");
         }
     }
 

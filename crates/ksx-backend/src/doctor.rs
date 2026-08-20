@@ -353,9 +353,11 @@ fn render_hidmaestro(doc: &mut Doc, hm: &ksx_platform::HidMaestroReport) {
     }
     doc.line("  [OK]   installed — production DualSense package is staged");
     if !hm.service_key {
-        // Not a fault: the UMDF service key appears when the first controller
-        // devnode binds the INF.
-        doc.line("  [INFO] service not yet registered — it appears on first controller creation");
+        // Not a fault, and not a pending event either: the 2026-08-20
+        // hardware session bound the driver and enumerated a live pad with
+        // no HIDMaestro-named service key ever appearing (UMDF loads under
+        // the reflector). The key's absence is the measured normal state.
+        doc.line("  [INFO] no HIDMaestro service key — measured normal; the UMDF driver loads without one");
     }
     match &hm.driver_file {
         Some(file) => render_driver_file(doc, file),
@@ -589,7 +591,7 @@ mod tests {
                 "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\hidmaestro.inf (SHA256 187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704)".into(),
                 "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\HIDMaestro.dll (present; bytes are re-signed per install)".into(),
                 "HKLM\\SOFTWARE\\HIDMaestro\\InstalledManifestSha256 == 2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c".into(),
-                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro (informational; registers on first controller creation)".into(),
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro (informational; measured 2026-08-20: absent even with a live pad — UMDF loads without it)".into(),
             ]),
         }
     }

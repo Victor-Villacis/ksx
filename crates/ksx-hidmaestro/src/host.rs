@@ -77,8 +77,17 @@ pub const CLIENT_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_millis(250);
-pub const DESTROY_TIMEOUT: Duration = Duration::from_secs(5);
-pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Destroying a virtual controller removes a live devnode, and the OS-side
+/// removal cascade is the slow part: the 2026-08-20 hardware session measured
+/// `DIF_REMOVE` on the first-ever HIDMaestro teardown at 11,978 ms (upstream
+/// budgets 120 s for the same wait). 5 s abandoned a perfectly healthy
+/// teardown and reported a torn transport over a pad that was cleanly
+/// removed seven seconds later.
+pub const DESTROY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Shutdown performs a full controller destroy (the same measured ~12 s
+/// removal cascade) before the host answers Bye, so it carries the same
+/// bound as [`DESTROY_TIMEOUT`].
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One of the fixed catalog identities KSX may eventually request.
 ///

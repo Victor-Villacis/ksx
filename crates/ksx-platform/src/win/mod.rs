@@ -194,7 +194,7 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
         format!(
             "HKLM\\{HIDMAESTRO_MANIFEST_KEY}\\{HIDMAESTRO_MANIFEST_VALUE} == {HIDMAESTRO_MANIFEST_SHA256}"
         ),
-        format!("HKLM\\{service_key} (informational; registers on first controller creation)"),
+        format!("HKLM\\{service_key} (informational; measured 2026-08-20: absent even with a live pad — UMDF loads without it)"),
     ];
     HidMaestroReport {
         // The exact package, not just the service key or a similarly named

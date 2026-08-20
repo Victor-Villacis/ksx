@@ -83,6 +83,32 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
         return new RuntimePreinstalledPackageProof(ExpectedInfSha256);
     }
 
+    /// <summary>
+    /// Re-derives the pinned Driver Store package's INF path for the
+    /// registration-time bind, re-proving byte identity fail-closed. The
+    /// package proof deliberately stays an identity (not a path): re-walking
+    /// here means a package swapped between proof and registration is refused
+    /// rather than silently bound.
+    /// </summary>
+    private static string PinnedPackageInfPath()
+    {
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            @"System32\DriverStore\FileRepository");
+        string[] packages = Directory.EnumerateDirectories(
+            root,
+            "hidmaestro.inf_amd64_*",
+            SearchOption.TopDirectoryOnly).ToArray();
+        if (packages.Length != 1)
+            throw new InvalidOperationException(
+                "Exactly one pinned HIDMaestro v1.6.1 Driver Store package is required for binding.");
+        string inf = Path.Combine(packages[0], "hidmaestro.inf");
+        string infHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(inf)));
+        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The HIDMaestro Driver Store package INF changed between proof and binding.");
+        return inf;
+    }
+
     public RuntimeDeviceRegistration RegisterPlainHidDualSense(RuntimePreinstalledPackageProof proof)
     {
         ArgumentNullException.ThrowIfNull(proof);
@@ -108,6 +134,17 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
                 using RegistryKey config = Registry.LocalMachine.OpenSubKey(ControllerKey, writable: true)
                     ?? throw new InvalidOperationException("The exact controller configuration disappeared.");
                 config.SetValue("DeviceInstanceId", parent, RegistryValueKind.String);
+                // Bind the pinned package to the fresh root devnode.
+                // DIF_REGISTERDEVICE only CREATES the node — nothing installs
+                // a driver on it, and a driverless root devnode never
+                // enumerates the HID child (measured 2026-08-20: zero PnP
+                // sections in setupapi.dev.log across three attempts while
+                // ProveExactParentBound burned its full wait each time).
+                // Upstream v1.6.1 makes this exact call after registration
+                // (DeviceNodeCreator.cs), warning in its own words that a
+                // failure here means "downstream waits will time out".
+                if (!UpdateDriverForPlugAndPlayDevicesW(0, HardwareId, PinnedPackageInfPath(), 0, out _))
+                    throw Last("The pinned HIDMaestro package could not be bound to the exact DualSense root.");
                 _ownedParent = parent;
                 return new RuntimeDeviceRegistration(parent);
             }
@@ -123,7 +160,13 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     public void ProveExactParentBound(RuntimeDeviceRegistration registration)
     {
         ValidateParent(registration);
-        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        // 12 s, deliberately INSIDE the Rust client's CREATE_TIMEOUT (15 s):
+        // the host must answer with a definite Created/Fault before the
+        // client's transport deadline, or a slow first bind reads as a torn
+        // lane instead of a named refusal (measured 2026-08-20: the previous
+        // 15 s wait raced CREATE_TIMEOUT to a photo finish — 15.2 s walls —
+        // and the client always left ~0.1 s before the host's fault arrived).
+        DateTime deadline = DateTime.UtcNow.AddSeconds(12);
         while (true)
         {
             IReadOnlyList<string> children = DirectChildren(registration.ParentInstanceId);
@@ -326,4 +369,6 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     [DllImport("cfgmgr32.dll")] private static extern uint CM_Get_Sibling(out uint sibling, uint node, uint flags);
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] private static extern uint CM_Get_Device_IDW(uint node, [Out] char[] id, uint length, uint flags);
     [DllImport("cfgmgr32.dll")] private static extern uint CM_Uninstall_DevNode(uint node, uint flags);
+    [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool UpdateDriverForPlugAndPlayDevicesW(nint parent, string hardwareId, string infPath, uint flags, [MarshalAs(UnmanagedType.Bool)] out bool rebootRequired);
 }

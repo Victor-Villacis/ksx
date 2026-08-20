@@ -35,13 +35,14 @@ Two rules that would have prevented most of the mistakes below:
 
 | Persona | Encoder | Device lane | Spawns? |
 |---|---|---|---|
-| DualSense | yes, frozen conformance | plain HID, `root\VID_054C&PID_0CE6` | **Never observed.** `[MEASURED 2026-08-20]` |
+| DualSense | yes, frozen conformance | plain HID, `root\VID_054C&PID_0CE6` | **No — root-caused 2026-08-20:** the candidate host registered the devnode but never called `UpdateDriverForPlugAndPlayDevicesW`, so the INF never bound. Fix committed, awaiting the next installed build. |
 | Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD**, needs `hmswd.exe` | no |
-| Switch Pro | yes — 48-byte `0x30` body, semantic buttons | plain HID | no |
+| Switch Pro | yes — 48-byte `0x30` body, semantic buttons | plain HID (SDK lane) | **YES — SPAWNED 2026-08-20.** Real devnode + HID child in 751 ms; clean ~12 s teardown. See the session results below. |
 | Xbox 360 / PlayStation | n/a — ViGEmBus | ViGEmBus | **yes, working** `[MEASURED 2026-08-20]` |
 
-`PadBackend::supports` in `crates/ksx-core/src/persona.rs` is `false` for Switch
-Pro and Xbox Series and must stay false until a device is observed.
+`PadBackend::supports` in `crates/ksx-core/src/persona.rs`: Switch Pro is
+`true` (device observed 2026-08-20, below); Xbox Series stays `false` until
+its SWD companion lane exists and a device is observed.
 
 ### DualSense has never spawned
 
@@ -78,8 +79,12 @@ All `[MEASURED 2026-08-20]`.
   verbatim. The archive itself was downloaded and verified against the
   installer's pins (118,879,222 B, SHA-256 `00145C23…`; `Core.dll` =
   `ADADD9E2…`, the HIDMAESTRO.md pin).
-- `HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro` does **not** exist. Expected:
-  the UMDF service materialises only when a `root\HIDMaestro` devnode is created.
+- `HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro` does **not** exist —
+  and `[MEASURED 2026-08-20]` it STAYED absent while a HIDMaestro pad was
+  live and bound (no `Services\*maestro*` key at any point; UMDF loads
+  under the reflector without registering an own-name service). The earlier
+  "materialises on first devnode" expectation is retracted below; the key
+  is useless as a spawned-before marker.
 - `hidmaestro_xusb.inf_amd64_*` is **also** staged (`oem207.inf`, `HMXInput.dll`).
 - `xinputhid` is genuine **Microsoft inbox** — own-name INF, MS-signed,
   service running. **No XInput INF needs shipping.**
@@ -101,9 +106,11 @@ two — so even correct hashes could never pass. Both probes (Rust and the C#
 host) now count directories only.
 
 `[MEASURED 2026-08-20]` After the fix, the rebuilt `ksx doctor` on this
-machine: `[OK] installed — production DualSense package is staged` +
-`[INFO] service not yet registered — it appears on first controller creation`.
+machine: `[OK] installed — production DualSense package is staged`.
 **The first time any ksx build has recognised a legitimate install.**
+(The `[INFO]` service-key line the doctor printed that day promised the key
+"appears on first controller creation" — measured false on 2026-08-20, text
+corrected to name absence as the normal state.)
 
 ---
 
@@ -221,13 +228,70 @@ the exact error.
 
 ---
 
+## Hardware session results — 2026-08-20 (Phase A, build `3cceb6a` installed)
+
+All `[MEASURED 2026-08-20]`, live on Victor's machine, elevated hosts launched
+by the installed `ksx.exe` (elevation auto-granted; no UAC prompt appeared on
+any launch).
+
+**Switch Pro — SPAWNED. The first HIDMaestro controller ksx has ever created.**
+`pads --count 1 --persona switchpro --json` → SDK-lane host launched 141 ms
+after the command, hello + both contract pins passed, and the SDK's own diag
+(`HIDMAESTRO_DIAG=1`, planted in the USER environment — a process env var does
+NOT cross the elevation boundary) recorded:
+
+```
+SETUP  ENTER ctrl=0 profile=switch-pro vid=0x057E pid=0x2009
+    driver install check (deployed=False) in 0ms
+    CreateDeviceNode -> ROOT\HIDClass\0002 in 700ms
+    WaitForHidChild(ROOT\HIDClass\0002) -> True in 0ms
+SETUP  EXIT  total=751ms
+TEARDOWN ENTER ctrl=0 instanceId=ROOT\HIDClass\0002
+    pre-captured HID children: 1  (HID\HIDCLASS\1&1731F3EA&0&0000)
+    parent RemoveDevice(ROOT\HIDClass\0002) returned True after 11978ms
+TEARDOWN EXIT  total=11985ms
+```
+
+A real devnode bound the staged package and enumerated a real HID child in
+751 ms; teardown completed cleanly, machine left clean. The CLI still exited 1:
+`DESTROY_TIMEOUT` was 5 s against a measured ~12 s `DIF_REMOVE` cascade
+(upstream budgets 120 s for the same wait), so the client abandoned a healthy
+teardown. Fixed the same day: `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` → 30 s.
+
+**DualSense — did NOT spawn; root-caused to a missing call, fix in flight.**
+Three attempts, each a deterministic 15.2 s transport timeout = the client's
+`CREATE_TIMEOUT` racing the host's own 15 s child-wait to a photo finish.
+Decomposed with a process watcher + `setupapi.dev.log`: the candidate host
+launches instantly, hello succeeds (the error is only reachable POST-handshake),
+`RegisterRootDevice` creates the root devnode — and then **nothing installs a
+driver on it**. `DIF_REGISTERDEVICE` only creates the node; upstream v1.6.1
+follows it with `UpdateDriverForPlugAndPlayDevicesW(hwId, infPath)`
+(`DeviceNodeCreator.cs`, whose own comment warns a failure there means
+"downstream waits will time out"), and the candidate port dropped that call.
+Zero PnP sections appeared in `setupapi.dev.log` across all three attempts —
+Windows was never asked to bind. Fixed the same day in
+`WindowsDeviceManager.cs` (bind the pinned Driver Store INF after registration,
+fail-closed re-hash of the package; host child-wait 15 s → 12 s so the host
+answers a definite Fault INSIDE the client's deadline). Awaiting the next
+installed build to re-run.
+
+**Instrument lessons (the session's own tooling was wrong twice):**
+- The PnP poller filtered instance ids on `HIDMAESTRO|057E|2009|054C|0CE6` and
+  MISSED the real device entirely — the SDK names its devnodes
+  `ROOT\HIDClass\NNNN` / `HID\HIDCLASS\…`. Poll for `ROOT\HIDCLASS` too, or
+  filter on nothing and diff.
+- `Get-Process` sightings truncated by `Select-Object -First` hid the host's
+  later lifetime; the diag file, not process sampling, settled the timeline.
+
+---
+
 ## Open questions — and exactly what settles each
 
 Nothing here may be written into a contract as a fact until it is measured.
 
 | Question | What settles it |
 |---|---|
-| Does a `root\HIDMaestro` devnode actually enumerate and bind? | Elevated: run the ksx HIDMaestro setup task, then `ksx pads --persona dualsense --hold-secs 20`, then `Get-PnpDevice \| ? InstanceId -match 'HIDMAESTRO'`. |
+| ~~Does a `root\HIDMaestro` devnode actually enumerate and bind?~~ **ANSWERED 2026-08-20**: yes — the SDK lane bound `ROOT\HIDClass\0002` and enumerated `HID\HIDCLASS\…` in 751 ms (session results above). The DualSense-lane rerun after the `UpdateDriver` fix is what remains. | — |
 | Does the SWD companion's HID child come out as `HID\VID_045E&PID_0B13&IG_00` (the string inbox `xinputhid` binds)? | Elevated, disposable box: `hmswd.exe create …`, then read `%windir%\INF\setupapi.dev.log` for the selected-driver / Driver Rank lines. |
 | Does `SwDeviceCreate` need elevation, or only the registry staging? | Run the same `hmswd.exe create` twice, standard then elevated, and diff the HRESULTs in `%TEMP%\HIDMaestro\hmswd_self.log`. |
 | Do Switch Pro button indices follow layout roles or HMButton bit values on a real client? | Create the pad, run SDL `testcontroller`, press minus/plus/home and read reported indices. |
@@ -244,6 +308,7 @@ Nothing here may be written into a contract as a fact until it is measured.
 | 2026-08-20 | "The HIDMaestro driver package is not installed" | It **is** staged; the `.dll` hash and service key are what fail | Reported a tool's three-condition summary line instead of decomposing it |
 | 2026-08-20 | Switch Pro speaks report `0x3F` | It speaks the 48-byte `0x30` body | Trusted the profile's `notes` about what the *encoder* does; the code takes a different lane |
 | 2026-08-20 | Our layout-derived button map is a "divergence" from upstream | `SwitchProPacker` cites the same layout indices | Reasoned from `HidReportBuilder`, a path the Switch lane never reaches |
+| 2026-08-20 | "The `Services\\HIDMaestro` key materialises when the first devnode binds" (doctor/advice text, poller design, runbook step 6) | A pad was live and bound with NO maestro-named service key ever appearing | Stated a plausible UMDF mechanism as fact without ever having seen a bind |
 
 ### Known-wrong text in sources we do not own
 
@@ -354,6 +419,8 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `4762ee1` | The SDK-lane host: session, per-persona mapper, pinned fetch + publish, CI build |
 | 2026-08-20 | `5f00e9e` | Rust lane routing: sealed SDK sibling, connect_production_sdk, dual-lane backend |
 | 2026-08-20 | `94089ac` | SDK-lane host packaged: iss Source, required-binary + PE gates |
+| 2026-08-20 | `3cceb6a` | Switch Pro gate flipped for the hardware session; roster/test churn |
+| 2026-08-20 | (this) | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

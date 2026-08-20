@@ -2058,12 +2058,13 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(dualsense.gap, None);
         assert_eq!(dualsense.backend, "hidmaestro");
         assert_eq!(dualsense.backend_label, "HIDMaestro");
-        assert_eq!(dualsense.instance_limit, Some(1));
+        // 2026-08-20: the multi-controller SDK host lifts the per-persona cap.
+        assert_eq!(dualsense.instance_limit, None);
     }
 
-    /// The roster answers a narrower question once a controller is staged:
-    /// the build can still create DualSense, but this setup cannot add a
-    /// second instance to the one-host HIDMaestro runtime.
+    /// 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+    /// cap — a staged DualSense leaves the roster offer standing. The
+    /// instance-limit machinery stays wired for the next bounded persona.
     #[test]
     fn the_stage_roster_marks_a_persona_at_its_instance_limit_unavailable() {
         let setup = StagedSetup::new()
@@ -2076,24 +2077,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .find(|option| option.name == "dualsense")
             .expect("DualSense remains in the served roster");
         assert!(dualsense.can_plug, "this remains a build capability");
-        assert!(
-            !dualsense.available,
-            "a second instance must not be offered"
-        );
-        assert!(
-            dualsense
-                .unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("already has its one DualSense")),
-            "{:?}",
-            dualsense.unavailable_reason
-        );
+        assert!(dualsense.available, "a second instance is offered now");
+        assert_eq!(dualsense.unavailable_reason, None);
         assert!(
             view.personas
                 .iter()
                 .find(|option| option.name == "playstation")
                 .is_some_and(|option| option.available),
-            "the persona-specific limit must not disable unrelated HID personas"
+            "unrelated HID personas stay available"
         );
     }
 

@@ -4417,7 +4417,7 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
         .expect("the canonical DualSense option");
     assert_eq!(dualsense["backend"], "hidmaestro");
     assert_eq!(dualsense["backend_label"], "HIDMaestro");
-    assert_eq!(dualsense["instance_limit"], 1);
+    assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
     assert_eq!(dualsense["available"], true);
     assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
     assert_eq!(
@@ -4425,7 +4425,7 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
         serde_json::json!([
             {"value": "xbox360", "label": "Xbox 360 · ViGEmBus"},
             {"value": "playstation", "label": "PlayStation · ViGEmBus"},
-            {"value": "dualsense", "label": "DualSense · HIDMaestro · one per session"},
+            {"value": "dualsense", "label": "DualSense · HIDMaestro"},
             {"value": "switchpro", "label": "Switch Pro · HIDMaestro"},
             {"value": "xboxseries", "label": "Xbox Series X|S · HIDMaestro"}
         ]),
@@ -6050,18 +6050,20 @@ fn start_stops_offering_a_second_dualsense_over_http() {
         .expect("the full roster keeps DualSense");
     assert_eq!(dualsense["can_plug"], true);
     assert_eq!(dualsense["backend"], "hidmaestro");
-    assert_eq!(dualsense["instance_limit"], 1);
-    assert_eq!(dualsense["available"], false);
-    assert!(dualsense["unavailable_reason"]
-        .as_str()
-        .is_some_and(|reason| reason.contains("already has its one DualSense")));
+    // 2026-08-20: the multi-controller SDK host lifts the one-DualSense cap —
+    // the offer stands after the first, and a second POST stages an ordinary
+    // slot. The unavailable machinery stays wired for the next bounded
+    // persona.
+    assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
+    assert_eq!(dualsense["available"], true);
+    assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
     assert!(
-        !payload["rows"]["personas"]
+        payload["rows"]["personas"]
             .as_array()
             .unwrap()
             .iter()
             .any(|option| option["value"] == "dualsense"),
-        "the rendered option rows offered a second DualSense: {payload}"
+        "the rendered option rows keep offering DualSense: {payload}"
     );
     assert!(payload["rows"]["personas"]
         .as_array()
@@ -6071,8 +6073,8 @@ fn start_stops_offering_a_second_dualsense_over_http() {
 
     let page = rendered_body(&get(addr, "/start"));
     assert!(
-        !page.contains(r#"<option value="dualsense""#),
-        "the HTML form offered a second DualSense: {page}"
+        page.contains(r#"<option value="dualsense""#),
+        "the HTML form must keep offering DualSense: {page}"
     );
 
     let second = post_form(
@@ -6080,11 +6082,11 @@ fn start_stops_offering_a_second_dualsense_over_http() {
         "/start/controller",
         "persona=dualsense&preset=Player+2&layout=keyboard-2p",
     );
-    assert!(second.contains("flash=error"), "{second}");
+    assert!(!second.contains("flash=error"), "{second}");
     assert_eq!(
         control.staged().slots.len(),
-        1,
-        "a handcrafted POST bypassed the one-DualSense limit"
+        2,
+        "the second DualSense stages an ordinary slot"
     );
 }
 

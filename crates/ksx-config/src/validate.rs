@@ -1854,14 +1854,10 @@ preset = "default"
             slots: vec![slot(1), slot(2)],
             ..ConfigFile::default()
         };
-        assert_eq!(
-            validate(&cfg, &[]),
-            vec![Issue::PersonaCapacity {
-                persona: "dualsense".into(),
-                count: 2,
-                limit: 1,
-            }]
-        );
+        // 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+        // cap — two DualSense slots validate clean; the capacity issue stays
+        // wired to `instance_limit` for the next bounded persona.
+        assert_eq!(validate(&cfg, &[]), vec![]);
 
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
@@ -1878,15 +1874,7 @@ preset = "default"
                 macros: Default::default(),
             })
             .collect();
-        assert_eq!(
-            validate_games(&games, &[]),
-            vec![Issue::GamePersonaCapacity {
-                game: "PS5".into(),
-                persona: "dualsense".into(),
-                count: 2,
-                limit: 1,
-            }]
-        );
+        assert_eq!(validate_games(&games, &[]), vec![]);
     }
 
     #[test]

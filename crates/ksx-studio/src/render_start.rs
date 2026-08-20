@@ -1977,19 +1977,19 @@ mod tests {
             .expect("DualSense remains in the canonical roster");
         assert!(dualsense.can_plug);
         assert_eq!(dualsense.backend, "hidmaestro");
-        assert_eq!(dualsense.instance_limit, Some(1));
-        assert!(!dualsense.available);
-        assert!(dualsense
-            .unavailable_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("already has its one DualSense")));
+        // 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+        // cap, so a staged DualSense leaves the offer standing — the
+        // unavailable machinery stays wired for the next bounded persona.
+        assert_eq!(dualsense.instance_limit, None);
+        assert!(dualsense.available);
+        assert_eq!(dualsense.unavailable_reason, None);
         assert!(
-            !staged
+            staged
                 .rows
                 .personas
                 .iter()
                 .any(|option| option.value == "dualsense"),
-            "the form must not offer a second DualSense: {:?}",
+            "the form still offers a second DualSense: {:?}",
             staged.rows.personas
         );
         assert!(
@@ -2000,19 +2000,11 @@ mod tests {
                 .any(|option| option.value == "playstation"),
             "unrelated live personas remain choices"
         );
-        assert!(
-            staged
-                .lines
-                .controller_line
-                .contains("already has its one DualSense"),
-            "{}",
-            staged.lines.controller_line
-        );
 
         let out = render_start(&page, &staged, None);
         assert!(
-            !out.html.contains(r#"<option value="dualsense""#),
-            "the SSR form offered a second DualSense: {}",
+            out.html.contains(r#"<option value="dualsense""#),
+            "the SSR form must offer a second DualSense: {}",
             out.html
         );
     }

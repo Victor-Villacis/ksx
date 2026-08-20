@@ -6364,10 +6364,7 @@ mod tests {
             "the maintenance menu offers every live persona and no gated one"
         );
         assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");
-        assert_eq!(
-            rows.persona_options[2].label,
-            "DualSense · HIDMaestro · one per session"
-        );
+        assert_eq!(rows.persona_options[2].label, "DualSense · HIDMaestro");
         assert_eq!(rows.profile_options[0].text, "Example Game");
         assert_eq!(rows.notes[0].text, "a note");
 

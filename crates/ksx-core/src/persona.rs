@@ -333,10 +333,12 @@ impl Persona {
     /// halfway through startup. Keep the bound here so setup, config, the slot
     /// writer, and `ksx pads` all make the same decision.
     pub const fn instance_limit(self) -> Option<usize> {
-        match self {
-            Persona::DualSense => Some(1),
-            _ => None,
-        }
+        // 2026-08-20: the multi-controller SDK host carries up to eight live
+        // pads of any HIDMaestro persona, so DualSense's one-per-session cap
+        // is gone; the ceiling is the host's, surfaced at plug time. The
+        // mechanism stays for the next persona with a real per-persona bound.
+        let _ = self;
+        None
     }
 
     /// Why this exact persona cannot be plugged by this build.
@@ -562,7 +564,7 @@ mod tests {
 
     #[test]
     fn the_first_hidmaestro_runtime_has_one_explicit_device_slot() {
-        assert_eq!(Persona::DualSense.instance_limit(), Some(1));
+        assert_eq!(Persona::DualSense.instance_limit(), None);
         for persona in [
             Persona::Xbox360,
             Persona::PlayStation,

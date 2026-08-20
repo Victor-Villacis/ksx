@@ -3,7 +3,7 @@
   "runtimeId": "ksx-hidmaestro-sdk-host-v1",
   "hostProtocol": "ksx.hidmaestro.host.v1",
   "lane": "pinned-official-sdk",
-  "laneRationale": "The SDK and the driver are a matched pair speaking a private shared-memory dialect. Re-implementing the SDK half per persona meant re-deriving that dialect from source each time; this lane instead loads the exact pinned release SDK inside the elevated host boundary, the way PadForge consumes it, while the DualSense conformance persona stays on the audited candidate host.",
+  "laneRationale": "The SDK and the driver are a matched pair speaking a private shared-memory dialect. Re-implementing the SDK half per persona meant re-deriving that dialect from source each time; this lane instead loads the exact pinned release SDK inside the elevated host boundary, the way PadForge consumes it, DualSense joined this lane on 2026-08-20 after the hardware session measured the SDK lane working first-try while the candidate lane needed three live root-causes; the audited candidate host still ships as the conformance reference.",
   "upstreamRepository": "https://github.com/hifihedgehog/HIDMaestro",
   "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
   "upstreamVersion": "1.6.1",
@@ -23,6 +23,14 @@
   "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A",
   "supportedProfiles": [
     {
+      "id": 1,
+      "slug": "dualsense",
+      "vendorId": 1356,
+      "productId": 3302,
+      "transport": "usb",
+      "buttonSemantics": "semantic HMButton flags (the descriptor lane maps them through the profile buttonMap)"
+    },
+    {
       "id": 2,
       "slug": "switch-pro",
       "vendorId": 1406,
@@ -39,13 +47,9 @@
       "buttonSemantics": "semantic HMButton flags (the descriptor lane maps them through the profile buttonMap)"
     }
   ],
-  "unsupportedProfiles": [
-    {
-      "slug": "dualsense",
-      "reason": "the DualSense conformance persona is served by the audited candidate host, never by this lane"
-    }
-  ],
-  "controllerLimit": 1,
+  "unsupportedProfiles": [],
+  "controllerLimit": 8,
+  "xinputSeatLimit": 4,
   "leaseMilliseconds": 5000,
   "feedback": "none in v1 — rumble decode (SwitchProPacker amplitude / descriptor output reports) is a recorded follow-up",
   "sdkApiSurfaceUsed": [

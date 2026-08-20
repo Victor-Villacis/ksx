@@ -216,6 +216,24 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     /// never "foreign", so the bound-wait keeps waiting instead of refusing a
     /// pad that is mid-birth.
     /// </summary>
+    /// <summary>
+    /// The retained root is ours iff its `HardwareID` multi-sz carries the
+    /// exact identity this host writes at registration (measured live:
+    /// `root\VID_054C&amp;PID_0CE6 ; root\HIDMaestro`).
+    /// </summary>
+    private static bool ParentIsExactRoot(string parentInstanceId)
+    {
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
+            $@"SYSTEM\CurrentControlSet\Enum\{parentInstanceId}", writable: false);
+        if (key?.GetValue("HardwareID") is not string[] ids) return false;
+        foreach (string id in ids)
+        {
+            if (id.Equals(HardwareId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     private static ChildKind ChildIdentity(string childInstanceId)
     {
         using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
@@ -314,9 +332,17 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
 
         if (!string.IsNullOrWhiteSpace(parent))
         {
-            string expectedPrefix = HardwareId + "\\";
-            if (!parent.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            // Hardware-id identity, not instance-path spelling: PnP names the
+            // root devnode `ROOT\HIDCLASS\NNNN` (measured 2026-08-20, three
+            // times), so a `root\VID_…`-prefix check on the INSTANCE id
+            // refused every legitimate residue and DEADLOCKED recovery — the
+            // same defect as the child checks, in its third home. A devnode
+            // that no longer exists needs no identity proof to forget.
+            if (CM_Locate_DevNodeW(out _, parent, 0) == CrSuccess
+                && !ParentIsExactRoot(parent))
+            {
                 throw new InvalidOperationException("The retained KSX HIDMaestro device identity is not exact.");
+            }
             TryUninstall(parent);
         }
         DeleteOwnedConfiguration();

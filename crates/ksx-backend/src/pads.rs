@@ -1353,18 +1353,20 @@ pub mod surface {
             }
         }
 
+        /// 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+        /// cap, so a multi-pad plan is ordinary; the per-persona capacity
+        /// refusal stays wired for the next bounded persona.
         #[test]
         fn the_dualsense_test_plan_enforces_the_one_host_capacity() {
-            assert!(matches!(
-                plan_spawn(1, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
-                SpawnPlan::Plug { .. }
-            ));
-            let refused = plan_spawn(2, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
-            assert_eq!(refused.code(), Some("persona-capacity"));
-            assert!(refused.message().contains("at most 1"));
-            assert!(refused
-                .remedy()
-                .is_some_and(|text| text.contains("one pad")));
+            for count in [1u8, 2, 4] {
+                assert!(
+                    matches!(
+                        plan_spawn(count, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
+                        SpawnPlan::Plug { .. }
+                    ),
+                    "{count} DualSense pads must plan"
+                );
+            }
         }
 
         #[test]

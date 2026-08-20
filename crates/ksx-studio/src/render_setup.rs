@@ -829,10 +829,7 @@ mod tests {
             assert!(form.contains(label), "missing {label}: {form}");
         }
         assert!(form.contains("Xbox 360 · ViGEmBus"), "{form}");
-        assert!(
-            form.contains("DualSense · HIDMaestro · one per session"),
-            "{form}"
-        );
+        assert!(form.contains("DualSense · HIDMaestro"), "{form}");
         // Every shipping persona is offered (2026-08-20 hardware session).
         assert!(form.contains("Switch Pro · HIDMaestro"), "{form}");
         assert!(form.contains(r#"value="xboxseries""#), "{form}");

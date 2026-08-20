@@ -1030,26 +1030,23 @@ mod tests {
         }
     }
 
+    /// 2026-08-20: the multi-controller SDK host carries up to eight live
+    /// pads, so a second DualSense is an ordinary slot now — the capacity
+    /// refusal machinery stays wired to `instance_limit` for the next persona
+    /// with a real per-persona bound.
     #[test]
     fn a_second_dualsense_is_refused_before_it_can_reach_the_single_host() {
-        let one = staged()
+        let two = staged()
             .add_slot(2, Persona::DualSense, preset("P2"))
-            .unwrap();
-        let err = one
+            .unwrap()
             .add_slot(3, Persona::DualSense, preset("P3"))
-            .unwrap_err();
-        assert_eq!(err.code(), "persona-capacity");
-        assert!(err.to_string().contains("at most 1"), "{err}");
-        assert_eq!(one.persona_slots(Persona::DualSense), 1);
+            .unwrap();
+        assert_eq!(two.persona_slots(Persona::DualSense), 2);
 
-        let with_other = one.add_slot(3, Persona::PlayStation, preset("P3")).unwrap();
-        assert_eq!(
-            with_other
-                .set_persona(3, Persona::DualSense)
-                .unwrap_err()
-                .code(),
-            "persona-capacity"
-        );
+        let with_other = two.add_slot(4, Persona::PlayStation, preset("P4")).unwrap();
+        with_other
+            .set_persona(4, Persona::DualSense)
+            .expect("a third DualSense is an ordinary slot too");
     }
 
     /// MAX_SLOTS is the total ceiling, and it is ksx's own — the refusal says

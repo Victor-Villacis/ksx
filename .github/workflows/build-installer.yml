@@ -200,7 +200,7 @@ jobs:
           if ($parsed.schemaVersion -ne 1 -or
               $parsed.lane -cne 'pinned-official-sdk' -or
               $parsed.sdkAssemblySha256 -cne 'ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5' -or
-              $parsed.runtimeContractSha256 -cne '3FC74E0AD063CE02A22DB9866842BD02987D1027315AE899EAE90305847CDBAF' -or
+              $parsed.runtimeContractSha256 -cne 'B744C0F3F0D80054BBD23E8682820C2B2C42575C09A83627CB6856B0FD22F240' -or
               $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
             throw 'The SDK-lane host build receipt is not exact.'
           }

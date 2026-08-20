@@ -1,14 +1,15 @@
-//! Production HIDMaestro adapter — two lanes, one bounded protocol.
+//! Production HIDMaestro adapter — one lane, one bounded protocol.
 //!
-//! The ordinary daemon owns only authenticated protocol clients. All driver
-//! and shared-memory handles live in fixed elevated sibling processes:
-//! DualSense in the audited candidate host, Switch Pro and Xbox Series in the
+//! The ordinary daemon owns only an authenticated protocol client. All driver
+//! and shared-memory handles live in one fixed elevated sibling process: the
 //! SDK-lane host that loads the hash-pinned official SDK
-//! (`docs/HIDMAESTRO-STATE.md`, "Architecture decision"). Each lane connects
-//! lazily at the first plug of one of its personas, so UAC appears exactly
-//! when a rich persona is requested and never for the other lane. The SDK
-//! lane's personas remain build-gated in `ksx-core` until hardware proves
-//! them; the lane is wired, not offered.
+//! (`docs/HIDMAESTRO-STATE.md`, "Architecture decision"). Every HIDMaestro
+//! persona rides it — DualSense joined on 2026-08-20 after the hardware
+//! session measured the SDK lane working first-try while the candidate lane
+//! needed three live root-causes; the audited candidate host still ships as
+//! the conformance reference, and its client wiring lives in git history.
+//! The host connects lazily at the first plug, so UAC appears exactly when a
+//! rich persona is requested.
 
 #[cfg(windows)]
 use std::collections::{BTreeMap, VecDeque};
@@ -24,12 +25,6 @@ use crate::error::OutputError;
 const LEASE_REFRESH: Duration = Duration::from_secs(1);
 
 #[cfg(windows)]
-const RUNTIME_CONTRACT_SHA256: [u8; 32] = [
-    0x4F, 0x76, 0xF3, 0x1C, 0x04, 0x93, 0x90, 0xA1, 0x34, 0x23, 0x88, 0xE0, 0x9F, 0x9D, 0x0D, 0x0E,
-    0x35, 0x47, 0x16, 0x2D, 0x08, 0xEA, 0x50, 0x1F, 0xD8, 0x29, 0xAF, 0x3C, 0xF6, 0x4F, 0x67, 0xDA,
-];
-
-#[cfg(windows)]
 const CATALOG_SHA256: [u8; 32] = [
     0x8F, 0x40, 0x7E, 0x6E, 0x1C, 0x3C, 0x24, 0x1E, 0x16, 0xCF, 0x6B, 0xEF, 0x38, 0x72, 0x16, 0xAD,
     0x4D, 0x1F, 0x5D, 0xE0, 0x55, 0xA2, 0xC4, 0xCC, 0x04, 0x1C, 0xA1, 0x6C, 0xE7, 0x95, 0x4A, 0x6A,
@@ -40,34 +35,26 @@ const CATALOG_SHA256: [u8; 32] = [
 /// `publish-sdk.ps1`, `SdkHostSession.cs` and `build-installer.yml`.
 #[cfg(windows)]
 const SDK_RUNTIME_CONTRACT_SHA256: [u8; 32] = [
-    0x3F, 0xC7, 0x4E, 0x0A, 0xD0, 0x63, 0xCE, 0x02, 0xA2, 0x2D, 0xB9, 0x86, 0x68, 0x42, 0xBD, 0x02,
-    0x98, 0x7D, 0x10, 0x27, 0x31, 0x5A, 0xE8, 0x99, 0xEA, 0xE9, 0x03, 0x05, 0x84, 0x7C, 0xDB, 0xAF,
+    0xB7, 0x44, 0xC0, 0xF3, 0xF0, 0xD8, 0x00, 0x54, 0xBB, 0xD2, 0x3E, 0x86, 0x82, 0x82, 0x0C, 0x2B,
+    0x2C, 0x42, 0x57, 0x5C, 0x09, 0xA8, 0x36, 0x27, 0xCB, 0x68, 0x56, 0xB0, 0xFD, 0x22, 0xF2, 0x40,
 ];
 
-/// Which elevated sibling serves a persona. DualSense must never travel the
-/// SDK lane (one persona, one lane), and the SDK personas cannot exist on the
-/// candidate host at all.
+/// The host's live-controller ceiling — ksx's eight-player couch design, and
+/// the `controllerLimit` the SDK contract declares. Enforced HERE, before the
+/// host is asked: any host Fault poisons the whole one-use session by design
+/// (fail-closed), so an over-capacity request must be refused locally rather
+/// than allowed to tear down every live pad. The host's own Capacity fault
+/// stays as defense-in-depth.
 #[cfg(windows)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HostLane {
-    Candidate,
-    Sdk,
-}
+const HOST_CONTROLLER_LIMIT: usize = 8;
 
+/// XInput seats four pads; a fifth Xbox Series companion would come up
+/// slotless (measured 2026-08-20: each Xbox pad claims a real slot).
 #[cfg(windows)]
-fn lane_for(persona: Persona) -> Option<HostLane> {
-    match persona {
-        Persona::DualSense => Some(HostLane::Candidate),
-        Persona::SwitchPro | Persona::XboxSeries => Some(HostLane::Sdk),
-        Persona::Xbox360 | Persona::PlayStation => None,
-    }
-}
+const XINPUT_SEAT_LIMIT: usize = 4;
 
 #[cfg(windows)]
 struct LivePad {
-    /// Which host owns this pad. Both hosts number their one controller `1`,
-    /// so a controller id means nothing without its lane.
-    lane: HostLane,
     controller: ksx_hidmaestro::host::ControllerId,
     /// ⚠️ WHICH PERSONA THIS PAD ACTUALLY IS. `persona()` used to answer
     /// DualSense for any live handle — true only while DualSense was the one
@@ -84,11 +71,10 @@ struct LivePad {
 type LaneClient =
     ksx_hidmaestro::host::HostClient<ksx_hidmaestro::windows_transport::WindowsHostTransport>;
 
-/// Authenticated connections to the fixed installed elevated hosts, one per
-/// lane, each established at the first plug of one of its personas.
+/// The authenticated connection to the fixed installed elevated SDK host,
+/// established at the first plug of a HIDMaestro persona.
 #[cfg(windows)]
 pub struct HidMaestroBackend {
-    candidate: Option<LaneClient>,
     sdk: Option<LaneClient>,
     pads: BTreeMap<u32, LivePad>,
     next_handle: u32,
@@ -100,66 +86,36 @@ pub struct HidMaestroBackend {
 }
 
 impl HidMaestroBackend {
-    /// Prepare the backend. Neither host is launched here: each lane's fixed
-    /// elevated sibling starts at the FIRST plug of one of its personas, so
-    /// UAC appears exactly when a rich persona is requested and never for a
-    /// lane that session never uses.
+    /// Prepare the backend. The host is not launched here: the fixed
+    /// elevated sibling starts at the FIRST plug of a HIDMaestro persona, so
+    /// UAC appears exactly when a rich persona is requested.
     #[cfg(windows)]
     pub fn connect() -> Result<Self, OutputError> {
         Ok(Self {
-            candidate: None,
             sdk: None,
             pads: BTreeMap::new(),
             next_handle: 1,
         })
     }
 
-    /// The lane's client, launching and authenticating its host on first use.
+    /// The host client, launching and authenticating the SDK host on first
+    /// use.
     #[cfg(windows)]
-    fn client_for(&mut self, lane: HostLane) -> Result<&mut LaneClient, OutputError> {
-        let slot = match lane {
-            HostLane::Candidate => &mut self.candidate,
-            HostLane::Sdk => &mut self.sdk,
-        };
-        if slot.is_none() {
-            let expected = match lane {
-                HostLane::Candidate => ksx_hidmaestro::host::HostExpectation {
-                    sdk_sha256: RUNTIME_CONTRACT_SHA256,
-                    catalog_sha256: CATALOG_SHA256,
-                    catalog_resource_count: 228,
-                },
-                HostLane::Sdk => ksx_hidmaestro::host::HostExpectation {
-                    sdk_sha256: SDK_RUNTIME_CONTRACT_SHA256,
-                    catalog_sha256: CATALOG_SHA256,
-                    catalog_resource_count: 228,
-                },
+    fn client(&mut self) -> Result<&mut LaneClient, OutputError> {
+        if self.sdk.is_none() {
+            let expected = ksx_hidmaestro::host::HostExpectation {
+                sdk_sha256: SDK_RUNTIME_CONTRACT_SHA256,
+                catalog_sha256: CATALOG_SHA256,
+                catalog_resource_count: 228,
             };
-            let client = match lane {
-                HostLane::Candidate => {
-                    ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production(
-                        expected,
-                    )
-                }
-                HostLane::Sdk => {
-                    ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production_sdk(
-                        expected,
-                    )
-                }
-            }
-            .map_err(|error| OutputError::HidMaestroRuntime(error.to_string()))?;
-            *slot = Some(client);
+            let client =
+                ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production_sdk(
+                    expected,
+                )
+                .map_err(|error| OutputError::HidMaestroRuntime(error.to_string()))?;
+            self.sdk = Some(client);
         }
-        Ok(slot.as_mut().expect("just connected"))
-    }
-
-    /// The lane's client only if its host is already running — polling paths
-    /// must never launch an elevated process as a side effect.
-    #[cfg(windows)]
-    fn connected_client(&mut self, lane: HostLane) -> Option<&mut LaneClient> {
-        match lane {
-            HostLane::Candidate => self.candidate.as_mut(),
-            HostLane::Sdk => self.sdk.as_mut(),
-        }
+        Ok(self.sdk.as_mut().expect("just connected"))
     }
 
     #[cfg(not(windows))]
@@ -194,28 +150,24 @@ impl VirtualPadBackend for HidMaestroBackend {
             .pads
             .values()
             .filter(|pad| now.duration_since(pad.last_submit) >= LEASE_REFRESH)
-            .map(|pad| (pad.lane, pad.controller, pad.state))
+            .map(|pad| (pad.controller, pad.state))
             .collect();
-        for (lane, controller, state) in renewals {
-            self.client_for(lane)?
+        for (controller, state) in renewals {
+            self.client()?
                 .submit(controller, state)
                 .map_err(Self::runtime)?;
             if let Some(pad) = self
                 .pads
                 .values_mut()
-                .find(|pad| pad.lane == lane && pad.controller == controller)
+                .find(|pad| pad.controller == controller)
             {
                 pad.last_submit = now;
             }
         }
 
-        // Poll only lanes whose host is already running: servicing must never
-        // launch an elevated process. Both hosts number their controller `1`,
-        // so events are matched lane-first.
-        for lane in [HostLane::Candidate, HostLane::Sdk] {
-            let Some(client) = self.connected_client(lane) else {
-                continue;
-            };
+        // Poll only if the host is already running: servicing must never
+        // launch an elevated process.
+        if let Some(client) = self.sdk.as_mut() {
             let mut events = Vec::new();
             while let Some(event) = client.poll_feedback().map_err(Self::runtime)? {
                 events.push(event);
@@ -224,7 +176,7 @@ impl VirtualPadBackend for HidMaestroBackend {
                 if let Some(pad) = self
                     .pads
                     .values_mut()
-                    .find(|pad| pad.lane == lane && pad.controller == event.controller)
+                    .find(|pad| pad.controller == event.controller)
                 {
                     if pad.feedback.len() == 64 {
                         pad.feedback.pop_front();
@@ -254,19 +206,28 @@ impl VirtualPadBackend for HidMaestroBackend {
         }
         let profile = ksx_hidmaestro::host::ProfileId::try_from(persona)
             .map_err(|_| OutputError::PersonaUnsupported(persona))?;
-        let lane = lane_for(persona).ok_or(OutputError::PersonaUnsupported(persona))?;
-        // The ceiling is the HOSTS', and it is one controller in TOTAL — each
-        // host enforces `controllerLimit: 1`, and the product offers at most
-        // one rich persona at a time.
-        if !self.pads.is_empty() {
-            return Err(OutputError::HidMaestroRuntime(
-                "the current HIDMaestro hosts support one live controller at a time".to_owned(),
-            ));
+        // Capacity is refused HERE, before the host is asked: a host Fault
+        // poisons the whole one-use session (fail-closed), so letting a 9th
+        // create reach the host would tear down eight live pads. The host
+        // enforces the same limits as defense-in-depth.
+        if self.pads.len() >= HOST_CONTROLLER_LIMIT {
+            return Err(OutputError::HidMaestroRuntime(format!(
+                "the HIDMaestro host carries at most {HOST_CONTROLLER_LIMIT} live controllers"
+            )));
         }
-        let ready = self
-            .client_for(lane)?
-            .create(profile)
-            .map_err(Self::runtime)?;
+        if persona.is_xinput()
+            && self
+                .pads
+                .values()
+                .filter(|pad| pad.persona.is_xinput())
+                .count()
+                >= XINPUT_SEAT_LIMIT
+        {
+            return Err(OutputError::HidMaestroRuntime(format!(
+                "XInput seats {XINPUT_SEAT_LIMIT} pads; another {persona} pad would come up slotless"
+            )));
+        }
+        let ready = self.client()?.create(profile).map_err(Self::runtime)?;
         let handle = PadHandle(self.next_handle);
         self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
             OutputError::HidMaestroRuntime("pad handle space is exhausted".into())
@@ -274,7 +235,6 @@ impl VirtualPadBackend for HidMaestroBackend {
         self.pads.insert(
             handle.0,
             LivePad {
-                lane,
                 controller: ready.controller,
                 persona: ready.profile.persona(),
                 state: PadState::default(),
@@ -294,11 +254,8 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn update(&mut self, handle: PadHandle, state: &PadState) -> Result<(), OutputError> {
-        let (lane, controller) = {
-            let pad = self.live_mut(handle)?;
-            (pad.lane, pad.controller)
-        };
-        self.client_for(lane)?
+        let controller = self.live_mut(handle)?.controller;
+        self.client()?
             .submit(controller, *state)
             .map_err(Self::runtime)?;
         let pad = self.live_mut(handle)?;
@@ -312,13 +269,8 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn unplug(&mut self, handle: PadHandle) -> Result<(), OutputError> {
-        let (lane, controller) = {
-            let pad = self.live_mut(handle)?;
-            (pad.lane, pad.controller)
-        };
-        self.client_for(lane)?
-            .destroy(controller)
-            .map_err(Self::runtime)?;
+        let controller = self.live_mut(handle)?.controller;
+        self.client()?.destroy(controller).map_err(Self::runtime)?;
         self.pads.remove(&handle.0);
         Ok(())
     }
@@ -327,9 +279,6 @@ impl VirtualPadBackend for HidMaestroBackend {
 #[cfg(windows)]
 impl Drop for HidMaestroBackend {
     fn drop(&mut self) {
-        if let Some(mut client) = self.candidate.take() {
-            let _ = client.shutdown();
-        }
         if let Some(mut client) = self.sdk.take() {
             let _ = client.shutdown();
         }

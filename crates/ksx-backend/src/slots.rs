@@ -1208,37 +1208,27 @@ mod tests {
         );
     }
 
+    /// 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+    /// cap — a second DualSense slot is an ordinary write now.
     #[test]
     fn a_second_dualsense_is_refused_before_the_config_is_written() {
         let root = TempRoot::new("dualsense-capacity");
         let store = root.store();
-        assign(
-            &store,
-            &SlotSpec {
-                slot: 1,
-                preset: Some("Panel P1".into()),
-                profile: None,
-                persona: Some(Persona::DualSense),
-                socd: None,
-            },
-        )
-        .unwrap();
-        let err = assign(
-            &store,
-            &SlotSpec {
-                slot: 2,
-                preset: Some("Panel P2".into()),
-                profile: None,
-                persona: Some(Persona::DualSense),
-                socd: None,
-            },
-        )
-        .unwrap_err();
-        assert_eq!(err.code(), "persona-capacity");
-        assert!(err.to_string().contains("at most 1"), "{err}");
+        for slot in 1u8..=2 {
+            assign(
+                &store,
+                &SlotSpec {
+                    slot,
+                    preset: Some(format!("Panel P{slot}")),
+                    profile: None,
+                    persona: Some(Persona::DualSense),
+                    socd: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("DualSense slot {slot} must write: {err}"));
+        }
         let config = store.load_config().unwrap().value;
-        assert_eq!(config.slots.len(), 1, "a refusal writes nothing");
-        assert_eq!(config.slots[0].persona, Persona::DualSense);
+        assert_eq!(config.slots.len(), 2);
     }
 
     /// A fifth XInput slot is refused the way `ksx pads` refuses a fifth pad.

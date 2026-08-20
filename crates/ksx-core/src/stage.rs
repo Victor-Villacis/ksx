@@ -68,7 +68,7 @@ use crate::engine::ResolvedSlot;
 use crate::persona::Persona;
 use crate::preset::Preset;
 use crate::selector::DeviceSelector;
-use crate::slot::{SlotSpec, MAX_SLOTS, MAX_XINPUT_SLOTS};
+use crate::slot::{SlotSpec, MAX_HIDMAESTRO_PADS, MAX_SLOTS, MAX_XINPUT_SLOTS};
 use crate::socd::Socd;
 
 /// The capture backend a staged device will use once the setup is committed.
@@ -227,6 +227,20 @@ pub enum StageRefusal {
         /// How many staged slots would be on an XInput persona.
         after: usize,
     },
+    /// Staging this would put a ninth slot on the HIDMaestro host.
+    #[error(
+        "that would make {after} staged slots use a HIDMaestro persona, and the elevated \
+         HIDMaestro host carries at most {MAX_HIDMAESTRO_PADS} live pads. Give slot {number} \
+         persona '{}' or '{}' (ViGEmBus, outside that pool), or remove one of the other \
+         {after}. Nothing has been written, so changing your mind costs nothing",
+        Persona::Xbox360,
+        Persona::PlayStation
+    )]
+    TooManyHidMaestroPads {
+        number: u8,
+        /// How many staged slots would be on a HIDMaestro persona.
+        after: usize,
+    },
     /// An alias that could never resolve back to its own `[[device]]` entry.
     #[error("\"{alias}\" cannot name this device: {problem}")]
     BadAlias {
@@ -333,6 +347,7 @@ impl StageRefusal {
             Self::PersonaNotImplemented { .. } => "persona-not-implemented",
             Self::PersonaCapacity { .. } => "persona-capacity",
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
+            Self::TooManyHidMaestroPads { .. } => "too-many-hidmaestro-pads",
             Self::BadAlias { .. } => "bad-alias",
             Self::PresetNameClash { .. } => "preset-name-clash",
             Self::UnnamedPreset { .. } => "unnamed-preset",
@@ -503,6 +518,7 @@ impl StagedSetup {
         next.slots.sort_by_key(|s| s.number);
         next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
+        next.check_hidmaestro_pool(number)?;
         Ok(next)
     }
 
@@ -527,6 +543,7 @@ impl StagedSetup {
         slot.persona = persona;
         next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
+        next.check_hidmaestro_pool(number)?;
         Ok(next)
     }
 
@@ -727,6 +744,23 @@ impl StagedSetup {
         let after = self.xinput_slots();
         if after > usize::from(MAX_XINPUT_SLOTS) {
             return Err(StageRefusal::TooManyXinputSlots { number, after });
+        }
+        Ok(())
+    }
+
+    /// Refuse a state where a ninth slot would sit on the HIDMaestro host.
+    ///
+    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads; a
+    /// configuration past that would validate, save, and then die at the
+    /// ninth plug of startup — after eight pads were already live.
+    fn check_hidmaestro_pool(&self, number: u8) -> Result<(), StageRefusal> {
+        let after = self
+            .slots
+            .iter()
+            .filter(|s| s.persona.backend() == crate::PadBackend::HidMaestro)
+            .count();
+        if after > usize::from(MAX_HIDMAESTRO_PADS) {
+            return Err(StageRefusal::TooManyHidMaestroPads { number, after });
         }
         Ok(())
     }
@@ -1022,7 +1056,7 @@ mod tests {
     /// the refusal machinery stays live behind `Persona::gap()` for the next
     /// gated persona, exercised by the gap unit tests in `persona.rs`).
     #[test]
-    fn a_persona_this_build_cannot_plug_is_refused_with_a_way_out() {
+    fn every_shipping_persona_stages() {
         for persona in Persona::ALL.iter().copied() {
             staged()
                 .add_slot(2, persona, preset("P2"))
@@ -1030,23 +1064,44 @@ mod tests {
         }
     }
 
-    /// 2026-08-20: the multi-controller SDK host carries up to eight live
-    /// pads, so a second DualSense is an ordinary slot now — the capacity
-    /// refusal machinery stays wired to `instance_limit` for the next persona
-    /// with a real per-persona bound.
+    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads, and
+    /// the stage refuses the ninth before it can reach the host — where the
+    /// runtime refusal would arrive only after eight pads were already live.
+    /// Non-XInput personas throughout: Xbox Series would trip the four-seat
+    /// XInput ceiling first and this test is about the POOL.
     #[test]
-    fn a_second_dualsense_is_refused_before_it_can_reach_the_single_host() {
-        let two = staged()
-            .add_slot(2, Persona::DualSense, preset("P2"))
-            .unwrap()
-            .add_slot(3, Persona::DualSense, preset("P3"))
-            .unwrap();
-        assert_eq!(two.persona_slots(Persona::DualSense), 2);
+    fn a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
+        let mut setup = staged();
+        for n in 2u8..=9 {
+            let persona = if n % 2 == 0 {
+                Persona::DualSense
+            } else {
+                Persona::SwitchPro
+            };
+            setup = setup.add_slot(n, persona, preset("P")).unwrap_or_else(|e| {
+                panic!("pad {} of {MAX_HIDMAESTRO_PADS} must stage: {e}", n - 1)
+            });
+        }
+        let refused = setup
+            .add_slot(10, Persona::DualSense, preset("P10"))
+            .unwrap_err();
+        assert_eq!(refused.code(), "too-many-hidmaestro-pads");
+        let message = refused.to_string();
+        assert!(message.contains("at most 8"), "{message}");
+        assert!(message.contains("xbox360"), "{message}");
 
-        let with_other = two.add_slot(4, Persona::PlayStation, preset("P4")).unwrap();
-        with_other
-            .set_persona(4, Persona::DualSense)
-            .expect("a third DualSense is an ordinary slot too");
+        // The same gate on the other door: repainting a ViGEm slot onto the
+        // full pool is the ninth pad too.
+        let with_other = setup
+            .add_slot(10, Persona::PlayStation, preset("P10"))
+            .unwrap();
+        assert_eq!(
+            with_other
+                .set_persona(10, Persona::DualSense)
+                .unwrap_err()
+                .code(),
+            "too-many-hidmaestro-pads"
+        );
     }
 
     /// MAX_SLOTS is the total ceiling, and it is ksx's own — the refusal says

@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn a_persona_this_build_cannot_make_is_refused_with_a_way_out() {
+    fn the_dormant_persona_refusal_keeps_its_shape() {
         // 2026-08-20 flip: no live persona reaches this refusal (all plug);
         // the variant stays for the next gated persona, so pin its dormant
         // shape — classification flags and the honest no-gap fallback.

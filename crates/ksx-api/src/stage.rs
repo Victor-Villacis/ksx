@@ -194,6 +194,13 @@ impl PersonaOption {
     /// narrower, stage-specific answer a picker needs right now.
     pub fn roster_for(setup: &StagedSetup) -> Vec<Self> {
         let xinput_full = setup.xinput_slots() >= usize::from(MAX_XINPUT_SLOTS);
+        let hidmaestro_full = Persona::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.backend() == ksx_core::PadBackend::HidMaestro)
+            .map(|p| setup.persona_slots(p))
+            .sum::<usize>()
+            >= usize::from(ksx_core::MAX_HIDMAESTRO_PADS);
         Self::roster()
             .into_iter()
             .zip(Persona::ALL.iter().copied())
@@ -223,6 +230,14 @@ impl PersonaOption {
                     option.unavailable_reason = Some(format!(
                         "All {} Xbox-style controller places are already in use. Remove or change an Xbox-style controller before adding another.",
                         MAX_XINPUT_SLOTS
+                    ));
+                    return option;
+                }
+                if persona.backend() == ksx_core::PadBackend::HidMaestro && hidmaestro_full {
+                    option.available = false;
+                    option.unavailable_reason = Some(format!(
+                        "This setup already stages the HIDMaestro host's {} pads. Remove or change one before adding another.",
+                        ksx_core::MAX_HIDMAESTRO_PADS
                     ));
                 }
                 option
@@ -2062,29 +2077,64 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(dualsense.instance_limit, None);
     }
 
-    /// 2026-08-20: the multi-controller SDK host lifts the one-DualSense
-    /// cap — a staged DualSense leaves the roster offer standing. The
-    /// instance-limit machinery stays wired for the next bounded persona.
+    /// A staged DualSense leaves the offer standing (the one-per-session cap
+    /// died with the multi-controller host), and the roster goes unavailable
+    /// only when the HIDMaestro pool itself fills at eight — with the pool
+    /// named as the reason. ViGEm personas are untouched by it.
     #[test]
-    fn the_stage_roster_marks_a_persona_at_its_instance_limit_unavailable() {
-        let setup = StagedSetup::new()
+    fn the_stage_roster_marks_hidmaestro_personas_unavailable_at_the_pool_ceiling() {
+        let mut setup = StagedSetup::new()
             .add_slot(1, Persona::DualSense, ksx_core::Preset::builtin_empty())
             .expect("the first DualSense stages");
-        let view = StagedSetupView::of(&setup);
-        let dualsense = view
-            .personas
-            .iter()
-            .find(|option| option.name == "dualsense")
-            .expect("DualSense remains in the served roster");
-        assert!(dualsense.can_plug, "this remains a build capability");
-        assert!(dualsense.available, "a second instance is offered now");
-        assert_eq!(dualsense.unavailable_reason, None);
+        {
+            let view = StagedSetupView::of(&setup);
+            let dualsense = view
+                .personas
+                .iter()
+                .find(|option| option.name == "dualsense")
+                .expect("DualSense remains in the served roster");
+            assert!(dualsense.can_plug, "this remains a build capability");
+            assert!(dualsense.available, "a second instance is offered");
+            assert_eq!(dualsense.unavailable_reason, None);
+        }
+
+        // Fill the pool: eight non-XInput HIDMaestro pads.
+        for n in 2u8..=8 {
+            let persona = if n % 2 == 0 {
+                Persona::SwitchPro
+            } else {
+                Persona::DualSense
+            };
+            setup = setup
+                .add_slot(n, persona, ksx_core::Preset::builtin_empty())
+                .unwrap_or_else(|e| panic!("pad {n} of 8 must stage: {e}"));
+        }
+        let full = StagedSetupView::of(&setup);
+        for name in ["dualsense", "switchpro", "xboxseries"] {
+            let option = full
+                .personas
+                .iter()
+                .find(|option| option.name == name)
+                .expect("roster keeps every persona");
+            assert!(
+                !option.available,
+                "{name} must be unavailable at the pool ceiling"
+            );
+            assert!(
+                option
+                    .unavailable_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("HIDMaestro host's 8 pads")),
+                "{name}: {:?}",
+                option.unavailable_reason
+            );
+        }
         assert!(
-            view.personas
+            full.personas
                 .iter()
                 .find(|option| option.name == "playstation")
                 .is_some_and(|option| option.available),
-            "unrelated HID personas stay available"
+            "ViGEm personas sit outside the pool"
         );
     }
 

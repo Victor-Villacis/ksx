@@ -796,6 +796,19 @@ pub mod surface {
                 };
             }
         }
+        // The elevated HIDMaestro host carries a fixed pool of live pads; a
+        // request past it must be refused before anything is plugged, because
+        // the runtime adapter's own refusal at pad N+1 arrives after N pads
+        // are already live.
+        if persona.backend() == ksx_core::PadBackend::HidMaestro
+            && usize::from(count) > usize::from(ksx_core::MAX_HIDMAESTRO_PADS)
+        {
+            return SpawnPlan::PersonaCapacity {
+                persona,
+                requested: count,
+                limit: usize::from(ksx_core::MAX_HIDMAESTRO_PADS),
+            };
+        }
         if on_bus.saturating_add(usize::from(count)) > usize::from(MAX_SLOTS) {
             return SpawnPlan::BusFull {
                 on_bus,
@@ -1353,12 +1366,12 @@ pub mod surface {
             }
         }
 
-        /// 2026-08-20: the multi-controller SDK host lifts the one-DualSense
-        /// cap, so a multi-pad plan is ordinary; the per-persona capacity
-        /// refusal stays wired for the next bounded persona.
+        /// The elevated SDK host carries eight live pads: counts 1..=8 plan,
+        /// the ninth refuses BEFORE anything plugs — the runtime adapter's
+        /// own refusal would arrive after eight pads were live.
         #[test]
-        fn the_dualsense_test_plan_enforces_the_one_host_capacity() {
-            for count in [1u8, 2, 4] {
+        fn the_plan_enforces_the_hidmaestro_pool_capacity() {
+            for count in [1u8, 2, 4, 8] {
                 assert!(
                     matches!(
                         plan_spawn(count, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
@@ -1367,6 +1380,13 @@ pub mod surface {
                     "{count} DualSense pads must plan"
                 );
             }
+            let refused = plan_spawn(9, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
+            assert_eq!(refused.code(), Some("persona-capacity"));
+            assert!(
+                refused.message().contains("at most 8"),
+                "{}",
+                refused.message()
+            );
         }
 
         #[test]

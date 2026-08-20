@@ -43,6 +43,11 @@ pub enum Issue {
     /// game, which is a failure that looks like success — so it is reported
     /// here, where the fix (a HID persona) can be named.
     TooManyXinputSlots { count: usize },
+    /// More slots use a HIDMaestro persona than the elevated host carries.
+    ///
+    /// Reported here for the same reason [`Issue::TooManyXinputSlots`] is: the
+    /// config would otherwise look valid and die at the ninth plug of startup.
+    TooManyHidMaestroPads { count: usize },
     /// More slots request a persona than this release's runtime can own.
     PersonaCapacity {
         persona: String,
@@ -314,6 +319,8 @@ pub enum Issue {
     GameSlotNumberOutOfRange { game: String, number: u8 },
     /// See [`Issue::TooManyXinputSlots`], for one game's slot list.
     GameTooManyXinputSlots { game: String, count: usize },
+    /// See [`Issue::TooManyHidMaestroPads`], for one game's slot list.
+    GameTooManyHidMaestroPads { game: String, count: usize },
     /// Two slots of one game share a number.
     GameDuplicateSlotNumber { game: String, number: u8 },
     /// Game slot references an unknown preset.
@@ -398,6 +405,17 @@ impl fmt::Display for Issue {
             }
             Issue::SlotNumberOutOfRange { number } => {
                 write!(f, "[[slot]] number {number} is outside 1..={MAX_SLOTS}")
+            }
+            Issue::TooManyHidMaestroPads { count } => {
+                write!(
+                    f,
+                    "{count} slots use a HIDMaestro persona, but the elevated HIDMaestro host \
+                     carries at most {} live pads; give the extra slots persona '{}' or '{}' \
+                     (ViGEmBus, outside that pool)",
+                    ksx_core::MAX_HIDMAESTRO_PADS,
+                    Persona::Xbox360,
+                    Persona::PlayStation
+                )
             }
             Issue::TooManyXinputSlots { count } => {
                 write!(
@@ -741,6 +759,17 @@ impl fmt::Display for Issue {
                     "game '{game}': slot number {number} is outside 1..={MAX_SLOTS}"
                 )
             }
+            Issue::GameTooManyHidMaestroPads { game, count } => {
+                write!(
+                    f,
+                    "game '{game}': {count} slots use a HIDMaestro persona, but the elevated \
+                     HIDMaestro host carries at most {} live pads; give the extra slots persona \
+                     '{}' or '{}'",
+                    ksx_core::MAX_HIDMAESTRO_PADS,
+                    Persona::Xbox360,
+                    Persona::PlayStation
+                )
+            }
             Issue::GameTooManyXinputSlots { game, count } => {
                 write!(
                     f,
@@ -860,6 +889,16 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
             count: xinput_slots,
         });
     }
+    let hidmaestro_slots = config
+        .slots
+        .iter()
+        .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+        .count();
+    if hidmaestro_slots > usize::from(ksx_core::MAX_HIDMAESTRO_PADS) {
+        issues.push(Issue::TooManyHidMaestroPads {
+            count: hidmaestro_slots,
+        });
+    }
     for persona in Persona::ALL.iter().copied() {
         let Some(limit) = persona.instance_limit() else {
             continue;
@@ -948,6 +987,17 @@ pub fn validate_games(games: &GamesFile, presets: &[PresetFile]) -> Vec<Issue> {
             issues.push(Issue::GameTooManyXinputSlots {
                 game: game.title.clone(),
                 count: xinput_slots,
+            });
+        }
+        let hidmaestro_slots = game
+            .slots
+            .iter()
+            .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+            .count();
+        if hidmaestro_slots > usize::from(ksx_core::MAX_HIDMAESTRO_PADS) {
+            issues.push(Issue::GameTooManyHidMaestroPads {
+                game: game.title.clone(),
+                count: hidmaestro_slots,
             });
         }
         for persona in Persona::ALL.iter().copied() {
@@ -1840,41 +1890,70 @@ preset = "default"
     }
 
     #[test]
-    fn a_second_dualsense_is_rejected_by_config_and_game_validation() {
+    fn a_ninth_hidmaestro_pad_is_rejected_by_config_and_game_validation() {
+        // Alternating non-XInput HIDMaestro personas: the pool rule must fire
+        // on its own, not hide behind the four-seat XInput rule.
         let slot = |number: u8| SlotEntry {
             number,
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: Persona::DualSense,
+            persona: if number % 2 == 0 {
+                Persona::DualSense
+            } else {
+                Persona::SwitchPro
+            },
             socd: Socd::default(),
             macros: Default::default(),
         };
-        let cfg = ConfigFile {
-            slots: vec![slot(1), slot(2)],
+        let eight = ConfigFile {
+            slots: (1u8..=8).map(slot).collect(),
             ..ConfigFile::default()
         };
-        // 2026-08-20: the multi-controller SDK host lifts the one-DualSense
-        // cap — two DualSense slots validate clean; the capacity issue stays
-        // wired to `instance_limit` for the next bounded persona.
-        assert_eq!(validate(&cfg, &[]), vec![]);
+        assert_eq!(validate(&eight, &[]), vec![], "eight pads fill the pool");
+        let nine = ConfigFile {
+            slots: (1u8..=9).map(slot).collect(),
+            ..ConfigFile::default()
+        };
+        assert_eq!(
+            validate(&nine, &[]),
+            vec![Issue::TooManyHidMaestroPads { count: 9 }]
+        );
+        let msg = validate(&nine, &[])[0].to_string();
+        assert!(msg.contains("at most 8"), "{msg}");
 
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"PS5\"\npath = \"C:\\\\ps5.exe\"\n").unwrap();
-        games.games[0].slots = (1..=2)
+        games.games[0].slots = (1u8..=9)
             .map(|number| GameSlotEntry {
                 number,
                 user_index: None,
                 keyboard: None,
                 mouse: None,
                 preset: "default".into(),
-                persona: Persona::DualSense,
+                persona: if number % 2 == 0 {
+                    Persona::DualSense
+                } else {
+                    Persona::SwitchPro
+                },
                 socd: Socd::default(),
                 macros: Default::default(),
             })
             .collect();
-        assert_eq!(validate_games(&games, &[]), vec![]);
+        assert_eq!(
+            validate_games(&games, &[]),
+            vec![Issue::GameTooManyHidMaestroPads {
+                game: "PS5".into(),
+                count: 9,
+            }]
+        );
+        games.games[0].slots.truncate(8);
+        assert_eq!(
+            validate_games(&games, &[]),
+            vec![],
+            "eight pads fill the pool cleanly"
+        );
     }
 
     #[test]

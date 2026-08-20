@@ -146,8 +146,10 @@ impl WindowsHostTransport {
     /// The SDK-lane twin of [`Self::connect_production`]: identical ordering,
     /// identical authentication, a different fixed installed sibling
     /// (`ksx-hidmaestro-sdk-host.exe`) and therefore a different pinned
-    /// runtime-contract expectation. Serves Switch Pro and Xbox Series through
-    /// the pinned official SDK; DualSense never travels this lane.
+    /// runtime-contract expectation. Since the 2026-08-20 consolidation this
+    /// is the ONE production lane — every HIDMaestro persona, DualSense
+    /// included, rides it; `connect_production` (the candidate lane) keeps no
+    /// production caller and remains as the conformance reference's client.
     pub fn connect_production_sdk(
         expected: crate::host::HostExpectation,
     ) -> Result<crate::host::HostClient<Self>, ProductionHostConnectError> {

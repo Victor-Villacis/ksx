@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lazy_production_router_refuses_before_opening_either_driver() {
+    fn a_lazy_production_router_opens_nothing_until_a_persona_is_plugged() {
         // 2026-08-20 flip: with every persona pluggable there is no refusal
         // to observe, so laziness is pinned directly — construction opens
         // nothing, and plugging a ViGEm persona opens only ViGEm.
@@ -494,7 +494,7 @@ mod tests {
     /// still cannot be created. A gate that flips with an install would offer a
     /// persona that plugs no better than before.
     #[test]
-    fn the_production_router_refuses_unbuildable_personas_without_probing() {
+    fn the_cabinet_personas_never_touch_the_hidmaestro_side() {
         // 2026-08-20 flip: no unbuildable persona remains, so the pinned
         // property narrows to its second half — the cabinet's own personas
         // never touch the HIDMaestro side.

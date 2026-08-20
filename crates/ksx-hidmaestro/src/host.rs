@@ -75,7 +75,13 @@ pub const CLIENT_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const CLIENT_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Finite upper bounds passed to every transport implementation.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
-pub const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Creating a devnode is slow and gets slower with siblings: the 2026-08-20
+/// session measured the FIRST Switch Pro create at 0.8 s and the SECOND at
+/// 7.7 s (the driver re-enumerates with every added pad). 15 s left too
+/// little headroom for the later pads of an eight-pad couch; a genuine bind
+/// failure still answers as a named Fault well inside this bound (the host's
+/// own child-wait is 12 s).
+pub const CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_millis(250);
 /// Destroying a virtual controller removes a live devnode, and the OS-side
 /// removal cascade is the slow part: the 2026-08-20 hardware session measured
@@ -91,9 +97,10 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One of the fixed catalog identities KSX may eventually request.
 ///
-/// This is protocol vocabulary, not a capability gate. The production host
-/// currently enables DualSense only; Switch Pro and Xbox Series remain gated
-/// independently by [`Persona::can_plug()`].
+/// This is protocol vocabulary, not a capability gate. Which personas a
+/// build offers is decided independently by [`Persona::can_plug()`] — all
+/// three since the 2026-08-20 session measured them working through the
+/// multi-controller SDK-lane host.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ProfileId {
@@ -2788,12 +2795,13 @@ mod tests {
     }
 
     /// Protocol vocabulary does not enable unfinished product personas. The
-    /// production DualSense profile is live; Switch Pro is enabled through the
-    /// SDK-lane host (2026-08-20 hardware session) while Xbox Series remains
-    /// independently gated. The CANDIDATE-shaped harness below still refuses
-    /// Switch Pro — that persona is served by the SDK lane, never this one.
+    /// Every protocol profile is product-enabled (2026-08-20 session: all
+    /// three measured working through the SDK-lane host). The
+    /// CANDIDATE-shaped harness below still refuses Switch Pro — the
+    /// candidate host serves nothing in production and stays the conformance
+    /// reference.
     #[test]
-    fn protocol_profiles_enable_only_finished_product_personas() {
+    fn every_protocol_profile_is_product_enabled() {
         assert!(ProfileId::DualSense.persona().can_plug());
         assert!(ProfileId::SwitchPro.persona().can_plug());
         // 2026-08-20 hardware session: the SDK lane serves Xbox Series too.

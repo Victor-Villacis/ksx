@@ -6025,7 +6025,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
 /// the real `/start` form and a handcrafted POST still cannot bypass the
 /// domain limit.
 #[test]
-fn start_stops_offering_a_second_dualsense_over_http() {
+fn start_keeps_offering_dualsense_after_the_first_over_http() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(Arc::clone(&control));
     post_form(

@@ -35,8 +35,8 @@ Two rules that would have prevented most of the mistakes below:
 
 | Persona | Encoder | Device lane | Spawns? |
 |---|---|---|---|
-| DualSense | yes, frozen conformance | plain HID, `root\VID_054C&PID_0CE6` | **No — root-caused 2026-08-20:** the candidate host registered the devnode but never called `UpdateDriverForPlugAndPlayDevicesW`, so the INF never bound. Fix committed, awaiting the next installed build. |
-| Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD via the SDK lane** (the SDK performs its own companion flow; XUSB INF already staged as oem207) | **gate flipped 2026-08-20 for the session** — measurement pending; reverts if no working device appears |
+| DualSense | yes, frozen conformance | plain HID via the SDK lane (consolidation) | **YES — SPAWNED 2026-08-20**, two at once: `pads --count 2` exit 0, ctrl 0+1, creates 705/1444 ms, teardowns ~260 ms |
+| Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD via the SDK lane** (the SDK performs its own companion flow; XUSB INF staged as oem207) | **YES — MEASURED WORKING 2026-08-20**, four at once: XInput slots 0→4 claimed, creates ~150 ms, teardowns ~160 ms, exit 0 — gate stays |
 | Switch Pro | yes — 48-byte `0x30` body, semantic buttons | plain HID (SDK lane) | **YES — SPAWNED 2026-08-20.** Real devnode + HID child in 751 ms; clean ~12 s teardown. See the session results below. |
 | Xbox 360 / PlayStation | n/a — ViGEmBus | ViGEmBus | **yes, working** `[MEASURED 2026-08-20]` |
 
@@ -407,7 +407,8 @@ PadForge, by contrast, consumes the pre-built `HIDMaestro.Core.dll`
 ProjectReference"), runs `requireAdministrator` for the whole app, and its
 entire lifecycle is `CreateController` + `SubmitState`.
 
-**The decision:** DualSense stays on the finished, audited candidate — the
+**The decision** *(superseded same day by the consolidation below — DualSense
+rides the SDK lane too)*: DualSense stays on the finished, audited candidate — the
 "cannot" property (install/cert/sweep authority physically absent) is already
 paid for there. Switch Pro and Xbox Series ride the hash-pinned official
 `Core.dll` (`ADADD9E2…`, byte-verified against the release) inside the
@@ -437,19 +438,21 @@ ViGEmBus (same author) is already the working X360/DS4 lane.
 **Implementation state (2026-08-20):**
 1. ✅ `tools/hidmaestro-sdk-host/` — host exe, session, per-persona state
    mapper (layout-indexed buttons for Switch), `runtime-contract-sdk.json`
-   (canonical sha `3FC74E0A…`), pinned fetch + publish gates.
+   (canonical sha `B744C0F3…` since the multi-controller consolidation;
+   `3FC74E0A…` was the single-controller revision), pinned fetch + publish
+   gates.
 2. ✅ superseded — the single-file bundle carries the SDK, so the installer
    ships one more sealed sibling instead of staging assemblies; `ksx.iss` and
    the workflow package + PE-validate it.
-3. ✅ Rust: `protected_hidmaestro_sdk_host` sealed sibling,
-   `connect_production_sdk` with the same ordering/authentication, dual-lane
-   backend with lazy per-lane connect and lane-scoped controller matching
-   (both hosts number their controller `1`).
+3. ✅ superseded by the consolidation — the backend is single-lane now
+   (`connect_production_sdk` only, controller ids 1..8); the dual-lane
+   wiring this item described lives in git history.
 4. ✅ CI builds the host on every branch push; the 113 MB archive is cached by
    content hash and verified on every path.
-5. ⏳ hardware: one elevated session on Victor's machine — DualSense via the
-   candidate host AND Switch Pro via the SDK host — settles both lanes.
-   `PadBackend::supports` stays false until then.
+5. ✅ DONE — the 2026-08-20 session measured all three personas working
+   (multi-pad: 2×DualSense, 4×Xbox Series; Switch Pro exit 0 single, the
+   ×2 run exposed the lease-starvation race, fixed same day).
+   `PadBackend::supports` is true for every persona.
 
 ---
 
@@ -496,7 +499,8 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `fae5ece` | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
 | 2026-08-20 | `48c6089` | DualSense defect #2 from the fixed-build rerun: exactness checks matched child INSTANCE paths (`HID\HIDCLASS\…` measured) instead of `HardwareID` entries → both checks now read the registry multi-sz; Switch Pro re-verified exit 0 |
 | 2026-08-20 | `46ea36b` | Xbox Series gate flipped for the SDK-lane measurement (~12 test reworks: with every persona pluggable, refusal pins became acceptance/dormancy pins); host faults now carry the real exception; child-identity wait tolerates the Enum-mirror race |
-| 2026-08-20 | `aec3c4a` | **Xbox Series MEASURED WORKING** (205 ms create, XInput slot 0→1, 152 ms teardown, exit 0) — gate stays; multi-controller consolidation: SDK host carries 8, DualSense joins the SDK lane, candidate lane wiring retired, contract re-pinned `B744C0F3…`; recovery-path identity bug (4th home) fixed |
+| 2026-08-20 | `aec3c4a`+`d711b0a` | **Xbox Series MEASURED WORKING** (205 ms create, XInput slot 0→1, 152 ms teardown, exit 0) — gate stays; multi-controller consolidation: SDK host carries 8, DualSense joins the SDK lane, candidate lane wiring retired, contract re-pinned `B744C0F3…`; recovery-path identity bug (4th home) fixed |
+| 2026-08-20 | (this) | Multi-pad measured: 2×DualSense + 4×Xbox exit 0; Switch ×2 exposed the lease-starvation race → host re-stamps every lease on any inbound frame AND on its own expiry-teardown time; lease expiry now destroys only its own pad (per-controller contract); CREATE_TIMEOUT 15→30 s (create #2 measured 7.7 s); 34-agent adversarial review → 10 confirmed findings fixed: static `MAX_HIDMAESTRO_PADS = 8` pool ceiling at validate/stage/write/plan/roster layers (a clean-validating 9-pad config no longer dies at plug #9), surrogate-safe fault truncation (both hosts), ~14 refusal-named tests renamed honestly or made real again against the pool, six stale doc-comment sites + this doc's own stale sections corrected |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

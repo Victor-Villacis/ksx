@@ -147,11 +147,10 @@ impl PadBackend {
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
+            // All three measured working 2026-08-20 through the
+            // multi-controller SDK-lane host (docs/HIDMAESTRO-STATE.md,
+            // session results + consolidation).
             (PadBackend::HidMaestro, Persona::DualSense) => true,
-            // HARDWARE SESSION 2026-08-20: enabled for the supervised
-            // measurement on Victor's machine — the SDK-lane host serves this
-            // persona through the pinned official SDK. If the session fails to
-            // produce a working device, this flips back.
             (PadBackend::HidMaestro, Persona::SwitchPro) => true,
             // HARDWARE SESSION 2026-08-20: enabled for the supervised
             // measurement — the SDK-lane host already accepts this persona and
@@ -553,10 +552,10 @@ mod tests {
     }
 
     #[test]
-    fn only_the_enabled_hidmaestro_personas_can_plug() {
-        // 2026-08-20 hardware session: every shipping persona is enabled —
-        // DualSense on the audited candidate host, Switch Pro and Xbox
-        // Series through the pinned official SDK.
+    fn every_shipping_persona_can_plug() {
+        // 2026-08-20 session + consolidation: every shipping persona rides
+        // the multi-controller SDK-lane host (the audited candidate host
+        // ships unwired, as the conformance reference).
         for p in Persona::ALL {
             assert!(p.can_plug(), "{p} must be offered");
         }
@@ -600,8 +599,8 @@ mod tests {
                 assert_eq!(instead, p, "{p} works; nothing to suggest");
             }
         }
-        // The suggestions that carry meaning: a pluggable persona is its own
-        // answer; the one still-gated persona falls back to XInput.
+        // The suggestions that carry meaning: every persona is pluggable and
+        // therefore its own answer; the XInput fallback arm is dormant.
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::XboxSeries);

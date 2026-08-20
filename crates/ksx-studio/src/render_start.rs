@@ -1966,7 +1966,7 @@ mod tests {
     /// The reason stays in primary controller copy instead of disappearing
     /// with the option.
     #[test]
-    fn a_staged_dualsense_removes_only_the_second_dualsense_offer() {
+    fn a_staged_dualsense_keeps_the_offer_standing() {
         let page = EmbeddedPage::load("/start").unwrap();
         let staged = payload(stage(&[choose(), add("dualsense")]));
         let dualsense = staged

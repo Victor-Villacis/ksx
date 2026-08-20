@@ -189,8 +189,21 @@ internal sealed class RuntimeHostSession : IDisposable
     private static string FailureDetail(Exception failure)
     {
         string text = $"{failure.GetType().Name}: {failure.Message}";
-        while (System.Text.Encoding.UTF8.GetByteCount(text) > HostProtocolCodec.MaximumFaultDetailBytes)
+        // Exception text is arbitrary WTF-16 (NTFS names can carry unpaired
+        // surrogates); the codec's STRICT encoder refuses those, so round-trip
+        // through lenient UTF-8 first — invalid units become U+FFFD and every
+        // remaining char is encodable.
+        text = System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(text));
+        // Also strip a trailing high surrogate: trimming can land mid-pair,
+        // lenient GetByteCount still accepts the lone half (3 bytes), and the
+        // codec's STRICT UTF-8 encoder would then throw while building the
+        // Fault — inside the very catch handler that reports failures.
+        while (System.Text.Encoding.UTF8.GetByteCount(text) > HostProtocolCodec.MaximumFaultDetailBytes
+               || (text.Length > 0 && char.IsHighSurrogate(text[^1])))
+        {
             text = text[..^1];
+        }
+
         return text;
     }
 

@@ -76,15 +76,45 @@ internal sealed class SdkHostSession : IDisposable
                 if (completed == tick)
                 {
                     if (!await tick.ConfigureAwait(false)) break;
+                    List<uint>? expired = null;
                     foreach ((uint id, Live live) in _live)
                     {
                         if (Stopwatch.GetElapsedTime(live.LeaseTimestamp) >= Lease)
                         {
-                            await pipe.WriteFrameAsync(Fault(0, HostFaultCode.InvalidOrder, $"controller {id} lease expired"), linked.Token).ConfigureAwait(false);
-                            return 5;
+                            (expired ??= new List<uint>()).Add(id);
+                            continue;
                         }
 
                         live.Controller.SubmitState(live.Mapper.Map(in live.State));
+                    }
+
+                    if (expired is not null)
+                    {
+                        // The per-controller lease contract (pinned by the
+                        // Rust reference test `lease_deadlines_are_per_
+                        // controller_and_one_expiry_does_not_kill_the_
+                        // session`): a silent client costs its own pad —
+                        // neutralized, then destroyed, with NO fault and the
+                        // session left open. The earlier whole-session
+                        // Fault(0)+exit here diverged from that contract and
+                        // tore down healthy siblings.
+                        foreach (uint id in expired)
+                        {
+                            if (_live.Remove(id, out Live? gone))
+                            {
+                                gone.State = KsxPadState.Neutral;
+                                gone.Controller.SubmitState(gone.Mapper.Map(in gone.State));
+                                gone.Controller.Dispose();
+                            }
+                        }
+
+                        // Destroying an expired pad blocks this loop for the
+                        // full OS removal cascade (~12 s measured) — that is
+                        // the host's own time, so surviving leases restart.
+                        foreach (Live live in _live.Values)
+                        {
+                            live.LeaseTimestamp = Stopwatch.GetTimestamp();
+                        }
                     }
 
                     tick = timer.WaitForNextTickAsync(linked.Token).AsTask();
@@ -103,6 +133,19 @@ internal sealed class SdkHostSession : IDisposable
                 {
                     response = Fault(request.RequestId, HostFaultCode.SdkFailure, FailureDetail(failure));
                     closeAfter = true;
+                }
+
+                // ANY inbound frame proves the client alive, so every live
+                // lease restarts here — time this loop spends blocked inside
+                // its own Dispatch must never count against the client.
+                // Measured 2026-08-20: the second Switch Pro create took
+                // 7.7 s inside CreateController; controller 1's renewals sat
+                // unread in the pipe, and the post-dispatch tick expired its
+                // 5 s lease BEFORE draining them, tearing down a healthy
+                // session.
+                foreach (Live live in _live.Values)
+                {
+                    live.LeaseTimestamp = Stopwatch.GetTimestamp();
                 }
 
                 await pipe.WriteFrameAsync(response, linked.Token).ConfigureAwait(false);
@@ -225,8 +268,21 @@ internal sealed class SdkHostSession : IDisposable
     private static string FailureDetail(Exception failure)
     {
         string text = $"{failure.GetType().Name}: {failure.Message}";
-        while (System.Text.Encoding.UTF8.GetByteCount(text) > HostProtocolCodec.MaximumFaultDetailBytes)
+        // Exception text is arbitrary WTF-16 (NTFS names can carry unpaired
+        // surrogates); the codec's STRICT encoder refuses those, so round-trip
+        // through lenient UTF-8 first — invalid units become U+FFFD and every
+        // remaining char is encodable.
+        text = System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(text));
+        // Also strip a trailing high surrogate: trimming can land mid-pair,
+        // lenient GetByteCount still accepts the lone half (3 bytes), and the
+        // codec's STRICT UTF-8 encoder would then throw while building the
+        // Fault — inside the very catch handler that reports failures.
+        while (System.Text.Encoding.UTF8.GetByteCount(text) > HostProtocolCodec.MaximumFaultDetailBytes
+               || (text.Length > 0 && char.IsHighSurrogate(text[^1])))
+        {
             text = text[..^1];
+        }
+
         return text;
     }
 

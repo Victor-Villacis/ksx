@@ -256,14 +256,22 @@ ViGEmBus (same author) is already the working X360/DS4 lane.
   installer bootstrap (which already downloads and pin-verifies exactly those
   three), retained into an ACL-protected install location instead of deleted.
 
-**Implementation order:** (1) `tools/hidmaestro-sdk-host/` — new host exe
-referencing the pinned `Core.dll`, mapping the existing pipe protocol onto
-`HMContext`/`HMController`, hash-checking the DLL at load; (2) installer
-retains the three assemblies; (3) Rust: route `plug_persona` per persona to
-the right host, second `HostExpectation`; (4) CI builds the new host (fetching
-the pinned archive at build time, hash-verified); (5) hardware: DualSense via
-the candidate host AND Switch Pro via the SDK host on Victor's machine — the
-same elevated session settles both lanes.
+**Implementation state (2026-08-20):**
+1. ✅ `tools/hidmaestro-sdk-host/` — host exe, session, per-persona state
+   mapper (layout-indexed buttons for Switch), `runtime-contract-sdk.json`
+   (canonical sha `3FC74E0A…`), pinned fetch + publish gates.
+2. ✅ superseded — the single-file bundle carries the SDK, so the installer
+   ships one more sealed sibling instead of staging assemblies; `ksx.iss` and
+   the workflow package + PE-validate it.
+3. ✅ Rust: `protected_hidmaestro_sdk_host` sealed sibling,
+   `connect_production_sdk` with the same ordering/authentication, dual-lane
+   backend with lazy per-lane connect and lane-scoped controller matching
+   (both hosts number their controller `1`).
+4. ✅ CI builds the host on every branch push; the 113 MB archive is cached by
+   content hash and verified on every path.
+5. ⏳ hardware: one elevated session on Victor's machine — DualSense via the
+   candidate host AND Switch Pro via the SDK host — settles both lanes.
+   `PadBackend::supports` stays false until then.
 
 ---
 
@@ -301,7 +309,11 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `06cc5cb` | Sweep corrections; XUSB→inbox-xinputhid; "live"→staged |
 | 2026-08-20 | `02a27c0` | Switch Pro rewritten to the 48-byte `0x30` body; second 362 retraction executed; trigger axis-read verifier gap closed; s1_5e README 244/15 |
 | 2026-08-20 | `ebbadfa` | The three host seams named with sources |
-| 2026-08-20 | (HEAD) | Install proof redesigned: the impossible DLL-byte pin and the service-key deadlock replaced by INF hash + the SDK's own payload manifest (byte-verified against the downloaded release); runtime-contract re-pinned in its four places |
+| 2026-08-20 | `a44ac95`+`c3fd174` | Install proof redesigned: the impossible DLL-byte pin and the service-key deadlock replaced by INF hash + the SDK's own payload manifest (byte-verified against the downloaded release); runtime-contract re-pinned in its four places |
+| 2026-08-20 | `b23e557` | The hybrid decision recorded with PadForge's measured design inputs |
+| 2026-08-20 | `4762ee1` | The SDK-lane host: session, per-persona mapper, pinned fetch + publish, CI build |
+| 2026-08-20 | `5f00e9e` | Rust lane routing: sealed SDK sibling, connect_production_sdk, dual-lane backend |
+| 2026-08-20 | `94089ac` | SDK-lane host packaged: iss Source, required-binary + PE gates |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

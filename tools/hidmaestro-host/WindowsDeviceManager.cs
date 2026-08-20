@@ -174,8 +174,8 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             {
                 foreach (string child in children)
                 {
-                    if (!child.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("The exact root acquired an unexpected child device.");
+                    if (!ChildIsExactDualSense(child))
+                        throw new InvalidOperationException($"The exact root acquired an unexpected child device: {child}.");
                 }
                 return;
             }
@@ -183,6 +183,27 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
                 throw new TimeoutException("The preinstalled HIDMaestro package did not bind the exact DualSense root.");
             Thread.Sleep(50);
         }
+    }
+
+    /// <summary>
+    /// A child under the owned root is the exact DualSense iff its HARDWARE ID
+    /// list carries the driver-reported identity. Measured 2026-08-20 on a
+    /// live pad: the child's INSTANCE path spells <c>HID\HIDCLASS\…</c> (it is
+    /// derived from the root-enumerated parent, never from VID/PID), while its
+    /// <c>HardwareID</c> multi-sz leads with <c>HID\VID_xxxx&amp;PID_yyyy</c> —
+    /// the earlier instance-prefix check refused every legitimate child.
+    /// </summary>
+    private static bool ChildIsExactDualSense(string childInstanceId)
+    {
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
+            $@"SYSTEM\CurrentControlSet\Enum\{childInstanceId}", writable: false);
+        if (key?.GetValue("HardwareID") is not string[] ids) return false;
+        foreach (string id in ids)
+        {
+            if (id.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     public IReadOnlyList<string> ReadExactChildInstanceIds(RuntimeDeviceRegistration registration)
@@ -195,8 +216,10 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             _ownedChildren.Clear();
             foreach (string child in children)
             {
-                if (!child.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase)
-                    || !_ownedChildren.Add(child))
+                // Hardware-id identity, not instance-path spelling — the
+                // measured child instance is `HID\HIDCLASS\…` (see
+                // ChildIsExactDualSense).
+                if (!ChildIsExactDualSense(child) || !_ownedChildren.Add(child))
                     throw new InvalidOperationException("The exact HIDMaestro child set is not valid.");
             }
         }

@@ -272,8 +272,34 @@ Zero PnP sections appeared in `setupapi.dev.log` across all three attempts —
 Windows was never asked to bind. Fixed the same day in
 `WindowsDeviceManager.cs` (bind the pinned Driver Store INF after registration,
 fail-closed re-hash of the package; host child-wait 15 s → 12 s so the host
-answers a definite Fault INSIDE the client's deadline). Awaiting the next
-installed build to re-run.
+answers a definite Fault INSIDE the client's deadline).
+
+**DualSense rerun on the fixed build (`fae5ece` installed) found defect #2.**
+The bind now WORKS — `setupapi.dev.log` records the INF matching (via the
+second hardware id `root\hidmaestro`), mshidumdf + WUDFRd configured, and
+`ROOT\HIDCLASS\0003` STARTED — and the diff poller caught its healthy child
+`HID\HIDCLASS\1&29EBA48F&0&0000 [OK]`. The host then refused its own working
+pad: `ProveExactParentBound`/`ReadExactChildInstanceIds` required child
+INSTANCE ids to start `HID\VID_054C&PID_0CE6`, but a live-pad registry catch
+proved the child's instance path spells `HID\HIDCLASS\…` while the identity
+lives in its `HardwareID` multi-sz:
+
+```
+HID\HIDCLASS\1&10A8B2D&0&0000
+  HW = HID\VID_057E&PID_2009 ; HID\HIDMaestro ; HID\VID_057E&UP:0001_U:0005 ;
+       HID_DEVICE_SYSTEM_GAME ; HID_DEVICE_UP:0001_U:0005 ; HID_DEVICE
+```
+
+Both checks now match the child's `HardwareID` list (prefix
+`HID\VID_054C&PID_0CE6`, fail-closed on a missing key). Observed side effect
+of the refused-pad fault path: the lifecycle's teardown removed only the
+captured parent, orphaning the healthy child devnode for ~2 minutes until the
+next run's teardown swept it — acceptable (the prove step no longer faults on
+legitimate children, and deleting unowned children would be worse), recorded
+so the orphan is recognised if ever seen again.
+
+**Switch Pro re-verified on the fixed build: `exit=0`, end to end clean**
+(create ≈ 1.4 s, teardown ≈ 12 s inside the new 30 s budget).
 
 **Instrument lessons (the session's own tooling was wrong twice):**
 - The PnP poller filtered instance ids on `HIDMAESTRO|057E|2009|054C|0CE6` and
@@ -420,7 +446,8 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `5f00e9e` | Rust lane routing: sealed SDK sibling, connect_production_sdk, dual-lane backend |
 | 2026-08-20 | `94089ac` | SDK-lane host packaged: iss Source, required-binary + PE gates |
 | 2026-08-20 | `3cceb6a` | Switch Pro gate flipped for the hardware session; roster/test churn |
-| 2026-08-20 | (this) | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
+| 2026-08-20 | `fae5ece` | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
+| 2026-08-20 | (this) | DualSense defect #2 from the fixed-build rerun: exactness checks matched child INSTANCE paths (`HID\HIDCLASS\…` measured) instead of `HardwareID` entries → both checks now read the registry multi-sz; Switch Pro re-verified exit 0 |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

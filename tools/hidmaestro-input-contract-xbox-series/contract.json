@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-input-xbox-series-xs-bt",
+  "scope": {
+    "profileId": "xbox-series-xs-bt",
+    "connection": "bluetooth",
+    "vendorIdHex": "045E",
+    "productIdHex": "0B13",
+    "stateSurface": [
+      "HMGamepadState.Axes",
+      "HMGamepadState.Buttons",
+      "HMGamepadState.Hat"
+    ],
+    "excludedState": [
+      "HatDegrees",
+      "HatHundredths",
+      "HatRaw",
+      "touchpad",
+      "IMU",
+      "battery",
+      "audio",
+      "output reports",
+      "paddles"
+    ],
+    "assurance": "static-source-only"
+  },
+  "source": {
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "profilePath": "profiles/microsoft/xbox-series-xs-bt.json",
+    "descriptorByteLength": 262,
+    "descriptorSha256": "6339f42029abe95d5368d1f27829af05b9d51dae8baca136c95865f81f608eb8"
+  },
+  "activePath": {
+    "name": "bluetooth-plain-hid-descriptor",
+    "selectedBy": "HMController.SubmitState",
+    "driverMode": "xinputhid",
+    "triggerMode": "separate",
+    "profileExtendedReportPresent": false,
+    "profileExtendedReportActive": false,
+    "deviceCreationLane": "software-device-companion (hmswd.exe), not plain HID"
+  },
+  "report": {
+    "wireByteLength": 17,
+    "descriptorDataBitLength": 136,
+    "wireBitLength": 136,
+    "reportId": null,
+    "reportIdWireByte": null,
+    "reportIdIncludedInWireReport": false,
+    "reportIdAbsentBecause": "the pinned descriptor declares no Report ID item, so the first input byte is the low half of the X axis",
+    "clearedBeforeEveryEncode": true,
+    "statefulFields": false,
+    "rollingSequence": false,
+    "inputDefaultsOverlay": false
+  },
+  "stateKeySemantics": {
+    "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. This profile's descriptor assigns four of those six letters differently, so every axis below is bound by PHYSICAL SEMANTIC and the letter disagreement is intentional.",
+    "hostAssignment": {
+      "X": "leftStickX",
+      "Y": "leftStickY",
+      "Z": "rightStickX",
+      "Rz": "rightStickY",
+      "Rx": "leftTrigger",
+      "Ry": "rightTrigger"
+    },
+    "descriptorAssignment": {
+      "X": "leftStickX",
+      "Y": "leftStickY",
+      "Rx": "rightStickX",
+      "Ry": "rightStickY",
+      "Z": "leftTrigger",
+      "Rz": "rightTrigger"
+    }
+  },
+  "descriptorInputGroups": [
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "X, Y, Rx, Ry",
+      "reportSize": 16,
+      "reportCount": 4,
+      "logical": [
+        0,
+        65535
+      ],
+      "firstBit": 0
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "Z",
+      "reportSize": 10,
+      "reportCount": 1,
+      "logical": [
+        0,
+        1023
+      ],
+      "firstBit": 64,
+      "paddingBits": 6
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "Rz",
+      "reportSize": 10,
+      "reportCount": 1,
+      "logical": [
+        0,
+        1023
+      ],
+      "firstBit": 80,
+      "paddingBits": 6
+    },
+    {
+      "usagePage": "Button",
+      "fields": "buttons 1..12",
+      "reportSize": 1,
+      "reportCount": 12,
+      "logical": [
+        0,
+        1
+      ],
+      "firstBit": 96,
+      "paddingBits": 4
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "Hat switch",
+      "reportSize": 4,
+      "reportCount": 1,
+      "logical": [
+        1,
+        8
+      ],
+      "firstBit": 112,
+      "paddingBits": 4
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "System Main Menu",
+      "reportSize": 1,
+      "reportCount": 1,
+      "logical": [
+        0,
+        1
+      ],
+      "firstBit": 120,
+      "paddingBits": 7
+    },
+    {
+      "usagePage": "Generic Device",
+      "fields": "Battery Strength",
+      "reportSize": 8,
+      "reportCount": 1,
+      "logical": [
+        0,
+        255
+      ],
+      "firstBit": 128
+    }
+  ],
+  "axes": {
+    "sourceValueType": "System.Single",
+    "validInputDomain": "finite",
+    "normalization": "clamp to [0.0, 1.0]",
+    "wireFormula": "truncate_toward_zero((double)(float)clamp(value, 0, 1) * logicalMaximum)",
+    "wireSignedness": "unsigned",
+    "byteOrder": "little-endian",
+    "missingAxisValue": 0.0,
+    "missingAxisReason": "Every descriptor field has LogicalMinimum 0, so an absent axis encodes as 0 rather than as the neutral centre.",
+    "precisionLimit": "The shared host state mapper quantises to eight bits before this contract is reached, so the sixteen-bit fields carry eight bits of real resolution. Widening it would change the frozen DualSense golden vectors and is deliberately not done here.",
+    "entries": [
+      {
+        "stateKey": "X",
+        "enumValueHex": "0130",
+        "semantic": "leftStickX",
+        "wireByte": 0,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767,
+        "sharedDataByte": 0
+      },
+      {
+        "stateKey": "Y",
+        "enumValueHex": "0131",
+        "semantic": "leftStickY",
+        "wireByte": 2,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767,
+        "sharedDataByte": 2
+      },
+      {
+        "stateKey": "Z",
+        "enumValueHex": "0132",
+        "semantic": "rightStickX",
+        "wireByte": 4,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767,
+        "sharedDataByte": 4
+      },
+      {
+        "stateKey": "Rz",
+        "enumValueHex": "0135",
+        "semantic": "rightStickY",
+        "wireByte": 6,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767,
+        "sharedDataByte": 6
+      },
+      {
+        "stateKey": "Rx",
+        "enumValueHex": "0133",
+        "semantic": "leftTrigger",
+        "wireByte": 8,
+        "wireBitLength": 10,
+        "logicalMaximum": 1023,
+        "normalizedNeutral": 0.0,
+        "wireNeutral": 0,
+        "sharedDataByte": 8
+      },
+      {
+        "stateKey": "Ry",
+        "enumValueHex": "0134",
+        "semantic": "rightTrigger",
+        "wireByte": 10,
+        "wireBitLength": 10,
+        "logicalMaximum": 1023,
+        "normalizedNeutral": 0.0,
+        "wireNeutral": 0,
+        "sharedDataByte": 10
+      }
+    ]
+  },
+  "hat": {
+    "wireByte": 14,
+    "wireBits": "0-3",
+    "descriptorUsageHex": "0039",
+    "logicalMinimum": 1,
+    "logicalMaximum": 8,
+    "hasNullState": true,
+    "nullStateRule": "The descriptor's logical range starts at 1, so the centred hat is the out-of-range 0. HMHat's own numbering already matches 1..8, making the enum value the wire value.",
+    "values": [
+      {
+        "name": "None",
+        "enumValue": 0,
+        "wireValue": 0
+      },
+      {
+        "name": "North",
+        "enumValue": 1,
+        "wireValue": 1
+      },
+      {
+        "name": "NorthEast",
+        "enumValue": 2,
+        "wireValue": 2
+      },
+      {
+        "name": "East",
+        "enumValue": 3,
+        "wireValue": 3
+      },
+      {
+        "name": "SouthEast",
+        "enumValue": 4,
+        "wireValue": 4
+      },
+      {
+        "name": "South",
+        "enumValue": 5,
+        "wireValue": 5
+      },
+      {
+        "name": "SouthWest",
+        "enumValue": 6,
+        "wireValue": 6
+      },
+      {
+        "name": "West",
+        "enumValue": 7,
+        "wireValue": 7
+      },
+      {
+        "name": "NorthWest",
+        "enumValue": 8,
+        "wireValue": 8
+      }
+    ],
+    "sharedDataByte": 14
+  },
+  "buttons": {
+    "wireBytes": [
+      12,
+      13
+    ],
+    "descriptorButtonCount": 12,
+    "mapSource": "profile buttonMap [0,1,2,3,4,5,6,7,8,9,-1,-1,11]",
+    "entries": [
+      {
+        "name": "A",
+        "wireByte": 12,
+        "wireBit": 0,
+        "descriptorButtonIndex": 0
+      },
+      {
+        "name": "B",
+        "wireByte": 12,
+        "wireBit": 1,
+        "descriptorButtonIndex": 1
+      },
+      {
+        "name": "X",
+        "wireByte": 12,
+        "wireBit": 2,
+        "descriptorButtonIndex": 2
+      },
+      {
+        "name": "Y",
+        "wireByte": 12,
+        "wireBit": 3,
+        "descriptorButtonIndex": 3
+      },
+      {
+        "name": "LeftBumper",
+        "wireByte": 12,
+        "wireBit": 4,
+        "descriptorButtonIndex": 4
+      },
+      {
+        "name": "RightBumper",
+        "wireByte": 12,
+        "wireBit": 5,
+        "descriptorButtonIndex": 5
+      },
+      {
+        "name": "Back",
+        "wireByte": 12,
+        "wireBit": 6,
+        "descriptorButtonIndex": 6
+      },
+      {
+        "name": "Start",
+        "wireByte": 12,
+        "wireBit": 7,
+        "descriptorButtonIndex": 7
+      },
+      {
+        "name": "LeftStick",
+        "wireByte": 13,
+        "wireBit": 0,
+        "descriptorButtonIndex": 8
+      },
+      {
+        "name": "RightStick",
+        "wireByte": 13,
+        "wireBit": 1,
+        "descriptorButtonIndex": 9
+      },
+      {
+        "name": "Share",
+        "wireByte": 13,
+        "wireBit": 3,
+        "descriptorButtonIndex": 11
+      }
+    ],
+    "dropped": [
+      {
+        "name": "Touchpad",
+        "reason": "profile buttonMap maps it to -1; this pad has none"
+      },
+      {
+        "name": "RightPaddle",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "LeftPaddle",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "Misc1",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "RightPaddle2",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "LeftPaddle2",
+        "reason": "absent from the descriptor"
+      }
+    ],
+    "aliases": []
+  },
+  "separateUsages": [
+    {
+      "name": "Guide",
+      "descriptorUsage": "Generic Desktop System Main Menu",
+      "descriptorUsageHex": "0085",
+      "wireByte": 15,
+      "wireBit": 0,
+      "reason": "profile buttonMap maps Guide to -1 because this pad does not carry it as a plain button; the descriptor gives it its own one-bit field",
+      "sharedDataByte": 15
+    }
+  ],
+  "fixedZeroRegions": [
+    {
+      "wireByte": 16,
+      "reason": "Generic Device battery strength is not sourced from gamepad state"
+    },
+    {
+      "wireBits": "13.4-13.7",
+      "reason": "descriptor padding above button 12"
+    },
+    {
+      "wireBits": "9.2-9.7",
+      "reason": "descriptor padding above the Z field"
+    },
+    {
+      "wireBits": "11.2-11.7",
+      "reason": "descriptor padding above the Rz field"
+    },
+    {
+      "wireBits": "14.4-14.7",
+      "reason": "descriptor padding above the hat"
+    },
+    {
+      "wireBits": "15.1-15.7",
+      "reason": "descriptor padding above System Main Menu"
+    }
+  ],
+  "fullStateBehavior": {
+    "clearedBeforeEveryEncode": true,
+    "everyCallIsACompleteFrame": true,
+    "noCarryOverFromPreviousReport": true,
+    "priorFrameCarry": false
+  },
+  "coordinates": {
+    "candidateFullWireEncoder": {
+      "byteLength": 17,
+      "includesReportId": false,
+      "firstByte": "low half of X"
+    },
+    "integrationRule": "This profile has no report ID, so the full-wire report and the shared data slice are the same seventeen bytes. The 64-to-63 offset rule that governs DualSense does not apply here.",
+    "upstreamLegacySharedInput": {
+      "byteLength": 17,
+      "sourceSlice": "wireReport[0..17]",
+      "includesReportId": false,
+      "dataOffset": 0,
+      "dataLen": 17,
+      "note": "No report ID exists to strip, so the shared data slice is the whole report."
+    }
+  },
+  "resolution": {
+    "sourceFieldsSettled": true,
+    "unresolvedFields": [],
+    "sourceContractVerdict": "GO",
+    "runtimeVerdict": "NO-GO",
+    "runtimeNoGoReasons": [
+      "this persona presents as an XUSB device and requires the installed, identity-verified hmswd.exe software-device companion, which the plain-HID candidate does not provide; the runtime candidate README names this as the precondition for Xbox Series",
+      "the candidate's device lifecycle therefore refuses this persona explicitly",
+      "no artifact has been built",
+      "no driver or device has been exercised",
+      "the bluetooth presentation and xinputhid driver binding are unmeasured on real hardware"
+    ],
+    "aggregateGatesChanged": false
+  },
+  "derivedTriggerButtons": []
+}

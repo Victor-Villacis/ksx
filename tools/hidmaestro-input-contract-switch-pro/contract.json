@@ -1,0 +1,402 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-input-switch-pro-bt-3f",
+  "scope": {
+    "profileId": "switch-pro",
+    "connection": "bluetooth",
+    "vendorIdHex": "057E",
+    "productIdHex": "2009",
+    "stateSurface": [
+      "HMGamepadState.Axes",
+      "HMGamepadState.Buttons",
+      "HMGamepadState.Hat"
+    ],
+    "excludedState": [
+      "HatDegrees",
+      "HatHundredths",
+      "HatRaw",
+      "IMU",
+      "battery",
+      "rumble",
+      "output reports",
+      "full-mode vendor reports 0x21/0x30/0x31-0x33"
+    ],
+    "assurance": "static-source-only"
+  },
+  "source": {
+    "tag": "v1.6.1",
+    "commit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+    "profilePath": "profiles/nintendo/switch-pro.json",
+    "descriptorByteLength": 170,
+    "descriptorSha256": "421dbc392ea406cd864c602acb17e9e5fb24e2d764b61ae80a4f0c60b6252ac8"
+  },
+  "activePath": {
+    "name": "bluetooth-simple-hid-report-3f",
+    "selectedBy": "HMController.SubmitState",
+    "reportSelectionReason": "The profile's own notes state that report 0x3F is a real HID gamepad and that DirectInput parses only 0x3F, while 0x21/0x30 and 0x31-0x33 are vendor blobs. Only 0x3F is described field by field in the descriptor, so only 0x3F is derivable and therefore encodable.",
+    "profileExtendedReportPresent": true,
+    "profileExtendedReportActive": false
+  },
+  "report": {
+    "wireByteLength": 12,
+    "descriptorDataBitLength": 88,
+    "wireBitLength": 96,
+    "reportId": 63,
+    "reportIdWireByte": 0,
+    "reportIdIncludedInWireReport": true,
+    "clearedBeforeEveryEncode": true,
+    "statefulFields": false,
+    "rollingSequence": false,
+    "inputDefaultsOverlay": false
+  },
+  "stateKeySemantics": {
+    "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. This descriptor names the right stick Rx/Ry, so the right stick is read from HMAxis.Z/Rz and the letter disagreement is intentional.",
+    "hostAssignment": {
+      "X": "leftStickX",
+      "Y": "leftStickY",
+      "Z": "rightStickX",
+      "Rz": "rightStickY",
+      "Rx": "leftTrigger",
+      "Ry": "rightTrigger"
+    },
+    "descriptorAssignment": {
+      "X": "leftStickX",
+      "Y": "leftStickY",
+      "Rx": "rightStickX",
+      "Ry": "rightStickY"
+    }
+  },
+  "descriptorInputGroups": [
+    {
+      "usagePage": "Button",
+      "fields": "buttons 1..16",
+      "reportSize": 1,
+      "reportCount": 16,
+      "logical": [
+        0,
+        1
+      ],
+      "firstBit": 0
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "Hat switch",
+      "reportSize": 4,
+      "reportCount": 1,
+      "logical": [
+        0,
+        7
+      ],
+      "firstBit": 16,
+      "paddingBits": 4
+    },
+    {
+      "usagePage": "Generic Desktop",
+      "fields": "X, Y, Rx, Ry",
+      "reportSize": 16,
+      "reportCount": 4,
+      "logical": [
+        0,
+        65535
+      ],
+      "firstBit": 24
+    }
+  ],
+  "axes": {
+    "sourceValueType": "System.Single",
+    "validInputDomain": "finite",
+    "normalization": "clamp to [0.0, 1.0]",
+    "wireFormula": "truncate_toward_zero((double)(float)clamp(value, 0, 1) * 65535)",
+    "wireSignedness": "unsigned",
+    "byteOrder": "little-endian",
+    "missingAxisValue": 0.0,
+    "missingAxisReason": "Every descriptor field has LogicalMinimum 0.",
+    "precisionLimit": "The shared host state mapper quantises to eight bits before this contract is reached, so these sixteen-bit fields carry eight bits of real resolution.",
+    "entries": [
+      {
+        "stateKey": "X",
+        "enumValueHex": "0130",
+        "semantic": "leftStickX",
+        "wireByte": 4,
+        "sharedDataByte": 3,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767
+      },
+      {
+        "stateKey": "Y",
+        "enumValueHex": "0131",
+        "semantic": "leftStickY",
+        "wireByte": 6,
+        "sharedDataByte": 5,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767
+      },
+      {
+        "stateKey": "Z",
+        "enumValueHex": "0132",
+        "semantic": "rightStickX",
+        "wireByte": 8,
+        "sharedDataByte": 7,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767
+      },
+      {
+        "stateKey": "Rz",
+        "enumValueHex": "0135",
+        "semantic": "rightStickY",
+        "wireByte": 10,
+        "sharedDataByte": 9,
+        "wireBitLength": 16,
+        "logicalMaximum": 65535,
+        "normalizedNeutral": 0.5,
+        "wireNeutral": 32767
+      }
+    ]
+  },
+  "hat": {
+    "wireByte": 3,
+    "sharedDataByte": 2,
+    "wireBits": "0-3",
+    "descriptorUsageHex": "0039",
+    "logicalMinimum": 0,
+    "logicalMaximum": 7,
+    "hasNullState": true,
+    "nullStateRule": "Eight directions occupy 0..7 and the centred hat is the out-of-range 8, the same null-state convention DualSense uses.",
+    "values": [
+      {
+        "name": "North",
+        "enumValue": 1,
+        "wireValue": 0
+      },
+      {
+        "name": "NorthEast",
+        "enumValue": 2,
+        "wireValue": 1
+      },
+      {
+        "name": "East",
+        "enumValue": 3,
+        "wireValue": 2
+      },
+      {
+        "name": "SouthEast",
+        "enumValue": 4,
+        "wireValue": 3
+      },
+      {
+        "name": "South",
+        "enumValue": 5,
+        "wireValue": 4
+      },
+      {
+        "name": "SouthWest",
+        "enumValue": 6,
+        "wireValue": 5
+      },
+      {
+        "name": "West",
+        "enumValue": 7,
+        "wireValue": 6
+      },
+      {
+        "name": "NorthWest",
+        "enumValue": 8,
+        "wireValue": 7
+      },
+      {
+        "name": "None",
+        "enumValue": 0,
+        "wireValue": 8
+      }
+    ]
+  },
+  "buttons": {
+    "wireBytes": [
+      1,
+      2
+    ],
+    "descriptorButtonCount": 16,
+    "mapSource": "profile layout faceButtons/shoulderButtons/systemButtons/sticks",
+    "faceMappingRule": "Nintendo labels the bottom face button B and the right one A. The mapping is POSITIONAL, so HMButton.A is the bottom button (descriptor index 0, role face_b) exactly as it is on every other persona; a player pressing the bottom button gets A in the game.",
+    "entries": [
+      {
+        "name": "A",
+        "wireByte": 1,
+        "wireBit": 0,
+        "descriptorButtonIndex": 0,
+        "layoutRole": "face_b"
+      },
+      {
+        "name": "B",
+        "wireByte": 1,
+        "wireBit": 1,
+        "descriptorButtonIndex": 1,
+        "layoutRole": "face_a"
+      },
+      {
+        "name": "X",
+        "wireByte": 1,
+        "wireBit": 2,
+        "descriptorButtonIndex": 2,
+        "layoutRole": "face_y"
+      },
+      {
+        "name": "Y",
+        "wireByte": 1,
+        "wireBit": 3,
+        "descriptorButtonIndex": 3,
+        "layoutRole": "face_x"
+      },
+      {
+        "name": "LeftBumper",
+        "wireByte": 1,
+        "wireBit": 4,
+        "descriptorButtonIndex": 4,
+        "layoutRole": "left_bumper"
+      },
+      {
+        "name": "RightBumper",
+        "wireByte": 1,
+        "wireBit": 5,
+        "descriptorButtonIndex": 5,
+        "layoutRole": "right_bumper"
+      },
+      {
+        "name": "Back",
+        "wireByte": 2,
+        "wireBit": 0,
+        "descriptorButtonIndex": 8,
+        "layoutRole": "back"
+      },
+      {
+        "name": "Start",
+        "wireByte": 2,
+        "wireBit": 1,
+        "descriptorButtonIndex": 9,
+        "layoutRole": "start"
+      },
+      {
+        "name": "LeftStick",
+        "wireByte": 2,
+        "wireBit": 2,
+        "descriptorButtonIndex": 10,
+        "layoutRole": "left_stick_click"
+      },
+      {
+        "name": "RightStick",
+        "wireByte": 2,
+        "wireBit": 3,
+        "descriptorButtonIndex": 11,
+        "layoutRole": "right_stick_click"
+      },
+      {
+        "name": "Guide",
+        "wireByte": 2,
+        "wireBit": 4,
+        "descriptorButtonIndex": 12,
+        "layoutRole": "guide"
+      },
+      {
+        "name": "Share",
+        "wireByte": 2,
+        "wireBit": 5,
+        "descriptorButtonIndex": 13,
+        "layoutRole": "capture"
+      }
+    ],
+    "aliases": [],
+    "dropped": [
+      {
+        "name": "Touchpad",
+        "reason": "the Switch Pro controller has none"
+      },
+      {
+        "name": "RightPaddle",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "LeftPaddle",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "Misc1",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "RightPaddle2",
+        "reason": "absent from the descriptor"
+      },
+      {
+        "name": "LeftPaddle2",
+        "reason": "absent from the descriptor"
+      }
+    ]
+  },
+  "derivedTriggerButtons": [
+    {
+      "axisStateKey": "Rx",
+      "wireByte": 1,
+      "wireBit": 6,
+      "condition": "clamped normalized value > 0.0",
+      "layoutRole": "left_trigger_click"
+    },
+    {
+      "axisStateKey": "Ry",
+      "wireByte": 1,
+      "wireBit": 7,
+      "condition": "clamped normalized value > 0.0",
+      "layoutRole": "right_trigger_click"
+    }
+  ],
+  "separateUsages": [],
+  "fixedZeroRegions": [
+    {
+      "wireBits": "2.6-2.7",
+      "reason": "buttons 15 and 16 have no mapped control"
+    },
+    {
+      "wireBits": "3.4-3.7",
+      "reason": "descriptor padding above the hat"
+    }
+  ],
+  "fullStateBehavior": {
+    "clearedBeforeEveryEncode": true,
+    "everyCallIsACompleteFrame": true,
+    "priorFrameCarry": false
+  },
+  "coordinates": {
+    "candidateFullWireEncoder": {
+      "byteLength": 12,
+      "includesReportId": true,
+      "firstByte": 63
+    },
+    "upstreamLegacySharedInput": {
+      "byteLength": 11,
+      "sourceSlice": "wireReport[1..12]",
+      "includesReportId": false,
+      "dataOffset": 1,
+      "dataLen": 11
+    },
+    "integrationRule": "The descriptor declares a report ID, so the leading byte is stripped exactly as it is for DualSense."
+  },
+  "resolution": {
+    "sourceFieldsSettled": false,
+    "unresolvedFields": [
+      "The profile declares inputReportSize 362, which is the largest vendor report, while the encodable 0x3F report is 12 bytes. Whether the plain-HID device path registers a Switch Pro endpoint that streams 0x3F alone is NOT answerable from the pinned source and must be measured on hardware before this persona is enabled."
+    ],
+    "sourceContractVerdict": "GO-WITH-OPEN-QUESTION",
+    "runtimeVerdict": "NO-GO",
+    "runtimeNoGoReasons": [
+      "the report-size question above is unmeasured",
+      "no artifact has been built",
+      "no driver or device has been exercised"
+    ],
+    "aggregateGatesChanged": false
+  }
+}

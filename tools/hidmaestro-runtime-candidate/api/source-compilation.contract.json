@@ -10,7 +10,10 @@
   },
   "coverage": {
     "root": "sdk/HIDMaestro.Core",
-    "includedExtensions": [".cs", ".csproj"],
+    "includedExtensions": [
+      ".cs",
+      ".csproj"
+    ],
     "expectedUpstreamUnitCount": 51,
     "everyUpstreamUnitClassifiedExactlyOnce": true
   },
@@ -73,38 +76,62 @@
     ],
     "replacementRequired": [
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/HIDMaestro.Core.csproj"],
-        "plannedCandidateUnits": ["candidate/HIDMaestro.Core.csproj"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/HIDMaestro.Core.csproj"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/HIDMaestro.Core.csproj"
+        ],
         "reason": "Explicit compile/resource items, no upstream targets, downloads, packers, provisioning payloads or implicit globs.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/HMContext.cs"],
-        "plannedCandidateUnits": ["candidate/HMContext.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/HMContext.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/HMContext.cs"
+        ],
         "reason": "Preserve only the five allowlisted lifecycle/catalog methods and remove constructor prewarm, install and global cleanup.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/HMController.cs"],
-        "plannedCandidateUnits": ["candidate/HMController.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/HMController.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/HMController.cs"
+        ],
         "reason": "Preserve only exact-owned input/raw-output/dispose behavior and the four allowlisted logical members.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/HMGamepadState.cs"],
-        "plannedCandidateUnits": ["candidate/HMGamepadState.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/HMGamepadState.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/HMGamepadState.cs"
+        ],
         "reason": "Preserve exact enum values and only Axes, Buttons and Hat; omit helpers and unrelated sensor/touch/battery fields from the public surface.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/HMProfile.cs"],
-        "plannedCandidateUnits": ["candidate/HMProfile.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/HMProfile.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/HMProfile.cs"
+        ],
         "reason": "Expose only Id, Name, VendorId and ProductId; omit builder/layout/descriptor and arbitrary catalog surfaces.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/ControllerProfile.cs"],
-        "plannedCandidateUnits": ["candidate/Internal/RuntimeProfileCatalog.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/Internal/ControllerProfile.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/Internal/RuntimeProfileCatalog.cs"
+        ],
         "reason": "Replace the generic public profile database/types with a hash-pinned immutable catalog over all 228 source-manifest-selected profiles; the S2 create guard still accepts only DualSense.",
         "replacementPresent": true
       },
@@ -127,13 +154,19 @@
           "sdk/HIDMaestro.Core/Internal/VendorBlobCodec.cs",
           "sdk/HIDMaestro.Core/Internal/VendorBlobProgram.cs"
         ],
-        "plannedCandidateUnits": ["candidate/Internal/RuntimeDualSenseInputEncoder.cs"],
+        "plannedCandidateUnits": [
+          "candidate/Internal/RuntimeDualSenseInputEncoder.cs"
+        ],
         "reason": "Replace the broad generic/public encoder graph with the fixed 64-byte DualSense USB report encoder required by the conformance slice.",
         "replacementPresent": true
       },
       {
-        "upstreamUnits": ["sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs"],
-        "plannedCandidateUnits": ["candidate/Internal/RuntimeOwnedSharedMemoryIO.cs"],
+        "upstreamUnits": [
+          "sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs"
+        ],
+        "plannedCandidateUnits": [
+          "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs"
+        ],
         "reason": "Replace process-global dictionaries and broad cleanup with one-controller owned handles, bounded output and exact teardown.",
         "replacementPresent": true
       }
@@ -183,6 +216,21 @@
       "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
       "purpose": "Validate HMOutputSource, report ID and exact length, then produce complete effective feedback snapshots from separate ReportId/Data coordinates.",
       "present": true
+    },
+    {
+      "path": "candidate/Internal/RuntimeInputWireShape.cs",
+      "purpose": "Carry each profile's own full-wire coordinates (report length, report-ID presence, endpoint data slice) as a closed set of frozen shapes, so the seam is no longer written to one profile's numbers.",
+      "present": true
+    },
+    {
+      "path": "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",
+      "purpose": "Encode the pinned xbox-series-xs-bt profile's own 17-byte, report-ID-less input report: 16-bit sticks, 10-bit triggers, twelve mapped buttons, a logical 1..8 hat and the separate System Main Menu bit.",
+      "present": true
+    },
+    {
+      "path": "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
+      "purpose": "Encode the pinned switch-pro profile's report 0x3F: twelve bytes led by the report ID, sixteen buttons across two bytes, a null-state 0..7 hat, four 16-bit axes, and ZL/ZR derived as digital bits because this pad has no analog triggers.",
+      "present": true
     }
   ],
   "nonCompilationInputs": [
@@ -226,6 +274,9 @@
       "candidate/HMProfile.cs",
       "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
       "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
+      "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",
+      "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
+      "candidate/Internal/RuntimeInputWireShape.cs",
       "candidate/Internal/RuntimeProfileCatalog.cs",
       "candidate/Internal/RuntimeExactDeviceManager.cs",
       "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",

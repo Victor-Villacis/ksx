@@ -173,7 +173,7 @@ internal sealed class RuntimePlainHidLifecycle
     internal RuntimePlainHidTransaction BeginCreate(HMProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        EnsureExactDualSense(profile);
+        EnsureExactSupportedProfile(profile);
 
         RuntimePreinstalledPackageProof proof = _deviceManager.ProvePreinstalledDualSensePackage();
         RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof);
@@ -277,16 +277,27 @@ internal sealed class RuntimePlainHidLifecycle
         }
     }
 
-    private static void EnsureExactDualSense(HMProfile profile)
+    // Generalized from an exact-DualSense guard to the frozen persona table.
+    // Every field the old guard compared is still compared, now against the
+    // shape declared for that profile id, so a profile this candidate has no
+    // encoder for is refused before any device is touched.
+    private static void EnsureExactSupportedProfile(HMProfile profile)
     {
-        if (!string.Equals(profile.Id, "dualsense", StringComparison.Ordinal) ||
-            profile.VendorId != 0x054C ||
-            profile.ProductId != 0x0CE6 ||
-            !string.Equals(profile.Connection, "usb", StringComparison.Ordinal) ||
-            profile.InputReportSize != 64 ||
-            !profile.HasDescriptor)
+        if (profile is null ||
+            !RuntimeInputWireShape.TryGet(profile.Id, out RuntimeInputWireShape shape) ||
+            !shape.MatchesProfileIdentity(profile))
         {
-            throw new NotSupportedException("Only the frozen plain-USB DualSense profile is permitted.");
+            throw new NotSupportedException(
+                "Only a frozen plain-HID persona profile is permitted.");
+        }
+
+        if (shape.RequiresSoftwareDeviceCompanion)
+        {
+            throw new NotSupportedException(
+                $"The '{profile.Id}' persona presents as an XUSB device and requires the " +
+                "installed, identity-verified hmswd.exe software-device companion, which " +
+                "this plain-HID candidate does not provide. Its input encoder and frozen " +
+                "input contract exist; the device-creation lane does not.");
         }
     }
 

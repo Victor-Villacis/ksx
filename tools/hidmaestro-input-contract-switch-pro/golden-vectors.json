@@ -1,0 +1,785 @@
+{
+  "schemaVersion": 1,
+  "contractId": "hidmaestro-input-switch-pro-bt-3f",
+  "vectors": [
+    {
+      "id": "neutral_explicit",
+      "purpose": "Centred sticks, released triggers, no buttons, centred hat.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "axes_absent",
+      "purpose": "A missing axis key encodes as 0.0, not as the neutral centre.",
+      "frames": [
+        {
+          "state": {
+            "axes": {},
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F0000080000000000000000"
+        }
+      ]
+    },
+    {
+      "id": "axis_X_sweep",
+      "purpose": "X (leftStickX) at both rails and centre.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.0,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F0000080000FF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 1.0,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FFFFFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "axis_Y_sweep",
+      "purpose": "Y (leftStickY) at both rails and centre.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.0,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7F0000FF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 1.0,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFFFFFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "axis_Z_sweep",
+      "purpose": "Z (rightStickX) at both rails and centre.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.0,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7F0000FF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 1.0,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFFFFFF7F"
+        }
+      ]
+    },
+    {
+      "id": "axis_Rz_sweep",
+      "purpose": "Rz (rightStickY) at both rails and centre.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.0,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7F0000"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 1.0,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFFFF"
+        }
+      ]
+    },
+    {
+      "id": "hat_all_values",
+      "purpose": "All eight octants and the null-state centred hat.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "North",
+            "buttons": []
+          },
+          "reportHex": "3F000000FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "NorthEast",
+            "buttons": []
+          },
+          "reportHex": "3F000001FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "East",
+            "buttons": []
+          },
+          "reportHex": "3F000002FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "SouthEast",
+            "buttons": []
+          },
+          "reportHex": "3F000003FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "South",
+            "buttons": []
+          },
+          "reportHex": "3F000004FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "SouthWest",
+            "buttons": []
+          },
+          "reportHex": "3F000005FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "West",
+            "buttons": []
+          },
+          "reportHex": "3F000006FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "NorthWest",
+            "buttons": []
+          },
+          "reportHex": "3F000007FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "buttons_individual",
+      "purpose": "Each carried button alone, proving its descriptor bit.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "A"
+            ]
+          },
+          "reportHex": "3F010008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "B"
+            ]
+          },
+          "reportHex": "3F020008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "X"
+            ]
+          },
+          "reportHex": "3F040008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Y"
+            ]
+          },
+          "reportHex": "3F080008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "LeftBumper"
+            ]
+          },
+          "reportHex": "3F100008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "RightBumper"
+            ]
+          },
+          "reportHex": "3F200008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Back"
+            ]
+          },
+          "reportHex": "3F000108FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Start"
+            ]
+          },
+          "reportHex": "3F000208FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "LeftStick"
+            ]
+          },
+          "reportHex": "3F000408FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "RightStick"
+            ]
+          },
+          "reportHex": "3F000808FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Guide"
+            ]
+          },
+          "reportHex": "3F001008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Share"
+            ]
+          },
+          "reportHex": "3F002008FF7FFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "digital_triggers",
+      "purpose": "ZL/ZR are digital: any trigger value above zero sets the bit.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.004,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F400008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 1.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F400008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.004
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F800008FF7FFF7FFF7FFF7F"
+        },
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 1.0
+            },
+            "hat": "None",
+            "buttons": []
+          },
+          "reportHex": "3F800008FF7FFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "buttons_dropped",
+      "purpose": "Touchpad has no Switch Pro control and encodes to nothing.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 0.5,
+              "Y": 0.5,
+              "Z": 0.5,
+              "Rz": 0.5,
+              "Rx": 0.0,
+              "Ry": 0.0
+            },
+            "hat": "None",
+            "buttons": [
+              "Touchpad"
+            ]
+          },
+          "reportHex": "3F000008FF7FFF7FFF7FFF7F"
+        }
+      ]
+    },
+    {
+      "id": "saturated",
+      "purpose": "All axes full, every carried button, both triggers, hat NorthWest.",
+      "frames": [
+        {
+          "state": {
+            "axes": {
+              "X": 1.0,
+              "Y": 1.0,
+              "Z": 1.0,
+              "Rz": 1.0,
+              "Rx": 1.0,
+              "Ry": 1.0
+            },
+            "hat": "NorthWest",
+            "buttons": [
+              "A",
+              "B",
+              "X",
+              "Y",
+              "LeftBumper",
+              "RightBumper",
+              "Back",
+              "Start",
+              "LeftStick",
+              "RightStick",
+              "Guide",
+              "Share"
+            ]
+          },
+          "reportHex": "3FFF3F07FFFFFFFFFFFFFFFF"
+        }
+      ]
+    }
+  ],
+  "requiredCoverage": {
+    "axes": [
+      "X",
+      "Y",
+      "Z",
+      "Rz",
+      "Rx",
+      "Ry"
+    ],
+    "hats": [
+      "North",
+      "NorthEast",
+      "East",
+      "SouthEast",
+      "South",
+      "SouthWest",
+      "West",
+      "NorthWest",
+      "None"
+    ],
+    "buttons": [
+      "A",
+      "B",
+      "X",
+      "Y",
+      "LeftBumper",
+      "RightBumper",
+      "Back",
+      "Start",
+      "LeftStick",
+      "RightStick",
+      "Guide",
+      "Share",
+      "Touchpad"
+    ]
+  }
+}

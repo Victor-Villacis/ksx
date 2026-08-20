@@ -73,11 +73,21 @@ public sealed class HMContext : IDisposable
                     "Exact-owned recovery must complete through Dispose before another controller can be created.");
             }
 
-            HMProfile? frozenProfile = _catalog.GetProfile("dualsense");
+            // A profile is admissible only when this candidate carries an encoder
+            // bound to it AND the caller handed back the catalog's own embedded
+            // instance. The second half is what keeps a look-alike profile built
+            // elsewhere from reaching a device, and it is unchanged.
+            if (!RuntimeInputWireShape.TryGet(profile.Id, out _))
+            {
+                throw new NotSupportedException(
+                    $"CreateController accepts only profiles with a bound candidate encoder; '{profile.Id}' has none.");
+            }
+
+            HMProfile? frozenProfile = _catalog.GetProfile(profile.Id);
             if (!ReferenceEquals(profile, frozenProfile))
             {
                 throw new NotSupportedException(
-                    "CreateController accepts only the exact embedded DualSense conformance profile.");
+                    "CreateController accepts only an exact embedded conformance profile instance.");
             }
 
             try

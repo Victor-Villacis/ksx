@@ -130,6 +130,14 @@ impl PadBackend {
     /// The three HIDMaestro arms are intentionally separate. The first live
     /// milestone is one plain DualSense, and proving it must not turn two
     /// unrelated catalog entries into product promises.
+    ///
+    /// Switch Pro and Xbox Series now have frozen source encoders, input
+    /// contracts and golden vectors in the runtime candidate — but source is
+    /// not a runtime. Nothing has been compiled into a shipping host, no
+    /// device has been created, and neither profile's Bluetooth presentation
+    /// has been measured on real hardware. They stay `false` until a built
+    /// artifact drives an actual pad, because a persona listed here is a
+    /// promise the Studio makes to a player.
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,

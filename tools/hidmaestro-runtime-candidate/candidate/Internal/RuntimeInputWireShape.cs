@@ -1,0 +1,224 @@
+using System;
+
+namespace HIDMaestro.Internal;
+
+/// <summary>
+/// One frozen persona: the exact catalog profile identity it may be created
+/// from, and the shape of the full-wire input report it produces — how long it
+/// is, whether it carries a leading report ID, and which slice of it the
+/// shared-memory endpoint is given.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Before this type existed the whole input path was one profile wide. The
+/// encoder, the controller's report buffer, the device lifecycle's identity
+/// guard and the shared-memory seam each spelled DualSense's own numbers
+/// directly — 64 bytes, a leading <c>0x01</c>, USB, and a <c>Slice(1, 63)</c>
+/// handed to the endpoint. That is correct for DualSense and wrong for every
+/// profile whose descriptor declares no report ID, because there is then no
+/// byte to strip and the data slice is the whole report.
+/// </para>
+/// <para>
+/// So the numbers move here, as a closed set of frozen shapes. A shape is not
+/// constructible from outside this file, and the lifecycle admits a profile
+/// only when one of these shapes matches its identity field for field — which
+/// keeps every guarantee the hard-coded checks gave, while letting a second
+/// persona carry its own coordinates. DualSense's values are read from
+/// <see cref="RuntimeDualSenseInputEncoder"/>'s own constants rather than
+/// restated, so the frozen conformance profile keeps a single source of truth.
+/// </para>
+/// <para>
+/// <see cref="DeclaredInputReportSize"/> is the profile's own
+/// <c>inputReportSize</c> and is deliberately separate from
+/// <see cref="FullWireLength"/>. DualSense and Xbox Series happen to agree,
+/// but Switch Pro does not — it declares a 362-byte vendor report while the
+/// encodable 0x3F report is twelve bytes. They are different facts: one is the report length the catalog profile
+/// declares, the other is the length this candidate actually encodes. A
+/// persona whose descriptor carries several report IDs of different sizes
+/// would have them differ, and conflating them would silently encode the wrong
+/// report.
+/// </para>
+/// </remarks>
+internal readonly struct RuntimeInputWireShape
+{
+    internal const string DualSenseProfileId = "dualsense";
+    internal const string XboxSeriesProfileId = "xbox-series-xs-bt";
+    internal const string SwitchProProfileId = "switch-pro";
+
+    private RuntimeInputWireShape(
+        string profileId,
+        ushort vendorId,
+        ushort productId,
+        string connection,
+        int declaredInputReportSize,
+        int fullWireLength,
+        bool includesReportId,
+        byte reportId,
+        int sharedDataOffset,
+        int sharedDataLength,
+        bool requiresSoftwareDeviceCompanion = false)
+    {
+        RequiresSoftwareDeviceCompanion = requiresSoftwareDeviceCompanion;
+        ProfileId = profileId;
+        VendorId = vendorId;
+        ProductId = productId;
+        Connection = connection;
+        DeclaredInputReportSize = declaredInputReportSize;
+        FullWireLength = fullWireLength;
+        IncludesReportId = includesReportId;
+        ReportId = reportId;
+        SharedDataOffset = sharedDataOffset;
+        SharedDataLength = sharedDataLength;
+    }
+
+    internal string ProfileId { get; }
+
+    internal ushort VendorId { get; }
+
+    internal ushort ProductId { get; }
+
+    internal string Connection { get; }
+
+    /// <summary>The profile's own declared <c>inputReportSize</c>.</summary>
+    internal int DeclaredInputReportSize { get; }
+
+    /// <summary>Length of the report this candidate's encoder produces.</summary>
+    internal int FullWireLength { get; }
+
+    /// <summary>
+    /// Whether the descriptor declares a Report ID, and therefore whether the
+    /// first wire byte is that ID rather than payload.
+    /// </summary>
+    internal bool IncludesReportId { get; }
+
+    /// <summary>Meaningful only when <see cref="IncludesReportId"/>.</summary>
+    internal byte ReportId { get; }
+
+    /// <summary>First byte of the slice handed to the endpoint.</summary>
+    internal int SharedDataOffset { get; }
+
+    /// <summary>Length of the slice handed to the endpoint.</summary>
+    internal int SharedDataLength { get; }
+
+    /// <summary>
+    /// Whether this persona presents as something the plain-HID lane cannot
+    /// create on its own.
+    /// </summary>
+    /// <remarks>
+    /// Encoding a report and creating the device that carries it are two
+    /// different problems. An Xbox pad presents to Windows as an XUSB device,
+    /// which needs the installed, identity-verified <c>hmswd.exe</c> companion
+    /// and a create result retaining every exact SWD, HID and XUSB companion
+    /// id. This candidate has no such companion, so it refuses that lane
+    /// explicitly rather than attempting a plain-HID creation that would either
+    /// fail obscurely or produce a device no game reads as a controller.
+    /// </remarks>
+    internal bool RequiresSoftwareDeviceCompanion { get; }
+
+    /// <summary>
+    /// Plain USB, 64 bytes led by report ID 0x01; the driver prepends the ID on
+    /// the exact device, so the endpoint receives the 63 descriptor-data bytes
+    /// only.
+    /// </summary>
+    internal static RuntimeInputWireShape DualSense { get; } =
+        new(
+            DualSenseProfileId, 0x054C, 0x0CE6, "usb",
+            declaredInputReportSize: RuntimeDualSenseInputEncoder.EncodedReportSize,
+            fullWireLength: RuntimeDualSenseInputEncoder.EncodedReportSize,
+            includesReportId: true,
+            reportId: RuntimeDualSenseInputEncoder.ReportId,
+            sharedDataOffset: 1,
+            sharedDataLength: RuntimeDualSenseInputEncoder.EncodedReportSize - 1);
+
+    /// <summary>
+    /// Bluetooth, 17 bytes with no report ID at all: the descriptor declares
+    /// none, so no byte is stripped and the data slice is the entire report.
+    /// </summary>
+    internal static RuntimeInputWireShape XboxSeries { get; } =
+        new(
+            XboxSeriesProfileId, 0x045E, 0x0B13, "bluetooth",
+            declaredInputReportSize: RuntimeXboxSeriesInputEncoder.EncodedReportSize,
+            fullWireLength: RuntimeXboxSeriesInputEncoder.EncodedReportSize,
+            includesReportId: false,
+            reportId: 0x00,
+            sharedDataOffset: 0,
+            sharedDataLength: RuntimeXboxSeriesInputEncoder.EncodedReportSize,
+            requiresSoftwareDeviceCompanion: true);
+
+    /// <summary>
+    /// Bluetooth, report 0x3F: twelve bytes led by the report ID, so the
+    /// endpoint receives the eleven descriptor-data bytes. The profile's
+    /// declared inputReportSize is the far larger vendor report, which is why
+    /// the two lengths are separate fields.
+    /// </summary>
+    internal static RuntimeInputWireShape SwitchPro { get; } =
+        new(
+            SwitchProProfileId, 0x057E, 0x2009, "bluetooth",
+            declaredInputReportSize: 362,
+            fullWireLength: RuntimeSwitchProInputEncoder.EncodedReportSize,
+            includesReportId: true,
+            reportId: RuntimeSwitchProInputEncoder.ReportId,
+            sharedDataOffset: 1,
+            sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize - 1);
+
+    /// <summary>
+    /// Resolves the frozen shape for a catalog profile id. A profile with no
+    /// shape has no encoder in this candidate and must be refused before any
+    /// device is touched.
+    /// </summary>
+    internal static bool TryGet(string profileId, out RuntimeInputWireShape shape)
+    {
+        switch (profileId)
+        {
+            case DualSenseProfileId:
+                shape = DualSense;
+                return true;
+            case XboxSeriesProfileId:
+                shape = XboxSeries;
+                return true;
+            case SwitchProProfileId:
+                shape = SwitchPro;
+                return true;
+            default:
+                shape = default;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Field-for-field identity match against an embedded catalog profile.
+    /// This is the generalization of the previous exact-DualSense guard and
+    /// checks every field that guard checked.
+    /// </summary>
+    internal bool MatchesProfileIdentity(HMProfile profile)
+    {
+        return profile is not null &&
+            string.Equals(profile.Id, ProfileId, StringComparison.Ordinal) &&
+            profile.VendorId == VendorId &&
+            profile.ProductId == ProductId &&
+            string.Equals(profile.Connection, Connection, StringComparison.Ordinal) &&
+            profile.InputReportSize == DeclaredInputReportSize &&
+            profile.HasDescriptor;
+    }
+
+    /// <summary>
+    /// Validates a produced report against this shape. Kept beside the shape so
+    /// the seam and the controller cannot disagree about what "valid" means.
+    /// </summary>
+    internal void ValidateFullWireReport(ReadOnlySpan<byte> fullWireReport, string parameterName)
+    {
+        if (fullWireReport.Length != FullWireLength)
+        {
+            throw new ArgumentException(
+                $"The full {ProfileId} wire report must be exactly {FullWireLength} bytes.",
+                parameterName);
+        }
+
+        if (IncludesReportId && fullWireReport[0] != ReportId)
+        {
+            throw new ArgumentException(
+                $"The full {ProfileId} wire report must begin with report ID 0x{ReportId:X2}.",
+                parameterName);
+        }
+    }
+}

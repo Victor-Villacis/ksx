@@ -33,6 +33,9 @@
     <Compile Include="HMProfile.cs" />
     <Compile Include="Internal/RawDualSenseFeedbackAdapter.cs" />
     <Compile Include="Internal/RuntimeDualSenseInputEncoder.cs" />
+    <Compile Include="Internal/RuntimeInputWireShape.cs" />
+    <Compile Include="Internal/RuntimeXboxSeriesInputEncoder.cs" />
+    <Compile Include="Internal/RuntimeSwitchProInputEncoder.cs" />
     <Compile Include="Internal/RuntimeProfileCatalog.cs" />
     <Compile Include="Internal/RuntimeExactDeviceManager.cs" />
     <Compile Include="Internal/RuntimeOwnedSharedMemoryIO.cs" />

@@ -100,22 +100,32 @@ internal sealed class RuntimeHostSession : IDisposable
 
         switch (frame.Message)
         {
-            case CreateMessage { Profile: HostProfileId.DualSense }:
+            // Every profile this host build carries an encoder for. The
+            // identity triple is stated here once so the CREATED answer can
+            // never disagree with the profile that was actually opened.
+            case CreateMessage create when create.Profile is HostProfileId.DualSense
+                                                          or HostProfileId.XboxSeries:
                 if (_controller is not null)
                     return (Fault(frame.RequestId, HostFaultCode.Capacity, "one controller is already live"), true);
                 if (_context.LoadDefaultProfiles() != 228)
                     return (Fault(frame.RequestId, HostFaultCode.SdkUnavailable, "the profile catalog is unavailable"), true);
-                HMProfile profile = _context.GetProfile("dualsense")
-                    ?? throw new InvalidOperationException("The DualSense profile is unavailable.");
+                (string profileSlug, ushort vendorId, ushort productId) = create.Profile switch
+                {
+                    HostProfileId.DualSense => ("dualsense", (ushort)0x054C, (ushort)0x0CE6),
+                    HostProfileId.XboxSeries => ("xbox-series-xs-bt", (ushort)0x045E, (ushort)0x0B13),
+                    _ => throw new InvalidOperationException("unreachable: guarded by the case pattern"),
+                };
+                HMProfile profile = _context.GetProfile(profileSlug)
+                    ?? throw new InvalidOperationException($"The {profileSlug} profile is unavailable.");
                 _controller = _context.CreateController(profile);
                 _controller.OutputReceived += OnOutput;
                 _state = KsxPadState.Neutral;
                 _controller.SubmitState(StateMapper.Map(in _state));
                 _leaseTimestamp = Stopwatch.GetTimestamp();
                 return (HostFrame.Create(frame.RequestId,
-                    new CreatedMessage(1, HostProfileId.DualSense, 0x054C, 0x0CE6)), false);
+                    new CreatedMessage(1, create.Profile, vendorId, productId)), false);
             case CreateMessage:
-                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "only the DualSense profile is supported"), true);
+                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "this host build supports only the DualSense and Xbox Series profiles"), true);
             case SubmitMessage submit when _controller is not null && submit.Controller == 1:
                 if (submit.Sequence <= _lastSubmit)
                     return (Fault(frame.RequestId, HostFaultCode.StaleSequence, "state sequence did not advance"), true);

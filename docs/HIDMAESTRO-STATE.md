@@ -181,6 +181,46 @@ internet.
 
 ---
 
+## Hardware session runbook — 2026-08-20
+
+Written down BEFORE the session so it survives a terminal crash: Windows
+Terminal on this machine is 1.24.11911.0, the version that fail-fasts on
+gamepad INPUT (`[MEASURED]`; device arrival has historically been safe —
+ViGEm pads have existed here without killing it), and the assistant session is
+hosted inside it.
+
+**Phase A — input-silent (safe under WT 1.24):**
+1. Build `a0b9a60` (Switch Pro gate enabled for this session; Xbox stays
+   gated). Download CI artifact `ksx-windows-installer` from the green run.
+2. Victor runs `setup.exe` (elevated; the HIDMaestro driver task may stay
+   unchecked — the package is already staged and manifest-exact).
+3. `& "C:\Program Files\ksx\ksx.exe" doctor` → expect
+   `[OK] installed — production DualSense package is staged`.
+4. Start a PnP poller (tight loop capturing `Get-PnpDevice` arrivals matching
+   HIDMAESTRO/057E/054C to a file), THEN
+   `pads --count 1 --persona dualsense --json` (plug → report → unplug; no
+   test pattern, no input). UAC: accept `ksx-hidmaestro-host.exe`.
+5. Same with `--persona switchpro`. UAC: accept `ksx-hidmaestro-sdk-host.exe`.
+6. Durable evidence regardless of the short window: the poller capture,
+   `%windir%\INF\setupapi.dev.log` (selected driver + rank per devnode), the
+   `HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro` key materialising on
+   the first-ever devnode, and each command's JSON receipt.
+
+**Phase B — input semantics (ONLY after Windows Terminal ≥ 1.26):**
+Victor updates Windows Terminal (an app update, not a Windows feature update —
+the Interception freeze concerns OS feature updates only), then, in any
+terminal: `pads --count 1 --persona switchpro --hold-secs 60` (the animated
+test pattern), watching joy.cpl: faces positional, Back lights Minus, Start
+lights Plus, stick clicks are clicks, Guide lights Home, triggers light ZL/ZR.
+That adjudicates the layout-indexed button divergence recorded in the Switch
+contract. Then the same for DualSense.
+
+**Decision rule:** a lane whose device appears and reads correctly keeps its
+gate; a lane that fails reverts its flip and the failure is recorded here with
+the exact error.
+
+---
+
 ## Open questions — and exactly what settles each
 
 Nothing here may be written into a contract as a fact until it is measured.

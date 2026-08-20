@@ -1117,7 +1117,7 @@ function Stage-ExactCandidate {
     }
 
     Assert-ExactFileSet -Root $candidateRoot -Expected $expectedPaths.ToArray()
-    if ($expectedPaths.Count -ne 241) { throw 'The staged candidate does not contain 241 files.' }
+    if ($expectedPaths.Count -ne 244) { throw 'The staged candidate does not contain 244 files.' }
     return [pscustomobject]@{
         Root = $candidateRoot
         RelativePaths = $expectedPaths.ToArray()
@@ -3100,7 +3100,7 @@ try {
             candidateNetworkAuthorized = $false
         }
         stage = [ordered]@{
-            fileCountPerBuild = 241
+            fileCountPerBuild = 244
             preRawTreeSha256 = $stageA.RawTreeSha256
             postRawTreeSha256 = $postRawA
             preNormalizedTreeSha256 = $stageA.NormalizedTreeSha256

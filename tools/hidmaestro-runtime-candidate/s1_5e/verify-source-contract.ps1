@@ -308,8 +308,8 @@ Assert-Check 'lock.compiler-extension-closure' `
      $lock.staticRejectPolicy.sourceGeneratorExecutionAuthorized -eq $false -and
      $lock.staticRejectPolicy.workloadResolverEnabled -eq $false) `
     'All compiler-extension inputs are fail-closed and source-generator execution is unauthorized.'
-Assert-Check 'lock.staged-count' ($lock.sourceCandidate.stagedInputFileCount -eq 241) `
-    'Twelve candidate, one retained, and 228 profiles are staged.'
+Assert-Check 'lock.staged-count' ($lock.sourceCandidate.stagedInputFileCount -eq 244) `
+    'Fifteen candidate, one retained, and 228 profiles are staged.'
 Assert-Check 'lock.upstream-bom-canonicalization' `
     ($lock.canonicalization -ceq
         'workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL' -and
@@ -629,7 +629,7 @@ foreach ($literal in @(
     "@('100644', '100755')", '.NETCoreApp,Version=v10.0/win-x64',
     'System.Reflection.Metadata.MetadataUpdater.IsSupported',
     '-noAutoResponse', '--depth=1', '--no-tags', 'Assert-NoReparsePoints',
-    'Stage-ExactCandidate', '$expectedPaths.Count -ne 241', 'Get-FramedTreeSha256',
+    'Stage-ExactCandidate', '$expectedPaths.Count -ne 244', 'Get-FramedTreeSha256',
     '$actualUtf8BomPaths',
     "-ByteMode Raw", "-ByteMode Normalized", 'Invoke-CandidateBuild',
     "-Name 'ksx-hm-s15e-build-a'", "-Name 'ksx-hm-s15e-build-b'",

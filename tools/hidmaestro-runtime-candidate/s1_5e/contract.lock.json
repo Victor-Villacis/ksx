@@ -159,7 +159,7 @@
     "compileItemCount": 11,
     "embeddedResourceCount": 228,
     "deployableProfileCount": 130,
-    "stagedInputFileCount": 241,
+    "stagedInputFileCount": 244,
     "fixedStagingPrefix": ".pinned-upstream-v1.6.1/",
     "workspaceCandidateStagingBytes": "canonical-utf8-lf-after-normalized-hash-verification",
     "upstreamStagingBytes": "exact-observed-windows-checkout-raw-bytes-after-raw-or-canonical-verification",
@@ -302,11 +302,11 @@
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "AE54C065066F238963B29A1C6EB6650E109FC175A85B6FDADEBD46444D79E384"
+      "sha256": "C63E1794CFEC18512B98279085A362111899A60690E271C6C66043D9EB355F3A"
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D"
+      "sha256": "A2236C827E2E9BAEA179983A65EB6B2F51A4B2D61ECB7B7B1D1D4333CE2CA8B9"
     }
   ],
   "gateState": {

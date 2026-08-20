@@ -112,6 +112,21 @@ therefore a free self-check.
 The handshake is entirely the driver's `[SOURCE driver.c SwitchHandle*]`; the
 SDK has no handshake duty.
 
+**What a Switch Pro spawn still needs, in order** — the encoder and contracts
+are done; three host-side seams are still DualSense-hardcoded:
+
+1. `[SOURCE tools/hidmaestro-host/WindowsDeviceManager.cs:22,26,173]` device
+   registration pins `root\VID_054C&PID_0CE6`, the DualSense descriptor bytes
+   and DualSense registry identity — must become profile-driven.
+2. `[SOURCE tools/hidmaestro-host/SharedMemoryEndpoint.cs:76]` the endpoint
+   hard-rejects any submission that is not exactly 63 bytes — must take the
+   wire shape's data length (Switch Pro submits 48).
+3. `[SOURCE tools/hidmaestro-host/RuntimeHostSession.cs]` the create arm admits
+   only DualSense, deliberately, until 1 and 2 are real.
+
+Then the driver package install (the opt-in setup task) and the supervised
+hardware lifecycle.
+
 ### Xbox Series is companion-only
 
 `[SOURCE DeviceOrchestrator.cs:1489-1497]` `driverMode: xinputhid` sets

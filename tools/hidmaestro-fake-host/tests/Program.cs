@@ -89,6 +89,8 @@ internal static class Program
         Require(FakePinnedIdentity.Persona(HostProfileId.DualSense) == new FakePersona(HostProfileId.DualSense, 0x054C, 0x0CE6));
         Require(FakePinnedIdentity.Persona(HostProfileId.SwitchPro) == new FakePersona(HostProfileId.SwitchPro, 0x057E, 0x2009));
         Require(FakePinnedIdentity.Persona(HostProfileId.XboxSeries) == new FakePersona(HostProfileId.XboxSeries, 0x045E, 0x0B13));
+        Require(FakePinnedIdentity.Persona(HostProfileId.Snes) == new FakePersona(HostProfileId.Snes, 0x0583, 0x2060));
+        Require(FakePinnedIdentity.Persona(HostProfileId.Genesis) == new FakePersona(HostProfileId.Genesis, 0x2341, 0x8036));
     }
 
     private static void HandshakeIsExact()
@@ -165,6 +167,8 @@ internal static class Program
             HostProfileId.DualSense,
             HostProfileId.SwitchPro,
             HostProfileId.XboxSeries,
+            HostProfileId.Snes,
+            HostProfileId.Genesis,
         ];
         for (int index = 0; index < expected.Length; index++)
         {

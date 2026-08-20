@@ -6266,22 +6266,42 @@ a.wsrow-title:hover {
      color, default = palette slot N); a user's pick overrides --pcs{N} on
      the island root from browser-kept state. Identity colors only — they
      never carry status meaning. */
-  --pal1: #2986ff;    /* blue — arcade P1 blue / N64 A-button */
-  --pal2: #ff3344;    /* red — arcade P2 red, lifted off SNES #C1121C */
-  --pal3: #00ff33;    /* green — Xbox green, lifted off #107C10 */
-  --pal4: #ffe500;    /* yellow — N64 C-buttons #F5B201 / SNES #F7BA0B */
-  --pal5: #ff00d4;    /* magenta — Game Boy Color berry */
-  --pal6: #00e1ff;    /* cyan — Dreamcast blue */
-  --pal7: #ffaa00;    /* gold — Zelda cartridge gold */
-  --pal8: #00ffdd;    /* teal — PlayStation circle #1FAA8C */
-  --pal9: #d738ff;    /* violet — SNES face violet / GBC grape */
-  --pal10: #b2ff00;   /* lime — Game Boy DMG screen #9BBC0F */
-  --pal11: #ab61ff;   /* purple — Game Boy Color atomic purple */
-  --pal12: #00ffa2;   /* spring — Xbox 360 dashboard green */
-  --pal13: #ff247f;   /* pink — Kirby pink / PS cross #E83287 */
-  --pal14: #00a6ff;   /* sky — N64 clear-blue shell */
-  --pal15: #ff6600;   /* orange — Dreamcast orange #F96900 */
-  --pal16: #7777fe;   /* indigo — PlayStation blue, lifted off #003791 */
+  /* THE VECTOR ARCADE 16. Victor's lineup, used exactly as given.
+     Eleven of them are dark enough that near-black label text would
+     disappear, so each carries the ink it can actually hold. */
+  --pal1: #e70009;  /* N64 red */
+  --pal2: #0050ef;  /* Hedgehog blue */
+  --pal3: #107c10;  /* Xbox green */
+  --pal4: #e3c800;  /* Puck yellow */
+  --pal5: #fa6800;  /* Hunter orange */
+  --pal6: #36399a;  /* GameCube indigo */
+  --pal7: #3f3f3f;  /* CRT grey */
+  --pal8: #931a33;  /* Famicom maroon */
+  --pal9: #c40062;  /* Arcade pink */
+  --pal10: #8b5a2b; /* Atari wood */
+  --pal11: #6a00ff; /* Rival purple */
+  --pal12: #a4c400; /* Dino lime */
+  --pal13: #003366; /* Space navy */
+  --pal14: #00008b; /* Void blue */
+  --pal15: #f0f8ff; /* Ice white */
+  --pal16: #00fa9a; /* Phazon teal */
+
+  --pal1-ink: #ffffff;  /* 4.8:1 on N64 red */
+  --pal2-ink: #ffffff;  /* 6.2:1 on Hedgehog blue */
+  --pal3-ink: #ffffff;  /* 5.4:1 on Xbox green */
+  --pal4-ink: #14151f;  /* 10.8:1 on Puck yellow */
+  --pal5-ink: #14151f;  /* 6.1:1 on Hunter orange */
+  --pal6-ink: #ffffff;  /* 9.5:1 on GameCube indigo */
+  --pal7-ink: #ffffff;  /* 10.5:1 on CRT grey */
+  --pal8-ink: #ffffff;  /* 8.6:1 on Famicom maroon */
+  --pal9-ink: #ffffff;  /* 6.0:1 on Arcade pink */
+  --pal10-ink: #ffffff; /* 5.8:1 on Atari wood */
+  --pal11-ink: #ffffff; /* 6.9:1 on Rival purple */
+  --pal12-ink: #14151f; /* 9.1:1 on Dino lime */
+  --pal13-ink: #ffffff; /* 12.6:1 on Space navy */
+  --pal14-ink: #ffffff; /* 15.3:1 on Void blue */
+  --pal15-ink: #14151f; /* 16.9:1 on Ice white */
+  --pal16-ink: #14151f; /* 13.1:1 on Phazon teal */
   --pcs1: var(--pal1);
   --pcs2: var(--pal2);
   --pcs3: var(--pal3);
@@ -6298,6 +6318,22 @@ a.wsrow-title:hover {
   --pcs14: var(--pal14);
   --pcs15: var(--pal15);
   --pcs16: var(--pal16);
+  --pcs1-ink: var(--pal1-ink);
+  --pcs2-ink: var(--pal2-ink);
+  --pcs3-ink: var(--pal3-ink);
+  --pcs4-ink: var(--pal4-ink);
+  --pcs5-ink: var(--pal5-ink);
+  --pcs6-ink: var(--pal6-ink);
+  --pcs7-ink: var(--pal7-ink);
+  --pcs8-ink: var(--pal8-ink);
+  --pcs9-ink: var(--pal9-ink);
+  --pcs10-ink: var(--pal10-ink);
+  --pcs11-ink: var(--pal11-ink);
+  --pcs12-ink: var(--pal12-ink);
+  --pcs13-ink: var(--pal13-ink);
+  --pcs14-ink: var(--pal14-ink);
+  --pcs15-ink: var(--pal15-ink);
+  --pcs16-ink: var(--pal16-ink);
   --n-bg: #161826;
   --n-panel: #1a1c28;
   --n-panel-2: #232532;
@@ -6950,73 +6986,89 @@ a.wsrow-title:hover {
   place-items: center;
   border-radius: 8px;
   background: var(--n-accent);
-  color: #14151f;
+  color: var(--badge-ink, #14151f);
   font-size: 11px;
   font-weight: 700;
 }
 
 .n-pbadge.np1 {
   background: var(--pcs1);
+  --badge-ink: var(--pcs1-ink);
 }
 
 .n-pbadge.np2 {
   background: var(--pcs2);
+  --badge-ink: var(--pcs2-ink);
 }
 
 .n-pbadge.np3 {
   background: var(--pcs3);
+  --badge-ink: var(--pcs3-ink);
 }
 
 .n-pbadge.np4 {
   background: var(--pcs4);
+  --badge-ink: var(--pcs4-ink);
 }
 
 .n-pbadge.np5 {
   background: var(--pcs5);
+  --badge-ink: var(--pcs5-ink);
 }
 
 .n-pbadge.np6 {
   background: var(--pcs6);
+  --badge-ink: var(--pcs6-ink);
 }
 
 .n-pbadge.np7 {
   background: var(--pcs7);
+  --badge-ink: var(--pcs7-ink);
 }
 
 .n-pbadge.np8 {
   background: var(--pcs8);
+  --badge-ink: var(--pcs8-ink);
 }
 
 .n-pbadge.np9 {
   background: var(--pcs9);
+  --badge-ink: var(--pcs9-ink);
 }
 
 .n-pbadge.np10 {
   background: var(--pcs10);
+  --badge-ink: var(--pcs10-ink);
 }
 
 .n-pbadge.np11 {
   background: var(--pcs11);
+  --badge-ink: var(--pcs11-ink);
 }
 
 .n-pbadge.np12 {
   background: var(--pcs12);
+  --badge-ink: var(--pcs12-ink);
 }
 
 .n-pbadge.np13 {
   background: var(--pcs13);
+  --badge-ink: var(--pcs13-ink);
 }
 
 .n-pbadge.np14 {
   background: var(--pcs14);
+  --badge-ink: var(--pcs14-ink);
 }
 
 .n-pbadge.np15 {
   background: var(--pcs15);
+  --badge-ink: var(--pcs15-ink);
 }
 
 .n-pbadge.np16 {
   background: var(--pcs16);
+  --badge-ink: var(--pcs16-ink);
 }
 
 

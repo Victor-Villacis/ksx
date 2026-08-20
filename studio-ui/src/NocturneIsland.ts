@@ -1446,8 +1446,15 @@ function applySlotColors(): void {
     const fallback = ((slot - 1) % 16) + 1;
     // Write only where the truth differs from the CSS default (and clear
     // where it no longer does): an untouched setup writes nothing.
-    if (idx !== fallback) root.style.setProperty(`--pcs${slot}`, `var(--pal${idx})`);
-    else root.style.removeProperty(`--pcs${slot}`);
+    if (idx !== fallback) {
+      root.style.setProperty(`--pcs${slot}`, `var(--pal${idx})`);
+      // The label's ink travels with the color it sits on — half this
+      // palette is dark enough that near-black text would vanish on it.
+      root.style.setProperty(`--pcs${slot}-ink`, `var(--pal${idx}-ink)`);
+    } else {
+      root.style.removeProperty(`--pcs${slot}`);
+      root.style.removeProperty(`--pcs${slot}-ink`);
+    }
   }
 }
 

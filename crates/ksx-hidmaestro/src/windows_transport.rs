@@ -362,6 +362,8 @@ mod tests {
             "self.reader_thread.join();",
             "pub fn connect_production(",
             "protected_hidmaestro_host()",
+            "pub fn connect_production_sdk(",
+            "protected_hidmaestro_sdk_host()",
             "launch_elevated(executable, &launch.argv())",
             ".accept_elevated(child, crate::host::HELLO_TIMEOUT)",
         ] {

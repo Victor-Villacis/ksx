@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using HIDMaestro;
 using Ksx.HidMaestroFakeHost;
+using Ksx.HidMaestroHost;
 using Ksx.HidMaestroProbe;
 
 namespace Ksx.HidMaestroSdkHost;

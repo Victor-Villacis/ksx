@@ -142,6 +142,45 @@ impl WindowsHostTransport {
         let transport = Self::from_authenticated_halves(reader, writer).map_err(setup_error)?;
         HostClient::connect(transport, hello_nonce, expected).map_err(Into::into)
     }
+
+    /// The SDK-lane twin of [`Self::connect_production`]: identical ordering,
+    /// identical authentication, a different fixed installed sibling
+    /// (`ksx-hidmaestro-sdk-host.exe`) and therefore a different pinned
+    /// runtime-contract expectation. Serves Switch Pro and Xbox Series through
+    /// the pinned official SDK; DualSense never travels this lane.
+    pub fn connect_production_sdk(
+        expected: crate::host::HostExpectation,
+    ) -> Result<crate::host::HostClient<Self>, ProductionHostConnectError> {
+        use ksx_platform::local_pipe::{random_32, OneUsePipeServer};
+        use ksx_platform::process::{is_elevated, launch_elevated, protected_hidmaestro_sdk_host};
+
+        use crate::host::{HostClient, NONCE_BYTES};
+        use crate::rendezvous::{HostLaunchSpec, RendezvousToken};
+
+        match is_elevated() {
+            Some(false) => {}
+            Some(true) => return Err(ProductionHostConnectError::DaemonElevated),
+            None => return Err(ProductionHostConnectError::PrivilegeUnknown),
+        }
+
+        let token_bytes = random_32().map_err(setup_error)?;
+        let hello_nonce: [u8; NONCE_BYTES] = random_32().map_err(setup_error)?;
+        let launch =
+            HostLaunchSpec::new(RendezvousToken::from_bytes(token_bytes), std::process::id())
+                .map_err(setup_error)?;
+
+        // Same security-significant ordering as the candidate lane: the
+        // first-instance listener exists before UAC can start the fixed child.
+        let server = OneUsePipeServer::create(&launch.pipe_name()).map_err(setup_error)?;
+        let executable = protected_hidmaestro_sdk_host().map_err(setup_error)?;
+        let child = launch_elevated(executable, &launch.argv()).map_err(setup_error)?;
+        let pipe = server
+            .accept_elevated(child, crate::host::HELLO_TIMEOUT)
+            .map_err(setup_error)?;
+        let (reader, writer) = pipe.into_split();
+        let transport = Self::from_authenticated_halves(reader, writer).map_err(setup_error)?;
+        HostClient::connect(transport, hello_nonce, expected).map_err(Into::into)
+    }
 }
 
 /// Failures before or during establishment of the fixed production host.

@@ -1,9 +1,14 @@
-//! Production HIDMaestro adapter for the first live, exact DualSense slice.
+//! Production HIDMaestro adapter — two lanes, one bounded protocol.
 //!
-//! The ordinary daemon owns only an authenticated protocol client. All driver
-//! and shared-memory handles live in the fixed elevated sibling process. The
-//! host supports one exact DualSense controller; Switch Pro and Xbox Series
-//! remain build-gated until their independently reviewed runtime paths exist.
+//! The ordinary daemon owns only authenticated protocol clients. All driver
+//! and shared-memory handles live in fixed elevated sibling processes:
+//! DualSense in the audited candidate host, Switch Pro and Xbox Series in the
+//! SDK-lane host that loads the hash-pinned official SDK
+//! (`docs/HIDMAESTRO-STATE.md`, "Architecture decision"). Each lane connects
+//! lazily at the first plug of one of its personas, so UAC appears exactly
+//! when a rich persona is requested and never for the other lane. The SDK
+//! lane's personas remain build-gated in `ksx-core` until hardware proves
+//! them; the lane is wired, not offered.
 
 #[cfg(windows)]
 use std::collections::{BTreeMap, VecDeque};
@@ -30,8 +35,39 @@ const CATALOG_SHA256: [u8; 32] = [
     0x4D, 0x1F, 0x5D, 0xE0, 0x55, 0xA2, 0xC4, 0xCC, 0x04, 0x1C, 0xA1, 0x6C, 0xE7, 0x95, 0x4A, 0x6A,
 ];
 
+/// Canonical SHA-256 of `tools/hidmaestro-sdk-host/runtime-contract-sdk.json`,
+/// the SDK lane's own bounded contract. Pinned identically in
+/// `publish-sdk.ps1`, `SdkHostSession.cs` and `build-installer.yml`.
+#[cfg(windows)]
+const SDK_RUNTIME_CONTRACT_SHA256: [u8; 32] = [
+    0x3F, 0xC7, 0x4E, 0x0A, 0xD0, 0x63, 0xCE, 0x02, 0xA2, 0x2D, 0xB9, 0x86, 0x68, 0x42, 0xBD, 0x02,
+    0x98, 0x7D, 0x10, 0x27, 0x31, 0x5A, 0xE8, 0x99, 0xEA, 0xE9, 0x03, 0x05, 0x84, 0x7C, 0xDB, 0xAF,
+];
+
+/// Which elevated sibling serves a persona. DualSense must never travel the
+/// SDK lane (one persona, one lane), and the SDK personas cannot exist on the
+/// candidate host at all.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostLane {
+    Candidate,
+    Sdk,
+}
+
+#[cfg(windows)]
+fn lane_for(persona: Persona) -> Option<HostLane> {
+    match persona {
+        Persona::DualSense => Some(HostLane::Candidate),
+        Persona::SwitchPro | Persona::XboxSeries => Some(HostLane::Sdk),
+        Persona::Xbox360 | Persona::PlayStation => None,
+    }
+}
+
 #[cfg(windows)]
 struct LivePad {
+    /// Which host owns this pad. Both hosts number their one controller `1`,
+    /// so a controller id means nothing without its lane.
+    lane: HostLane,
     controller: ksx_hidmaestro::host::ControllerId,
     /// ⚠️ WHICH PERSONA THIS PAD ACTUALLY IS. `persona()` used to answer
     /// DualSense for any live handle — true only while DualSense was the one
@@ -44,11 +80,16 @@ struct LivePad {
     feedback: VecDeque<Feedback>,
 }
 
-/// One authenticated connection to the fixed installed elevated host.
+#[cfg(windows)]
+type LaneClient =
+    ksx_hidmaestro::host::HostClient<ksx_hidmaestro::windows_transport::WindowsHostTransport>;
+
+/// Authenticated connections to the fixed installed elevated hosts, one per
+/// lane, each established at the first plug of one of its personas.
 #[cfg(windows)]
 pub struct HidMaestroBackend {
-    client:
-        ksx_hidmaestro::host::HostClient<ksx_hidmaestro::windows_transport::WindowsHostTransport>,
+    candidate: Option<LaneClient>,
+    sdk: Option<LaneClient>,
     pads: BTreeMap<u32, LivePad>,
     next_handle: u32,
 }
@@ -59,23 +100,66 @@ pub struct HidMaestroBackend {
 }
 
 impl HidMaestroBackend {
-    /// Start the fixed production host. No driver object is touched until a
-    /// DualSense is actually requested through [`plug_persona`](Self::plug_persona).
+    /// Prepare the backend. Neither host is launched here: each lane's fixed
+    /// elevated sibling starts at the FIRST plug of one of its personas, so
+    /// UAC appears exactly when a rich persona is requested and never for a
+    /// lane that session never uses.
     #[cfg(windows)]
     pub fn connect() -> Result<Self, OutputError> {
-        let expected = ksx_hidmaestro::host::HostExpectation {
-            sdk_sha256: RUNTIME_CONTRACT_SHA256,
-            catalog_sha256: CATALOG_SHA256,
-            catalog_resource_count: 228,
-        };
-        let client =
-            ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production(expected)
-                .map_err(|error| OutputError::HidMaestroRuntime(error.to_string()))?;
         Ok(Self {
-            client,
+            candidate: None,
+            sdk: None,
             pads: BTreeMap::new(),
             next_handle: 1,
         })
+    }
+
+    /// The lane's client, launching and authenticating its host on first use.
+    #[cfg(windows)]
+    fn client_for(&mut self, lane: HostLane) -> Result<&mut LaneClient, OutputError> {
+        let slot = match lane {
+            HostLane::Candidate => &mut self.candidate,
+            HostLane::Sdk => &mut self.sdk,
+        };
+        if slot.is_none() {
+            let expected = match lane {
+                HostLane::Candidate => ksx_hidmaestro::host::HostExpectation {
+                    sdk_sha256: RUNTIME_CONTRACT_SHA256,
+                    catalog_sha256: CATALOG_SHA256,
+                    catalog_resource_count: 228,
+                },
+                HostLane::Sdk => ksx_hidmaestro::host::HostExpectation {
+                    sdk_sha256: SDK_RUNTIME_CONTRACT_SHA256,
+                    catalog_sha256: CATALOG_SHA256,
+                    catalog_resource_count: 228,
+                },
+            };
+            let client = match lane {
+                HostLane::Candidate => {
+                    ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production(
+                        expected,
+                    )
+                }
+                HostLane::Sdk => {
+                    ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production_sdk(
+                        expected,
+                    )
+                }
+            }
+            .map_err(|error| OutputError::HidMaestroRuntime(error.to_string()))?;
+            *slot = Some(client);
+        }
+        Ok(slot.as_mut().expect("just connected"))
+    }
+
+    /// The lane's client only if its host is already running — polling paths
+    /// must never launch an elevated process as a side effect.
+    #[cfg(windows)]
+    fn connected_client(&mut self, lane: HostLane) -> Option<&mut LaneClient> {
+        match lane {
+            HostLane::Candidate => self.candidate.as_mut(),
+            HostLane::Sdk => self.sdk.as_mut(),
+        }
     }
 
     #[cfg(not(windows))]
@@ -110,35 +194,47 @@ impl VirtualPadBackend for HidMaestroBackend {
             .pads
             .values()
             .filter(|pad| now.duration_since(pad.last_submit) >= LEASE_REFRESH)
-            .map(|pad| (pad.controller, pad.state))
+            .map(|pad| (pad.lane, pad.controller, pad.state))
             .collect();
-        for (controller, state) in renewals {
-            self.client
+        for (lane, controller, state) in renewals {
+            self.client_for(lane)?
                 .submit(controller, state)
                 .map_err(Self::runtime)?;
             if let Some(pad) = self
                 .pads
                 .values_mut()
-                .find(|pad| pad.controller == controller)
+                .find(|pad| pad.lane == lane && pad.controller == controller)
             {
                 pad.last_submit = now;
             }
         }
 
-        while let Some(event) = self.client.poll_feedback().map_err(Self::runtime)? {
-            if let Some(pad) = self
-                .pads
-                .values_mut()
-                .find(|pad| pad.controller == event.controller)
-            {
-                if pad.feedback.len() == 64 {
-                    pad.feedback.pop_front();
+        // Poll only lanes whose host is already running: servicing must never
+        // launch an elevated process. Both hosts number their controller `1`,
+        // so events are matched lane-first.
+        for lane in [HostLane::Candidate, HostLane::Sdk] {
+            let Some(client) = self.connected_client(lane) else {
+                continue;
+            };
+            let mut events = Vec::new();
+            while let Some(event) = client.poll_feedback().map_err(Self::runtime)? {
+                events.push(event);
+            }
+            for event in events {
+                if let Some(pad) = self
+                    .pads
+                    .values_mut()
+                    .find(|pad| pad.lane == lane && pad.controller == event.controller)
+                {
+                    if pad.feedback.len() == 64 {
+                        pad.feedback.pop_front();
+                    }
+                    pad.feedback.push_back(Feedback {
+                        large_motor: event.large_motor,
+                        small_motor: event.small_motor,
+                        led_number: event.led_number,
+                    });
                 }
-                pad.feedback.push_back(Feedback {
-                    large_motor: event.large_motor,
-                    small_motor: event.small_motor,
-                    led_number: event.led_number,
-                });
             }
         }
         Ok(())
@@ -158,14 +254,19 @@ impl VirtualPadBackend for HidMaestroBackend {
         }
         let profile = ksx_hidmaestro::host::ProfileId::try_from(persona)
             .map_err(|_| OutputError::PersonaUnsupported(persona))?;
-        // The ceiling is the HOST's, and it is one controller in TOTAL — not
-        // one per persona (`controllerLimit: 1`).
+        let lane = lane_for(persona).ok_or(OutputError::PersonaUnsupported(persona))?;
+        // The ceiling is the HOSTS', and it is one controller in TOTAL — each
+        // host enforces `controllerLimit: 1`, and the product offers at most
+        // one rich persona at a time.
         if !self.pads.is_empty() {
             return Err(OutputError::HidMaestroRuntime(
-                "the current HIDMaestro host supports one live controller at a time".to_owned(),
+                "the current HIDMaestro hosts support one live controller at a time".to_owned(),
             ));
         }
-        let ready = self.client.create(profile).map_err(Self::runtime)?;
+        let ready = self
+            .client_for(lane)?
+            .create(profile)
+            .map_err(Self::runtime)?;
         let handle = PadHandle(self.next_handle);
         self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
             OutputError::HidMaestroRuntime("pad handle space is exhausted".into())
@@ -173,6 +274,7 @@ impl VirtualPadBackend for HidMaestroBackend {
         self.pads.insert(
             handle.0,
             LivePad {
+                lane,
                 controller: ready.controller,
                 persona: ready.profile.persona(),
                 state: PadState::default(),
@@ -192,8 +294,11 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn update(&mut self, handle: PadHandle, state: &PadState) -> Result<(), OutputError> {
-        let controller = self.live_mut(handle)?.controller;
-        self.client
+        let (lane, controller) = {
+            let pad = self.live_mut(handle)?;
+            (pad.lane, pad.controller)
+        };
+        self.client_for(lane)?
             .submit(controller, *state)
             .map_err(Self::runtime)?;
         let pad = self.live_mut(handle)?;
@@ -207,8 +312,13 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn unplug(&mut self, handle: PadHandle) -> Result<(), OutputError> {
-        let controller = self.live_mut(handle)?.controller;
-        self.client.destroy(controller).map_err(Self::runtime)?;
+        let (lane, controller) = {
+            let pad = self.live_mut(handle)?;
+            (pad.lane, pad.controller)
+        };
+        self.client_for(lane)?
+            .destroy(controller)
+            .map_err(Self::runtime)?;
         self.pads.remove(&handle.0);
         Ok(())
     }
@@ -217,7 +327,12 @@ impl VirtualPadBackend for HidMaestroBackend {
 #[cfg(windows)]
 impl Drop for HidMaestroBackend {
     fn drop(&mut self) {
-        let _ = self.client.shutdown();
+        if let Some(mut client) = self.candidate.take() {
+            let _ = client.shutdown();
+        }
+        if let Some(mut client) = self.sdk.take() {
+            let _ = client.shutdown();
+        }
     }
 }
 

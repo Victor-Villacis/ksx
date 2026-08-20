@@ -493,26 +493,9 @@ mod tests {
     /// on a box where HIDMaestro is installed the probe says yes, and the pad
     /// still cannot be created. A gate that flips with an install would offer a
     /// persona that plugs no better than before.
-    /// The property the 2026-08-20 flip retired for lack of subjects, back
-    /// with real ones: a gated persona is refused by the BUILD GATE before
-    /// either driver is opened or probed — the refusal is identical on a
-    /// machine with HIDMaestro installed and one without.
-    #[test]
-    fn a_gated_persona_is_refused_before_either_driver_opens() {
-        let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        for persona in [Persona::Snes, Persona::Genesis] {
-            let err = r.plug_persona(persona).unwrap_err();
-            assert!(
-                matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),
-                "{persona}: {err}"
-            );
-            assert!(!err.is_hidmaestro_missing(), "{persona}: {err}");
-            assert!(err.is_not_implemented(), "{persona}: {err}");
-        }
-        // Only the HIDMaestro side proves laziness here: `standard()` takes
-        // its ViGEm backend already constructed.
-        assert!(!r.hidmaestro_started());
-    }
+    // (The gated-persona no-probe refusal test retires with its subjects —
+    // retro leg flip 2026-08-20. It returns verbatim with the next gated
+    // persona; git history holds the shape.)
 
     #[test]
     fn the_cabinet_personas_never_touch_the_hidmaestro_side() {

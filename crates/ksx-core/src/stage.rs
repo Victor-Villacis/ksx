@@ -1059,23 +1059,7 @@ mod tests {
     fn every_shipping_persona_stages() {
         for persona in Persona::ALL.iter().copied() {
             let result = staged().add_slot(2, persona, preset("P2"));
-            if matches!(persona, Persona::Snes | Persona::Genesis) {
-                // The gated retro pair is refused with the gap verbatim and a
-                // way out, until its hardware leg flips the gate.
-                let refused = result.expect_err("the gated persona must refuse");
-                assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
-                let message = refused.to_string();
-                assert!(message.contains("xbox360"), "{message}");
-                // The same gate on the other door: repainting an accepted
-                // slot must refuse identically.
-                assert_eq!(
-                    staged().set_persona(1, persona).unwrap_err().code(),
-                    "persona-not-implemented",
-                    "{persona}"
-                );
-            } else {
-                result.unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
-            }
+            result.unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
         }
     }
 

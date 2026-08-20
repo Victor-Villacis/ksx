@@ -6359,7 +6359,9 @@ mod tests {
                 "playstation",
                 "dualsense",
                 "switchpro",
-                "xboxseries"
+                "xboxseries",
+                "snes",
+                "genesis"
             ],
             "the maintenance menu offers every live persona and no gated one"
         );

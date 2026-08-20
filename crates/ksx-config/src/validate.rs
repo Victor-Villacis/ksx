@@ -1848,20 +1848,18 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        // The modern personas validate clean; the gated retro pair is
-        // reported with the build's own gap.
+        // Every shipping persona validates clean (retro leg flip); the
+        // PersonaNotImplemented issue re-arms with the next gated persona.
         for persona in Persona::ALL.iter().copied() {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
             let issues = validate(&cfg, &[]);
-            let gated = matches!(persona, Persona::Snes | Persona::Genesis);
-            assert_eq!(
-                issues
+            assert!(
+                !issues
                     .iter()
                     .any(|i| matches!(i, Issue::PersonaNotImplemented { .. })),
-                gated,
                 "{persona}: {issues:?}"
             );
         }
@@ -1973,26 +1971,17 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         }];
-        // The measured persona validates clean...
-        assert!(!validate_games(&games, &[])
-            .iter()
-            .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),);
-        // ...and the gated retro persona re-arms the per-game report with the
-        // full struct: game, slot, the build's own reason, and a way out.
-        games.games[0].slots[0].persona = Persona::Snes;
-        assert_eq!(
-            validate_games(&games, &[]),
-            vec![Issue::GamePersonaNotImplemented {
-                game: "Bloodborne".into(),
-                slot: 1,
-                persona: "snes".into(),
-                reason: Persona::Snes.gap().unwrap().to_owned(),
-                instead: "xbox360".into(),
-            }]
-        );
-        let msg = validate_games(&games, &[])[0].to_string();
-        assert!(msg.contains("Bloodborne"), "{msg}");
-        assert!(msg.contains("xbox360"), "{msg}");
+        // Every shipping persona validates clean per game (retro leg flip);
+        // the per-game report shape re-arms with the next gated persona.
+        for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
+            games.games[0].slots[0].persona = persona;
+            assert!(
+                !validate_games(&games, &[])
+                    .iter()
+                    .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),
+                "{persona}"
+            );
+        }
     }
 
     /// The trap, stated as a test: this check may never consult the machine.
@@ -2004,20 +1993,11 @@ preset = "default"
     /// says the install does not help.
     #[test]
     fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
-        // The check stays wired to the capability (never a probe): the gated
-        // retro pair carries the build's gap, everything else has none.
+        // The check stays wired to the capability (never a probe): no
+        // persona carries a gap while everything plugs; it re-arms with the
+        // next gated persona.
         for persona in Persona::ALL.iter().copied() {
-            let gap = persona_gap(persona);
-            if matches!(persona, Persona::Snes | Persona::Genesis) {
-                let (reason, instead) = gap.unwrap_or_else(|| panic!("{persona} must carry a gap"));
-                assert!(
-                    reason.contains("has not yet completed its independent production runtime"),
-                    "{reason}"
-                );
-                assert_eq!(instead, "xbox360");
-            } else {
-                assert_eq!(gap, None, "{persona}");
-            }
+            assert_eq!(persona_gap(persona), None, "{persona}");
         }
         assert_eq!(persona_gap(Persona::PlayStation), None);
         assert_eq!(persona_gap(Persona::DualSense), None);

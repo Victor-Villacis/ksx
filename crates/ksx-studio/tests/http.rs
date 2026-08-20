@@ -4427,7 +4427,9 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
             {"value": "playstation", "label": "PlayStation · ViGEmBus"},
             {"value": "dualsense", "label": "DualSense · HIDMaestro"},
             {"value": "switchpro", "label": "Switch Pro · HIDMaestro"},
-            {"value": "xboxseries", "label": "Xbox Series X|S · HIDMaestro"}
+            {"value": "xboxseries", "label": "Xbox Series X|S · HIDMaestro"},
+            {"value": "snes", "label": "SNES · HIDMaestro"},
+            {"value": "genesis", "label": "Genesis · HIDMaestro"}
         ]),
         "the form rows contain every live persona and no gated one"
     );

@@ -1306,23 +1306,17 @@ pub mod surface {
             assert_eq!(unreadable, Some(0));
         }
 
-        /// Every measured persona plans; the gated retro pair is refused by
-        /// the planner BEFORE anything is plugged — and the ViGEm diagnostic
-        /// page still offers only its own backend's personas.
+        /// Every shipping persona plans (retro leg flip 2026-08-20) — and
+        /// the ViGEm diagnostic page still offers only its own backend's
+        /// personas.
         #[test]
         fn the_vigem_page_offers_only_implemented_vigem_personas() {
-            let plan = plan_spawn(1, Persona::XboxSeries, 30, false, IDLE.0, IDLE.1);
-            assert_ne!(
-                plan.code(),
-                Some("persona-not-implemented"),
-                "the measured personas plan"
-            );
-            for persona in [Persona::Snes, Persona::Genesis] {
-                let refused = plan_spawn(1, persona, 30, false, IDLE.0, IDLE.1);
-                assert_eq!(
-                    refused.code(),
+            for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
+                let plan = plan_spawn(1, persona, 30, false, IDLE.0, IDLE.1);
+                assert_ne!(
+                    plan.code(),
                     Some("persona-not-implemented"),
-                    "{persona} is gated until its hardware leg"
+                    "{persona} plans"
                 );
             }
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)

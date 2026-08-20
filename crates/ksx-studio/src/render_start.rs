@@ -929,24 +929,19 @@ mod tests {
             !p.rows.prepared.is_empty(),
             "the claimed fixture must reach the held-keyboard list"
         );
-        // The gated retro pair refills the gap list with the build's own
-        // sentences — EXACTLY the pair, so a silently dropped row can never
-        // pass (a mutation dropping Genesis alone survived the any-style
-        // pin this replaces).
+        // Retro leg flip 2026-08-20: every persona plugs, so the gap list is
+        // empty — asserted EXACTLY (an exact pin caught a dropped row when
+        // the list was populated, and catches a phantom row now).
         assert_eq!(
             p.rows
                 .gaps
                 .iter()
                 .map(|g| g.label.as_str())
                 .collect::<Vec<_>>(),
-            ["SNES", "Genesis"],
+            Vec::<&str>::new(),
             "{:?}",
             p.rows.gaps
         );
-        for gap in &p.rows.gaps {
-            assert!(gap.gap.contains("has not yet completed"), "{:?}", gap);
-            assert!(gap.instead.contains("xbox360"), "{:?}", gap);
-        }
         // The reference scan has one ordinary keyboard and one board that
         // cannot be picked. Populate the opt-in arbitrary-HID list here too:
         // this test's purpose is the row-field contract, not device
@@ -972,6 +967,11 @@ mod tests {
             let SlotValue::Array(rows) = &value else {
                 panic!("{list_slot} is not an array");
             };
+            // Retro leg flip: `gapRows` is legitimately empty while every
+            // persona plugs — it refills with the next gated persona.
+            if signal == "gapRows" && rows.is_empty() {
+                continue;
+            }
             let first = rows.first().unwrap_or_else(|| {
                 panic!("the fixture must populate {signal}, or this proves nothing")
             });

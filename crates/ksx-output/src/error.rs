@@ -198,19 +198,16 @@ mod tests {
         assert!(msg.contains("no reason recorded"), "{msg}");
     }
 
-    /// The LIVE rendering: `ksx pads --persona snes` prints exactly this, so
-    /// the gated pair's refusal carries the build's own reason and a way out.
+    /// With every persona pluggable the gap-rendering arm is dormant: the
+    /// refusal keeps its honest fallback for any persona (re-arms with the
+    /// next gated one; the gapped rendering's shape lives in git history).
     #[test]
     fn a_gated_persona_refusal_names_the_gap_and_a_way_out() {
         for persona in [ksx_core::Persona::Snes, ksx_core::Persona::Genesis] {
             let err = OutputError::PersonaNotImplemented(persona);
             let msg = err.to_string();
             assert!(msg.contains(persona.as_str()), "{msg}");
-            assert!(
-                msg.contains("has not yet completed its independent production runtime"),
-                "{msg}"
-            );
-            assert!(msg.contains("xbox360"), "{msg}");
+            assert!(msg.contains("no reason recorded"), "{msg}");
             assert!(err.is_not_implemented());
         }
     }

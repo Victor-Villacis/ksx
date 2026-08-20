@@ -162,11 +162,13 @@ impl PadBackend {
             // session results + consolidation).
             (PadBackend::HidMaestro, Persona::DualSense) => true,
             (PadBackend::HidMaestro, Persona::SwitchPro) => true,
-            // Retro identities through the same lane — descriptor-derived
-            // tables, offered after their own supervised hardware leg
-            // observes real devices (same rule as everything above).
-            (PadBackend::HidMaestro, Persona::Snes) => false,
-            (PadBackend::HidMaestro, Persona::Genesis) => false,
+            // RETRO HARDWARE LEG 2026-08-20 (Victor supervising): enabled
+            // for the spawn measurement — descriptor-ordered tables through
+            // the same SDK lane; the provisional button-label assignments
+            // are adjudicated in joy.cpl during the leg. If a device fails
+            // to appear, its arm flips back.
+            (PadBackend::HidMaestro, Persona::Snes) => true,
+            (PadBackend::HidMaestro, Persona::Genesis) => true,
             // HARDWARE SESSION 2026-08-20: enabled for the supervised
             // measurement — the SDK-lane host already accepts this persona and
             // the SDK performs its own SWD-companion flow (hmswd ships in its
@@ -587,12 +589,11 @@ mod tests {
 
     #[test]
     fn every_shipping_persona_can_plug() {
-        // 2026-08-20 session + consolidation: the modern trio rides the
-        // multi-controller SDK-lane host. The retro pair is WIRED but GATED
-        // until its own supervised hardware leg observes real devices.
+        // 2026-08-20: the modern trio measured in the morning session, the
+        // retro pair enabled for its supervised leg the same evening — every
+        // shipping persona plugs.
         for p in Persona::ALL {
-            let gated = matches!(p, Persona::Snes | Persona::Genesis);
-            assert_eq!(p.can_plug(), !gated, "{p}");
+            assert!(p.can_plug(), "{p} must be offered");
         }
     }
 
@@ -628,7 +629,6 @@ mod tests {
                 .parse()
                 .unwrap_or_else(|e| panic!("{spelling}: {e}"));
             assert_eq!(p, persona, "{spelling}");
-            assert!(!p.can_plug(), "{spelling} is gated, not gone");
             assert!(Persona::ALL.contains(&p));
         }
     }
@@ -646,10 +646,10 @@ mod tests {
                 assert_eq!(instead, p, "{p} works; nothing to suggest");
             }
         }
-        // The suggestions that carry meaning: a pluggable persona is its own
-        // answer; the gated retro pair lands on the most compatible pad.
-        assert_eq!(Persona::Snes.nearest_pluggable(), Persona::Xbox360);
-        assert_eq!(Persona::Genesis.nearest_pluggable(), Persona::Xbox360);
+        // The suggestions that carry meaning: every pluggable persona is its
+        // own answer (the fallback arm is dormant while nothing is gated).
+        assert_eq!(Persona::Snes.nearest_pluggable(), Persona::Snes);
+        assert_eq!(Persona::Genesis.nearest_pluggable(), Persona::Genesis);
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::XboxSeries);
@@ -663,18 +663,10 @@ mod tests {
             assert_eq!(b.gap().is_none(), b.is_implemented(), "{b}");
         }
         assert_eq!(PadBackend::HidMaestro.gap(), None);
-        // The gated retro pair carries a gap; everything else plugs clean.
+        // Every persona plugs, so no per-persona gap remains — the machinery
+        // stays for the next gated persona.
         for p in Persona::ALL.iter().copied() {
-            let gap = p.backend().gap_for(p);
-            if matches!(p, Persona::Snes | Persona::Genesis) {
-                let text = gap.unwrap_or_else(|| panic!("{p} must carry a gap"));
-                assert!(
-                    text.contains("has not yet completed its independent production runtime"),
-                    "{text}"
-                );
-            } else {
-                assert_eq!(gap, None, "{p}");
-            }
+            assert_eq!(p.backend().gap_for(p), None, "{p}");
         }
     }
 

@@ -2335,24 +2335,17 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(typo.code, codes::BAD_REQUEST);
         assert!(typo.message.contains("playstation"), "{typo}");
 
-        // The domain-rule refusal has real subjects again: a parseable but
-        // gated persona refuses over the wire with its own code, distinct
-        // from the typo's BAD_REQUEST.
-        let gated = StageEdit::AddSlot {
+        // Every shipping persona is accepted over the wire (retro leg flip);
+        // the persona-not-implemented wire shape re-arms with the next gated
+        // persona.
+        StageEdit::AddSlot {
             number: None,
             persona: "snes".into(),
             preset: "P1".into(),
             layout: None,
         }
         .apply(&setup)
-        .unwrap_err();
-        assert_eq!(gated.code, "persona-not-implemented");
-        assert!(
-            gated
-                .message
-                .contains("has not yet completed its independent production runtime"),
-            "{gated}"
-        );
+        .expect("snes is accepted");
 
         StageEdit::AddSlot {
             number: None,

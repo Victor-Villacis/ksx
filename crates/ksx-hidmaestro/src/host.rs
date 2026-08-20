@@ -2816,16 +2816,14 @@ mod tests {
         }
     }
 
-    /// Protocol vocabulary does not enable product personas: the modern trio
-    /// is measured and plugs; the retro pair is wire-valid but gated until
-    /// its hardware leg. The CANDIDATE-shaped harness below still refuses
-    /// Switch Pro — the candidate host serves nothing in production and
-    /// stays the conformance reference.
+    /// Every protocol profile is product-enabled (retro leg flip
+    /// 2026-08-20). The CANDIDATE-shaped harness below still refuses Switch
+    /// Pro — the candidate host serves nothing in production and stays the
+    /// conformance reference.
     #[test]
     fn protocol_profiles_carry_their_measured_gates() {
         for profile in ProfileId::ALL.iter().copied() {
-            let gated = matches!(profile, ProfileId::Snes | ProfileId::Genesis);
-            assert_eq!(profile.persona().can_plug(), !gated, "{profile:?}");
+            assert!(profile.persona().can_plug(), "{profile:?}");
         }
         let (_harness, transport) = Harness::new();
         let mut client = HostClient::connect(transport, nonce(), expectation()).unwrap();

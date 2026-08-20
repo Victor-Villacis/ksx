@@ -830,9 +830,12 @@ mod tests {
         }
         assert!(form.contains("Xbox 360 · ViGEmBus"), "{form}");
         assert!(form.contains("DualSense · HIDMaestro"), "{form}");
-        // Every shipping persona is offered (2026-08-20 hardware session).
+        // Every shipping persona is offered (2026-08-20 hardware session +
+        // retro leg flip).
         assert!(form.contains("Switch Pro · HIDMaestro"), "{form}");
         assert!(form.contains(r#"value="xboxseries""#), "{form}");
+        assert!(form.contains(r#"value="snes""#), "{form}");
+        assert!(form.contains(r#"value="genesis""#), "{form}");
     }
 
     /// The slot menu offers every slot the BACKEND accepts — the ceiling it

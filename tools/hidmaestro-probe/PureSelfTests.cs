@@ -9,7 +9,7 @@ internal static class PureSelfTests
         var tests = new List<TestResult>
         {
             Run("catalog parser normalizes IDs and defaults", ParserNormalizesAndDefaults),
-            Run("contract accepts the pinned three-persona shape", ContractAcceptsPinnedShape),
+            Run("contract accepts the pinned persona shapes", ContractAcceptsPinnedShape),
             Run("contract rejects a property drift", ContractRejectsDrift),
             Run("contract rejects a missing persona", ContractRejectsMissingPersona),
             Run("managed resource extraction is length bounded", ManagedResourceExtractionIsBounded),
@@ -133,6 +133,8 @@ internal static class PureSelfTests
         Profile("dualsense", "DualSense (PS5)", "Sony", "0x054C", "0x0CE6", "DualSense Wireless Controller", "usb", null, null, 64),
         Profile("switch-pro", "Nintendo Switch Pro Controller", "Nintendo", "0x057E", "0x2009", "Pro Controller", "bluetooth", null, null, 362),
         Profile("xbox-series-xs-bt", "Xbox Series X|S Controller (Bluetooth)", "Microsoft", "0x045E", "0x0B13", "HID-compliant game controller", "bluetooth", "xinputhid", "separate", 17),
+        Profile("ibuffalo-snes", "iBuffalo Classic USB SNES Gamepad", "iBuffalo", "0x0583", "0x2060", "USB,2-axis 8-button gamepad", "usb", null, null, 0),
+        Profile("daemonbite-genesis", "DaemonBite Sega Genesis/Saturn Controller Adapter", "DaemonBite", "0x2341", "0x8036", "Sega Controller", "usb", null, null, 4),
     ];
 
     private static CatalogProfile Profile(

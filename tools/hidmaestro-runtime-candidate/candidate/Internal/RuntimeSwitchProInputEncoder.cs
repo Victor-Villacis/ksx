@@ -33,13 +33,14 @@ namespace HIDMaestro.Internal;
 ///   byte 10..11  Ry  16 bits
 /// </code>
 /// <para>
-/// AN OPEN QUESTION THIS FILE DOES NOT ANSWER, recorded rather than papered
-/// over: the profile declares <c>inputReportSize: 362</c>, which is the largest
-/// vendor report, while the report encoded here is twelve bytes. Whether the
-/// plain-HID device path registers a Switch Pro endpoint that streams
-/// <c>0x3F</c> alone is not answerable from the pinned source and must be
-/// measured on hardware before this persona is enabled for players. The
-/// build gate in ksx-core keeps it off until then.
+/// WHY THE PROFILE SAYS 362 AND THIS ENCODER SAYS 12. The profile declares
+/// <c>inputReportSize: 362</c>, which is not a report length at all: upstream's
+/// shared input section is <c>SeqNo(4) + DataSize(4) + Data[256] + GipData(14)
+/// + ExtendedReportSize(4) + ExtendedReportData[80] = 362</c>. No report can be
+/// 362 bytes because the data window is 256, and the section carries an
+/// explicit <c>DataSize</c> field for the real per-frame length. DualSense
+/// already submits 63 bytes into that same 362-byte section, so an eleven-byte
+/// data slice is ordinary rather than anomalous.
 /// </para>
 /// <para>
 /// THE AXIS TRAP, same as every other persona here.

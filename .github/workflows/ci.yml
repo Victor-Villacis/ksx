@@ -323,7 +323,7 @@ jobs:
             throw 'A frozen S1.5c/S1.5d API, profile, feedback, or input source contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
-                '87715E832EC44039CA5413B02DFC04E29A9476D78363BB6F599A1CD9DAF6BB3A' -or
+                '0F9624230CEC8739CA169A91D9EEDDF3A46AF587D23384D954D947FD2ED8BBD2' -or
               (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
                 '8A4D2E147DCCDD56A2727D7A4D170DAB4A6CB2AD571754B1E1A6395F79C6810C') {
             throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
@@ -658,7 +658,7 @@ jobs:
                     'hash-pinned-static-candidate-source-and-project-xml-closure-only' -or
                   $s1dReport.ok -ne $true -or
                   $s1dReport.candidateTreeSha256 -cne
-                    'FB3CAC12584ABB20FBFE4504F4CD77344ED75D6F54B5CBC0EDDD7D00F64DD078' -or
+                    '625C18E0F37A98F42D95A120561F214F8D9A755FC7941D7C47A0BD39BBCEB63A' -or
                   $s1dReport.counts.candidateFiles -ne 15 -or
                   $s1dReport.counts.compileItems -ne 14 -or
                   $s1dReport.counts.embeddedResources -ne 228 -or
@@ -1129,9 +1129,9 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'EDD3ED456031B2D812E262709D9A310CDBD91B34959B6BDBC7B4741B96E0B96E' -or
+                'FB61FB64C0DA0FC16D55C76DA5B5B38911D3D5F2214D2EAA89CE979C9AE0226F' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
-                '9B1E769517BDA7516DAA5B115E0123DD616216735146A00E9B247EC7EA1F3427') {
+                '860E282852FED86C5618C845A5FC9B2D24E2130867E192934160FA0B53DF9657') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'
           }
 

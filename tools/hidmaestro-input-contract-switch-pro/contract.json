@@ -47,7 +47,9 @@
     "clearedBeforeEveryEncode": true,
     "statefulFields": false,
     "rollingSequence": false,
-    "inputDefaultsOverlay": false
+    "inputDefaultsOverlay": false,
+    "declaredProfileInputReportSize": 362,
+    "declaredProfileInputReportSizeNote": "The profile's inputReportSize is upstream's shared input SECTION size (SeqNo 4 + DataSize 4 + Data 256 + GipData 14 + ExtendedReportSize 4 + ExtendedReportData 80 = 362), not a report length. No report can be 362 because the data window is 256 bytes, and the section carries an explicit DataSize field. DualSense submits 63 bytes into that same section."
   },
   "stateKeySemantics": {
     "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. This descriptor names the right stick Rx/Ry, so the right stick is read from HMAxis.Z/Rz and the letter disagreement is intentional.",
@@ -386,16 +388,14 @@
     "integrationRule": "The descriptor declares a report ID, so the leading byte is stripped exactly as it is for DualSense."
   },
   "resolution": {
-    "sourceFieldsSettled": false,
-    "unresolvedFields": [
-      "The profile declares inputReportSize 362, which is the largest vendor report, while the encodable 0x3F report is 12 bytes. Whether the plain-HID device path registers a Switch Pro endpoint that streams 0x3F alone is NOT answerable from the pinned source and must be measured on hardware before this persona is enabled."
-    ],
-    "sourceContractVerdict": "GO-WITH-OPEN-QUESTION",
+    "sourceFieldsSettled": true,
+    "unresolvedFields": [],
+    "sourceContractVerdict": "GO",
     "runtimeVerdict": "NO-GO",
     "runtimeNoGoReasons": [
-      "the report-size question above is unmeasured",
       "no artifact has been built",
-      "no driver or device has been exercised"
+      "no driver or device has been exercised",
+      "the bluetooth presentation is unmeasured on real hardware"
     ],
     "aggregateGatesChanged": false
   }

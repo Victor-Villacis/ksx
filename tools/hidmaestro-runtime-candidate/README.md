@@ -177,9 +177,9 @@ source build with the unwanted units absent, not post-build surgery.
 
 The next increment can add Switch Pro after the same exact-owned lifecycle
 passes for its plain-HID profile; its encoder and input contract are now in
-place, and the open question left for hardware is that the profile declares
-`inputReportSize` 362 for the largest vendor report while the encodable `0x3F`
-report is twelve bytes. Xbox Series must wait for a fixed, installed,
+place. Its `inputReportSize` of 362 is upstream's shared input SECTION size,
+not a report length, so an eleven-byte data slice is ordinary — DualSense
+already submits 63 bytes into that same section. Xbox Series must wait for a fixed, installed,
 identity-verified `hmswd.exe` and a create result that retains every exact SWD,
 HID and XUSB companion ID; its encoder and input contract are likewise in
 place, and `RuntimeInputWireShape` marks it as requiring that companion so the

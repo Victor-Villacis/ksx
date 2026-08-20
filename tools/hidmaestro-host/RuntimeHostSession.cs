@@ -100,11 +100,24 @@ internal sealed class RuntimeHostSession : IDisposable
 
         switch (frame.Message)
         {
-            // Every profile this host build carries an encoder for. The
+            // Every profile this host build can actually REGISTER a device for
+            // — which is narrower than the set it carries encoders for. The
             // identity triple is stated here once so the CREATED answer can
             // never disagree with the profile that was actually opened.
-            case CreateMessage create when create.Profile is HostProfileId.DualSense
-                                                          or HostProfileId.XboxSeries:
+            //
+            // Xbox Series is deliberately absent: its profile is driverMode
+            // xinputhid, which upstream creates as a software-device companion
+            // rather than a plain-HID node, and that lane does not exist here
+            // yet. Admitting it would reach the lifecycle's refusal, escape as
+            // an unhandled fault and kill the session, instead of the clean
+            // UnsupportedProfile answer the fallback arm below gives.
+            //
+            // Switch Pro is absent for a different reason: the lifecycle would
+            // accept it, but WindowsDeviceManager still registers the hard-coded
+            // DualSense identity, so the device would claim to be a DualSense
+            // while streaming Switch Pro reports. It returns once that registry
+            // and hardware-id path is profile-driven.
+            case CreateMessage create when create.Profile is HostProfileId.DualSense:
                 if (_controller is not null)
                     return (Fault(frame.RequestId, HostFaultCode.Capacity, "one controller is already live"), true);
                 if (_context.LoadDefaultProfiles() != 228)
@@ -112,7 +125,6 @@ internal sealed class RuntimeHostSession : IDisposable
                 (string profileSlug, ushort vendorId, ushort productId) = create.Profile switch
                 {
                     HostProfileId.DualSense => ("dualsense", (ushort)0x054C, (ushort)0x0CE6),
-                    HostProfileId.XboxSeries => ("xbox-series-xs-bt", (ushort)0x045E, (ushort)0x0B13),
                     _ => throw new InvalidOperationException("unreachable: guarded by the case pattern"),
                 };
                 HMProfile profile = _context.GetProfile(profileSlug)
@@ -125,7 +137,7 @@ internal sealed class RuntimeHostSession : IDisposable
                 return (HostFrame.Create(frame.RequestId,
                     new CreatedMessage(1, create.Profile, vendorId, productId)), false);
             case CreateMessage:
-                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "this host build supports only the DualSense and Xbox Series profiles"), true);
+                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "this host build can create only the DualSense profile; Switch Pro awaits a profile-driven device registration and Xbox Series awaits the software-device companion lane"), true);
             case SubmitMessage submit when _controller is not null && submit.Controller == 1:
                 if (submit.Sequence <= _lastSubmit)
                     return (Fault(frame.RequestId, HostFaultCode.StaleSequence, "state sequence did not advance"), true);

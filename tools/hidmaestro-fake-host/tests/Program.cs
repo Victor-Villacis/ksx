@@ -16,7 +16,7 @@ internal static class Program
             ("pinned identity and personas are exact", () => RunSync(PinnedIdentityIsExact)),
             ("hello echoes nonce and real expected pin", () => RunSync(HandshakeIsExact)),
             ("all twelve directions are dispatched", () => RunSync(AllKindsAreAccountedFor)),
-            ("three personas and lifetime ids are bounded", () => RunSync(PersonasAndLifetimeBudgetAreExact)),
+            ("every pinned persona and the lifetime id budget are exact", () => RunSync(PersonasAndLifetimeBudgetAreExact)),
             ("submit yields full deterministic feedback", () => RunSync(SubmitAndFeedbackAreExact)),
             ("pump and lease deadlines are host-local", () => RunSync(PumpAndLeaseAreExact)),
             ("feedback is global bounded drop-oldest", () => RunSync(FeedbackQueueIsBounded)),
@@ -184,11 +184,14 @@ internal static class Program
             Require(initial.Controller == message.Controller);
             Require(initial.Reason == FakePublicationReason.ControllerCreatedNeutral && initial.State.IsNeutral);
         }
-        _ = profiles.Dispatch(HostFrame.Create(5, new DestroyMessage(1)), 0);
+        // Request ids must keep advancing past the five-create loop (ids
+        // 2..6), and controller ids are monotonic, never reused: five issued,
+        // one destroyed, the next mint is 6.
+        _ = profiles.Dispatch(HostFrame.Create(7, new DestroyMessage(1)), 0);
         CreatedMessage afterDestroy = RequireMessage<CreatedMessage>(profiles.Dispatch(
-            HostFrame.Create(6, new CreateMessage(HostProfileId.DualSense)),
+            HostFrame.Create(8, new CreateMessage(HostProfileId.DualSense)),
             0).Response);
-        Require(afterDestroy.Controller == 4);
+        Require(afterDestroy.Controller == 6);
         profiles.CleanupAll(0);
 
         var capacity = HandshakenSession();

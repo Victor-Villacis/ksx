@@ -656,7 +656,7 @@ internal static class HostProtocolCodec
         return value is >= 1 and <= 8;
     }
 
-    private static bool IsProfile(HostProfileId profile) => (byte)profile is >= 1 and <= 3;
+    private static bool IsProfile(HostProfileId profile) => (byte)profile is >= 1 and <= 5;
     private static bool IsFeedbackSource(HostFeedbackSource source) => (byte)source is >= 1 and <= 4;
     private static bool IsFaultCode(HostFaultCode code) => (ushort)code is >= 1 and <= 8;
 

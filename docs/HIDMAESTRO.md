@@ -1,5 +1,15 @@
 # HIDMaestro M8 execution plan
 
+> **This is the PLAN. For what is actually true right now, read
+> [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md) — it wins over this file.**
+>
+> Read "implemented" below as *code-complete and CI-proven*, never as *observed
+> working*. As of 2026-08-20 no HIDMaestro device has ever been created on any
+> machine, DualSense included. Historical section numbers and counts in the
+> S1.x provenance trail describe the checkpoints they were written at, not the
+> current tree — the state doc carries the current figures with the measurement
+> behind each one.
+
 Status: **the installed product path for one plain-USB DualSense is implemented
 and has passed clean-runner build, byte-inspection, packaging, and installer
 acceptance; supervised hardware/API/force-kill acceptance remains. Switch Pro

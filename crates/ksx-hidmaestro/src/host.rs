@@ -2757,6 +2757,27 @@ mod tests {
         ));
     }
 
+    /// The adapter now asks the profile which persona it is, instead of
+    /// answering DualSense for every live handle. That only works if the two
+    /// directions agree, so pin the round trip for all three — including the
+    /// two that are still build-gated, because the gate is a product decision
+    /// and this is a protocol fact.
+    #[test]
+    fn a_profile_and_a_persona_name_each_other_both_ways() {
+        for id in ProfileId::ALL {
+            assert_eq!(
+                ProfileId::try_from(id.persona()).expect("a host profile maps back"),
+                *id,
+                "{id:?} did not survive the round trip"
+            );
+        }
+        // ...and the two ViGEm personas have no host profile at all: a
+        // HIDMaestro Xbox 360 pad would be the synthesis layer we refuse.
+        for persona in [Persona::Xbox360, Persona::PlayStation] {
+            assert!(ProfileId::try_from(persona).is_err(), "{persona}");
+        }
+    }
+
     /// Protocol vocabulary does not enable unfinished product personas. The
     /// production DualSense profile is live, while Switch Pro and Xbox Series
     /// remain independently gated even though the host can parse their names.

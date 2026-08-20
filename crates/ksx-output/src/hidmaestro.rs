@@ -33,6 +33,12 @@ const CATALOG_SHA256: [u8; 32] = [
 #[cfg(windows)]
 struct LivePad {
     controller: ksx_hidmaestro::host::ControllerId,
+    /// ⚠️ WHICH PERSONA THIS PAD ACTUALLY IS. `persona()` used to answer
+    /// DualSense for any live handle — true only while DualSense was the one
+    /// profile that could exist, and a lie the moment a second one can. The
+    /// answer feeds session reporting and the XInput-slot accounting, so it
+    /// comes from the profile the host confirmed, never from a constant.
+    persona: Persona,
     state: PadState,
     last_submit: Instant,
     feedback: VecDeque<Feedback>,
@@ -143,18 +149,23 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn plug_persona(&mut self, persona: Persona) -> Result<PadHandle, OutputError> {
-        if persona != Persona::DualSense {
+        // The BUILD GATE decides which personas exist, not this adapter.
+        // Asking `can_plug` keeps ksx-core's `PadBackend::supports` in sole
+        // charge of that, so a persona going live is a change there rather
+        // than a second place to remember.
+        if !persona.can_plug() {
             return Err(OutputError::PersonaUnsupported(persona));
         }
+        let profile = ksx_hidmaestro::host::ProfileId::try_from(persona)
+            .map_err(|_| OutputError::PersonaUnsupported(persona))?;
+        // The ceiling is the HOST's, and it is one controller in TOTAL — not
+        // one per persona (`controllerLimit: 1`).
         if !self.pads.is_empty() {
             return Err(OutputError::HidMaestroRuntime(
-                "the current HIDMaestro host supports one live DualSense".to_owned(),
+                "the current HIDMaestro host supports one live controller at a time".to_owned(),
             ));
         }
-        let ready = self
-            .client
-            .create(ksx_hidmaestro::host::ProfileId::DualSense)
-            .map_err(Self::runtime)?;
+        let ready = self.client.create(profile).map_err(Self::runtime)?;
         let handle = PadHandle(self.next_handle);
         self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
             OutputError::HidMaestroRuntime("pad handle space is exhausted".into())
@@ -163,6 +174,7 @@ impl VirtualPadBackend for HidMaestroBackend {
             handle.0,
             LivePad {
                 controller: ready.controller,
+                persona: ready.profile.persona(),
                 state: PadState::default(),
                 last_submit: Instant::now(),
                 feedback: VecDeque::new(),
@@ -172,9 +184,7 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn persona(&self, handle: PadHandle) -> Option<Persona> {
-        self.pads
-            .contains_key(&handle.0)
-            .then_some(Persona::DualSense)
+        self.pads.get(&handle.0).map(|pad| pad.persona)
     }
 
     fn user_index(&self, _handle: PadHandle) -> Option<u8> {

@@ -1279,7 +1279,7 @@ function Get-XmlExpectedItems {
 
     $compileNodes = @($xml.SelectNodes('/Project/ItemGroup/Compile'))
     $resourceNodes = @($xml.SelectNodes('/Project/ItemGroup/EmbeddedResource'))
-    if ($compileNodes.Count -ne 11 -or $resourceNodes.Count -ne 228) {
+    if ($compileNodes.Count -ne 14 -or $resourceNodes.Count -ne 228) {
         throw 'The candidate project XML item topology is not exact.'
     }
     $compileValues = [Collections.Generic.List[string]]::new()
@@ -1546,7 +1546,7 @@ function Get-EvaluatedManifest {
     $compileItems = Get-OrdinalSorted -Values @($evaluation.Items.Compile | ForEach-Object {
         ([string]$_.Identity).Replace('\', '/')
     })
-    if ($compileItems.Count -ne 11 -or
+    if ($compileItems.Count -ne 14 -or
         [string]::Join("`n", $compileItems) -cne [string]::Join("`n", $expected.Compile)) {
         throw 'Evaluated Compile identities are not the exact project list.'
     }

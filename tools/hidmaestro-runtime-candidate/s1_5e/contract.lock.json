@@ -302,7 +302,7 @@
     },
     {
       "path": "run-actions-proof.ps1",
-      "sha256": "C63E1794CFEC18512B98279085A362111899A60690E271C6C66043D9EB355F3A"
+      "sha256": "A04AF448CCD4D3942D6420386F7C18887A43C802936E9F222D12FBE1411037A8"
     },
     {
       "path": "verify-source-contract.ps1",

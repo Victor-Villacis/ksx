@@ -1129,7 +1129,7 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'A2529DE6CE92C992C04F40E9884B0DE94C075D916D698917680859BCD23BE03F' -or
+                '289AC9C350B570A3044FEC20748ECFF6AD4CEF1FFC2AF4FD50BB995BCA0F628A' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
                 'A2236C827E2E9BAEA179983A65EB6B2F51A4B2D61ECB7B7B1D1D4333CE2CA8B9') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'

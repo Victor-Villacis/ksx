@@ -45,6 +45,22 @@
       "productId": 2835,
       "transport": "bluetooth",
       "buttonSemantics": "semantic HMButton flags (the descriptor lane maps them through the profile buttonMap)"
+    },
+    {
+      "id": 4,
+      "slug": "ibuffalo-snes",
+      "vendorId": 1411,
+      "productId": 8288,
+      "transport": "usb",
+      "buttonSemantics": "descriptor-ordered mask (bare-descriptor profile; the builder's no-ButtonMap fallback is identity, so bit positions ARE descriptor button indices; positional faces, provisional until the hardware leg adjudicates)"
+    },
+    {
+      "id": 5,
+      "slug": "daemonbite-genesis",
+      "vendorId": 9025,
+      "productId": 32822,
+      "transport": "usb",
+      "buttonSemantics": "descriptor-ordered mask (bare-descriptor profile, identity fallback; six-button fighting layout, provisional until the hardware leg adjudicates; the same wire identity serves Saturn per the adapter's own descriptor notes)"
     }
   ],
   "unsupportedProfiles": [],

@@ -95,6 +95,8 @@ pub const fn slug_for(persona: Persona) -> Option<&'static str> {
         Persona::DualSense => Some("dualsense"),
         Persona::SwitchPro => Some("switch-pro"),
         Persona::XboxSeries => Some("xbox-series-xs-bt"),
+        Persona::Snes => Some("ibuffalo-snes"),
+        Persona::Genesis => Some("daemonbite-genesis"),
         Persona::Xbox360 | Persona::PlayStation => None,
     }
 }

@@ -55,6 +55,8 @@ internal enum HostProfileId : byte
     DualSense = 1,
     SwitchPro = 2,
     XboxSeries = 3,
+    Snes = 4,
+    Genesis = 5,
 }
 
 internal enum HostFeedbackSource : byte
@@ -639,7 +641,7 @@ internal static class HostProtocolCodec
     private static bool TryProfile(byte value, out HostProfileId profile)
     {
         profile = (HostProfileId)value;
-        return value is >= 1 and <= 3;
+        return value is >= 1 and <= 5;
     }
 
     private static bool TryFeedbackSource(byte value, out HostFeedbackSource source)

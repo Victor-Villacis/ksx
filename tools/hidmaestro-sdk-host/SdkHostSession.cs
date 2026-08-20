@@ -29,7 +29,7 @@ internal sealed class SdkHostSession : IDisposable
     // Canonical SHA-256 of runtime-contract-sdk.json (BOM-free, CRLF->LF),
     // asserted by publish-sdk.ps1 and pinned by the Rust client's
     // HostExpectation for this lane.
-    private static readonly byte[] RuntimeSha = Convert.FromHexString("B744C0F3F0D80054BBD23E8682820C2B2C42575C09A83627CB6856B0FD22F240");
+    private static readonly byte[] RuntimeSha = Convert.FromHexString("EDE64B5F53CB6B8681A66AEFFE4C7C464BC5A37697E8DA160C29B655B60FFE89");
     private static readonly byte[] CatalogSha = Convert.FromHexString("8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A");
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(5);
 
@@ -180,7 +180,9 @@ internal sealed class SdkHostSession : IDisposable
         {
             case CreateMessage create when create.Profile is HostProfileId.DualSense
                                                           or HostProfileId.SwitchPro
-                                                          or HostProfileId.XboxSeries:
+                                                          or HostProfileId.XboxSeries
+                                                          or HostProfileId.Snes
+                                                          or HostProfileId.Genesis:
                 if (_live.Count >= TotalCap)
                     return (Fault(frame.RequestId, HostFaultCode.Capacity, $"this host carries at most {TotalCap} live controllers"), true);
                 if (create.Profile is HostProfileId.XboxSeries
@@ -201,6 +203,8 @@ internal sealed class SdkHostSession : IDisposable
                     HostProfileId.DualSense => ("dualsense", (ushort)0x054C, (ushort)0x0CE6),
                     HostProfileId.SwitchPro => ("switch-pro", (ushort)0x057E, (ushort)0x2009),
                     HostProfileId.XboxSeries => ("xbox-series-xs-bt", (ushort)0x045E, (ushort)0x0B13),
+                    HostProfileId.Snes => ("ibuffalo-snes", (ushort)0x0583, (ushort)0x2060),
+                    HostProfileId.Genesis => ("daemonbite-genesis", (ushort)0x2341, (ushort)0x8036),
                     _ => throw new InvalidOperationException("unreachable: guarded by the case pattern"),
                 };
                 HMProfile profile = _context.GetProfile(profileSlug)
@@ -214,7 +218,7 @@ internal sealed class SdkHostSession : IDisposable
                 return (HostFrame.Create(frame.RequestId,
                     new CreatedMessage(id, create.Profile, vendorId, productId)), false);
             case CreateMessage:
-                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "this lane serves DualSense, Switch Pro and Xbox Series"), true);
+                return (Fault(frame.RequestId, HostFaultCode.UnsupportedProfile, "this lane serves every HIDMaestro persona; the requested profile is not one"), true);
             case SubmitMessage submit when _live.TryGetValue(submit.Controller, out Live? target):
                 if (submit.Sequence <= target.LastSubmit)
                     return (Fault(frame.RequestId, HostFaultCode.StaleSequence, "state sequence did not advance"), true);

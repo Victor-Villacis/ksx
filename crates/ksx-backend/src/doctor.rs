@@ -634,11 +634,13 @@ mod tests {
             !text.contains("personas available"),
             "doctor must never advertise a persona it cannot plug:\n{text}"
         );
-        // 2026-08-20 flip: nothing is gated, so the unavailable-personas
-        // lines vanish instead of naming an empty set.
-        assert!(ksx_platform::HidMaestroReport::gated_personas().is_empty());
+        // The gated retro pair is named, with the honest not-implemented
+        // line back in force.
+        for persona in ksx_platform::HidMaestroReport::gated_personas() {
+            assert!(text.contains(persona), "{persona} unmentioned:\n{text}");
+        }
         assert!(
-            !text.contains("profile runtimes are not implemented"),
+            text.contains("profile runtimes are not implemented"),
             "{text}"
         );
         // The install is still reported — it is worth knowing, it just decides

@@ -929,11 +929,11 @@ mod tests {
             !p.rows.prepared.is_empty(),
             "the claimed fixture must reach the held-keyboard list"
         );
-        // 2026-08-20 flip: every persona plugs, so the gap list is empty;
-        // it refills with the next gated persona.
+        // The gated retro pair refills the gap list with the build's own
+        // sentences (it emptied briefly while every persona plugged).
         assert!(
-            p.rows.gaps.is_empty(),
-            "no persona is gated: {:?}",
+            p.rows.gaps.iter().any(|g| g.label == "SNES"),
+            "the gated pair must be listed: {:?}",
             p.rows.gaps
         );
         // The reference scan has one ordinary keyboard and one board that

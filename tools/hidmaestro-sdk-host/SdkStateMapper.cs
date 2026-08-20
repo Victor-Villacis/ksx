@@ -15,21 +15,44 @@ namespace Ksx.HidMaestroSdkHost;
 /// values for every profile without knowing descriptor letters.
 /// </para>
 /// <para>
-/// BUTTONS DIVERGE PER LANE, deliberately. For descriptor-lane profiles
-/// (Xbox Series), semantic <see cref="HMButton"/> flags are correct: the SDK's
-/// report builder maps them through the profile's <c>buttonMap</c>. For the
-/// Switch protocol lane, upstream's packer indexes the raw mask by the
-/// profile's LAYOUT BUTTON INDICES — feeding semantic flags there lands Back
-/// on ZL and the stick clicks on Minus/Plus (measured 2026-08-20, and visible
-/// in PadForge's own unconditional semantic mapping). This mapper therefore
-/// builds a layout-indexed mask for Switch, so the wire is right even where
-/// upstream's own caller is skewed. Final adjudication belongs to hardware;
-/// `docs/HIDMAESTRO-STATE.md` carries the question.
+/// BUTTONS DIVERGE PER LANE, deliberately. For descriptor-lane profiles with
+/// layout metadata (Xbox Series, DualSense), semantic <see cref="HMButton"/>
+/// flags are correct: the SDK's report builder maps them through the profile's
+/// <c>buttonMap</c>. For the Switch protocol lane, upstream's packer indexes
+/// the raw mask by the profile's LAYOUT BUTTON INDICES — feeding semantic
+/// flags there lands Back on ZL (measured 2026-08-20), so this mapper builds a
+/// layout-indexed mask for Switch.
+/// </para>
+/// <para>
+/// The RETRO profiles (iBuffalo SNES, DaemonBite Genesis) carry NO layout
+/// metadata at all — bare descriptors — and the builder's no-ButtonMap
+/// fallback is IDENTITY (semantic bit b → descriptor button b, measured in
+/// `HidReportBuilder.cs`). So this mapper emits DESCRIPTOR-ORDERED masks for
+/// them: each bit position is the pad's own descriptor button index. The
+/// bit→physical-label assignments below are PROVISIONAL (drawn from the
+/// widely-published SDL/RetroArch mappings for these exact identities) until
+/// the pads' supervised hardware leg adjudicates them in joy.cpl; what this
+/// mapper guarantees regardless is that every ksx control lands on a DISTINCT,
+/// STABLE descriptor button.
 /// </para>
 /// </remarks>
 internal sealed class SdkStateMapper
 {
-    private readonly bool _switchProtocol;
+    private enum Kind
+    {
+        /// <summary>Layout-carrying descriptor profile — semantic flags.</summary>
+        Descriptor,
+        /// <summary>The Switch protocol lane — layout-indexed mask.</summary>
+        SwitchProtocol,
+        /// <summary>iBuffalo Classic USB Gamepad (0583:2060): 3-byte report,
+        /// X/Y axes + 8 buttons, no hat.</summary>
+        IBuffaloSnes,
+        /// <summary>DaemonBite Genesis/Saturn adapter (2341:8036): 9 buttons +
+        /// signed −1..1 X/Y, no hat.</summary>
+        DaemonBiteGenesis,
+    }
+
+    private readonly Kind _kind;
     private readonly HMAxis _leftStickX;
     private readonly HMAxis _leftStickY;
     private readonly HMAxis _rightStickX;
@@ -43,7 +66,13 @@ internal sealed class SdkStateMapper
 
     internal SdkStateMapper(HMProfile profile)
     {
-        _switchProtocol = profile.VendorId == 0x057E && profile.ProductId == 0x2009;
+        _kind = (profile.VendorId, profile.ProductId) switch
+        {
+            (0x057E, 0x2009) => Kind.SwitchProtocol,
+            (0x0583, 0x2060) => Kind.IBuffaloSnes,
+            (0x2341, 0x8036) => Kind.DaemonBiteGenesis,
+            _ => Kind.Descriptor,
+        };
 
         IReadOnlyList<HMSimpleStick> sticks = profile.Sticks;
         if (sticks.Count > 0)
@@ -72,6 +101,16 @@ internal sealed class SdkStateMapper
 
     internal HMGamepadState Map(in KsxPadState input)
     {
+        return _kind switch
+        {
+            Kind.IBuffaloSnes => MapIBuffalo(in input),
+            Kind.DaemonBiteGenesis => MapDaemonBite(in input),
+            _ => MapModern(in input),
+        };
+    }
+
+    private HMGamepadState MapModern(in KsxPadState input)
+    {
         _axes.Clear();
         WriteAxis(_leftStickX, Axis(input.LeftX, invert: false));
         WriteAxis(_leftStickY, Axis(input.LeftY, invert: true));
@@ -82,12 +121,137 @@ internal sealed class SdkStateMapper
 
         return new HMGamepadState
         {
-            Buttons = _switchProtocol
+            Buttons = _kind == Kind.SwitchProtocol
                 ? SwitchLayoutMask(input)
                 : SemanticButtons(input.Buttons),
             Hat = Hat(input.Buttons),
             Axes = _axes,
         };
+    }
+
+    /// <summary>
+    /// iBuffalo SNES: X/Y byte axes carry the D-pad (with the left stick as a
+    /// keyboard-couch alias when the D-pad is centred), and the 8 descriptor
+    /// buttons are driven positionally — ksx A is the bottom button, which is
+    /// SNES B, exactly the positional rule the Switch lane uses.
+    /// PROVISIONAL bit order (the pad's decade-old SDL mapping:
+    /// b0=B b1=A b2=Y b3=X b4=L b5=R b6=Select b7=Start), adjudicated on
+    /// hardware.
+    /// </summary>
+    private HMGamepadState MapIBuffalo(in KsxPadState input)
+    {
+        _axes.Clear();
+        WriteDpadOrStickAxes(in input, half: 0.5f);
+
+        uint mask = 0;
+        KsxButtons pressed = input.Buttons;
+        void Set(KsxButtons source, int bit)
+        {
+            if ((pressed & source) != 0)
+            {
+                mask |= 1u << bit;
+            }
+        }
+
+        Set(KsxButtons.A, 0); // bottom → SNES B
+        Set(KsxButtons.B, 1); // right  → SNES A
+        Set(KsxButtons.X, 2); // left   → SNES Y
+        Set(KsxButtons.Y, 3); // top    → SNES X
+        Set(KsxButtons.LeftBumper, 4); // L
+        Set(KsxButtons.RightBumper, 5); // R
+        Set(KsxButtons.Back, 6); // Select
+        Set(KsxButtons.Start, 7); // Start
+        // Triggers, stick clicks and Guide have no home on an 8-button pad
+        // and are deliberately dropped.
+
+        return new HMGamepadState
+        {
+            Buttons = (HMButton)mask,
+            Hat = HMHat.None,
+            Axes = _axes,
+        };
+    }
+
+    /// <summary>
+    /// DaemonBite Genesis/Saturn: signed −1..1 X/Y axes carry the D-pad, and
+    /// the 9 descriptor buttons take the six-button fighting layout — ksx's
+    /// face-plus-bumper six map onto Genesis A/B/C (bottom row) and X/Y/Z
+    /// (top row). PROVISIONAL bit order (the adapter firmware's declared
+    /// order: b0=A b1=B b2=C b3=X b4=Y b5=Z b6=Start b7=Mode b8=Home),
+    /// adjudicated on hardware.
+    /// </summary>
+    private HMGamepadState MapDaemonBite(in KsxPadState input)
+    {
+        _axes.Clear();
+        WriteDpadOrStickAxes(in input, half: 0.5f);
+
+        uint mask = 0;
+        KsxButtons pressed = input.Buttons;
+        void Set(KsxButtons source, int bit)
+        {
+            if ((pressed & source) != 0)
+            {
+                mask |= 1u << bit;
+            }
+        }
+
+        Set(KsxButtons.X, 0); // Genesis A (bottom-left)
+        Set(KsxButtons.A, 1); // Genesis B (bottom-centre)
+        Set(KsxButtons.B, 2); // Genesis C (bottom-right)
+        Set(KsxButtons.Y, 3); // Genesis X (top-left)
+        Set(KsxButtons.LeftBumper, 4); // Genesis Y (top-centre)
+        Set(KsxButtons.RightBumper, 5); // Genesis Z (top-right)
+        Set(KsxButtons.Start, 6); // Start
+        Set(KsxButtons.Back, 7); // Mode
+        Set(KsxButtons.Guide, 8); // Home (the adapter's ninth button)
+
+        return new HMGamepadState
+        {
+            Buttons = (HMButton)mask,
+            Hat = HMHat.None,
+            Axes = _axes,
+        };
+    }
+
+    /// <summary>
+    /// Retro pads carry the D-pad on their X/Y axes: the D-pad wins when
+    /// pressed, else the left stick drives the same axes so keyboard-couch
+    /// bindings work unchanged. `half` is the builder's float centre (it
+    /// scales 0..1 across each descriptor's own logical range, so 0.5 is the
+    /// centre for both the 0..255 and the −1..1 pads).
+    /// </summary>
+    private void WriteDpadOrStickAxes(in KsxPadState input, float half)
+    {
+        KsxButtons b = input.Buttons;
+        bool left = (b & KsxButtons.DpadLeft) != 0;
+        bool right = (b & KsxButtons.DpadRight) != 0;
+        bool up = (b & KsxButtons.DpadUp) != 0;
+        bool down = (b & KsxButtons.DpadDown) != 0;
+
+        float x = (left, right) switch
+        {
+            (true, false) => 0f,
+            (false, true) => 1f,
+            _ => half,
+        };
+        float y = (up, down) switch
+        {
+            (true, false) => 0f,
+            (false, true) => 1f,
+            _ => half,
+        };
+        if (!left && !right && input.LeftX != 0)
+        {
+            x = Axis(input.LeftX, invert: false);
+        }
+
+        if (!up && !down && input.LeftY != 0)
+        {
+            y = Axis(input.LeftY, invert: true);
+        }
+
+        _axes[HMAxis.X] = x;
+        _axes[HMAxis.Y] = y;
     }
 
     private void WriteAxis(HMAxis axis, float value)

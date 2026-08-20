@@ -1848,19 +1848,21 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        // 2026-08-20 flip: every shipping persona validates clean; the
-        // PersonaNotImplemented issue re-arms with the next gated persona.
+        // The modern personas validate clean; the gated retro pair is
+        // reported with the build's own gap.
         for persona in Persona::ALL.iter().copied() {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
             let issues = validate(&cfg, &[]);
-            assert!(
-                !issues
+            let gated = matches!(persona, Persona::Snes | Persona::Genesis);
+            assert_eq!(
+                issues
                     .iter()
                     .any(|i| matches!(i, Issue::PersonaNotImplemented { .. })),
-                "{persona} must validate: {issues:?}"
+                gated,
+                "{persona}: {issues:?}"
             );
         }
     }
@@ -1991,11 +1993,20 @@ preset = "default"
     /// says the install does not help.
     #[test]
     fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
-        // 2026-08-20 flip: no persona carries a gap — the check stays wired
-        // to the capability (never a probe) and re-arms with the next gated
-        // persona.
+        // The check stays wired to the capability (never a probe): the gated
+        // retro pair carries the build's gap, everything else has none.
         for persona in Persona::ALL.iter().copied() {
-            assert_eq!(persona_gap(persona), None, "{persona}");
+            let gap = persona_gap(persona);
+            if matches!(persona, Persona::Snes | Persona::Genesis) {
+                let (reason, instead) = gap.unwrap_or_else(|| panic!("{persona} must carry a gap"));
+                assert!(
+                    reason.contains("has not yet completed its independent production runtime"),
+                    "{reason}"
+                );
+                assert_eq!(instead, "xbox360");
+            } else {
+                assert_eq!(gap, None, "{persona}");
+            }
         }
         assert_eq!(persona_gap(Persona::PlayStation), None);
         assert_eq!(persona_gap(Persona::DualSense), None);

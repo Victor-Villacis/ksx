@@ -107,10 +107,22 @@ pub enum ProfileId {
     DualSense = 1,
     SwitchPro = 2,
     XboxSeries = 3,
+    /// The iBuffalo Classic USB Gamepad identity carrying the SNES persona
+    /// (see `Persona::Snes` for why this identity and not the NSO pad).
+    Snes = 4,
+    /// The DaemonBite Genesis/Saturn adapter identity carrying the Genesis
+    /// persona (see `Persona::Genesis`).
+    Genesis = 5,
 }
 
 impl ProfileId {
-    pub const ALL: &'static [Self] = &[Self::DualSense, Self::SwitchPro, Self::XboxSeries];
+    pub const ALL: &'static [Self] = &[
+        Self::DualSense,
+        Self::SwitchPro,
+        Self::XboxSeries,
+        Self::Snes,
+        Self::Genesis,
+    ];
 
     /// The pinned HIDMaestro catalog slug selected inside the host.
     pub const fn catalog_slug(self) -> &'static str {
@@ -118,6 +130,8 @@ impl ProfileId {
             Self::DualSense => "dualsense",
             Self::SwitchPro => "switch-pro",
             Self::XboxSeries => "xbox-series-xs-bt",
+            Self::Snes => "ibuffalo-snes",
+            Self::Genesis => "daemonbite-genesis",
         }
     }
 
@@ -126,6 +140,8 @@ impl ProfileId {
             Self::DualSense => Persona::DualSense,
             Self::SwitchPro => Persona::SwitchPro,
             Self::XboxSeries => Persona::XboxSeries,
+            Self::Snes => Persona::Snes,
+            Self::Genesis => Persona::Genesis,
         }
     }
 
@@ -135,6 +151,8 @@ impl ProfileId {
             Self::DualSense => (0x054C, 0x0CE6),
             Self::SwitchPro => (0x057E, 0x2009),
             Self::XboxSeries => (0x045E, 0x0B13),
+            Self::Snes => (0x0583, 0x2060),
+            Self::Genesis => (0x2341, 0x8036),
         }
     }
 
@@ -143,6 +161,8 @@ impl ProfileId {
             1 => Ok(Self::DualSense),
             2 => Ok(Self::SwitchPro),
             3 => Ok(Self::XboxSeries),
+            4 => Ok(Self::Snes),
+            5 => Ok(Self::Genesis),
             other => Err(ProtocolError::UnknownValue {
                 field: "profile",
                 value: u64::from(other),
@@ -164,6 +184,8 @@ impl TryFrom<Persona> for ProfileId {
             Persona::DualSense => Ok(Self::DualSense),
             Persona::SwitchPro => Ok(Self::SwitchPro),
             Persona::XboxSeries => Ok(Self::XboxSeries),
+            Persona::Snes => Ok(Self::Snes),
+            Persona::Genesis => Ok(Self::Genesis),
             other => Err(UnsupportedHostPersona(other)),
         }
     }

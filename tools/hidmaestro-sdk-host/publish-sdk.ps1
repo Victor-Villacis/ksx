@@ -54,7 +54,7 @@ try {
 finally {
     $sha256.Dispose()
 }
-if ($contractHash -cne 'B744C0F3F0D80054BBD23E8682820C2B2C42575C09A83627CB6856B0FD22F240') {
+if ($contractHash -cne 'EDE64B5F53CB6B8681A66AEFFE4C7C464BC5A37697E8DA160C29B655B60FFE89') {
     throw 'The SDK-lane runtime contract identity changed.'
 }
 

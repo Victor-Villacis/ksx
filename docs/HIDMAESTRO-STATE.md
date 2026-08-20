@@ -383,6 +383,32 @@ spawns CORRECTLY for free.
 | Defer behind its own measurement | GameCube (`gamecube-adapter`) — Dolphin prefers the vendor protocol over HID; Saturn via `daemonbite-genesis` (4-byte report, trivial descriptor, weaker auto-config identity) | |
 | Don't do | Dreamcast (zero profiles; DC emulators take any pad — the modern personas serve them fully), Wii/Wiimote (absent; motion is a different product), NES as its own persona (SNES/generic covers it — roster noise), Joy-Cons/mini-console pads/8BitDo identities (niche), custom catalog profiles (breaks the 228-resource pin) | |
 
+**The increment that followed the scope call (same day):** the NSO trio
+pivoted identities after two more source measurements — the NSO catalog
+profiles are synthesized Joy-Con-family placeholders whose SDL-HIDAPI
+handshake the driver only answers for PID 2009 (a virtual NSO pad would look
+dead in SDL apps), and the Mega Drive Mini profile's Usage(0) hat is
+invisible to the report builder (dead D-pad). The identities that ARE clean:
+
+- **`Persona::Snes`** → `ibuffalo-snes` (0583:2060) — the canonical emulator
+  SNES pad, 3-byte report (X/Y + 8 buttons), positional faces (ksx A =
+  bottom = SNES B).
+- **`Persona::Genesis`** → `daemonbite-genesis` (2341:8036) — 9 buttons +
+  signed X/Y from the adapter firmware's own descriptor; the same wire
+  identity serves Saturn per its notes (aliases: megadrive/md/sega/saturn).
+
+Both are WIRED end to end (Persona + ProfileId 4/5 both sides, SDK-host
+create arms, descriptor-ordered masks in the mapper, contract
+`supportedProfiles` grown, sha re-pinned `EDE64B5F…`) and GATED
+(`supports() => false`) until their supervised hardware leg observes real
+devices — the same rule as every persona before them. The bare-descriptor
+reality means the builder's identity fallback is exactly what the
+descriptor-ordered masks target; the bit→physical-label tables are marked
+PROVISIONAL in the mapper and adjudicated in joy.cpl during the leg. N64
+stays deferred: no clean identity exists in the catalog (its NSO profile has
+the placeholder+HIDAPI problem), so N64 emulation rides Switch Pro/X360
+personas until upstream lands a direct capture.
+
 **Retraction:** the consolidation notes said retro personas would be cheap
 because "the host projects the modern pad state onto each retro layout, so
 ksx's binding vocabulary is unchanged." The ksx-side half was right; the
@@ -537,6 +563,7 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `aec3c4a`+`d711b0a` | **Xbox Series MEASURED WORKING** (205 ms create, XInput slot 0→1, 152 ms teardown, exit 0) — gate stays; multi-controller consolidation: SDK host carries 8, DualSense joins the SDK lane, candidate lane wiring retired, contract re-pinned `B744C0F3…`; recovery-path identity bug (4th home) fixed |
 | 2026-08-20 | (this) | Multi-pad measured: 2×DualSense + 4×Xbox exit 0; Switch ×2 exposed the lease-starvation race → host re-stamps every lease on any inbound frame AND on its own expiry-teardown time; lease expiry now destroys only its own pad (per-controller contract); CREATE_TIMEOUT 15→30 s (create #2 measured 7.7 s); 34-agent adversarial review → 10 confirmed findings fixed: static `MAX_HIDMAESTRO_PADS = 8` pool ceiling at validate/stage/write/plan/roster layers (a clean-validating 9-pad config no longer dies at plug #9), surrogate-safe fault truncation (both hosts), ~14 refusal-named tests renamed honestly or made real again against the pool, six stale doc-comment sites + this doc's own stale sections corrected |
 | 2026-08-20 | (this) | Retro-persona scope measured: catalog profiles are bare descriptors, Switch packer keys strictly on PID 2009, no-ButtonMap fallback is identity → NSO trio (N64/SNES/Genesis) deferred to a descriptor-table increment; Dreamcast/Wii/NES ruled out; 'cheap per persona' claim retracted |
+| 2026-08-20 | (this) | SNES (iBuffalo 0583:2060) + Genesis/Saturn (DaemonBite 2341:8036) personas wired end to end, GATED pending their hardware leg; NSO identities rejected (SDL-HIDAPI handshake dead + placeholder descriptors), MD Mini rejected (Usage(0) hat invisible to the builder); contract sha → `EDE64B5F…`; nearest_pluggable refusal-loop bug caught by the invariant test and fixed |
 | 2026-08-20 | `1f109dd` verified live | The lease-fix build measured: Switch Pro x2 exit 0 (34 s wall - slow second create + two 12 s teardowns, all inside budgets, no lease kill), DualSense x2 exit 0 (4.7 s), Xbox Series x4 exit 0 (4.5 s), zero residue. Every persona multi-pad PROVEN on the shipped build |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile

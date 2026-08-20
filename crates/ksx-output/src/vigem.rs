@@ -222,9 +222,13 @@ impl VigemBackend {
                 // spawned. Stated as an explicit arm rather than a wildcard so
                 // that adding a persona to ksx-core fails to compile here until
                 // someone decides, in writing, which stack it belongs on.
-                Persona::DualSense | Persona::SwitchPro | Persona::XboxSeries => Err(
-                    vigem_client::Error::WinError(windows_error_invalid_parameter()),
-                ),
+                Persona::DualSense
+                | Persona::SwitchPro
+                | Persona::XboxSeries
+                | Persona::Snes
+                | Persona::Genesis => Err(vigem_client::Error::WinError(
+                    windows_error_invalid_parameter(),
+                )),
             };
             let _ = tx.send(result);
         });

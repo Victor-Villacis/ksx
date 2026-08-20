@@ -213,6 +213,60 @@ Nothing here may be written into a contract as a fact until it is measured.
 
 ---
 
+## Architecture decision — 2026-08-20: the hybrid
+
+Victor's call, made with the tradeoff measured and on the table.
+
+**Why the rewrite kept hurting:** the SDK and the driver are a MATCHED PAIR
+speaking a private shared-memory dialect, and ksx kept upstream's driver while
+rewriting the SDK half. Every persona meant re-deriving their internal protocol
+(the `0x3F`-vs-`0x30` reversal was this tax), and upstream's 2,675-line
+orchestrator carries years of hardware scars — the sticky-SwDevice-tuple
+workaround, the `&`→`_` enumerator PnP edge case, slot-1-skip, per-instance
+UpperFilters — that a rewrite must re-earn one hardware session at a time.
+PadForge, by contrast, consumes the pre-built `HIDMaestro.Core.dll`
+(`[MEASURED 2026-08-20]` its csproj: "pre-built release DLL, NOT a
+ProjectReference"), runs `requireAdministrator` for the whole app, and its
+entire lifecycle is `CreateController` + `SubmitState`.
+
+**The decision:** DualSense stays on the finished, audited candidate — the
+"cannot" property (install/cert/sweep authority physically absent) is already
+paid for there. Switch Pro and Xbox Series ride the hash-pinned official
+`Core.dll` (`ADADD9E2…`, byte-verified against the release) inside the
+elevated host boundary — daemon still unelevated, the authenticated pipe still
+the only surface, the host simply never calls the install/certificate APIs.
+DsHidMini was considered and is the wrong tool: it drives REAL DualShock 3
+hardware; its contribution is the UMDF technique HIDMaestro reuses, and
+ViGEmBus (same author) is already the working X360/DS4 lane.
+
+**Design inputs measured from PadForge before writing code:**
+- Axes: resolve per-profile through the SDK's layout view (`_profile.Sticks`/
+  `Triggers`), never hardcode the DualSense-shaped assignment.
+- Buttons: PadForge feeds semantic `HMButton` flags unconditionally, which for
+  Switch inherits the raw-mask skew (Back→ZL, stick-click→Minus). Our SDK lane
+  converts to layout indices for Switch instead — correct on-wire beats
+  bug-compatible. Final adjudication on hardware.
+- Keepalive: 16 ms, NOT longer — the GIP companion's stale watchdog counts
+  READS and tears down at >500 unchanged-SeqNo reads (PadForge's own audit).
+- NativeAOT cannot load managed assemblies, so the SDK lane is a SECOND host
+  executable (ordinary .NET, self-contained), same pipe protocol and
+  authentication; the candidate host and its S1.5e observation stay
+  byte-stable.
+- `Core.dll` + its two managed companions reach disk via the existing
+  installer bootstrap (which already downloads and pin-verifies exactly those
+  three), retained into an ACL-protected install location instead of deleted.
+
+**Implementation order:** (1) `tools/hidmaestro-sdk-host/` — new host exe
+referencing the pinned `Core.dll`, mapping the existing pipe protocol onto
+`HMContext`/`HMController`, hash-checking the DLL at load; (2) installer
+retains the three assemblies; (3) Rust: route `plug_persona` per persona to
+the right host, second `HostExpectation`; (4) CI builds the new host (fetching
+the pinned archive at build time, hash-verified); (5) hardware: DualSense via
+the candidate host AND Switch Pro via the SDK host on Victor's machine — the
+same elevated session settles both lanes.
+
+---
+
 ## Known-stale, not yet fixed
 
 The 2026-08-20 sweep found 54 contradicted claims. All are now fixed:

@@ -312,6 +312,52 @@ so the orphan is recognised if ever seen again.
 
 ---
 
+## The multi-controller consolidation — 2026-08-20 (Victor's call)
+
+After the session measured the SDK lane working first-try on both its personas
+(Xbox Series: 205 ms create, XInput slot 0→1, 152 ms teardown, exit 0 — gate
+stays) while the candidate lane needed three live root-causes, Victor ordered
+the consolidation: every HIDMaestro persona rides the SDK-lane host, which
+carries up to EIGHT live controllers at once (the SDK allocates controller
+indices with no bound of its own — its `CreateController` comment says so;
+XInput seats four, so Xbox-family pads cap there). What changed:
+
+- `SdkHostSession` went multi-controller: ids 1..8, per-controller lease and
+  sequence, the 16 ms republish iterates every live pad, and DualSense is
+  served through the same generic per-profile mapper (semantic buttons — the
+  SDK maps them through the profile's own `buttonMap`, the PadForge-proven
+  path).
+- `runtime-contract-sdk.json`: `controllerLimit` 1 → 8, `xinputSeatLimit: 4`,
+  DualSense added to `supportedProfiles` (`dualsense`, USB 054C:0CE6),
+  `unsupportedProfiles` emptied. Canonical sha re-pinned in its four places
+  (`B744C0F3…`).
+- `ksx-output` became single-lane: the candidate lane's client wiring is
+  deleted (git history keeps it; the audited candidate host still ships as
+  the conformance reference). **Capacity is enforced in the Rust adapter,
+  BEFORE the host is asked** — any host Fault poisons the whole one-use
+  session by design (fail-closed), so a 9th create must be refused locally,
+  never allowed to tear down eight live pads. The host's own Capacity faults
+  stay as defense-in-depth.
+- `Persona::instance_limit`: DualSense's `Some(1)` is gone (the "· one per
+  session" studio label with it); ~8 one-DualSense pins across
+  core/api/config/backend/studio became multi-pad acceptance pins.
+- The candidate's `RecoverOwnedResidue` carried the instance-vs-hardware-id
+  bug in a FOURTH home (recovery required the retained parent's INSTANCE id
+  to start `root\\VID_…`; the measured instance is `ROOT\\HIDCLASS\\NNNN`) —
+  fixed by hardware-id proof, and the deadlocking residue it refused
+  (`ROOT\\HIDCLASS\\0005` + `Controller0`) was swept manually.
+
+Measurement pending on the next installed build: multi-DualSense
+(`pads --count 2 --persona dualsense`), multi-Switch, and the mixed roster.
+
+Next after that (Victor 2026-08-20): retro personas through the same lane —
+N64 (`n64-nso`), SNES (`snes-nso`), Genesis (`genesis-nso`) — chosen from the
+227-profile catalog sweep for emulator auto-config payoff; the host projects
+the modern pad state onto each retro layout (C-buttons = right stick, Z = LT),
+so ksx's binding vocabulary is unchanged.
+
+---
+
 ## Open questions — and exactly what settles each
 
 Nothing here may be written into a contract as a fact until it is measured.
@@ -449,7 +495,8 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `3cceb6a` | Switch Pro gate flipped for the hardware session; roster/test churn |
 | 2026-08-20 | `fae5ece` | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
 | 2026-08-20 | `48c6089` | DualSense defect #2 from the fixed-build rerun: exactness checks matched child INSTANCE paths (`HID\HIDCLASS\…` measured) instead of `HardwareID` entries → both checks now read the registry multi-sz; Switch Pro re-verified exit 0 |
-| 2026-08-20 | (this) | Xbox Series gate flipped for the SDK-lane measurement (~12 test reworks: with every persona pluggable, refusal pins became acceptance/dormancy pins); host faults now carry the real exception; child-identity wait tolerates the Enum-mirror race |
+| 2026-08-20 | `46ea36b` | Xbox Series gate flipped for the SDK-lane measurement (~12 test reworks: with every persona pluggable, refusal pins became acceptance/dormancy pins); host faults now carry the real exception; child-identity wait tolerates the Enum-mirror race |
+| 2026-08-20 | `aec3c4a` | **Xbox Series MEASURED WORKING** (205 ms create, XInput slot 0→1, 152 ms teardown, exit 0) — gate stays; multi-controller consolidation: SDK host carries 8, DualSense joins the SDK lane, candidate lane wiring retired, contract re-pinned `B744C0F3…`; recovery-path identity bug (4th home) fixed |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

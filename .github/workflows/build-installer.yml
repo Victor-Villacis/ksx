@@ -170,6 +170,42 @@ jobs:
           }
           Write-Host "ksx-hidmaestro-host.exe SHA256 $($parsed.executableSha256)"
 
+      # The SDK-lane host references the pinned official release SDK, which is
+      # 113 MB and never committed. Cache the archive by its content hash so a
+      # cache hit skips the download entirely; the fetch script verifies the
+      # bytes identically either way.
+      - name: Cache pinned HIDMaestro release archive
+        id: sdk-archive-cache
+        uses: actions/cache@v4
+        with:
+          path: sdk-archive/HIDMaestro-v1.6.1.zip
+          key: hidmaestro-release-00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34
+
+      - name: Build pinned SDK-lane HIDMaestro host
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path sdk-archive -Force | Out-Null
+          $archive = Join-Path $PWD 'sdk-archive/HIDMaestro-v1.6.1.zip'
+          if (-not (Test-Path -LiteralPath $archive)) {
+            Invoke-WebRequest `
+              -Uri 'https://github.com/hifihedgehog/HIDMaestro/releases/download/v1.6.1/HIDMaestro-v1.6.1.zip' `
+              -OutFile $archive -UseBasicParsing
+          }
+          $receipt = ./tools/hidmaestro-sdk-host/publish-sdk.ps1 `
+            -WorkspaceRoot $PWD `
+            -OutputDirectory (Join-Path $PWD 'target/release') `
+            -ArchivePath $archive
+          if ($LASTEXITCODE -ne 0) { throw 'SDK-lane host publish failed' }
+          $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
+          if ($parsed.schemaVersion -ne 1 -or
+              $parsed.lane -cne 'pinned-official-sdk' -or
+              $parsed.sdkAssemblySha256 -cne 'ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5' -or
+              $parsed.runtimeContractSha256 -cne '3FC74E0AD063CE02A22DB9866842BD02987D1027315AE899EAE90305847CDBAF' -or
+              $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
+            throw 'The SDK-lane host build receipt is not exact.'
+          }
+          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $($parsed.executableSha256)"
+
       - name: Build pinned HIDMaestro driver installer
         shell: pwsh
         run: |

@@ -1066,6 +1066,13 @@ mod tests {
                 assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
                 let message = refused.to_string();
                 assert!(message.contains("xbox360"), "{message}");
+                // The same gate on the other door: repainting an accepted
+                // slot must refuse identically.
+                assert_eq!(
+                    staged().set_persona(1, persona).unwrap_err().code(),
+                    "persona-not-implemented",
+                    "{persona}"
+                );
             } else {
                 result.unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
             }

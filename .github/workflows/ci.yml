@@ -808,9 +808,9 @@ jobs:
               }
               $personas = @($report.ksxPersonaContract.personas)
               if ($report.ksxPersonaContract.ok -ne $true -or
-                  $personas.Count -ne 3 -or
+                  $personas.Count -ne 5 -or
                   @($personas | Where-Object { $_.present -ne $true -or $_.passed -ne $true }).Count -ne 0) {
-                throw 'the three KSX persona contracts did not pass'
+                throw 'the five KSX persona contracts did not pass'
               }
               if ($report.safety.requestsReadOnlySdkOperations -ne $false -or
                   $report.safety.constructsSdkContext -ne $false -or

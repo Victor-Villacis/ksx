@@ -2816,18 +2816,17 @@ mod tests {
         }
     }
 
-    /// Protocol vocabulary does not enable unfinished product personas. The
-    /// Every protocol profile is product-enabled (2026-08-20 session: all
-    /// three measured working through the SDK-lane host). The
-    /// CANDIDATE-shaped harness below still refuses Switch Pro — the
-    /// candidate host serves nothing in production and stays the conformance
-    /// reference.
+    /// Protocol vocabulary does not enable product personas: the modern trio
+    /// is measured and plugs; the retro pair is wire-valid but gated until
+    /// its hardware leg. The CANDIDATE-shaped harness below still refuses
+    /// Switch Pro — the candidate host serves nothing in production and
+    /// stays the conformance reference.
     #[test]
-    fn every_protocol_profile_is_product_enabled() {
-        assert!(ProfileId::DualSense.persona().can_plug());
-        assert!(ProfileId::SwitchPro.persona().can_plug());
-        // 2026-08-20 hardware session: the SDK lane serves Xbox Series too.
-        assert!(ProfileId::XboxSeries.persona().can_plug());
+    fn protocol_profiles_carry_their_measured_gates() {
+        for profile in ProfileId::ALL.iter().copied() {
+            let gated = matches!(profile, ProfileId::Snes | ProfileId::Genesis);
+            assert_eq!(profile.persona().can_plug(), !gated, "{profile:?}");
+        }
         let (_harness, transport) = Harness::new();
         let mut client = HostClient::connect(transport, nonce(), expectation()).unwrap();
         let err = client.create(ProfileId::SwitchPro).unwrap_err();

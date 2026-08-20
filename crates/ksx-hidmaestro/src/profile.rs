@@ -157,10 +157,26 @@ mod tests {
         assert_eq!(slug_for(Persona::XboxSeries), Some("xbox-series-xs-bt"));
         assert_eq!(slug_for(Persona::DualSense), Some("dualsense"));
         assert_eq!(slug_for(Persona::SwitchPro), Some("switch-pro"));
+        assert_eq!(slug_for(Persona::Snes), Some("ibuffalo-snes"));
+        assert_eq!(slug_for(Persona::Genesis), Some("daemonbite-genesis"));
         // The two ViGEm personas must NOT be reachable here: a HIDMaestro X360
         // pad is the synthesis layer we deliberately refuse.
         assert_eq!(slug_for(Persona::Xbox360), None);
         assert_eq!(slug_for(Persona::PlayStation), None);
+    }
+
+    /// The two hand-written slug tables (this module's `slug_for` and the
+    /// protocol's `ProfileId::catalog_slug`) can never drift apart: every
+    /// profile's persona must round-trip to the same catalog entry.
+    #[test]
+    fn slug_tables_cannot_drift() {
+        for profile in crate::host::ProfileId::ALL.iter().copied() {
+            assert_eq!(
+                slug_for(profile.persona()),
+                Some(profile.catalog_slug()),
+                "{profile:?}"
+            );
+        }
     }
 
     #[test]

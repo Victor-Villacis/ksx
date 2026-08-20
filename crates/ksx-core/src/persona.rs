@@ -144,23 +144,16 @@ impl PadBackend {
     /// Whether this exact persona is implemented by this backend in this
     /// build.
     ///
-    /// The three HIDMaestro arms are intentionally separate. The first live
-    /// milestone is one plain DualSense, and proving it must not turn two
-    /// unrelated catalog entries into product promises.
-    ///
-    /// Switch Pro and Xbox Series now have frozen source encoders, input
-    /// contracts and golden vectors in the runtime candidate — but source is
-    /// not a runtime. Nothing has been compiled into a shipping host, no
-    /// device has been created, and neither profile's Bluetooth presentation
-    /// has been measured on real hardware. They stay `false` until a built
-    /// artifact drives an actual pad, because a persona listed here is a
-    /// promise the Studio makes to a player.
+    /// The HIDMaestro arms are intentionally separate: each flips `true`
+    /// only after ITS device has been observed on real hardware, because a
+    /// persona listed here is a promise the Studio makes to a player. The
+    /// modern trio (DualSense, Switch Pro, Xbox Series) was measured working
+    /// on 2026-08-20; the retro pair (SNES, Genesis) is wired end to end and
+    /// stays `false` until its own supervised hardware leg.
     ///
     /// `docs/HIDMAESTRO-STATE.md` is the living record of what has actually
     /// been observed versus merely implemented, with the measurement behind
-    /// each claim. Read it before flipping any arm here — the older docs use
-    /// "live" to mean code-complete, and no HIDMaestro device has yet been
-    /// seen to exist on any machine.
+    /// each claim. Read it before flipping any arm here.
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
@@ -467,7 +460,8 @@ impl FromStr for Persona {
             // persona presents as is the SAME wire identity for Genesis,
             // Mega Drive and Saturn (its descriptor notes say so) — nothing
             // is silently substituted.
-            "genesis" | "megadrive" | "md" | "sega" | "saturn" => Ok(Persona::Genesis),
+            "genesis" | "megadrive" | "md" | "sega" | "saturn" | "segagenesis"
+            | "segamegadrive" | "segasaturn" | "megadrive6b" => Ok(Persona::Genesis),
             _ => Err(UnknownPersona(s.to_owned())),
         }
     }
@@ -618,13 +612,25 @@ mod tests {
     #[test]
     fn a_refused_persona_still_parses_and_still_has_a_name() {
         // Deleting the variant, or making it stop parsing, would turn every
-        // existing `persona = "dualsense"` into "unknown persona" — which is
-        // false, and points the reader at a typo they did not make.
-        let p: Persona = "xboxseries".parse().unwrap();
-        assert_eq!(p, Persona::XboxSeries);
-        assert!(p.can_plug());
-        assert!(Persona::ALL.contains(&p));
-        assert_eq!(p.as_str(), "xboxseries");
+        // existing `persona = "snes"` into "unknown persona" — which is
+        // false, and points the reader at a typo they did not make. The
+        // subjects are the ACTUALLY gated pair, restoring this test's premise
+        // (it drifted onto a pluggable persona when nothing was gated).
+        for (spelling, persona) in [
+            ("snes", Persona::Snes),
+            ("superfamicom", Persona::Snes),
+            ("genesis", Persona::Genesis),
+            ("saturn", Persona::Genesis),
+            ("Sega Genesis", Persona::Genesis),
+            ("Sega Mega Drive", Persona::Genesis),
+        ] {
+            let p: Persona = spelling
+                .parse()
+                .unwrap_or_else(|e| panic!("{spelling}: {e}"));
+            assert_eq!(p, persona, "{spelling}");
+            assert!(!p.can_plug(), "{spelling} is gated, not gone");
+            assert!(Persona::ALL.contains(&p));
+        }
     }
 
     #[test]

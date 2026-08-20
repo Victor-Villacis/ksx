@@ -24,16 +24,19 @@ namespace Ksx.HidMaestroSdkHost;
 /// layout-indexed mask for Switch.
 /// </para>
 /// <para>
-/// The RETRO profiles (iBuffalo SNES, DaemonBite Genesis) carry NO layout
-/// metadata at all — bare descriptors — and the builder's no-ButtonMap
-/// fallback is IDENTITY (semantic bit b → descriptor button b, measured in
-/// `HidReportBuilder.cs`). So this mapper emits DESCRIPTOR-ORDERED masks for
-/// them: each bit position is the pad's own descriptor button index. The
-/// bit→physical-label assignments below are PROVISIONAL (drawn from the
-/// widely-published SDL/RetroArch mappings for these exact identities) until
-/// the pads' supervised hardware leg adjudicates them in joy.cpl; what this
-/// mapper guarantees regardless is that every ksx control lands on a DISTINCT,
-/// STABLE descriptor button.
+/// The RETRO profiles (iBuffalo SNES, DaemonBite Genesis) carry no
+/// `buttonMap`, and that key — not layout presence — is what decides button
+/// routing: the builder's no-ButtonMap fallback is IDENTITY (semantic bit b →
+/// descriptor button b, measured in `HidReportBuilder.cs`; the SDK's
+/// `ApplyLayoutSemantics` leaves buttons untouched even when a layout block
+/// exists). So this mapper emits DESCRIPTOR-ORDERED masks: each bit position
+/// is the pad's own descriptor button index. The iBuffalo profile in fact
+/// DOES carry a layout block whose role table (face_a→0 … start→7) matches
+/// the table below index for index — corroboration, not the routing
+/// mechanism. The bit→physical-label assignments stay PROVISIONAL until the
+/// pads' supervised hardware leg adjudicates them in joy.cpl; what this
+/// mapper guarantees regardless is that every ksx control lands on a
+/// DISTINCT, STABLE descriptor button.
 /// </para>
 /// </remarks>
 internal sealed class SdkStateMapper
@@ -141,7 +144,9 @@ internal sealed class SdkStateMapper
     private HMGamepadState MapIBuffalo(in KsxPadState input)
     {
         _axes.Clear();
-        WriteDpadOrStickAxes(in input, half: 0.5f);
+        // Continuous alias is byte-exact for this 0..255 pad (ByteValue's
+        // +0.25 bias inverts the builder's truncation over that range).
+        WriteDpadOrStickAxes(in input, digital: false);
 
         uint mask = 0;
         KsxButtons pressed = input.Buttons;
@@ -183,7 +188,13 @@ internal sealed class SdkStateMapper
     private HMGamepadState MapDaemonBite(in KsxPadState input)
     {
         _axes.Clear();
-        WriteDpadOrStickAxes(in input, half: 0.5f);
+        // DIGITAL stick alias, forced by builder arithmetic over this pad's
+        // −1..1 logical range: WriteField truncates `(int)(norm*2-1)` toward
+        // zero, so every Axis()-produced float in (0,1) collapses to centre —
+        // a continuous alias could never reach −1, and +1 only at exactly
+        // full scale (review-executed math, 2026-08-20). Thresholding is the
+        // only honest mapping onto a three-valued axis.
+        WriteDpadOrStickAxes(in input, digital: true);
 
         uint mask = 0;
         KsxButtons pressed = input.Buttons;
@@ -213,14 +224,19 @@ internal sealed class SdkStateMapper
         };
     }
 
+    /// <summary>Deflection past this drives a digital retro axis — a quarter
+    /// scale, matching the conventional stick-to-dpad threshold.</summary>
+    private const short DigitalStickThreshold = 8192;
+
     /// <summary>
     /// Retro pads carry the D-pad on their X/Y axes: the D-pad wins when
     /// pressed, else the left stick drives the same axes so keyboard-couch
-    /// bindings work unchanged. `half` is the builder's float centre (it
-    /// scales 0..1 across each descriptor's own logical range, so 0.5 is the
-    /// centre for both the 0..255 and the −1..1 pads).
+    /// bindings work unchanged. `digital` selects thresholded extremes for
+    /// pads whose logical axis range is too coarse for continuous floats
+    /// (see the DaemonBite call site); 0.5 is the builder's float centre for
+    /// both the 0..255 and the −1..1 ranges.
     /// </summary>
-    private void WriteDpadOrStickAxes(in KsxPadState input, float half)
+    private void WriteDpadOrStickAxes(in KsxPadState input, bool digital)
     {
         KsxButtons b = input.Buttons;
         bool left = (b & KsxButtons.DpadLeft) != 0;
@@ -232,22 +248,35 @@ internal sealed class SdkStateMapper
         {
             (true, false) => 0f,
             (false, true) => 1f,
-            _ => half,
+            _ => 0.5f,
         };
         float y = (up, down) switch
         {
             (true, false) => 0f,
             (false, true) => 1f,
-            _ => half,
+            _ => 0.5f,
         };
         if (!left && !right && input.LeftX != 0)
         {
-            x = Axis(input.LeftX, invert: false);
+            x = digital
+                ? input.LeftX <= -DigitalStickThreshold
+                    ? 0f
+                    : input.LeftX >= DigitalStickThreshold
+                        ? 1f
+                        : 0.5f
+                : Axis(input.LeftX, invert: false);
         }
 
         if (!up && !down && input.LeftY != 0)
         {
-            y = Axis(input.LeftY, invert: true);
+            // ksx LeftY is up-positive; the HID axis is down-positive.
+            y = digital
+                ? input.LeftY >= DigitalStickThreshold
+                    ? 0f
+                    : input.LeftY <= -DigitalStickThreshold
+                        ? 1f
+                        : 0.5f
+                : Axis(input.LeftY, invert: true);
         }
 
         _axes[HMAxis.X] = x;

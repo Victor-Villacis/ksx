@@ -1252,11 +1252,9 @@ mod tests {
         );
     }
 
-    /// The two unfinished HIDMaestro personas are refused BEFORE the disk is touched,
-    /// 2026-08-20 flip: every shipping persona is writable. The refusal
-    /// machinery (code + gap-quoting message) stays live behind
-    /// `Persona::gap()` for the next gated persona; its wording is pinned by
-    /// the gap unit tests in ksx-core.
+    /// Every measured persona is writable; the gated retro pair is refused
+    /// BEFORE the disk is touched, in `Persona::gap()`'s own words — the
+    /// refusal machinery re-armed with real subjects on 2026-08-20.
     #[test]
     fn every_shipping_persona_is_writable() {
         let root = TempRoot::new("cannot-plug");
@@ -1266,6 +1264,16 @@ mod tests {
         for persona in [Persona::XboxSeries, Persona::SwitchPro] {
             assign(&store, &persona_spec(1, persona))
                 .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
+        }
+        for persona in [Persona::Snes, Persona::Genesis] {
+            let err = assign(&store, &persona_spec(1, persona)).unwrap_err();
+            assert_eq!(err.code(), "persona-not-implemented", "{persona}");
+            let message = err.to_string();
+            assert!(
+                message.contains("has not yet completed its independent production runtime"),
+                "{message}"
+            );
+            assert!(message.contains("xbox360"), "{message}");
         }
         assign(&store, &persona_spec(1, Persona::DualSense))
             .expect("the production DualSense path is writable");

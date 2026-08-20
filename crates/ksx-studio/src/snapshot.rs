@@ -2904,7 +2904,7 @@ impl StartRows {
                     label: p.label.clone(),
                     // `Persona::gap()`'s own sentence. A surface that
                     // paraphrased it into "install HIDMaestro" would be
-                    // promising a fix that does not exist for two of the three.
+                    // promising a fix that does not exist for the gated pair.
                     gap: p.gap.clone().unwrap_or_default(),
                     instead: format!("Use {} instead.", p.instead),
                 })

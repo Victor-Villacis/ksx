@@ -188,18 +188,31 @@ mod tests {
 
     #[test]
     fn the_dormant_persona_refusal_keeps_its_shape() {
-        // 2026-08-20 flip: no live persona reaches this refusal (all plug);
-        // the variant stays for the next gated persona, so pin its dormant
-        // shape — classification flags and the honest no-gap fallback.
+        // A PLUGGABLE persona reaching this refusal is a bug elsewhere; its
+        // rendering stays honest — no invented reason.
         let err = OutputError::PersonaNotImplemented(ksx_core::Persona::XboxSeries);
         let msg = err.to_string();
         assert!(msg.contains("xboxseries"), "{msg}");
-        // It must not read as an install problem...
         assert!(!err.is_hidmaestro_missing(), "{msg}");
         assert!(err.is_not_implemented());
-        // ...and with no recorded gap the message says so instead of
-        // inventing a reason.
         assert!(msg.contains("no reason recorded"), "{msg}");
+    }
+
+    /// The LIVE rendering: `ksx pads --persona snes` prints exactly this, so
+    /// the gated pair's refusal carries the build's own reason and a way out.
+    #[test]
+    fn a_gated_persona_refusal_names_the_gap_and_a_way_out() {
+        for persona in [ksx_core::Persona::Snes, ksx_core::Persona::Genesis] {
+            let err = OutputError::PersonaNotImplemented(persona);
+            let msg = err.to_string();
+            assert!(msg.contains(persona.as_str()), "{msg}");
+            assert!(
+                msg.contains("has not yet completed its independent production runtime"),
+                "{msg}"
+            );
+            assert!(msg.contains("xbox360"), "{msg}");
+            assert!(err.is_not_implemented());
+        }
     }
 
     #[test]

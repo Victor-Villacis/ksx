@@ -402,7 +402,9 @@ create arms, descriptor-ordered masks in the mapper, contract
 `supportedProfiles` grown, sha re-pinned `EDE64B5F…`) and GATED
 (`supports() => false`) until their supervised hardware leg observes real
 devices — the same rule as every persona before them. The bare-descriptor
-reality means the builder's identity fallback is exactly what the
+reality (no `buttonMap` — the iBuffalo profile does carry a layout block,
+which corroborates its table but is not the routing mechanism) means the
+builder's identity fallback is exactly what the
 descriptor-ordered masks target; the bit→physical-label tables are marked
 PROVISIONAL in the mapper and adjudicated in joy.cpl during the leg. N64
 stays deferred: no clean identity exists in the catalog (its NSO profile has
@@ -499,9 +501,9 @@ ViGEmBus (same author) is already the working X360/DS4 lane.
 **Implementation state (2026-08-20):**
 1. ✅ `tools/hidmaestro-sdk-host/` — host exe, session, per-persona state
    mapper (layout-indexed buttons for Switch), `runtime-contract-sdk.json`
-   (canonical sha `B744C0F3…` since the multi-controller consolidation;
-   `3FC74E0A…` was the single-controller revision), pinned fetch + publish
-   gates.
+   (canonical sha `EDE64B5F…` since the retro-persona increment; `B744C0F3…`
+   was the multi-controller revision, `3FC74E0A…` the single-controller one),
+   pinned fetch + publish gates.
 2. ✅ superseded — the single-file bundle carries the SDK, so the installer
    ships one more sealed sibling instead of staging assemblies; `ksx.iss` and
    the workflow package + PE-validate it.
@@ -564,6 +566,7 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | (this) | Multi-pad measured: 2×DualSense + 4×Xbox exit 0; Switch ×2 exposed the lease-starvation race → host re-stamps every lease on any inbound frame AND on its own expiry-teardown time; lease expiry now destroys only its own pad (per-controller contract); CREATE_TIMEOUT 15→30 s (create #2 measured 7.7 s); 34-agent adversarial review → 10 confirmed findings fixed: static `MAX_HIDMAESTRO_PADS = 8` pool ceiling at validate/stage/write/plan/roster layers (a clean-validating 9-pad config no longer dies at plug #9), surrogate-safe fault truncation (both hosts), ~14 refusal-named tests renamed honestly or made real again against the pool, six stale doc-comment sites + this doc's own stale sections corrected |
 | 2026-08-20 | (this) | Retro-persona scope measured: catalog profiles are bare descriptors, Switch packer keys strictly on PID 2009, no-ButtonMap fallback is identity → NSO trio (N64/SNES/Genesis) deferred to a descriptor-table increment; Dreamcast/Wii/NES ruled out; 'cheap per persona' claim retracted |
 | 2026-08-20 | (this) | SNES (iBuffalo 0583:2060) + Genesis/Saturn (DaemonBite 2341:8036) personas wired end to end, GATED pending their hardware leg; NSO identities rejected (SDL-HIDAPI handshake dead + placeholder descriptors), MD Mini rejected (Usage(0) hat invisible to the builder); contract sha → `EDE64B5F…`; nearest_pluggable refusal-loop bug caught by the invariant test and fixed |
+| 2026-08-20 | (this) | 29-agent retro review → 21 confirmed, all fixed: Genesis stick alias was digitally dead over the −1..1 range (builder truncation — review-executed math) → thresholded; the profile set turned out pinned in EIGHT C# places (identity map, TryProfile, IsProfile, invalid-vector, protocol table, self-test list, PersonaContract+ci count, fake tests) — three found by CI, five by the review; gate coverage re-armed at every layer (router/api/slots/plan/games/set_persona/error-display/studio exact-pair); protocol description's stale pre-session deadlines corrected to the measured 30 s; Sega compound aliases; slug cross-check drift guard |
 | 2026-08-20 | `1f109dd` verified live | The lease-fix build measured: Switch Pro x2 exit 0 (34 s wall - slow second create + two 12 s teardowns, all inside budgets, no lease kill), DualSense x2 exit 0 (4.7 s), Xbox Series x4 exit 0 (4.5 s), zero residue. Every persona multi-pad PROVEN on the shipped build |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile

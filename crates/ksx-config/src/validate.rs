@@ -1973,15 +1973,26 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         }];
-        let issues = validate_games(&games, &[]);
-        // 2026-08-20 flip: xboxseries plugs, so the game validates clean; the
-        // per-game report shape re-arms with the next gated persona.
-        assert!(
-            !issues
-                .iter()
-                .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),
-            "{issues:?}"
+        // The measured persona validates clean...
+        assert!(!validate_games(&games, &[])
+            .iter()
+            .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),);
+        // ...and the gated retro persona re-arms the per-game report with the
+        // full struct: game, slot, the build's own reason, and a way out.
+        games.games[0].slots[0].persona = Persona::Snes;
+        assert_eq!(
+            validate_games(&games, &[]),
+            vec![Issue::GamePersonaNotImplemented {
+                game: "Bloodborne".into(),
+                slot: 1,
+                persona: "snes".into(),
+                reason: Persona::Snes.gap().unwrap().to_owned(),
+                instead: "xbox360".into(),
+            }]
         );
+        let msg = validate_games(&games, &[])[0].to_string();
+        assert!(msg.contains("Bloodborne"), "{msg}");
+        assert!(msg.contains("xbox360"), "{msg}");
     }
 
     /// The trap, stated as a test: this check may never consult the machine.

@@ -358,6 +358,41 @@ so ksx's binding vocabulary is unchanged.
 
 ---
 
+## Retro personas — measured scope call, 2026-08-20
+
+Victor asked for every low-hanging mainstream-console pad. Measured against the
+pinned catalog and SDK source — the answer reversed the earlier assumption:
+
+`[MEASURED]` Every retro profile in the catalog (`snes-nso` 057E:2017,
+`n64-nso` 057E:2019, `genesis-nso` 057E:201E, `daemonbite-genesis` 2341:8036,
+minis, adapters) is a BARE DESCRIPTOR: `layout.kind: "unspecified"`, no
+`buttonMap`, no `axisMap`, no sticks/triggers metadata.
+`[SOURCE SwitchProPacker.cs:30]` The Switch protocol lane keys STRICTLY on
+`vid == 0x057E && pid == 0x2009` — NSO pads do not ride it.
+`[SOURCE HidReportBuilder.cs:955]` With no ButtonMap the descriptor lane falls
+back to IDENTITY — semantic bit `b` writes descriptor button `b`, so ksx's A
+would land on Nintendo's B on every Switch-family descriptor. Nothing retro
+spawns CORRECTLY for free.
+
+**Verdict table:**
+
+| Tier | Personas | Why |
+|---|---|---|
+| Real today (shipped, measured) | DualSense, Switch Pro, Xbox Series — multi-pad | the mainstream modern three; Switch Pro is already a first-class emulator identity |
+| Next increment (each ≈ hours + one shared hardware leg) | **N64, SNES, Genesis** via the NSO profiles | descriptor lane is self-describing: derive each pad's button/axis bit table from its own pinned descriptor, drive it with a per-profile mask (the `SwitchLayoutMask` pattern), golden-vector it, verify once on hardware. N64 first (C-buttons ← right stick is the emulator convention) |
+| Defer behind its own measurement | GameCube (`gamecube-adapter`) — Dolphin prefers the vendor protocol over HID; Saturn via `daemonbite-genesis` (4-byte report, trivial descriptor, weaker auto-config identity) | |
+| Don't do | Dreamcast (zero profiles; DC emulators take any pad — the modern personas serve them fully), Wii/Wiimote (absent; motion is a different product), NES as its own persona (SNES/generic covers it — roster noise), Joy-Cons/mini-console pads/8BitDo identities (niche), custom catalog profiles (breaks the 228-resource pin) | |
+
+**Retraction:** the consolidation notes said retro personas would be cheap
+because "the host projects the modern pad state onto each retro layout, so
+ksx's binding vocabulary is unchanged." The ksx-side half was right; the
+host-side half assumed layout metadata the profiles turned out not to carry.
+The projection tables must be derived per pad from the descriptors — real
+work, done with the contracts machinery, gated by the same
+observed-device-before-offered rule as everything else.
+
+---
+
 ## Open questions — and exactly what settles each
 
 Nothing here may be written into a contract as a fact until it is measured.
@@ -501,6 +536,7 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `46ea36b` | Xbox Series gate flipped for the SDK-lane measurement (~12 test reworks: with every persona pluggable, refusal pins became acceptance/dormancy pins); host faults now carry the real exception; child-identity wait tolerates the Enum-mirror race |
 | 2026-08-20 | `aec3c4a`+`d711b0a` | **Xbox Series MEASURED WORKING** (205 ms create, XInput slot 0→1, 152 ms teardown, exit 0) — gate stays; multi-controller consolidation: SDK host carries 8, DualSense joins the SDK lane, candidate lane wiring retired, contract re-pinned `B744C0F3…`; recovery-path identity bug (4th home) fixed |
 | 2026-08-20 | (this) | Multi-pad measured: 2×DualSense + 4×Xbox exit 0; Switch ×2 exposed the lease-starvation race → host re-stamps every lease on any inbound frame AND on its own expiry-teardown time; lease expiry now destroys only its own pad (per-controller contract); CREATE_TIMEOUT 15→30 s (create #2 measured 7.7 s); 34-agent adversarial review → 10 confirmed findings fixed: static `MAX_HIDMAESTRO_PADS = 8` pool ceiling at validate/stage/write/plan/roster layers (a clean-validating 9-pad config no longer dies at plug #9), surrogate-safe fault truncation (both hosts), ~14 refusal-named tests renamed honestly or made real again against the pool, six stale doc-comment sites + this doc's own stale sections corrected |
+| 2026-08-20 | (this) | Retro-persona scope measured: catalog profiles are bare descriptors, Switch packer keys strictly on PID 2009, no-ButtonMap fallback is identity → NSO trio (N64/SNES/Genesis) deferred to a descriptor-table increment; Dreamcast/Wii/NES ruled out; 'cheap per persona' claim retracted |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

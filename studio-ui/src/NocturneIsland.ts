@@ -1451,9 +1451,11 @@ function applySlotColors(): void {
       // The label's ink travels with the color it sits on — half this
       // palette is dark enough that near-black text would vanish on it.
       root.style.setProperty(`--pcs${slot}-ink`, `var(--pal${idx}-ink)`);
+      root.style.setProperty(`--pcs${slot}-key`, `var(--pal${idx}-key)`);
     } else {
       root.style.removeProperty(`--pcs${slot}`);
       root.style.removeProperty(`--pcs${slot}-ink`);
+      root.style.removeProperty(`--pcs${slot}-key`);
     }
   }
 }

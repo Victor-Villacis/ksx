@@ -6302,6 +6302,29 @@ a.wsrow-title:hover {
   --pal14-ink: #ffffff; /* 15.3:1 on Void blue */
   --pal15-ink: #14151f; /* 16.9:1 on Ice white */
   --pal16-ink: #14151f; /* 13.1:1 on Phazon teal */
+
+  /* WHAT THE KEYBOARD PAINTS. Ownership shows as a 30% wash over a dark
+     key cap, and a dark color cannot tint a dark surface — CRT grey lands
+     within 2.6 of the cap's own color, so a key owned by P7 read as
+     unowned. These lift the three that vanish: same hue, more light, and
+     ONLY here. Everywhere the color is seen AS a color — badge, legend
+     chip, pad card — it is the palette's own value, untouched. */
+  --pal1-key: #e70009;  /* as-is */
+  --pal2-key: #0050ef;  /* as-is */
+  --pal3-key: #107c10;  /* as-is */
+  --pal4-key: #e3c800;  /* as-is */
+  --pal5-key: #fa6800;  /* as-is */
+  --pal6-key: #9193d8;  /* GameCube indigo lifted — was 9.3 on a bare cap */
+  --pal7-key: #a5a5a5;  /* CRT grey lifted — was 2.6 on a bare cap */
+  --pal8-key: #931a33;  /* as-is */
+  --pal9-key: #c40062;  /* as-is */
+  --pal10-key: #8b5a2b; /* as-is */
+  --pal11-key: #6a00ff; /* as-is */
+  --pal12-key: #a4c400; /* as-is */
+  --pal13-key: #0069d1; /* Space navy lifted — was 6.1 on a bare cap */
+  --pal14-key: #00008b; /* as-is */
+  --pal15-key: #f0f8ff; /* as-is */
+  --pal16-key: #00fa9a; /* as-is */
   --pcs1: var(--pal1);
   --pcs2: var(--pal2);
   --pcs3: var(--pal3);
@@ -6334,6 +6357,22 @@ a.wsrow-title:hover {
   --pcs14-ink: var(--pal14-ink);
   --pcs15-ink: var(--pal15-ink);
   --pcs16-ink: var(--pal16-ink);
+  --pcs1-key: var(--pal1-key);
+  --pcs2-key: var(--pal2-key);
+  --pcs3-key: var(--pal3-key);
+  --pcs4-key: var(--pal4-key);
+  --pcs5-key: var(--pal5-key);
+  --pcs6-key: var(--pal6-key);
+  --pcs7-key: var(--pal7-key);
+  --pcs8-key: var(--pal8-key);
+  --pcs9-key: var(--pal9-key);
+  --pcs10-key: var(--pal10-key);
+  --pcs11-key: var(--pal11-key);
+  --pcs12-key: var(--pal12-key);
+  --pcs13-key: var(--pal13-key);
+  --pcs14-key: var(--pal14-key);
+  --pcs15-key: var(--pal15-key);
+  --pcs16-key: var(--pal16-key);
   --n-bg: #161826;
   --n-panel: #1a1c28;
   --n-panel-2: #232532;
@@ -7583,22 +7622,22 @@ a.wsrow-title:hover {
 .n-kb {
   --kbt: var(--n-accent);
   --band-mute: #454956;
-  --kb1: var(--pcs1);
-  --kb2: var(--pcs2);
-  --kb3: var(--pcs3);
-  --kb4: var(--pcs4);
-  --kb5: var(--pcs5);
-  --kb6: var(--pcs6);
-  --kb7: var(--pcs7);
-  --kb8: var(--pcs8);
-  --kb9: var(--pcs9);
-  --kb10: var(--pcs10);
-  --kb11: var(--pcs11);
-  --kb12: var(--pcs12);
-  --kb13: var(--pcs13);
-  --kb14: var(--pcs14);
-  --kb15: var(--pcs15);
-  --kb16: var(--pcs16);
+  --kb1: var(--pcs1-key);
+  --kb2: var(--pcs2-key);
+  --kb3: var(--pcs3-key);
+  --kb4: var(--pcs4-key);
+  --kb5: var(--pcs5-key);
+  --kb6: var(--pcs6-key);
+  --kb7: var(--pcs7-key);
+  --kb8: var(--pcs8-key);
+  --kb9: var(--pcs9-key);
+  --kb10: var(--pcs10-key);
+  --kb11: var(--pcs11-key);
+  --kb12: var(--pcs12-key);
+  --kb13: var(--pcs13-key);
+  --kb14: var(--pcs14-key);
+  --kb15: var(--pcs15-key);
+  --kb16: var(--pcs16-key);
 }
 
 /* A key the SELECTED controller drives wears the ring, in that
@@ -10502,67 +10541,67 @@ button.n-keychip:hover {
 }
 
 .n-center.solo .n-kb.np1 {
-  --kb1: var(--pcs1);
+  --kb1: var(--pcs1-key);
 }
 
 .n-center.solo .n-kb.np2 {
-  --kb2: var(--pcs2);
+  --kb2: var(--pcs2-key);
 }
 
 .n-center.solo .n-kb.np3 {
-  --kb3: var(--pcs3);
+  --kb3: var(--pcs3-key);
 }
 
 .n-center.solo .n-kb.np4 {
-  --kb4: var(--pcs4);
+  --kb4: var(--pcs4-key);
 }
 
 .n-center.solo .n-kb.np5 {
-  --kb5: var(--pcs5);
+  --kb5: var(--pcs5-key);
 }
 
 .n-center.solo .n-kb.np6 {
-  --kb6: var(--pcs6);
+  --kb6: var(--pcs6-key);
 }
 
 .n-center.solo .n-kb.np7 {
-  --kb7: var(--pcs7);
+  --kb7: var(--pcs7-key);
 }
 
 .n-center.solo .n-kb.np8 {
-  --kb8: var(--pcs8);
+  --kb8: var(--pcs8-key);
 }
 
 .n-center.solo .n-kb.np9 {
-  --kb9: var(--pcs9);
+  --kb9: var(--pcs9-key);
 }
 
 .n-center.solo .n-kb.np10 {
-  --kb10: var(--pcs10);
+  --kb10: var(--pcs10-key);
 }
 
 .n-center.solo .n-kb.np11 {
-  --kb11: var(--pcs11);
+  --kb11: var(--pcs11-key);
 }
 
 .n-center.solo .n-kb.np12 {
-  --kb12: var(--pcs12);
+  --kb12: var(--pcs12-key);
 }
 
 .n-center.solo .n-kb.np13 {
-  --kb13: var(--pcs13);
+  --kb13: var(--pcs13-key);
 }
 
 .n-center.solo .n-kb.np14 {
-  --kb14: var(--pcs14);
+  --kb14: var(--pcs14-key);
 }
 
 .n-center.solo .n-kb.np15 {
-  --kb15: var(--pcs15);
+  --kb15: var(--pcs15-key);
 }
 
 .n-center.solo .n-kb.np16 {
-  --kb16: var(--pcs16);
+  --kb16: var(--pcs16-key);
 }
 
 /* ── Controller colors: the dot, the picker, the cap strips ── */

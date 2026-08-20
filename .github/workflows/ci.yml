@@ -442,8 +442,8 @@ jobs:
                   $contract.sourceContracts.compilationDisposition.replacementRequiredCount -ne 13 -or
                   $contract.sourceContracts.compilationDisposition.excludedCount -ne 37 -or
                   $contract.sourceContracts.compilationDisposition.replacementSourcesPresent -ne $true -or
-                  $contract.sourceContracts.managedSourceCandidate.candidateFileCount -ne 12 -or
-                  $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 11 -or
+                  $contract.sourceContracts.managedSourceCandidate.candidateFileCount -ne 15 -or
+                  $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 14 -or
                   $contract.sourceContracts.managedSourceCandidate.embeddedResourceCount -ne 228 -or
                   $contract.sourceContracts.managedSourceCandidate.sourceAndProjectXmlFrozen -ne $true -or
                   $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuildAuthorized -ne $false -or

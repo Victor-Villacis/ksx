@@ -417,9 +417,10 @@ jobs:
           $launcher = 'target/release/ksx-launcher.exe'
           $helper = 'target/release/ksx-winusb-helper.exe'
           $hidmaestroHost = 'target/release/ksx-hidmaestro-host.exe'
+          $hidmaestroSdkHost = 'target/release/ksx-hidmaestro-sdk-host.exe'
           $hidmaestroInstaller = 'target/release/ksx-hidmaestro-driver-installer.exe'
           $provider = 'target/release/libwdi.dll'
-          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroInstaller, $provider)) {
+          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroSdkHost, $hidmaestroInstaller, $provider)) {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
               throw "required release binary was not built: $required"
             }
@@ -444,6 +445,12 @@ jobs:
               $hostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
               $hostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
             throw 'ksx-hidmaestro-host.exe must be an x64 console-subsystem PE'
+          }
+          $sdkHostHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroSdkHost | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $sdkHostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
+              $sdkHostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
+            throw 'ksx-hidmaestro-sdk-host.exe must be an x64 console-subsystem PE'
           }
           $installerHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroInstaller | Out-String)
           if ($LASTEXITCODE -ne 0 -or
@@ -471,6 +478,7 @@ jobs:
           $launcherKb = [math]::Round((Get-Item $launcher).Length / 1KB, 1)
           $helperHash = (Get-FileHash $helper -Algorithm SHA256).Hash
           $hidmaestroHostHash = (Get-FileHash $hidmaestroHost -Algorithm SHA256).Hash
+          $hidmaestroSdkHostHash = (Get-FileHash $hidmaestroSdkHost -Algorithm SHA256).Hash
           $hidmaestroInstallerHash = (Get-FileHash $hidmaestroInstaller -Algorithm SHA256).Hash
           $providerHash = (Get-FileHash $provider -Algorithm SHA256).Hash
           Write-Host "ksx.exe  $mb MB"
@@ -479,10 +487,11 @@ jobs:
           Write-Host "SHA256            $launcherHash"
           Write-Host "ksx-winusb-helper.exe SHA256 $helperHash"
           Write-Host "ksx-hidmaestro-host.exe SHA256 $hidmaestroHostHash"
+          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $hidmaestroSdkHostHash"
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $hidmaestroInstallerHash"
           Write-Host "libwdi.dll SHA256               $providerHash"
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
+          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-sdk-host.exe: SHA256 ``$hidmaestroSdkHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       # The secondary release download is a PORTABLE DISTRIBUTION, not a bare

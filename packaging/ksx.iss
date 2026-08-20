@@ -88,6 +88,7 @@
 #define LauncherExe    "ksx-launcher.exe"
 #define WinUsbHelper   "ksx-winusb-helper.exe"
 #define HidMaestroHost "ksx-hidmaestro-host.exe"
+#define HidMaestroSdkHost "ksx-hidmaestro-sdk-host.exe"
 #define HidMaestroInstaller "ksx-hidmaestro-driver-installer.exe"
 #define LibwdiDll      "libwdi.dll"
 #define RepoRoot       ".."
@@ -227,6 +228,9 @@ Source: "{#RepoRoot}\target\release\{#WinUsbHelper}"; DestDir: "{app}"; Flags: i
 ; Fixed elevated one-controller HIDMaestro host. The daemon will seal and
 ; launch this sibling only from a protected Program Files installation.
 Source: "{#RepoRoot}\target\release\{#HidMaestroHost}"; DestDir: "{app}"; Flags: ignoreversion
+; SDK-lane twin: Switch Pro and Xbox Series through the pinned official SDK,
+; bundled self-contained into this one executable. Same sealed-sibling launch.
+Source: "{#RepoRoot}\target\release\{#HidMaestroSdkHost}"; DestDir: "{app}"; Flags: ignoreversion
 ; Installer-only, pinned upstream bootstrap. It downloads the exact official
 ; v1.6.1 archive only when the user selects the task, verifies every byte it
 ; executes, and removes the temporary SDK afterward. The ordinary daemon and

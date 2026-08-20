@@ -31,9 +31,10 @@ namespace HIDMaestro.Internal;
 /// <see cref="DeclaredInputReportSize"/> is the profile's own
 /// <c>inputReportSize</c> and is deliberately separate from
 /// <see cref="FullWireLength"/>. DualSense and Xbox Series happen to agree,
-/// but Switch Pro does not — it declares 362, which is upstream's shared
-/// input SECTION size rather than any report length, while the encodable
-/// 0x3F report is twelve bytes. They are different facts: one is what the
+/// but Switch Pro does not — it declares 362, the length of its largest
+/// declared report (0x31/0x32/0x33 carry 361 data bytes plus a report ID),
+/// while the report this candidate encodes is far smaller. They are
+/// different facts: one is what the
 /// catalog profile declares, the other is the length this candidate
 /// actually encodes. A
 /// persona whose descriptor carries several report IDs of different sizes
@@ -150,8 +151,9 @@ internal readonly struct RuntimeInputWireShape
     /// <summary>
     /// Bluetooth, report 0x3F: twelve bytes led by the report ID, so the
     /// endpoint receives the eleven descriptor-data bytes. The profile's
-    /// declared inputReportSize of 362 is the shared input SECTION size, not
-    /// a report length, which is exactly why the two are separate fields.
+    /// declared inputReportSize of 362 is the length of its LARGEST declared
+    /// report (0x31/0x32/0x33), not of the one encoded here — which is
+    /// exactly why the two are separate fields.
     /// </summary>
     internal static RuntimeInputWireShape SwitchPro { get; } =
         new(

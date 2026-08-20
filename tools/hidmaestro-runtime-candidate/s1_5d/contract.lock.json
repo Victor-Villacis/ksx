@@ -6,7 +6,7 @@
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
   "expectedVerifierCheckCount": 605,
   "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
-  "candidateTreeSha256": "625C18E0F37A98F42D95A120561F214F8D9A755FC7941D7C47A0BD39BBCEB63A",
+  "candidateTreeSha256": "BCF2FEB3B10F5072E20A3B4BA4020657C9A24F450F9772F5D6C2750D3DCA4EA9",
   "expectedCounts": {
     "candidateFileCount": 15,
     "compileItemCount": 14,
@@ -110,7 +110,7 @@
       "id": "input-contract-switch-pro",
       "path": "../../hidmaestro-input-contract-switch-pro/contract.json",
       "format": "json",
-      "sha256": "08C4A3F53817ED702265CE2170F6AFECFD2081FF00D1758FEF211D22F79D654B"
+      "sha256": "A94CC38CD878715924E9D86E1A29A023AC577D1DEAD4A5CC34E234C0DB9792DD"
     },
     {
       "id": "input-vectors-switch-pro",
@@ -158,7 +158,7 @@
     },
     {
       "path": "candidate/Internal/RuntimeInputWireShape.cs",
-      "sha256": "C5CD4300E8AD95CCF83E3245BBA3A43897862CEEFCD82586DB3155CB098AA6A1"
+      "sha256": "C0E90E8F9F025893E93FB7B2637347E835B8D6CB53D90E4D4DC13978C0A06681"
     },
     {
       "path": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
@@ -174,7 +174,7 @@
     },
     {
       "path": "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
-      "sha256": "ED4258F86B8FD139569778630CC09494A2B14CC805CA206371AEFDF88C580D39"
+      "sha256": "E027CA89D3051FBB8C229390664404A874CBB85BA9B37A39B82523EB8173314A"
     },
     {
       "path": "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",

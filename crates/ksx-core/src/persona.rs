@@ -138,6 +138,12 @@ impl PadBackend {
     /// has been measured on real hardware. They stay `false` until a built
     /// artifact drives an actual pad, because a persona listed here is a
     /// promise the Studio makes to a player.
+    ///
+    /// `docs/HIDMAESTRO-STATE.md` is the living record of what has actually
+    /// been observed versus merely implemented, with the measurement behind
+    /// each claim. Read it before flipping any arm here — the older docs use
+    /// "live" to mean code-complete, and no HIDMaestro device has yet been
+    /// seen to exist on any machine.
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,

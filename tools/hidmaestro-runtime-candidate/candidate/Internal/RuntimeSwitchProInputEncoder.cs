@@ -33,14 +33,16 @@ namespace HIDMaestro.Internal;
 ///   byte 10..11  Ry  16 bits
 /// </code>
 /// <para>
-/// WHY THE PROFILE SAYS 362 AND THIS ENCODER SAYS 12. The profile declares
-/// <c>inputReportSize: 362</c>, which is not a report length at all: upstream's
-/// shared input section is <c>SeqNo(4) + DataSize(4) + Data[256] + GipData(14)
-/// + ExtendedReportSize(4) + ExtendedReportData[80] = 362</c>. No report can be
-/// 362 bytes because the data window is 256, and the section carries an
-/// explicit <c>DataSize</c> field for the real per-frame length. DualSense
-/// already submits 63 bytes into that same 362-byte section, so an eleven-byte
-/// data slice is ordinary rather than anomalous.
+/// WHY THE PROFILE SAYS 362 AND THIS ENCODER SAYS 12. <c>inputReportSize</c>
+/// IS a report length: this descriptor declares reports <c>0x31</c>/<c>0x32</c>/
+/// <c>0x33</c> at 361 data bytes plus a report ID, so 362 is the largest report
+/// the profile can carry. (Upstream's shared input section is also 362 bytes,
+/// because it was sized to hold the largest report in the catalog — two
+/// different quantities that happen to share a number. An earlier revision of
+/// this comment asserted they were the same thing; they are not.)
+/// A short submission is nonetheless ordinary, for a different reason: the
+/// shared section carries an explicit <c>DataSize</c> field, and DualSense
+/// already submits 63 bytes into that same section.
 /// </para>
 /// <para>
 /// THE AXIS TRAP, same as every other persona here.

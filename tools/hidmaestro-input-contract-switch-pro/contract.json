@@ -50,7 +50,7 @@
     "rollingSequence": false,
     "inputDefaultsOverlay": false,
     "declaredProfileInputReportSize": 362,
-    "declaredProfileInputReportSizeNote": "The profile's inputReportSize is upstream's shared input SECTION size (SeqNo 4 + DataSize 4 + Data 256 + GipData 14 + ExtendedReportSize 4 + ExtendedReportData 80 = 362), not a report length. No report can be 362 because the data window is 256 bytes, and the section carries an explicit DataSize field. DualSense submits 63 bytes into that same section."
+    "declaredProfileInputReportSizeNote": "362 is a REPORT LENGTH: this descriptor declares reports 0x31/0x32/0x33 at 361 data bytes plus a report ID. Upstream's shared input section is also 362 bytes because it was sized to hold the largest catalog report \u2014 a coincidence, not an identity. A shorter submission is still ordinary because the section carries an explicit DataSize field; DualSense submits 63 bytes into it."
   },
   "stateKeySemantics": {
     "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. This descriptor names the right stick Rx/Ry, so the right stick is read from HMAxis.Z/Rz and the letter disagreement is intentional.",

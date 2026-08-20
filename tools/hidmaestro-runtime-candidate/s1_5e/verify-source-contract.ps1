@@ -319,7 +319,7 @@ Assert-Check 'lock.upstream-bom-canonicalization' `
     'The canonical source contract preserves the one exact upstream profile BOM.'
 Assert-Check 'lock.candidate-tree' `
     ($lock.sourceCandidate.normalizedTreeSha256 -ceq
-        '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393') `
+        'FB3CAC12584ABB20FBFE4504F4CD77344ED75D6F54B5CBC0EDDD7D00F64DD078') `
     'S1.5d candidate tree is exact.'
 $artifactExpectationPropertyNames = @(
     $lock.artifactExpectation.PSObject.Properties | ForEach-Object { [string]$_.Name })

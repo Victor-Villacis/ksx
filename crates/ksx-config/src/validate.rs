@@ -1798,7 +1798,8 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
+        {
+            let persona = Persona::XboxSeries;
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
@@ -1907,7 +1908,7 @@ preset = "default"
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: Persona::SwitchPro,
+            persona: Persona::XboxSeries,
             socd: Socd::default(),
             macros: Default::default(),
         }];
@@ -1917,8 +1918,8 @@ preset = "default"
             vec![Issue::GamePersonaNotImplemented {
                 game: "Bloodborne".into(),
                 slot: 1,
-                persona: "switchpro".into(),
-                reason: Persona::SwitchPro.gap().unwrap().to_owned(),
+                persona: "xboxseries".into(),
+                reason: Persona::XboxSeries.gap().unwrap().to_owned(),
                 instead: "xbox360".into(),
             }]
         );
@@ -1937,10 +1938,10 @@ preset = "default"
     #[test]
     fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
         let (reason, instead) =
-            persona_gap(Persona::SwitchPro).expect("switchpro cannot be plugged by this build");
+            persona_gap(Persona::XboxSeries).expect("xboxseries cannot be plugged by this build");
         assert_eq!(
             reason,
-            Persona::SwitchPro.gap().unwrap(),
+            Persona::XboxSeries.gap().unwrap(),
             "the sentence must come from the capability, not a second copy"
         );
         assert!(reason.contains("has not yet completed its independent production runtime"));

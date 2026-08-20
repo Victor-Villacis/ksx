@@ -153,9 +153,13 @@ impl PadBackend {
             // persona through the pinned official SDK. If the session fails to
             // produce a working device, this flips back.
             (PadBackend::HidMaestro, Persona::SwitchPro) => true,
-            // Stays false: the Xbox Series create path needs the SWD companion
-            // flow (hmswd.exe placement unmeasured); it is the next session.
-            (PadBackend::HidMaestro, Persona::XboxSeries) => false,
+            // HARDWARE SESSION 2026-08-20: enabled for the supervised
+            // measurement — the SDK-lane host already accepts this persona and
+            // the SDK performs its own SWD-companion flow (hmswd ships in its
+            // payload; the XUSB INF is staged as oem207 on the session
+            // machine). If the session fails to produce a working device,
+            // this flips back.
+            (PadBackend::HidMaestro, Persona::XboxSeries) => true,
             _ => false,
         }
     }
@@ -359,9 +363,8 @@ impl Persona {
             return self;
         }
         match self {
-            // Xbox Series is an XInput pad, so it lands on the most
-            // compatible pad there is while its SWD companion lane is
-            // unfinished.
+            // Unreachable while every persona plugs; kept so a reverted gate
+            // still lands on the most compatible pad there is.
             Persona::SwitchPro | Persona::XboxSeries => Persona::Xbox360,
             already => already,
         }
@@ -549,18 +552,12 @@ mod tests {
 
     #[test]
     fn only_the_enabled_hidmaestro_personas_can_plug() {
-        assert!(Persona::DualSense.can_plug());
-        // Enabled 2026-08-20 for the supervised hardware session: the SDK-lane
-        // host serves it through the pinned official SDK.
-        assert!(Persona::SwitchPro.can_plug());
-        // Still gated: the SWD companion lane is unmeasured.
-        assert!(
-            !Persona::XboxSeries.can_plug(),
-            "XboxSeries must not be offered"
-        );
-        // ...and the two the cabinet actually runs on are unaffected.
-        assert!(Persona::Xbox360.can_plug());
-        assert!(Persona::PlayStation.can_plug());
+        // 2026-08-20 hardware session: every shipping persona is enabled —
+        // DualSense on the audited candidate host, Switch Pro and Xbox
+        // Series through the pinned official SDK.
+        for p in Persona::ALL {
+            assert!(p.can_plug(), "{p} must be offered");
+        }
     }
 
     #[test]
@@ -583,7 +580,7 @@ mod tests {
         // false, and points the reader at a typo they did not make.
         let p: Persona = "xboxseries".parse().unwrap();
         assert_eq!(p, Persona::XboxSeries);
-        assert!(!p.can_plug());
+        assert!(p.can_plug());
         assert!(Persona::ALL.contains(&p));
         assert_eq!(p.as_str(), "xboxseries");
     }
@@ -605,7 +602,7 @@ mod tests {
         // answer; the one still-gated persona falls back to XInput.
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
-        assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::Xbox360);
+        assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::XboxSeries);
     }
 
     #[test]
@@ -616,13 +613,11 @@ mod tests {
             assert_eq!(b.gap().is_none(), b.is_implemented(), "{b}");
         }
         assert_eq!(PadBackend::HidMaestro.gap(), None);
-        let gap = PadBackend::HidMaestro
-            .gap_for(Persona::XboxSeries)
-            .expect("Xbox Series remains unimplemented");
-        assert!(
-            gap.contains("has not yet completed its independent production runtime"),
-            "{gap}"
-        );
+        // Every persona plugs, so no per-persona gap remains either — the
+        // machinery stays for the next gated persona.
+        for p in Persona::ALL.iter().copied() {
+            assert_eq!(p.backend().gap_for(p), None, "{p}");
+        }
     }
 
     #[test]

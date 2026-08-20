@@ -1185,33 +1185,19 @@ mod tests {
     }
 
     /// The two unfinished HIDMaestro personas are refused BEFORE the disk is touched,
-    /// in `Persona::gap()`'s own words — including the sentence that closes
-    /// off the wrong fix, because "not installed" is the reading that costs a
-    /// pointless driver install.
-    ///
-    /// Breaks against: a writer that accepts them (the config then refuses to
-    /// start at the next boot, with four missing pads as the only symptom) and
-    /// against any refusal that paraphrases the gap instead of quoting it.
+    /// 2026-08-20 flip: every shipping persona is writable. The refusal
+    /// machinery (code + gap-quoting message) stays live behind
+    /// `Persona::gap()` for the next gated persona; its wording is pinned by
+    /// the gap unit tests in ksx-core.
     #[test]
     fn a_persona_this_build_cannot_plug_is_refused_with_the_reason_and_a_way_out() {
         let root = TempRoot::new("cannot-plug");
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
-        {
-            let (persona, instead) = (Persona::XboxSeries, "xbox360");
-            let err = assign(&store, &persona_spec(1, persona)).unwrap_err();
-            assert_eq!(err.code(), "persona-not-implemented", "{persona}");
-            let message = err.to_string();
-            // The gap, verbatim — the half that stops a wasted driver install.
-            assert!(
-                message.contains("has not yet completed its independent production runtime"),
-                "{message}"
-            );
-            // What DECIDES it: the binary, not this machine.
-            assert!(message.contains("BINARY"), "{message}");
-            // ...and a way out that itself works.
-            assert!(message.contains(instead), "{message}");
+        for persona in [Persona::XboxSeries, Persona::SwitchPro] {
+            assign(&store, &persona_spec(1, persona))
+                .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
         }
         assign(&store, &persona_spec(1, Persona::DualSense))
             .expect("the production DualSense path is writable");

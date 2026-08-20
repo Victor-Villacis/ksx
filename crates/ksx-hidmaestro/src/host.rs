@@ -2796,10 +2796,8 @@ mod tests {
     fn protocol_profiles_enable_only_finished_product_personas() {
         assert!(ProfileId::DualSense.persona().can_plug());
         assert!(ProfileId::SwitchPro.persona().can_plug());
-        assert!(
-            !ProfileId::XboxSeries.persona().can_plug(),
-            "XboxSeries stays gated"
-        );
+        // 2026-08-20 hardware session: the SDK lane serves Xbox Series too.
+        assert!(ProfileId::XboxSeries.persona().can_plug());
         let (_harness, transport) = Harness::new();
         let mut client = HostClient::connect(transport, nonce(), expectation()).unwrap();
         let err = client.create(ProfileId::SwitchPro).unwrap_err();

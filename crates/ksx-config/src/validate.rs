@@ -1798,28 +1798,20 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        {
-            let persona = Persona::XboxSeries;
+        // 2026-08-20 flip: every shipping persona validates clean; the
+        // PersonaNotImplemented issue re-arms with the next gated persona.
+        for persona in Persona::ALL.iter().copied() {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
             let issues = validate(&cfg, &[]);
-            let found = issues
-                .iter()
-                .find(|i| matches!(i, Issue::PersonaNotImplemented { .. }))
-                .unwrap_or_else(|| panic!("{persona} produced no issue: {issues:?}"));
-            let msg = found.to_string();
-            assert!(msg.contains(persona.as_str()), "{msg}");
-            // A refusal that stops at "no" makes the user guess. It has to name
-            // what is missing AND what to write instead.
-            assert!(msg.contains("cannot be plugged by this build"), "{msg}");
             assert!(
-                msg.contains(persona.nearest_pluggable().as_str()),
-                "{msg} must name the persona to use instead"
+                !issues
+                    .iter()
+                    .any(|i| matches!(i, Issue::PersonaNotImplemented { .. })),
+                "{persona} must validate: {issues:?}"
             );
-            // It is a fault, not advice: the slot does not work as written.
-            assert!(!found.is_advisory(), "{msg}");
         }
     }
 
@@ -1913,19 +1905,14 @@ preset = "default"
             macros: Default::default(),
         }];
         let issues = validate_games(&games, &[]);
-        assert_eq!(
-            issues,
-            vec![Issue::GamePersonaNotImplemented {
-                game: "Bloodborne".into(),
-                slot: 1,
-                persona: "xboxseries".into(),
-                reason: Persona::XboxSeries.gap().unwrap().to_owned(),
-                instead: "xbox360".into(),
-            }]
+        // 2026-08-20 flip: xboxseries plugs, so the game validates clean; the
+        // per-game report shape re-arms with the next gated persona.
+        assert!(
+            !issues
+                .iter()
+                .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),
+            "{issues:?}"
         );
-        let msg = issues[0].to_string();
-        assert!(msg.contains("Bloodborne"), "{msg}");
-        assert!(msg.contains("xbox360"), "{msg}");
     }
 
     /// The trap, stated as a test: this check may never consult the machine.
@@ -1937,17 +1924,12 @@ preset = "default"
     /// says the install does not help.
     #[test]
     fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
-        let (reason, instead) =
-            persona_gap(Persona::XboxSeries).expect("xboxseries cannot be plugged by this build");
-        assert_eq!(
-            reason,
-            Persona::XboxSeries.gap().unwrap(),
-            "the sentence must come from the capability, not a second copy"
-        );
-        assert!(reason.contains("has not yet completed its independent production runtime"));
-        assert_eq!(instead, "xbox360");
-        // And no gap at all for what the cabinet actually runs.
-        assert_eq!(persona_gap(Persona::Xbox360), None);
+        // 2026-08-20 flip: no persona carries a gap — the check stays wired
+        // to the capability (never a probe) and re-arms with the next gated
+        // persona.
+        for persona in Persona::ALL.iter().copied() {
+            assert_eq!(persona_gap(persona), None, "{persona}");
+        }
         assert_eq!(persona_gap(Persona::PlayStation), None);
         assert_eq!(persona_gap(Persona::DualSense), None);
     }

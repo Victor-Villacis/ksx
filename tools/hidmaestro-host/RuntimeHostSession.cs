@@ -66,9 +66,9 @@ internal sealed class RuntimeHostSession : IDisposable
                         "the pinned HIDMaestro v1.6.1 Driver Store package is not installed");
                     closeAfter = true;
                 }
-                catch
+                catch (Exception failure)
                 {
-                    response = Fault(request.RequestId, HostFaultCode.SdkFailure, "the exact HIDMaestro operation failed");
+                    response = Fault(request.RequestId, HostFaultCode.SdkFailure, FailureDetail(failure));
                     closeAfter = true;
                 }
                 await FlushFeedback(pipe, linked.Token).ConfigureAwait(false);
@@ -178,6 +178,20 @@ internal sealed class RuntimeHostSession : IDisposable
     {
         while (_feedback.TryDequeue(out HostFrame? frame))
             await pipe.WriteFrameAsync(frame, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The fault detail names the real exception. A generic sentence here cost
+    /// one full CI round trip per defect during the 2026-08-20 hardware
+    /// session — the client saw "the exact HIDMaestro operation failed" for
+    /// three different root causes. Bounded to the V1 fault-detail budget.
+    /// </summary>
+    private static string FailureDetail(Exception failure)
+    {
+        string text = $"{failure.GetType().Name}: {failure.Message}";
+        while (System.Text.Encoding.UTF8.GetByteCount(text) > HostProtocolCodec.MaximumFaultDetailBytes)
+            text = text[..^1];
+        return text;
     }
 
     private static HostFrame Fault(uint request, HostFaultCode code, string detail) =>

@@ -36,13 +36,14 @@ Two rules that would have prevented most of the mistakes below:
 | Persona | Encoder | Device lane | Spawns? |
 |---|---|---|---|
 | DualSense | yes, frozen conformance | plain HID, `root\VID_054C&PID_0CE6` | **No — root-caused 2026-08-20:** the candidate host registered the devnode but never called `UpdateDriverForPlugAndPlayDevicesW`, so the INF never bound. Fix committed, awaiting the next installed build. |
-| Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD**, needs `hmswd.exe` | no |
+| Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD via the SDK lane** (the SDK performs its own companion flow; XUSB INF already staged as oem207) | **gate flipped 2026-08-20 for the session** — measurement pending; reverts if no working device appears |
 | Switch Pro | yes — 48-byte `0x30` body, semantic buttons | plain HID (SDK lane) | **YES — SPAWNED 2026-08-20.** Real devnode + HID child in 751 ms; clean ~12 s teardown. See the session results below. |
 | Xbox 360 / PlayStation | n/a — ViGEmBus | ViGEmBus | **yes, working** `[MEASURED 2026-08-20]` |
 
-`PadBackend::supports` in `crates/ksx-core/src/persona.rs`: Switch Pro is
-`true` (device observed 2026-08-20, below); Xbox Series stays `false` until
-its SWD companion lane exists and a device is observed.
+`PadBackend::supports` in `crates/ksx-core/src/persona.rs`: every persona is
+`true` as of the 2026-08-20 session — Switch Pro measured working; Xbox Series
+flipped for measurement through the SDK lane (the decision rule stands: a lane
+that fails to produce a working device reverts its flip).
 
 ### DualSense has never spawned
 
@@ -447,7 +448,8 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `94089ac` | SDK-lane host packaged: iss Source, required-binary + PE gates |
 | 2026-08-20 | `3cceb6a` | Switch Pro gate flipped for the hardware session; roster/test churn |
 | 2026-08-20 | `fae5ece` | Hardware session Phase A: Switch Pro SPAWNED (751 ms create, 12 s teardown); DualSense root-caused → `UpdateDriverForPlugAndPlayDevicesW` bind added, host child-wait 15→12 s; `DESTROY_TIMEOUT`/`SHUTDOWN_TIMEOUT` 5/10→30 s; service-key claim retracted in doctor/advice text |
-| 2026-08-20 | (this) | DualSense defect #2 from the fixed-build rerun: exactness checks matched child INSTANCE paths (`HID\HIDCLASS\…` measured) instead of `HardwareID` entries → both checks now read the registry multi-sz; Switch Pro re-verified exit 0 |
+| 2026-08-20 | `48c6089` | DualSense defect #2 from the fixed-build rerun: exactness checks matched child INSTANCE paths (`HID\HIDCLASS\…` measured) instead of `HardwareID` entries → both checks now read the registry multi-sz; Switch Pro re-verified exit 0 |
+| 2026-08-20 | (this) | Xbox Series gate flipped for the SDK-lane measurement (~12 test reworks: with every persona pluggable, refusal pins became acceptance/dormancy pins); host faults now carry the real exception; child-identity wait tolerates the Enum-mirror race |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

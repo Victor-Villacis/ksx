@@ -2294,21 +2294,16 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(typo.code, codes::BAD_REQUEST);
         assert!(typo.message.contains("playstation"), "{typo}");
 
-        let refused = StageEdit::AddSlot {
+        // Every shipping persona is accepted (2026-08-20 flip); the
+        // domain-rule wire shape stays pinned by the typo case above.
+        StageEdit::AddSlot {
             number: None,
             persona: "xboxseries".into(),
             preset: "P1".into(),
             layout: None,
         }
         .apply(&setup)
-        .unwrap_err();
-        assert_eq!(refused.code, "persona-not-implemented");
-        assert!(
-            refused
-                .message
-                .contains("has not yet completed its independent production runtime"),
-            "{refused}"
-        );
+        .expect("xboxseries is accepted");
 
         let bad_blocking = StageEdit::SetBlocking {
             blocking: "sometimes".into(),

@@ -1018,34 +1018,16 @@ mod tests {
         );
     }
 
-    /// The still-unfinished HIDMaestro persona is refused in `Persona::gap()`'s
-    /// own words — including the half that closes off the wrong fix.
-    ///
-    /// Breaks against a stage that accepted it: the user picks the persona, the
-    /// screen says ready, and the pad never appears — with a driver install as
-    /// the obvious and useless next step.
+    /// Every shipping persona is stageable (2026-08-20 hardware session flip;
+    /// the refusal machinery stays live behind `Persona::gap()` for the next
+    /// gated persona, exercised by the gap unit tests in `persona.rs`).
     #[test]
     fn a_persona_this_build_cannot_plug_is_refused_with_a_way_out() {
-        {
-            let (persona, instead) = (Persona::XboxSeries, Persona::Xbox360);
-            let refused = staged().add_slot(2, persona, preset("P2")).unwrap_err();
-            assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
-            let message = refused.to_string();
-            assert!(
-                message.contains("has not yet completed its independent production runtime"),
-                "the gap verbatim: {message}"
-            );
-            assert!(message.contains("BINARY"), "{message}");
-            assert!(message.contains(instead.as_str()), "{message}");
-            // The same gate on the other door.
-            assert_eq!(
-                staged().set_persona(1, persona).unwrap_err().code(),
-                "persona-not-implemented"
-            );
+        for persona in Persona::ALL.iter().copied() {
+            staged()
+                .add_slot(2, persona, preset("P2"))
+                .unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
         }
-        staged()
-            .add_slot(2, Persona::DualSense, preset("P2"))
-            .expect("the production DualSense path is accepted");
     }
 
     #[test]

@@ -929,9 +929,12 @@ mod tests {
             !p.rows.prepared.is_empty(),
             "the claimed fixture must reach the held-keyboard list"
         );
+        // 2026-08-20 flip: every persona plugs, so the gap list is empty;
+        // it refills with the next gated persona.
         assert!(
-            !p.rows.gaps.is_empty(),
-            "the roster carries un-pluggable personas"
+            p.rows.gaps.is_empty(),
+            "no persona is gated: {:?}",
+            p.rows.gaps
         );
         // The reference scan has one ordinary keyboard and one board that
         // cannot be picked. Populate the opt-in arbitrary-HID list here too:
@@ -958,6 +961,12 @@ mod tests {
             let SlotValue::Array(rows) = &value else {
                 panic!("{list_slot} is not an array");
             };
+            // 2026-08-20 flip: `gapRows` is legitimately empty while every
+            // persona plugs — it refills with the next gated persona, and the
+            // field contract for its row shape is pinned by `gap_row` itself.
+            if signal == "gapRows" && rows.is_empty() {
+                continue;
+            }
             let first = rows.first().unwrap_or_else(|| {
                 panic!("the fixture must populate {signal}, or this proves nothing")
             });

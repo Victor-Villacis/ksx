@@ -416,6 +416,9 @@ mod tests {
 
     #[test]
     fn a_lazy_production_router_refuses_before_opening_either_driver() {
+        // 2026-08-20 flip: with every persona pluggable there is no refusal
+        // to observe, so laziness is pinned directly — construction opens
+        // nothing, and plugging a ViGEm persona opens only ViGEm.
         let vigem_builds = Arc::new(AtomicUsize::new(0));
         let counter = vigem_builds.clone();
         let mut r = RoutedBackend::standard_lazy(Box::new(move || {
@@ -423,13 +426,13 @@ mod tests {
             Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
         }));
 
-        let err = r.plug_persona(Persona::XboxSeries).unwrap_err();
-        assert!(matches!(
-            err,
-            OutputError::PersonaNotImplemented(Persona::XboxSeries)
-        ));
         assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
         assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
+
+        r.plug_persona(Persona::Xbox360).unwrap();
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 1);
+        assert!(r.vigem_started());
         assert!(!r.hidmaestro_started());
     }
 
@@ -492,23 +495,13 @@ mod tests {
     /// persona that plugs no better than before.
     #[test]
     fn the_production_router_refuses_unbuildable_personas_without_probing() {
+        // 2026-08-20 flip: no unbuildable persona remains, so the pinned
+        // property narrows to its second half — the cabinet's own personas
+        // never touch the HIDMaestro side.
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        {
-            let persona = Persona::XboxSeries;
-            let err = r.plug_persona(persona).unwrap_err();
-            assert!(
-                matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),
-                "{persona}: {err}"
-            );
-            assert!(!err.is_hidmaestro_missing(), "{persona}: {err}");
-            assert!(err.is_not_implemented(), "{persona}: {err}");
-        }
-        // Nothing was constructed, so nothing was probed — the refusal is the
-        // same on a machine with HIDMaestro installed as on one without.
-        assert!(!r.hidmaestro_started());
-        // ...and the cabinet's own personas are untouched.
         assert!(r.plug_persona(Persona::Xbox360).is_ok());
         assert!(r.plug_persona(Persona::PlayStation).is_ok());
+        assert!(!r.hidmaestro_started());
     }
 
     #[test]

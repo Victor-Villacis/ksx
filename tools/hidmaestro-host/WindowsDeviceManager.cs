@@ -170,20 +170,39 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
         while (true)
         {
             IReadOnlyList<string> children = DirectChildren(registration.ParentInstanceId);
-            if (children.Count > 0)
+            bool proven = false;
+            bool pending = children.Count == 0;
+            foreach (string child in children)
             {
-                foreach (string child in children)
+                switch (ChildIdentity(child))
                 {
-                    if (!ChildIsExactDualSense(child))
-                        throw new InvalidOperationException($"The exact root acquired an unexpected child device: {child}.");
+                    case ChildKind.ExactDualSense:
+                        proven = true;
+                        break;
+                    case ChildKind.Foreign:
+                        throw new InvalidOperationException(
+                            $"The exact root acquired an unexpected child device: {child}.");
+                    case ChildKind.NotYetIdentifiable:
+                        pending = true;
+                        break;
                 }
-                return;
             }
+            if (proven && !pending) return;
             if (DateTime.UtcNow >= deadline)
                 throw new TimeoutException("The preinstalled HIDMaestro package did not bind the exact DualSense root.");
             Thread.Sleep(50);
         }
     }
+
+    private enum ChildKind
+    {
+        ExactDualSense,
+        Foreign,
+        NotYetIdentifiable,
+    }
+
+    private static bool ChildIsExactDualSense(string childInstanceId) =>
+        ChildIdentity(childInstanceId) == ChildKind.ExactDualSense;
 
     /// <summary>
     /// A child under the owned root is the exact DualSense iff its HARDWARE ID
@@ -191,19 +210,24 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     /// live pad: the child's INSTANCE path spells <c>HID\HIDCLASS\…</c> (it is
     /// derived from the root-enumerated parent, never from VID/PID), while its
     /// <c>HardwareID</c> multi-sz leads with <c>HID\VID_xxxx&amp;PID_yyyy</c> —
-    /// the earlier instance-prefix check refused every legitimate child.
+    /// the earlier instance-prefix check refused every legitimate child. A
+    /// child can also surface in the devnode tree before PnP finishes writing
+    /// its Enum mirror; an unreadable identity means "still materialising",
+    /// never "foreign", so the bound-wait keeps waiting instead of refusing a
+    /// pad that is mid-birth.
     /// </summary>
-    private static bool ChildIsExactDualSense(string childInstanceId)
+    private static ChildKind ChildIdentity(string childInstanceId)
     {
         using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
             $@"SYSTEM\CurrentControlSet\Enum\{childInstanceId}", writable: false);
-        if (key?.GetValue("HardwareID") is not string[] ids) return false;
+        if (key?.GetValue("HardwareID") is not string[] ids || ids.Length == 0)
+            return ChildKind.NotYetIdentifiable;
         foreach (string id in ids)
         {
             if (id.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase))
-                return true;
+                return ChildKind.ExactDualSense;
         }
-        return false;
+        return ChildKind.Foreign;
     }
 
     public IReadOnlyList<string> ReadExactChildInstanceIds(RuntimeDeviceRegistration registration)

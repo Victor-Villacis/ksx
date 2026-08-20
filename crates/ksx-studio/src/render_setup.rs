@@ -833,10 +833,9 @@ mod tests {
             form.contains("DualSense · HIDMaestro · one per session"),
             "{form}"
         );
-        // Switch Pro is enabled (2026-08-20 hardware session); the one
-        // still-gated persona must not be offered.
+        // Every shipping persona is offered (2026-08-20 hardware session).
         assert!(form.contains("Switch Pro · HIDMaestro"), "{form}");
-        assert!(!form.contains(r#"value="xboxseries""#), "{form}");
+        assert!(form.contains(r#"value="xboxseries""#), "{form}");
     }
 
     /// The slot menu offers every slot the BACKEND accepts — the ceiling it

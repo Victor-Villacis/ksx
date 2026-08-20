@@ -1293,13 +1293,16 @@ pub mod surface {
             assert_eq!(unreadable, Some(0));
         }
 
-        /// A persona this build cannot create is refused before ViGEmBus is
-        /// opened — a build limitation must never arrive shaped like a driver
-        /// problem (the same ordering `run` keeps).
+        /// Every shipping persona plans (2026-08-20 flip) — and the ViGEm
+        /// diagnostic page still offers only its own backend's personas.
         #[test]
         fn the_vigem_page_offers_only_implemented_vigem_personas() {
             let plan = plan_spawn(1, Persona::XboxSeries, 30, false, IDLE.0, IDLE.1);
-            assert_eq!(plan.code(), Some("persona-not-implemented"));
+            assert_ne!(
+                plan.code(),
+                Some("persona-not-implemented"),
+                "every persona plans now"
+            );
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
                 .personas
                 .into_iter()

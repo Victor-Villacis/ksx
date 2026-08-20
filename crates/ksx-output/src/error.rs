@@ -188,18 +188,18 @@ mod tests {
 
     #[test]
     fn a_persona_this_build_cannot_make_is_refused_with_a_way_out() {
+        // 2026-08-20 flip: no live persona reaches this refusal (all plug);
+        // the variant stays for the next gated persona, so pin its dormant
+        // shape — classification flags and the honest no-gap fallback.
         let err = OutputError::PersonaNotImplemented(ksx_core::Persona::XboxSeries);
         let msg = err.to_string();
         assert!(msg.contains("xboxseries"), "{msg}");
         // It must not read as an install problem...
         assert!(!err.is_hidmaestro_missing(), "{msg}");
         assert!(err.is_not_implemented());
-        assert!(
-            msg.contains("has not yet completed its independent production runtime"),
-            "{msg} must close off the wrong fix"
-        );
-        // ...and it must end in something the user can actually type.
-        assert!(msg.contains("xbox360"), "{msg}");
+        // ...and with no recorded gap the message says so instead of
+        // inventing a reason.
+        assert!(msg.contains("no reason recorded"), "{msg}");
     }
 
     #[test]

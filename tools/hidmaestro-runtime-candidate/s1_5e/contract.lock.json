@@ -154,7 +154,7 @@
   "sourceCandidate": {
     "relativeProject": "candidate/HIDMaestro.Core.csproj",
     "treeFraming": "ordinal candidate-relative path, NUL, normalized UTF-8 bytes, NUL",
-    "normalizedTreeSha256": "975C5855D9F8DBE34FB1B8504B0B213324036CF07D913F93C397A7D35FEB2EFD",
+    "normalizedTreeSha256": "C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F",
     "candidateFileCount": 15,
     "compileItemCount": 14,
     "embeddedResourceCount": 228,
@@ -248,7 +248,7 @@
   "sourceInputs": [
     {
       "path": "tools/hidmaestro-runtime-candidate/candidate-contract.json",
-      "sha256": "BAD2F9E48ABA4F1AC13F3F8FE9C52A3D94E31B299B1F3D205FC628DC915B87CE"
+      "sha256": "042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/api/public-api.contract.json",
@@ -268,11 +268,11 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json",
-      "sha256": "3861C2B19DC92D1F5F84723118B968CBF9B780AAA984AB3E6BCD3E437239FD78"
+      "sha256": "BFE49555DE8C3B985B2045C7E39FE02B567CBA0A134866555BCED3BB97570311"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
-      "sha256": "9B6199DD88DAC26B24E71F60CC048FF414927D761C6ECE69542B8852169D6CAE"
+      "sha256": "EB13AEC225273C4A5F8C88ABA249E4AF3E71A30A72A78098224BC33FE5E8AC46"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/HIDMaestro.ArtifactInspector.csproj",
@@ -290,7 +290,7 @@
   "leafFiles": [
     {
       "path": "README.md",
-      "sha256": "3AB475BFA347CAE2FEB02361F61B7337AC876448A14C53FCB5985019927ABEAE"
+      "sha256": "36E235541E6D67D319DE3CA19B97BEC3FA0B6CDB8D0CB07638C906D411D6EE87"
     },
     {
       "path": "inspector/HIDMaestro.ArtifactInspector.csproj",
@@ -306,7 +306,7 @@
     },
     {
       "path": "verify-source-contract.ps1",
-      "sha256": "4FFA667CEB1B75327FC3BF17697F28F0BEA8C8F7D07E8FA503152027662EA93F"
+      "sha256": "2F4CE763FC45AE2E545D26C8A68F476290E8D07F4E7CC3FCFA36B12922A9F02B"
     }
   ],
   "gateState": {

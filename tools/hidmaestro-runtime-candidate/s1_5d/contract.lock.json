@@ -4,9 +4,9 @@
   "status": "source-frozen-verifier-does-not-build-or-load",
   "assurance": "hash-pinned-static-candidate-source-and-project-xml-closure-only",
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
-  "expectedVerifierCheckCount": 605,
+  "expectedVerifierCheckCount": 612,
   "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
-  "candidateTreeSha256": "975C5855D9F8DBE34FB1B8504B0B213324036CF07D913F93C397A7D35FEB2EFD",
+  "candidateTreeSha256": "C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F",
   "expectedCounts": {
     "candidateFileCount": 15,
     "compileItemCount": 14,
@@ -26,13 +26,13 @@
       "id": "aggregate-contract",
       "path": "../candidate-contract.json",
       "format": "json",
-      "sha256": "BAD2F9E48ABA4F1AC13F3F8FE9C52A3D94E31B299B1F3D205FC628DC915B87CE"
+      "sha256": "042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1"
     },
     {
       "id": "api-lock",
       "path": "../api/contract.lock.json",
       "format": "json",
-      "sha256": "A8AB91B07D68AD5CDA36F8A7B3B4D6F253B2B99475C4150CFC86038597CA79A3"
+      "sha256": "C7EBDC9357735AE71B96309D1A448CBB31CAB8A2FE2CE49F76E1F718188A6224"
     },
     {
       "id": "public-api-contract",
@@ -110,13 +110,13 @@
       "id": "input-contract-switch-pro",
       "path": "../../hidmaestro-input-contract-switch-pro/contract.json",
       "format": "json",
-      "sha256": "A94CC38CD878715924E9D86E1A29A023AC577D1DEAD4A5CC34E234C0DB9792DD"
+      "sha256": "6A230BD9F92442CE98DCF5099CC1D57F33617E787DB93E9E1BA57830297F3B2E"
     },
     {
       "id": "input-vectors-switch-pro",
       "path": "../../hidmaestro-input-contract-switch-pro/golden-vectors.json",
       "format": "json",
-      "sha256": "B5B6EE47479E32A8DB21928A1358968D8910691BE7F211677F0D97929061C661"
+      "sha256": "6CE51A832A24C22A14476C0A146552233FF8872287B15A5ADBB7AE3C692B32D1"
     }
   ],
   "candidateFiles": [
@@ -158,7 +158,7 @@
     },
     {
       "path": "candidate/Internal/RuntimeInputWireShape.cs",
-      "sha256": "E356ABD0FD6022CAA53A7CF962D0A2DAFE3DECC140349B2EF068FFA997B4A0B3"
+      "sha256": "4F06F52043BDC83B30F4223CAB8A3DEF24E693C50C3C40E38F028ECC4F521F78"
     },
     {
       "path": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
@@ -174,7 +174,7 @@
     },
     {
       "path": "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
-      "sha256": "E027CA89D3051FBB8C229390664404A874CBB85BA9B37A39B82523EB8173314A"
+      "sha256": "02D880209628D50FA16137A14BF7215E39B0296D7A3281DB205A734401318EA4"
     },
     {
       "path": "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",
@@ -1121,28 +1121,23 @@
         "aggregateRequirementUnit": "RuntimeSwitchProInputEncoder",
         "aggregateRequirementCount": 3,
         "isNewUnit": true,
-        "hasReportId": true,
-        "expectedHatWireByte": 3,
-        "expectedFixedZeroRegionCount": 2,
+        "hasReportId": false,
+        "expectedHatWireByte": 4,
+        "expectedFixedZeroRegionCount": 7,
         "expectedButtonCounts": {
           "carried": 12,
           "aliased": 0,
           "dropped": 6
         },
         "sharedSlice": {
-          "offset": 1,
-          "length": 11
+          "offset": 0,
+          "length": 48
         },
         "vectorEnvelope": {
-          "hexLength": 24,
-          "prefix": "3F"
+          "hexLength": 96,
+          "prefix": null
         },
         "numericAnchors": [
-          {
-            "id": "report-id",
-            "contractPath": "report.reportId",
-            "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+ReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
-          },
           {
             "id": "wire-byte-length",
             "contractPath": "report.wireByteLength",
@@ -1185,10 +1180,6 @@
             "text": "destination.Clear();"
           },
           {
-            "id": "write-report-id",
-            "text": "destination[0] = ReportId;"
-          },
-          {
             "id": "axes-source",
             "text": "Dictionary<HMAxis, float>? axes = state.Axes;"
           },
@@ -1205,8 +1196,36 @@
             "text": "return Math.Clamp(value, 0.0f, 1.0f);"
           },
           {
-            "id": "truncate-scale",
-            "text": "double scaled = Math.Truncate((double)normalized * logicalMaximum);"
+            "id": "stick-centre-and-range",
+            "text": "int raw = 0x800 + (int)(centered * 0x600);"
+          },
+          {
+            "id": "stick-y-inversion",
+            "text": "ushort raw = StickRaw(normalized, invert: true);"
+          },
+          {
+            "id": "stick-pack-low",
+            "text": "destination[offset] = (byte)(raw & 0xFF); destination[offset + 1] |= (byte)((raw >> 8) & 0x0F);"
+          },
+          {
+            "id": "stick-pack-high",
+            "text": "destination[offset + 1] |= (byte)((raw & 0x0F) << 4); destination[offset + 2] = (byte)(raw >> 4);"
+          },
+          {
+            "id": "left-stick-x-write",
+            "text": "WriteStickX(destination, 5, leftStickX);"
+          },
+          {
+            "id": "left-stick-y-write",
+            "text": "WriteStickY(destination, 5, leftStickY);"
+          },
+          {
+            "id": "right-stick-x-write",
+            "text": "WriteStickX(destination, 8, rightStickX);"
+          },
+          {
+            "id": "right-stick-y-write",
+            "text": "WriteStickY(destination, 8, rightStickY);"
           },
           {
             "id": "button-mask-source",
@@ -1218,33 +1237,40 @@
           },
           {
             "id": "button-write",
-            "text": "destination[1 + (index / 8)] |= (byte)(1 << (index % 8));"
+            "text": "destination[bodyByte] |= (byte)(1 << bit);"
           },
           {
-            "id": "hat-write",
-            "text": "destination[3] = EncodeHat(state.Hat);"
+            "id": "semantic-back-is-minus",
+            "text": "(HMButton.Back, 3, 0),"
+          },
+          {
+            "id": "semantic-guide-is-home",
+            "text": "(HMButton.Guide, 3, 4),"
+          },
+          {
+            "id": "dpad-write",
+            "text": "destination[4] |= EncodeDpad(state.Hat);"
           }
         ],
         "expectedDirectDestinationIndexes": [
-          0,
-          1,
-          3
+          2,
+          4
         ],
         "expectedDestinationIndexExpressions": [
-          "0",
-          "1",
-          "3",
-          "1 + (index / 8)",
+          "2",
+          "4",
+          "bodyByte",
           "offset",
-          "offset + 1"
+          "offset + 1",
+          "offset + 2"
         ],
         "templates": {
           "axisRead": "float {local} = GetNormalizedAxis(axes, HMAxis.{stateKey});",
           "axisWriteByBitLength": {
-            "16": "WriteUInt16(destination, {wireByte}, {local});"
+            "12": "(destination, {wireByte}, {local});"
           },
           "hat": "HMHat.{name} => (byte){wireValue}",
-          "button": "(HMButton.{name}, {descriptorButtonIndex}),",
+          "button": "(HMButton.{name}, {wireByte}, {wireBit}),",
           "triggerCondition": "if ({local} > 0.0f)",
           "triggerWrite": "destination[{wireByte}] |= {maskLiteral};",
           "separateUsage": "destination[{wireByte}] |= {maskLiteral};"
@@ -1282,7 +1308,7 @@
       },
       {
         "id": "switch-pro-shape",
-        "text": "SwitchProProfileId, 0x057E, 0x2009, \"bluetooth\", declaredInputReportSize: 362, fullWireLength: RuntimeSwitchProInputEncoder.EncodedReportSize, includesReportId: true, reportId: RuntimeSwitchProInputEncoder.ReportId, sharedDataOffset: 1, sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize - 1);"
+        "text": "SwitchProProfileId, 0x057E, 0x2009, \"bluetooth\", declaredInputReportSize: 362, fullWireLength: RuntimeSwitchProInputEncoder.EncodedReportSize, includesReportId: false, reportId: 0x00, sharedDataOffset: 0, sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize);"
       },
       {
         "id": "software-device-lane",

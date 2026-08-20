@@ -37,7 +37,7 @@ Two rules that would have prevented most of the mistakes below:
 |---|---|---|---|
 | DualSense | yes, frozen conformance | plain HID, `root\VID_054C&PID_0CE6` | **Never observed.** `[MEASURED 2026-08-20]` |
 | Xbox Series X\|S | yes, descriptor-derived | **companion-only SWD**, needs `hmswd.exe` | no |
-| Switch Pro | **wrong report — being rewritten** | plain HID | no |
+| Switch Pro | yes — 48-byte `0x30` body, semantic buttons | plain HID | no |
 | Xbox 360 / PlayStation | n/a — ViGEmBus | ViGEmBus | **yes, working** `[MEASURED 2026-08-20]` |
 
 `PadBackend::supports` in `crates/ksx-core/src/persona.rs` is `false` for Switch
@@ -175,42 +175,17 @@ Nothing here may be written into a contract as a fact until it is measured.
 
 ## Known-stale, not yet fixed
 
-A sweep on 2026-08-20 found 54 contradicted claims. The mechanical ones (stale
-counts, "live" overstatements, the XUSB-vs-inbox-`xinputhid` mechanism error)
-are fixed. These are not, and each says why.
+The 2026-08-20 sweep found 54 contradicted claims. All are now fixed:
+the mechanical ones (counts, "live", the XUSB mechanism error) first, and the
+structural ones with the `0x30` rewrite — the Switch Pro encoder, both of its
+contract files, the aggregate requirement and the s1_5d lock's lane pins moved
+together in one change, so the gate that briefly enforced the wrong lane now
+enforces the right one (612 checks). The s1_5e README's 241/12 literals were
+corrected in lockstep with the verifier anchor that pins them, and HANDOFF.md
+no longer denies the production adapter that exists.
 
-**The Switch Pro `0x3F` lane is wrong and is frozen into eight places.** It is
-not a prose fix — the encoder has to be rewritten to the 48-byte `0x30` body
-first, and the contracts regenerated with it. Until then these all assert the
-wrong lane, and this file is the correction of record:
-
-- `tools/hidmaestro-input-contract-switch-pro/contract.json` — the contract id
-  itself (`…-bt-3f`), `activePath.name`, `reportSelectionReason`,
-  `integrationRule`, and the verdict (the lane defect is not in
-  `unresolvedFields`)
-- `candidate/Internal/RuntimeSwitchProInputEncoder.cs` — the "only `0x3F` can be
-  derived" justification. Derivability from the descriptor was never the
-  selection criterion; the driver decides, and it early-returns
-- `candidate/Internal/RuntimeInputWireShape.cs` — the `SwitchPro` shape's
-  `sharedDataOffset 1 / sharedDataLength 11` hands the endpoint exactly the
-  slice the driver misparses
-- `candidate-contract.json` — the aggregate freezes "encode a complete 12-byte
-  report `0x3F`" as a requirement
-- `s1_5d/contract.lock.json` — `vectorEnvelope {hexLength: 24, prefix: "3F"}`
-  and `sharedSlice {offset: 1, length: 11}` pin the wrong lane in the gate
-  itself, so the gate would currently *reject* a correct encoder
-
-**`s1_5e/README.md` still says "241 input files" and "12 source-candidate
-files"** (measured: 244 and 15). It cannot be edited alone:
-`s1_5e/verify-source-contract.ps1:955` pins the literal `'241 input files'` in
-its README anchor list, and `s1_5e/contract.lock.json` pins the README's hash,
-and `ci.yml` pins both of those files' hashes. Correcting it is a coordinated
-five-file edit in a fixed order — see the `hidmaestro-contract-refreeze` note.
-
-**`docs/HANDOFF.md` is stale in the opposite direction** — it says there is "no
-production adapter", but `crates/ksx-output/src/hidmaestro.rs` exists and is
-wired through `router.rs`. What is actually outstanding is the physical
-lifecycle, not the adapter.
+Nothing known-stale is currently outstanding. New contradictions go here, each
+with why it cannot be fixed immediately.
 
 ---
 
@@ -227,6 +202,10 @@ lifecycle, not the adapter.
 | 2026-08-20 | `52c91a1` | S1.5e candidate facts the artifact inspector reads |
 | 2026-08-20 | `ce54e01` | Host stops offering personas it cannot register (⚠ also introduced the wrong `362` note, retracted above) |
 | 2026-08-20 | `1176c76` | Close an assurance hole; stop claiming layout is the button source |
+| 2026-08-20 | `3968ff8` | Living state doc; first 362 retraction |
+| 2026-08-20 | `1e0e63b` | Plan doc points at the state doc |
+| 2026-08-20 | `06cc5cb` | Sweep corrections; XUSB→inbox-xinputhid; "live"→staged |
+| 2026-08-20 | (HEAD) | Switch Pro rewritten to the 48-byte `0x30` body; second 362 retraction executed; trigger axis-read verifier gap closed; s1_5e README 244/15 |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
-items **14**, S1.5d **605 checks**, S1.5e staged inputs **244**.
+items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

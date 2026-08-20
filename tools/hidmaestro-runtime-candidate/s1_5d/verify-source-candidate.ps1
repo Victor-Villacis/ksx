@@ -1412,9 +1412,18 @@ try {
             $writeAnchor = Expand-AnchorTemplate $templates.triggerWrite @{
                 wireByte = $trigger.wireByte; maskLiteral = $maskLiteral
             }
+            # The trigger's local must also be BOUND to its axis by an
+            # axis-read anchor. Without this, a trigger axis that appears only
+            # in derivedTriggerButtons (Switch Pro's ZL/ZR) had its identifier
+            # names pinned but not its source, so repointing leftTrigger at a
+            # different HMAxis passed every semantic check.
+            $readAnchor = Expand-AnchorTemplate $templates.axisRead @{
+                local = $localName; stateKey = $trigger.axisStateKey
+            }
             Add-Check "inputBinding.${p}trigger.$($trigger.axisStateKey)" `
                 ($binding.Count -eq 1 -and
                  $trigger.condition -ceq 'clamped normalized value > 0.0' -and
+                 (Test-ContainsNormalized $encoderCode $readAnchor) -and
                  (Test-ContainsNormalized $encoderCode $conditionAnchor) -and
                  (Test-ContainsNormalized $encoderCode $writeAnchor)) `
                 "trigger axis $($trigger.axisStateKey) derives its digital bit only when the clamped value is greater than zero"

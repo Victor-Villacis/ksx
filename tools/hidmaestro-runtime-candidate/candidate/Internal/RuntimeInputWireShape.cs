@@ -151,21 +151,23 @@ internal readonly struct RuntimeInputWireShape
             requiresSoftwareDeviceCompanion: true);
 
     /// <summary>
-    /// Bluetooth, report 0x3F: twelve bytes led by the report ID, so the
-    /// endpoint receives the eleven descriptor-data bytes. The profile's
-    /// declared inputReportSize of 362 is the length of its LARGEST declared
-    /// report (0x31/0x32/0x33), not of the one encoded here — which is
-    /// exactly why the two are separate fields.
+    /// Bluetooth, the 48-byte report-0x30 BODY with no report-ID byte: the
+    /// driver frames and streams it as report 0x30 itself (0x3F pre-handshake)
+    /// and overlays the counter, battery and vibrator bytes, so the endpoint
+    /// receives the whole body and nothing is stripped. The profile's declared
+    /// inputReportSize of 362 is the length of its LARGEST declared report
+    /// (0x31/0x32/0x33), not of the body submitted here — which is exactly why
+    /// the two are separate fields.
     /// </summary>
     internal static RuntimeInputWireShape SwitchPro { get; } =
         new(
             SwitchProProfileId, 0x057E, 0x2009, "bluetooth",
             declaredInputReportSize: 362,
             fullWireLength: RuntimeSwitchProInputEncoder.EncodedReportSize,
-            includesReportId: true,
-            reportId: RuntimeSwitchProInputEncoder.ReportId,
-            sharedDataOffset: 1,
-            sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize - 1);
+            includesReportId: false,
+            reportId: 0x00,
+            sharedDataOffset: 0,
+            sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize);
 
     /// <summary>
     /// Resolves the frozen shape for a catalog profile id. A profile with no

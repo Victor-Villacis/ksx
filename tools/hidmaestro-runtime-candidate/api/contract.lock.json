@@ -6,7 +6,7 @@
   "files": [
     {
       "path": "../candidate-contract.json",
-      "sha256": "BAD2F9E48ABA4F1AC13F3F8FE9C52A3D94E31B299B1F3D205FC628DC915B87CE"
+      "sha256": "042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1"
     },
     {
       "path": "../profiles/catalog.lock.json",

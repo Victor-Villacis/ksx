@@ -45,13 +45,18 @@ That source-derived contract does not prove compiled candidate behavior.
 `../hidmaestro-input-contract-switch-pro/` freeze the same shape for the two
 added personas. Xbox Series is 17 bytes with no report ID at all — nothing is
 stripped and the endpoint receives the whole report — across 13 scenarios and
-45 frames. Switch Pro encodes report `0x3F`, the only one of that descriptor's
-six input reports described field by field, across 11 scenarios and 43 frames;
-its `0x21`/`0x30` and `0x31`-`0x33` family are vendor blobs this candidate
-never synthesizes. Both were derived by walking the pinned descriptors, and
-both record that the host state mapper populates `HMAxis` with one fixed
-physical assignment shaped by DualSense, so a descriptor that spells its axes
-differently must be read by physical meaning rather than by letter.
+45 frames. Switch Pro is NOT a descriptor report at all: it is the 48-byte
+report-`0x30` BODY the driver's own streamer serves — the driver reads
+`Data[2..10]` (buttons + 12-bit packed sticks) and, when IMU streaming is
+armed, `Data[12..47]`, frames the report itself, and owns the whole
+handshake. An earlier revision froze the descriptor's 12-byte `0x3F` report
+here on the argument that only `0x3F` is field-by-field derivable; that
+argument was true and irrelevant — the driver never treats the submission as
+a report, and an 11-byte `0x3F` slice passes its `DataSize >= 11` guard and
+is silently misparsed. Both contracts record that the host state mapper
+populates `HMAxis` with one fixed physical assignment shaped by DualSense, so
+a descriptor that spells its axes differently must be read by physical
+meaning rather than by letter.
 
 The original source hashes deliberately describe a Windows checkout made with
 `core.autocrlf=true`; CI sets that conversion explicitly so runner-global Git

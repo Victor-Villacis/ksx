@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "contractId": "hidmaestro-input-switch-pro-bt-3f",
+  "contractId": "hidmaestro-input-switch-pro-bt-30-body",
   "scope": {
     "profileId": "switch-pro",
     "connection": "bluetooth",
@@ -19,7 +19,7 @@
       "battery",
       "rumble",
       "output reports",
-      "full-mode vendor reports 0x21/0x30/0x31-0x33"
+      "the driver-owned 0x80/0x01 handshake and SPI image"
     ],
     "assurance": "static-source-only"
   },
@@ -31,29 +31,27 @@
     "descriptorSha256": "421dbc392ea406cd864c602acb17e9e5fb24e2d764b61ae80a4f0c60b6252ac8"
   },
   "activePath": {
-    "name": "bluetooth-simple-hid-report-3f",
-    "selectedBy": "HMController.SubmitState",
-    "reportSelectionReason": "The profile's own notes state that report 0x3F is a real HID gamepad and that DirectInput parses only 0x3F, while 0x21/0x30 and 0x31-0x33 are vendor blobs. Only 0x3F is described field by field in the descriptor, so only 0x3F is derivable and therefore encodable.",
+    "name": "bluetooth-switch-0x30-body",
+    "selectedBy": "upstream HMController.SubmitState early-returns into SwitchProPacker.BuildBody for 057E:2009 and never reaches the descriptor-driven builder; driver.c's Switch lane reads the body slices directly and synthesizes the 0x3F frame itself pre-handshake",
+    "reportSelectionReason": "The driver decides the lane, not descriptor derivability. driver.c reads Data[2..10] always and Data[12..47] when IMU streaming is armed and DataSize >= 48; an 11-byte 0x3F submission passes the DataSize >= 11 guard and is silently misparsed as this body. An earlier revision of this contract froze the 0x3F report on the derivability argument; that lane was wrong and is retracted.",
+    "handshakeOwnership": "The 0x80/0x01 request-reply machine and the fabricated SPI calibration image are entirely the driver's (SwitchHandle* in driver.c); the SDK submits state and nothing else.",
     "profileExtendedReportPresent": false,
-    "profileExtendedReportActive": false,
     "profileExtendedReportPresentNote": "switch-pro.json declares no extendedReport block at all."
   },
   "report": {
-    "wireByteLength": 12,
-    "descriptorDataBitLength": 88,
-    "wireBitLength": 96,
-    "reportId": 63,
-    "reportIdWireByte": 0,
-    "reportIdIncludedInWireReport": true,
+    "wireByteLength": 48,
+    "reportId": null,
+    "reportIdIncludedInWireReport": false,
+    "framedByDriverAs": "report 0x30 post-handshake (0x3F pre-handshake), with the driver's own frame counter, battery and vibrator overlay on bytes 0, 1 and 11",
     "clearedBeforeEveryEncode": true,
     "statefulFields": false,
     "rollingSequence": false,
     "inputDefaultsOverlay": false,
     "declaredProfileInputReportSize": 362,
-    "declaredProfileInputReportSizeNote": "362 is a REPORT LENGTH: this descriptor declares reports 0x31/0x32/0x33 at 361 data bytes plus a report ID. Upstream's shared input section is also 362 bytes because it was sized to hold the largest catalog report \u2014 a coincidence, not an identity. A shorter submission is still ordinary because the section carries an explicit DataSize field; DualSense submits 63 bytes into it."
+    "declaredProfileInputReportSizeNote": "362 is a REPORT LENGTH: this descriptor declares reports 0x31/0x32/0x33 at 361 data bytes plus a report ID. It is not the length of anything this candidate submits; the submission is the 48-byte 0x30 body with DataSize = 48."
   },
   "stateKeySemantics": {
-    "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. This descriptor names the right stick Rx/Ry, so the right stick is read from HMAxis.Z/Rz and the letter disagreement is intentional.",
+    "rule": "HMAxis members are named after HID usages, but the host state mapper populates ONE fixed physical assignment shaped by the DualSense descriptor. Every axis here is bound by PHYSICAL SEMANTIC: Z/Rz are the right stick, Rx/Ry are the triggers.",
     "hostAssignment": {
       "X": "leftStickX",
       "Y": "leftStickY",
@@ -61,256 +59,214 @@
       "Rz": "rightStickY",
       "Rx": "leftTrigger",
       "Ry": "rightTrigger"
-    },
-    "descriptorAssignment": {
-      "X": "leftStickX",
-      "Y": "leftStickY",
-      "Rx": "rightStickX",
-      "Ry": "rightStickY"
     }
   },
-  "descriptorInputGroups": [
-    {
-      "usagePage": "Button",
-      "fields": "buttons 1..16",
-      "reportSize": 1,
-      "reportCount": 16,
-      "logical": [
-        0,
-        1
-      ],
-      "firstBit": 0
-    },
-    {
-      "usagePage": "Generic Desktop",
-      "fields": "Hat switch",
-      "reportSize": 4,
-      "reportCount": 1,
-      "logical": [
-        0,
-        7
-      ],
-      "firstBit": 16,
-      "paddingBits": 4
-    },
-    {
-      "usagePage": "Generic Desktop",
-      "fields": "X, Y, Rx, Ry",
-      "reportSize": 16,
-      "reportCount": 4,
-      "logical": [
-        0,
-        65535
-      ],
-      "firstBit": 24
-    }
-  ],
   "axes": {
     "sourceValueType": "System.Single",
     "validInputDomain": "finite",
     "normalization": "clamp to [0.0, 1.0]",
-    "wireFormula": "truncate_toward_zero((double)(float)clamp(value, 0, 1) * 65535)",
+    "wireFormula": "raw = 0x800 + truncate_toward_zero((clamp(value,0,1) * 2 - 1) * 0x600), clamped to [0, 0xFFF]; Y negates the centred value first because the wire is up-positive while HMAxis.Y/Rz are HID-style down-positive",
     "wireSignedness": "unsigned",
-    "byteOrder": "little-endian",
+    "packing": "12-bit little-nibble pairs, the exact inverse of SDL's extraction: b0 = x & 0xFF; b1 = (x >> 8) | ((y & 0xF) << 4); b2 = y >> 4. wireByte below is the pair's base offset: X occupies base and the low nibble of base+1, Y the high nibble of base+1 and base+2.",
     "missingAxisValue": 0.0,
-    "missingAxisReason": "Every descriptor field has LogicalMinimum 0.",
-    "precisionLimit": "The shared host state mapper quantises to eight bits before this contract is reached, so these sixteen-bit fields carry eight bits of real resolution.",
+    "missingAxisReason": "Consistent with the other personas' unsigned-axis default; a missing stick axis encodes the calibrated minimum rail 0x200 (0xE00 after Y inversion), not the neutral centre.",
+    "calibration": "centre 0x800, rails 0x200/0xE00 \u2014 the fabricated factory calibration the driver serves from SPI 0x603D, so a neutral stick packs to 00 08 80, byte-identical to the driver's own neutral prefill",
     "entries": [
       {
         "stateKey": "X",
-        "enumValueHex": "0130",
         "semantic": "leftStickX",
-        "wireByte": 4,
-        "sharedDataByte": 3,
-        "wireBitLength": 16,
-        "logicalMaximum": 65535,
+        "wireByte": 5,
+        "sharedDataByte": 5,
+        "wireBitLength": 12,
+        "logicalMaximum": 4095,
+        "calibratedMinimum": 512,
+        "calibratedCenter": 2048,
+        "calibratedMaximum": 3584,
+        "invertedOnWire": false,
         "normalizedNeutral": 0.5,
-        "wireNeutral": 32767
+        "wireNeutral": 2048
       },
       {
         "stateKey": "Y",
-        "enumValueHex": "0131",
         "semantic": "leftStickY",
-        "wireByte": 6,
+        "wireByte": 5,
         "sharedDataByte": 5,
-        "wireBitLength": 16,
-        "logicalMaximum": 65535,
+        "wireBitLength": 12,
+        "logicalMaximum": 4095,
+        "calibratedMinimum": 512,
+        "calibratedCenter": 2048,
+        "calibratedMaximum": 3584,
+        "invertedOnWire": true,
         "normalizedNeutral": 0.5,
-        "wireNeutral": 32767
+        "wireNeutral": 2048
       },
       {
         "stateKey": "Z",
-        "enumValueHex": "0132",
         "semantic": "rightStickX",
         "wireByte": 8,
-        "sharedDataByte": 7,
-        "wireBitLength": 16,
-        "logicalMaximum": 65535,
+        "sharedDataByte": 8,
+        "wireBitLength": 12,
+        "logicalMaximum": 4095,
+        "calibratedMinimum": 512,
+        "calibratedCenter": 2048,
+        "calibratedMaximum": 3584,
+        "invertedOnWire": false,
         "normalizedNeutral": 0.5,
-        "wireNeutral": 32767
+        "wireNeutral": 2048
       },
       {
         "stateKey": "Rz",
-        "enumValueHex": "0135",
         "semantic": "rightStickY",
-        "wireByte": 10,
-        "sharedDataByte": 9,
-        "wireBitLength": 16,
-        "logicalMaximum": 65535,
+        "wireByte": 8,
+        "sharedDataByte": 8,
+        "wireBitLength": 12,
+        "logicalMaximum": 4095,
+        "calibratedMinimum": 512,
+        "calibratedCenter": 2048,
+        "calibratedMaximum": 3584,
+        "invertedOnWire": true,
         "normalizedNeutral": 0.5,
-        "wireNeutral": 32767
+        "wireNeutral": 2048
       }
     ]
   },
   "hat": {
-    "wireByte": 3,
-    "sharedDataByte": 2,
+    "wireByte": 4,
+    "sharedDataByte": 4,
     "wireBits": "0-3",
-    "descriptorUsageHex": "0039",
+    "encoding": "not a HID hat field: four plain d-pad bits in the left button byte (bit0=Down bit1=Up bit2=Right bit3=Left); each HMHat octant decomposes into its bit pair and wireValue is the resulting nibble mask",
     "logicalMinimum": 0,
-    "logicalMaximum": 7,
+    "logicalMaximum": 15,
     "hasNullState": true,
-    "nullStateRule": "Eight directions occupy 0..7 and the centred hat is the out-of-range 8, the same null-state convention DualSense uses.",
+    "nullStateRule": "HMHat.None decomposes to no bits: the nibble is 0.",
     "values": [
+      {
+        "name": "None",
+        "enumValue": 0,
+        "wireValue": 0
+      },
       {
         "name": "North",
         "enumValue": 1,
-        "wireValue": 0
+        "wireValue": 2
       },
       {
         "name": "NorthEast",
         "enumValue": 2,
-        "wireValue": 1
+        "wireValue": 6
       },
       {
         "name": "East",
         "enumValue": 3,
-        "wireValue": 2
+        "wireValue": 4
       },
       {
         "name": "SouthEast",
         "enumValue": 4,
-        "wireValue": 3
+        "wireValue": 5
       },
       {
         "name": "South",
         "enumValue": 5,
-        "wireValue": 4
+        "wireValue": 1
       },
       {
         "name": "SouthWest",
         "enumValue": 6,
-        "wireValue": 5
+        "wireValue": 9
       },
       {
         "name": "West",
         "enumValue": 7,
-        "wireValue": 6
+        "wireValue": 8
       },
       {
         "name": "NorthWest",
         "enumValue": 8,
-        "wireValue": 7
-      },
-      {
-        "name": "None",
-        "enumValue": 0,
-        "wireValue": 8
+        "wireValue": 10
       }
     ]
   },
   "buttons": {
     "wireBytes": [
-      1,
-      2
+      2,
+      3,
+      4
     ],
-    "descriptorButtonCount": 16,
-    "mapSource": "profile layout roles (faceButtons/shoulderButtons/systemButtons/sticks) \u2014 a DELIBERATE DIVERGENCE from upstream, see divergenceFromUpstream",
-    "faceMappingRule": "Nintendo labels the bottom face button B and the right one A. The mapping is POSITIONAL, so HMButton.A is the bottom button (descriptor index 0, role face_b) exactly as it is on every other persona; a player pressing the bottom button gets A in the game.",
+    "mapSource": "semantic HMButton meanings bound to SDL HandleFullControllerState wire positions (the client under test), faces positional",
+    "divergenceFromUpstreamCaller": "Upstream's HMController passes the raw HMButton bit mask into SwitchProPacker, which indexes it by the profile's layout button indices; with the raw mask those numberings disagree above the bumpers, so upstream lands HMButton.Back on ZL, Start on ZR, LeftStick on Minus, RightStick on Plus, Guide on LStick and Share on Home. No upstream test or doc states whether the consumer was meant to pre-convert. This host's StateMapper populates HMButton semantically, so this contract binds each semantic button to the wire position SDL documents for it. DELIBERATE DIVERGENCE, recorded; settle on hardware by pressing minus/plus/home and reading what a client reports.",
     "entries": [
       {
         "name": "A",
-        "wireByte": 1,
-        "wireBit": 0,
-        "descriptorButtonIndex": 0,
-        "layoutRole": "face_b"
+        "wireByte": 2,
+        "wireBit": 2,
+        "wireMeaning": "Nintendo B (bottom face)"
       },
       {
         "name": "B",
-        "wireByte": 1,
-        "wireBit": 1,
-        "descriptorButtonIndex": 1,
-        "layoutRole": "face_a"
+        "wireByte": 2,
+        "wireBit": 3,
+        "wireMeaning": "Nintendo A (right face)"
       },
       {
         "name": "X",
-        "wireByte": 1,
-        "wireBit": 2,
-        "descriptorButtonIndex": 2,
-        "layoutRole": "face_y"
+        "wireByte": 2,
+        "wireBit": 0,
+        "wireMeaning": "Nintendo Y (left face)"
       },
       {
         "name": "Y",
-        "wireByte": 1,
-        "wireBit": 3,
-        "descriptorButtonIndex": 3,
-        "layoutRole": "face_x"
-      },
-      {
-        "name": "LeftBumper",
-        "wireByte": 1,
-        "wireBit": 4,
-        "descriptorButtonIndex": 4,
-        "layoutRole": "left_bumper"
+        "wireByte": 2,
+        "wireBit": 1,
+        "wireMeaning": "Nintendo X (top face)"
       },
       {
         "name": "RightBumper",
-        "wireByte": 1,
-        "wireBit": 5,
-        "descriptorButtonIndex": 5,
-        "layoutRole": "right_bumper"
+        "wireByte": 2,
+        "wireBit": 6,
+        "wireMeaning": "R"
+      },
+      {
+        "name": "LeftBumper",
+        "wireByte": 4,
+        "wireBit": 6,
+        "wireMeaning": "L"
       },
       {
         "name": "Back",
-        "wireByte": 2,
+        "wireByte": 3,
         "wireBit": 0,
-        "descriptorButtonIndex": 8,
-        "layoutRole": "back"
+        "wireMeaning": "Minus"
       },
       {
         "name": "Start",
-        "wireByte": 2,
+        "wireByte": 3,
         "wireBit": 1,
-        "descriptorButtonIndex": 9,
-        "layoutRole": "start"
-      },
-      {
-        "name": "LeftStick",
-        "wireByte": 2,
-        "wireBit": 2,
-        "descriptorButtonIndex": 10,
-        "layoutRole": "left_stick_click"
+        "wireMeaning": "Plus"
       },
       {
         "name": "RightStick",
-        "wireByte": 2,
+        "wireByte": 3,
+        "wireBit": 2,
+        "wireMeaning": "right stick click"
+      },
+      {
+        "name": "LeftStick",
+        "wireByte": 3,
         "wireBit": 3,
-        "descriptorButtonIndex": 11,
-        "layoutRole": "right_stick_click"
+        "wireMeaning": "left stick click"
       },
       {
         "name": "Guide",
-        "wireByte": 2,
+        "wireByte": 3,
         "wireBit": 4,
-        "descriptorButtonIndex": 12,
-        "layoutRole": "guide"
+        "wireMeaning": "Home"
       },
       {
         "name": "Share",
-        "wireByte": 2,
+        "wireByte": 3,
         "wireBit": 5,
-        "descriptorButtonIndex": 13,
-        "layoutRole": "capture"
+        "wireMeaning": "Capture"
       }
     ],
     "aliases": [],
@@ -321,52 +277,71 @@
       },
       {
         "name": "RightPaddle",
-        "reason": "absent from the descriptor"
+        "reason": "absent from this pad"
       },
       {
         "name": "LeftPaddle",
-        "reason": "absent from the descriptor"
+        "reason": "absent from this pad"
       },
       {
         "name": "Misc1",
-        "reason": "absent from the descriptor"
+        "reason": "absent from this pad"
       },
       {
         "name": "RightPaddle2",
-        "reason": "absent from the descriptor"
+        "reason": "absent from this pad"
       },
       {
         "name": "LeftPaddle2",
-        "reason": "absent from the descriptor"
+        "reason": "absent from this pad"
       }
-    ],
-    "divergenceFromUpstream": "switch-pro.json carries no buttonMap, and upstream's HidReportBuilder falls back to identity when ButtonMap is null (descBtn = b), so upstream's own encoder would place Back/Start/LeftStick/RightStick/Guide/Share at descriptor indices 6/7/8/9/10/12. Upstream also states that layout's button-role information is exposed without affecting the encoder. This contract instead uses the layout roles (8/9/10/11/12/13) because they describe where a real Pro Controller reports those buttons, and a pad whose minus/plus/home land on the wrong indices reads wrong in games that know the Switch layout. The descriptor itself declares only 'sixteen buttons' and cannot settle this: it is a HARDWARE question, and it must be measured before this persona ships."
+    ]
   },
   "derivedTriggerButtons": [
     {
       "axisStateKey": "Rx",
-      "wireByte": 1,
-      "wireBit": 6,
-      "condition": "clamped normalized value > 0.0",
-      "layoutRole": "left_trigger_click"
+      "wireByte": 4,
+      "wireBit": 7,
+      "wireMeaning": "ZL",
+      "condition": "clamped normalized value > 0.0"
     },
     {
       "axisStateKey": "Ry",
-      "wireByte": 1,
+      "wireByte": 2,
       "wireBit": 7,
-      "condition": "clamped normalized value > 0.0",
-      "layoutRole": "right_trigger_click"
+      "wireMeaning": "ZR",
+      "condition": "clamped normalized value > 0.0"
     }
   ],
   "separateUsages": [],
   "fixedZeroRegions": [
     {
-      "wireBits": "2.6-2.7",
-      "reason": "buttons 15 and 16 have no mapped control"
+      "wireByte": 0,
+      "reason": "frame counter \u2014 the driver overlays it"
     },
     {
-      "wireBits": "3.4-3.7",
-      "reason": "descriptor padding above the hat"
+      "wireByte": 1,
+      "reason": "battery/connection \u2014 the driver overlays it"
+    },
+    {
+      "wireBits": "2.4-2.5",
+      "reason": "SR/SL of a right Joy-Con; absent on a Pro Controller"
+    },
+    {
+      "wireBits": "3.6-3.7",
+      "reason": "unused / charging-grip bits"
+    },
+    {
+      "wireBits": "4.4-4.5",
+      "reason": "SL/SR of a left Joy-Con; absent on a Pro Controller"
+    },
+    {
+      "wireByte": 11,
+      "reason": "vibrator ack \u2014 the driver overlays it"
+    },
+    {
+      "wireBytes": "12-47",
+      "reason": "IMU, three 12-byte frames \u2014 zeroed because this candidate's HMGamepadState carries no accelerometer or gyro state; an IMU-armed client reads zero motion"
     }
   ],
   "fullStateBehavior": {
@@ -376,30 +351,30 @@
   },
   "coordinates": {
     "candidateFullWireEncoder": {
-      "byteLength": 12,
-      "includesReportId": true,
-      "firstByte": 63
+      "byteLength": 48,
+      "includesReportId": false,
+      "firstByte": "frame counter (zero; driver overlay)"
     },
     "upstreamLegacySharedInput": {
-      "byteLength": 11,
-      "sourceSlice": "wireReport[1..12]",
+      "byteLength": 48,
+      "sourceSlice": "wireReport[0..48]",
       "includesReportId": false,
-      "dataOffset": 1,
-      "dataLen": 11
+      "dataOffset": 0,
+      "dataLen": 48,
+      "note": "The whole body is the data: DataSize = 48, exactly what upstream's WriteInputFrame(_switchBodyBuffer, 48) submits. Nothing is stripped; the driver frames the report itself."
     },
-    "integrationRule": "The descriptor declares a report ID, so the leading byte is stripped exactly as it is for DualSense."
+    "integrationRule": "The endpoint must receive all 48 body bytes so the driver's DataSize >= 48 test can arm the IMU slice read."
   },
   "resolution": {
-    "sourceFieldsSettled": false,
-    "unresolvedFields": [
-      "Button index mapping: layout roles (used here) versus upstream's identity fallback. The descriptor declares button count only. Settle by creating the device and reading which indices a game and joy.cpl report for minus, plus, the stick clicks, home and capture."
-    ],
-    "sourceContractVerdict": "GO-WITH-OPEN-QUESTION",
+    "sourceFieldsSettled": true,
+    "unresolvedFields": [],
+    "sourceContractVerdict": "GO",
     "runtimeVerdict": "NO-GO",
     "runtimeNoGoReasons": [
       "no artifact has been built",
       "no driver or device has been exercised",
-      "the bluetooth presentation is unmeasured on real hardware"
+      "the bluetooth presentation is unmeasured on real hardware",
+      "the semantic-vs-raw button divergence from upstream's caller is recorded, not hardware-measured"
     ],
     "aggregateGatesChanged": false
   }

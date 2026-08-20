@@ -319,7 +319,7 @@ Assert-Check 'lock.upstream-bom-canonicalization' `
     'The canonical source contract preserves the one exact upstream profile BOM.'
 Assert-Check 'lock.candidate-tree' `
     ($lock.sourceCandidate.normalizedTreeSha256 -ceq
-        '975C5855D9F8DBE34FB1B8504B0B213324036CF07D913F93C397A7D35FEB2EFD') `
+        'C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F') `
     'S1.5d candidate tree is exact.'
 $artifactExpectationPropertyNames = @(
     $lock.artifactExpectation.PSObject.Properties | ForEach-Object { [string]$_.Name })
@@ -952,7 +952,7 @@ foreach ($literal in @(
     'instrument operating-system sockets',
     'AddressOfEntryPoint == 0', 'EntryPointTokenOrRelativeVirtualAddress == 0',
     'zero native import modules and symbols',
-    'do not upload the DLL or PDB', '241 input files', 'quiescent, hash-bound'
+    'do not upload the DLL or PDB', '244 input files', 'quiescent, hash-bound'
 )) {
     Assert-Check ('readme.anchor.' + $readmeAnchorIndex) `
         (Has-Literal $readme $literal) 'README preserves the observation-only truth boundary.'

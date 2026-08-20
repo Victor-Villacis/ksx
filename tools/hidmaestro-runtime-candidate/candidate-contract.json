@@ -229,9 +229,9 @@
       {
         "unit": "RuntimeSwitchProInputEncoder",
         "requirements": [
-          "Encode a complete 12-byte Bluetooth report 0x3F with the report ID at byte zero from the frozen source-derived switch-pro input contract.",
-          "Clear every report before encoding, reject non-finite axes, clamp finite axes to [0,1], truncate against 65535, and preserve the frozen sixteen-bit axis, null-state hat, positional face-button and digital ZL/ZR mappings.",
-          "Encode only report 0x3F; the 0x21/0x30 and 0x31-0x33 vendor blobs are not described field by field by the descriptor and are never synthesized."
+          "Encode the 48-byte Switch Pro report-0x30 BODY from the frozen source-derived switch-pro input contract: three button bytes, two 12-bit little-nibble packed sticks with wire Y up-positive, a four-bit d-pad decomposition, and a zeroed IMU region, leaving the counter, battery and vibrator bytes for the driver's overlay.",
+          "Clear every body before encoding, reject non-finite axes, clamp finite axes to [0,1], scale sticks as 0x800 plus the truncated centred value times 0x600, and preserve the frozen semantic HMButton-to-wire mapping and digital ZL/ZR derivation.",
+          "Read every axis by physical semantic rather than by descriptor letter, and never synthesize the descriptor's 0x3F/0x31-0x33 reports or the driver-owned handshake \u2014 the driver frames and streams the body itself."
         ]
       }
     ]

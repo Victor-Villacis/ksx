@@ -8,13 +8,13 @@ authorize a local build, load the candidate into a CLR, execute candidate code,
 install or contact a driver, touch a device, publish an artifact, or retain the
 build output.
 
-The observation stages exactly 241 input files into each quiescent, hash-bound
+The observation stages exactly 244 input files into each quiescent, hash-bound
 build root. Workspace-authored source-candidate text is identity-checked by its
 normalized lock and staged as deterministic UTF-8/LF bytes; the retained
 Windows-checkout source and all profiles preserve their observed raw upstream
 bytes after their raw/canonical checks:
 
-- 12 source-candidate files, including the project and `.gitignore`;
+- 15 source-candidate files, including the project and `.gitignore`;
 - the one retained upstream `HMOutputPacket.cs` at the fixed project staging
   path; and
 - 228 profile JSON resources selected by `profiles/catalog.lock.json`.

@@ -4,94 +4,118 @@ using System.Collections.Generic;
 namespace HIDMaestro.Internal;
 
 /// <summary>
-/// Input report encoder for the pinned <c>switch-pro</c> catalog profile
-/// (Nintendo, 057E:2009, Bluetooth), report <c>0x3F</c>.
+/// Input body encoder for the pinned <c>switch-pro</c> catalog profile
+/// (Nintendo, 057E:2009, Bluetooth): the 48-byte report-<c>0x30</c> BODY the
+/// driver's 60 Hz streamer serves.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Source-only binding to tools/hidmaestro-input-contract-switch-pro/{contract.json,
-/// golden-vectors.json}. Its eleven scenarios / 43 frames remain an unexecuted
-/// artifact behavior gate in S1.5d; this source freeze performs no compile,
-/// assembly load, driver action, or device action.
+/// golden-vectors.json}. Its scenarios remain an unexecuted artifact behavior
+/// gate in S1.5d; this source freeze performs no compile, assembly load,
+/// driver action, or device action.
 /// </para>
 /// <para>
-/// WHY REPORT 0x3F AND NOT THE OTHERS. This descriptor declares six input
-/// reports. The profile's own notes settle which one is encodable: report
-/// <c>0x3F</c> is "a real HID gamepad (16 buttons, null-state hat, X/Y/Rx/Ry
-/// 16-bit)", while <c>0x21</c>/<c>0x30</c> and <c>0x31</c>-<c>0x33</c> are
-/// vendor blobs, and "DirectInput parses only 0x3F". Only <c>0x3F</c> is
-/// described field by field in the descriptor, so only <c>0x3F</c> can be
-/// derived rather than guessed. The descriptor walk gives twelve bytes:
+/// WHY A BODY AND NOT A REPORT. An earlier revision of this file encoded the
+/// descriptor's 12-byte report <c>0x3F</c>, on the argument that only
+/// <c>0x3F</c> is described field by field. That argument was true and
+/// irrelevant: derivability was never the selection criterion — the driver
+/// decides, and the driver's Switch lane never treats the shared section as a
+/// report at all. Upstream's <c>HMController.SubmitState</c> early-returns
+/// into <c>SwitchProPacker.BuildBody</c> for 057E:2009, submitting this
+/// 48-byte body; <c>driver.c</c> reads <c>Data[2..10]</c> (buttons + packed
+/// sticks) and, when IMU streaming is armed and <c>DataSize &gt;= 48</c>,
+/// <c>Data[12..47]</c> — and builds the <c>0x3F</c> frame ITSELF pre-handshake
+/// from that same state. An 11-byte <c>0x3F</c> slice passes the driver's
+/// <c>DataSize &gt;= 11</c> guard and is silently misparsed as this body: a
+/// centred no-button frame decodes as eight buttons held with both sticks
+/// pinned past the rail. The lane, not the shape, was the defect.
+/// </para>
+/// <para>
+/// BODY LAYOUT, from <c>SwitchProPacker</c> (grounded in SDL_hidapi_switch.c,
+/// the client under test) and <c>driver.c</c>'s reader:
 /// </para>
 /// <code>
-///   byte  0      report ID 0x3F
-///   byte  1..2   buttons 1..16, one bit each
-///   byte  3      hat switch, 4 bits, logical 0..7, then 4 bits padding
-///   byte  4..5   X   16 bits, logical 0..65535
-///   byte  6..7   Y   16 bits
-///   byte  8..9   Rx  16 bits
-///   byte 10..11  Ry  16 bits
+///   byte  0      frame counter   — driver overlays; leave zero
+///   byte  1      battery/conn    — driver overlays; leave zero
+///   byte  2      buttons, right: bit0=Y bit1=X bit2=B bit3=A bit6=R bit7=ZR
+///   byte  3      buttons, shared: bit0=Minus bit1=Plus bit2=RStick click
+///                bit3=LStick click bit4=Home bit5=Capture
+///   byte  4      buttons, left: bit0=Down bit1=Up bit2=Right bit3=Left
+///                bit6=L bit7=ZL
+///   byte  5..7   left stick, two 12-bit values little-nibble packed
+///   byte  8..10  right stick, same packing
+///   byte 11      vibrator ack    — driver overlays; leave zero
+///   byte 12..47  IMU, three 12-byte frames — zeroed: this candidate's
+///                HMGamepadState carries no accelerometer or gyro state
 /// </code>
 /// <para>
-/// WHY THE PROFILE SAYS 362 AND THIS ENCODER SAYS 12. <c>inputReportSize</c>
-/// IS a report length: this descriptor declares reports <c>0x31</c>/<c>0x32</c>/
-/// <c>0x33</c> at 361 data bytes plus a report ID, so 362 is the largest report
-/// the profile can carry. (Upstream's shared input section is also 362 bytes,
-/// because it was sized to hold the largest report in the catalog — two
-/// different quantities that happen to share a number. An earlier revision of
-/// this comment asserted they were the same thing; they are not.)
-/// A short submission is nonetheless ordinary, for a different reason: the
-/// shared section carries an explicit <c>DataSize</c> field, and DualSense
-/// already submits 63 bytes into that same section.
+/// BUTTONS ARE MAPPED BY SEMANTIC, AND THAT IS A DELIBERATE DIVERGENCE worth
+/// stating precisely. Upstream's own caller hands <c>SwitchProPacker</c> the
+/// raw <c>HMButton</c> bit mask, and the packer indexes that mask by the
+/// profile's layout button indices — with the raw mask those two numbering
+/// systems disagree above the bumpers, so upstream lands <c>HMButton.Back</c>
+/// on ZL, <c>Start</c> on ZR, <c>LeftStick</c> on Minus, <c>RightStick</c> on
+/// Plus, <c>Guide</c> on LStick and <c>Share</c> on Home. No upstream test or
+/// document states whether the consumer was meant to pre-convert. THIS host's
+/// state mapper populates <c>HMButton</c> semantically (Back means the select
+/// button), so this encoder binds each semantic button to the wire position
+/// SDL documents for it: Back→Minus, Start→Plus, stick clicks→stick clicks,
+/// Guide→Home, Share→Capture, faces positional (A=bottom=Nintendo B).
 /// </para>
 /// <para>
-/// THE AXIS TRAP, same as every other persona here.
-/// <see cref="HMGamepadState.Axes"/> is keyed by <see cref="HMAxis"/>, but the
-/// host writes ONE fixed physical assignment shaped by the DualSense
-/// descriptor: <c>Z</c>/<c>Rz</c> are the right stick and <c>Rx</c>/<c>Ry</c>
-/// are the triggers. This descriptor names its right stick <c>Rx</c>/<c>Ry</c>,
-/// so the right stick is read from <c>HMAxis.Z</c>/<c>HMAxis.Rz</c> and the
-/// letters deliberately disagree.
+/// STICKS: 12 bits per axis, little-nibble packed as
+/// <c>b0 = x&amp;0xFF; b1 = (x&gt;&gt;8) | ((y&amp;0xF)&lt;&lt;4);
+/// b2 = y&gt;&gt;4</c> — the exact inverse of SDL's extraction. Scale is
+/// centre <c>0x800</c>, range <c>±0x600</c>, matching the fabricated factory
+/// calibration the driver serves from SPI 0x603D; the wire is up-positive
+/// while <c>HMAxis.Y</c>/<c>Rz</c> are HID-style down-positive, so Y negates
+/// the centred value. A neutral stick packs to <c>00 08 80</c>, byte-identical
+/// to the driver's own neutral prefill. Scaling truncates toward zero exactly
+/// as the upstream packer does.
 /// </para>
 /// <para>
-/// FACE BUTTONS ARE POSITIONAL. Nintendo labels the bottom face button B and
-/// the right one A — the mirror of Xbox. The profile's <c>layout</c> gives
-/// <c>face_b</c> descriptor index 0 and <c>face_a</c> index 1, and this encoder
-/// binds <see cref="HMButton.A"/> to index 0. That is deliberate: A is the
-/// bottom button on every persona, so a player pressing the bottom button gets
-/// the same action here as on an Xbox pad rather than a mirrored one.
+/// ZL and ZR are digital on this pad (the layout's <c>triggers</c> list is
+/// empty), so the analog trigger axes become bits the moment they leave rest,
+/// exactly as DualSense derives its L2/R2 bits. The d-pad is four bits, not a
+/// hat field; <see cref="EncodeDpad"/> decomposes <see cref="HMHat"/> into
+/// them. The handshake (0x80/0x01 request-reply, SPI calibration image) is
+/// entirely the driver's; this encoder has no handshake duty.
 /// </para>
 /// <para>
-/// The two triggers are digital. The profile's layout carries an empty
-/// <c>triggers</c> list and gives ZL and ZR button indices 6 and 7, so the
-/// analog trigger axes become bits exactly as DualSense derives its L2/R2 bits.
+/// THE AXIS TRAP, same as every persona here: the host state mapper populates
+/// <c>HMAxis</c> with a DualSense-shaped assignment where <c>Z</c>/<c>Rz</c>
+/// are the RIGHT STICK and <c>Rx</c>/<c>Ry</c> are the TRIGGERS. Every read
+/// below is by physical meaning, not by descriptor letter.
 /// </para>
 /// </remarks>
 internal sealed class RuntimeSwitchProInputEncoder
 {
-    internal const byte ReportId = 0x3F;
-    internal const int EncodedReportSize = 12;
-
-    private const int ButtonCount = 16;
+    // The 48-byte report-0x30 body. The driver frames and streams it as
+    // report 0x30 itself (and synthesizes 0x3F pre-handshake); no report-ID
+    // byte is part of this submission.
+    internal const int EncodedReportSize = 48;
 
     /// <summary>
-    /// Descriptor button index for each carried button, taken from the
-    /// profile's <c>layout</c> roles.
+    /// Semantic wire map: each carried <see cref="HMButton"/>, the body byte
+    /// it lands in, and its bit. Wire positions are SDL's
+    /// <c>HandleFullControllerState</c> layout as documented by the upstream
+    /// packer; the semantic pairing is this host's (see remarks).
     /// </summary>
-    private static readonly (HMButton Button, int Index)[] ButtonMap =
+    private static readonly (HMButton Button, int BodyByte, int Bit)[] ButtonMap =
     [
-        (HMButton.A, 0),
-        (HMButton.B, 1),
-        (HMButton.X, 2),
-        (HMButton.Y, 3),
-        (HMButton.LeftBumper, 4),
-        (HMButton.RightBumper, 5),
-        (HMButton.Back, 8),
-        (HMButton.Start, 9),
-        (HMButton.LeftStick, 10),
-        (HMButton.RightStick, 11),
-        (HMButton.Guide, 12),
-        (HMButton.Share, 13),
+        (HMButton.A, 2, 2),
+        (HMButton.B, 2, 3),
+        (HMButton.X, 2, 0),
+        (HMButton.Y, 2, 1),
+        (HMButton.RightBumper, 2, 6),
+        (HMButton.LeftBumper, 4, 6),
+        (HMButton.Back, 3, 0),
+        (HMButton.Start, 3, 1),
+        (HMButton.RightStick, 3, 2),
+        (HMButton.LeftStick, 3, 3),
+        (HMButton.Guide, 3, 4),
+        (HMButton.Share, 3, 5),
     ];
 
     internal void Encode(in HMGamepadState state, Span<byte> destination)
@@ -99,14 +123,13 @@ internal sealed class RuntimeSwitchProInputEncoder
         if (destination.Length != EncodedReportSize)
         {
             throw new ArgumentException(
-                $"The Switch Pro report destination must be exactly {EncodedReportSize} bytes.",
+                $"The Switch Pro body destination must be exactly {EncodedReportSize} bytes.",
                 nameof(destination));
         }
 
-        // Every call is a complete frame: no vendor byte, no sequence counter,
-        // and no carry-over from the previous report.
+        // Every call is a complete frame: no carry-over, and the counter,
+        // battery and vibrator bytes stay zero for the driver's own overlay.
         destination.Clear();
-        destination[0] = ReportId;
 
         Dictionary<HMAxis, float>? axes = state.Axes;
 
@@ -119,40 +142,34 @@ internal sealed class RuntimeSwitchProInputEncoder
         float rightTrigger = GetNormalizedAxis(axes, HMAxis.Ry);
 
         uint buttons = (uint)state.Buttons;
-        foreach ((HMButton button, int index) in ButtonMap)
+        foreach ((HMButton button, int bodyByte, int bit) in ButtonMap)
         {
             if ((buttons & (uint)button) == 0)
             {
                 continue;
             }
 
-            if (index < 0 || index >= ButtonCount)
-            {
-                throw new InvalidOperationException(
-                    $"Switch Pro button {button} maps outside the descriptor's {ButtonCount} buttons.");
-            }
-
-            destination[1 + (index / 8)] |= (byte)(1 << (index % 8));
+            destination[bodyByte] |= (byte)(1 << bit);
         }
+
+        destination[4] |= EncodeDpad(state.Hat);
 
         // ZL and ZR are buttons on this pad, so the analog trigger axes become
         // bits the moment they leave rest.
         if (leftTrigger > 0.0f)
         {
-            destination[1] |= 0x40;
+            destination[4] |= 0x80;
         }
 
         if (rightTrigger > 0.0f)
         {
-            destination[1] |= 0x80;
+            destination[2] |= 0x80;
         }
 
-        destination[3] = EncodeHat(state.Hat);
-
-        WriteUInt16(destination, 4, leftStickX);
-        WriteUInt16(destination, 6, leftStickY);
-        WriteUInt16(destination, 8, rightStickX);
-        WriteUInt16(destination, 10, rightStickY);
+        WriteStickX(destination, 5, leftStickX);
+        WriteStickY(destination, 5, leftStickY);
+        WriteStickX(destination, 8, rightStickX);
+        WriteStickY(destination, 8, rightStickY);
     }
 
     private static float GetNormalizedAxis(Dictionary<HMAxis, float>? axes, HMAxis axis)
@@ -173,46 +190,65 @@ internal sealed class RuntimeSwitchProInputEncoder
         return Math.Clamp(value, 0.0f, 1.0f);
     }
 
-    private static void WriteUInt16(Span<byte> destination, int offset, float normalized)
+    /// <summary>
+    /// One 12-bit stick value: centre 0x800, range ±0x600 (the fabricated
+    /// factory calibration the driver serves), truncating toward zero exactly
+    /// as the upstream packer does. The wire is up-positive while the HID-style
+    /// axis is down-positive, so Y negates the centred value.
+    /// </summary>
+    private static ushort StickRaw(float normalized, bool invert)
     {
-        ushort scaled = (ushort)ScaleAxis(normalized, ushort.MaxValue);
-        destination[offset] = (byte)(scaled & 0xFF);
-        destination[offset + 1] = (byte)(scaled >> 8);
+        double centered = ((double)normalized * 2.0) - 1.0;
+        if (invert)
+        {
+            centered = -centered;
+        }
+
+        int raw = 0x800 + (int)(centered * 0x600);
+        return (ushort)Math.Clamp(raw, 0, 0xFFF);
+    }
+
+    /// <summary>Low half of the little-nibble pair: the axis byte and the low
+    /// nibble of the shared middle byte.</summary>
+    private static void WriteStickX(Span<byte> destination, int offset, float normalized)
+    {
+        ushort raw = StickRaw(normalized, invert: false);
+        destination[offset] = (byte)(raw & 0xFF);
+        destination[offset + 1] |= (byte)((raw >> 8) & 0x0F);
+    }
+
+    /// <summary>High half of the pair: the high nibble of the shared middle
+    /// byte and the top byte. Carries the wire's Y inversion.</summary>
+    private static void WriteStickY(Span<byte> destination, int offset, float normalized)
+    {
+        ushort raw = StickRaw(normalized, invert: true);
+        destination[offset + 1] |= (byte)((raw & 0x0F) << 4);
+        destination[offset + 2] = (byte)(raw >> 4);
     }
 
     /// <summary>
-    /// Truncates, matching the DualSense encoder and the quarter-unit bias the
-    /// host state mapper applies for exactly that reason.
+    /// The d-pad is four plain bits in the left button byte (bit0=Down bit1=Up
+    /// bit2=Right bit3=Left), not a hat field, so each octant decomposes into
+    /// its bit pair. Values are written out explicitly — a renumbering of
+    /// <see cref="HMHat"/> must fail here, never reach the wire.
     /// </summary>
-    private static int ScaleAxis(float normalized, int logicalMaximum)
-    {
-        double scaled = Math.Truncate((double)normalized * logicalMaximum);
-        return (int)Math.Clamp(scaled, 0.0, logicalMaximum);
-    }
-
-    /// <summary>
-    /// Eight directions occupy 0..7 clockwise from North and the centred hat is
-    /// the out-of-range 8. Each value is written out explicitly rather than
-    /// cast from the enum, which would silently follow a renumbering of
-    /// <see cref="HMHat"/> straight onto the wire.
-    /// </summary>
-    private static byte EncodeHat(HMHat hat)
+    private static byte EncodeDpad(HMHat hat)
     {
         return hat switch
         {
-            HMHat.North => (byte)0,
-            HMHat.NorthEast => (byte)1,
-            HMHat.East => (byte)2,
-            HMHat.SouthEast => (byte)3,
-            HMHat.South => (byte)4,
-            HMHat.SouthWest => (byte)5,
-            HMHat.West => (byte)6,
-            HMHat.NorthWest => (byte)7,
-            HMHat.None => (byte)8,
+            HMHat.None => (byte)0,
+            HMHat.North => (byte)2,
+            HMHat.NorthEast => (byte)6,
+            HMHat.East => (byte)4,
+            HMHat.SouthEast => (byte)5,
+            HMHat.South => (byte)1,
+            HMHat.SouthWest => (byte)9,
+            HMHat.West => (byte)8,
+            HMHat.NorthWest => (byte)10,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(hat),
                 hat,
-                "The Switch Pro hat must be None or one of the eight octants."),
+                "The Switch Pro d-pad must be None or one of the eight octants."),
         };
     }
 }

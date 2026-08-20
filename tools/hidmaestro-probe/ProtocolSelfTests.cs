@@ -94,7 +94,7 @@ internal static class ProtocolSelfTests
         RequireError(shutdown, HostProtocolError.InvalidRequestId);
 
         byte[] create = frames[2].Encode();
-        create[16] = 4;
+        create[16] = 6;
         RequireError(create, HostProtocolError.UnknownProfile);
         byte[] submit = frames[4].Encode();
         submit.AsSpan(20, 8).Clear();
@@ -128,8 +128,10 @@ internal static class ProtocolSelfTests
             new ProtocolProfile(1, "DualSense", "dualsense", "0x054C", "0x0CE6"),
             new ProtocolProfile(2, "SwitchPro", "switch-pro", "0x057E", "0x2009"),
             new ProtocolProfile(3, "XboxSeries", "xbox-series-xs-bt", "0x045E", "0x0B13"),
+            new ProtocolProfile(4, "Snes", "ibuffalo-snes", "0x0583", "0x2060"),
+            new ProtocolProfile(5, "Genesis", "daemonbite-genesis", "0x2341", "0x8036"),
         ]), "Allowlisted profile USB identity drifted.");
-        Require(description.Deadlines == new RequestDeadlines(5_000, 15_000, 250, 5_000, 10_000), "Mandatory request deadlines drifted.");
+        Require(description.Deadlines == new RequestDeadlines(5_000, 30_000, 250, 30_000, 30_000), "Mandatory request deadlines drifted.");
     }
 
     private static void ClientAndHostCadencesAreSeparated()

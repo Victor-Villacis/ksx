@@ -243,13 +243,15 @@ impl Persona {
     /// the output backend bothers running slot correlation (600 ms per pad that
     /// can only ever fail for a HID pad — see `ksx-output/src/vigem.rs`).
     /// `true` for [`Persona::XboxSeries`] as well, and that is deliberate:
-    /// HIDMaestro's GIP companion *does* map its Xbox devices onto an XInput
-    /// slot (the companion's own watchdog zeroes "XInput state" after >500
-    /// unchanged-SeqNo reads — `padforge-code-audit.md` §3.3, which is only
-    /// meaningful because the slot exists). So an Xbox Series pad competes for
-    /// the same four slots a real one would, and must be counted by the
+    /// an Xbox Series virtual is created as a software-device companion that
+    /// Windows' own inbox `xinputhid` driver binds (measured 2026-08-20: every
+    /// Xbox profile in the catalog is `driverMode: xinputhid`, and the created
+    /// devnode's HID child hardware id is what `xinputhid.inf` matches), which
+    /// is precisely what claims an XInput slot. So an Xbox Series pad competes
+    /// for the same four slots a real one would, and must be counted by the
     /// [`crate::MAX_XINPUT_SLOTS`] rule. Sony and Nintendo personas are plain
-    /// HID and consume nothing.
+    /// HID and consume nothing. An earlier revision credited a "GIP companion"
+    /// for the slot — the wrong mechanism, the right conclusion.
     pub const fn is_xinput(self) -> bool {
         matches!(self, Persona::Xbox360 | Persona::XboxSeries)
     }

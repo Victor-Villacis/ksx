@@ -164,7 +164,7 @@ jobs:
           $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
           if ($parsed.schemaVersion -ne 1 -or
               $parsed.upstreamCommit -cne '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
-              $parsed.runtimeContractSha256 -cne '1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0' -or
+              $parsed.runtimeContractSha256 -cne '4F76F31C049390A1342388E09F9D0D0E3547162D08EA501FD829AF3CF64F67DA' -or
               $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
             throw 'The HIDMaestro host build receipt is not exact.'
           }

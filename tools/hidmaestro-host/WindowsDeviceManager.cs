@@ -18,7 +18,14 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     private const string OwnershipName = "KSXRuntimeOwner";
     private const string OwnershipValue = "ksx-hidmaestro-host-v1";
     private const string ExpectedInfSha256 = "187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704";
-    private const string ExpectedDriverSha256 = "D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C";
+    // SHA-256 the SDK's installer writes over its five UNSIGNED payload
+    // resources (HKLM\SOFTWARE\HIDMaestro\InstalledManifestSha256).
+    // Deterministic per SDK version — unlike the installed driver DLL's bytes,
+    // which InstallDriver() re-signs with an install-time-generated test
+    // certificate (measured 2026-08-20: signing appends ~1.4 KB and the cert's
+    // NotBefore is the install second minus a day). An earlier revision pinned
+    // the installed DLL bytes and therefore refused every legitimate install.
+    private const string ExpectedManifestSha256 = "2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c";
     private const string HardwareId = @"root\VID_054C&PID_0CE6";
     private const uint CrSuccess = 0;
     private const uint CrNoSuchDevnode = 0x0000000D;
@@ -34,7 +41,11 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     {
         string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             @"System32\DriverStore\FileRepository");
-        string[] packages = Directory.EnumerateFileSystemEntries(
+        // Directories only: the Driver Store keeps a "<package>.ini" sidecar
+        // FILE beside every package directory whose name matches the same
+        // prefix; EnumerateFileSystemEntries counted it and made "exactly one
+        // package" see two on every staged machine (measured 2026-08-20).
+        string[] packages = Directory.EnumerateDirectories(
             root,
             "hidmaestro.inf_amd64_*",
             SearchOption.TopDirectoryOnly).ToArray();
@@ -52,16 +63,23 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             throw new HidMaestroPackageUnavailableException(
                 "The HIDMaestro Driver Store package is incomplete.");
         string infHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(inf)));
-        string driverHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(dll)));
-        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal)
-            || !driverHash.Equals(ExpectedDriverSha256, StringComparison.Ordinal))
+        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal))
             throw new HidMaestroPackageUnavailableException(
-                "The HIDMaestro Driver Store package does not match pinned v1.6.1 bytes.");
-        using RegistryKey? service = Registry.LocalMachine.OpenSubKey(
-            @"SYSTEM\CurrentControlSet\Services\HIDMaestro", writable: false);
-        if (service is null)
+                "The HIDMaestro Driver Store package INF does not match pinned v1.6.1 bytes.");
+        // The DLL's presence was proven above; its bytes are not compared —
+        // they are re-signed per install. Version identity comes from the
+        // SDK's own installed-payload manifest instead.
+        using RegistryKey? manifestKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\HIDMaestro", writable: false);
+        string? manifest = manifestKey?.GetValue("InstalledManifestSha256") as string;
+        if (manifest is null
+            || !manifest.Equals(ExpectedManifestSha256, StringComparison.OrdinalIgnoreCase))
             throw new HidMaestroPackageUnavailableException(
-                "The pinned HIDMaestro v1.6.1 service registration is missing.");
+                "The installed HIDMaestro payload manifest does not match pinned v1.6.1.");
+        // The HIDMaestro service key is deliberately NOT required here: the
+        // UMDF service materialises when the FIRST root\HIDMaestro devnode
+        // binds the INF, so requiring it would refuse the very install whose
+        // first controller creation is about to create it.
         return new RuntimePreinstalledPackageProof(ExpectedInfSha256);
     }
 

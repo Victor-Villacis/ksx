@@ -52,7 +52,8 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             code: "personas-not-implemented",
             message: format!(
                 "The {} personas have not completed their independent production runtimes. \
-                 DualSense is live; use xbox360 for the unfinished profiles.",
+                 DualSense is the enabled HIDMaestro persona; use xbox360 for the unfinished \
+                 profiles.",
                 gated.join("/"),
             ),
         });
@@ -67,9 +68,9 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             severity: Severity::Warning,
             code: "hidmaestro-partial",
             message: format!(
-                "The HIDMaestro package is missing, duplicated, or does not match the pinned \
-                 v1.6.1 INF and UMDF driver hashes (checked {}): reinstall it with the KSX \
-                 installer task, or remove the broken package.",
+                "The HIDMaestro package is missing, duplicated, or does not match pinned \
+                 v1.6.1 (the INF hash or the SDK's InstalledManifestSha256 differs; checked {}): \
+                 reinstall it with the KSX installer task, or remove the broken package.",
                 hm.looked_for.join(", "),
             ),
         });

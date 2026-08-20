@@ -67,11 +67,17 @@ All `[MEASURED 2026-08-20]`.
 
 - `hidmaestro.inf_amd64_ffdd15d5558ca3d9` **is staged** (published `oem200.inf`).
   `hidmaestro.inf` SHA-256 `187D5B06…` **matches** the ksx pin.
-- `HIDMaestro.dll` SHA-256 `287CE56C…` **does not match** the pin `D68EF6C3…`.
-  The pinned value matches no file on this machine; the installed one appears
-  nowhere in the repo. Signer is `CN=HIDMaestroTestCert`, and
-  `%TEMP%\HIDMaestro_2f5c0313b3ea6fa7` still holds `Inf2Cat.exe` and
-  `signtool.exe` — i.e. **a local test-signed build, not the official release.**
+- `HIDMaestro.dll` SHA-256 `287CE56C…` vs the old pin `D68EF6C3…` — **RESOLVED
+  2026-08-20 at byte level.** The pin was the UNSIGNED embedded payload (found
+  byte-exact inside the verified release `Core.dll`); `InstallDriver()` signs
+  the DLL with a test certificate it GENERATES AT INSTALL TIME (cert NotBefore
+  = install second minus a day; signing appends ~1.4 KB), so **no fixed pin on
+  the installed bytes can ever match**. The install itself is byte-exact
+  v1.6.1: the SDK's `InstalledManifestSha256` (`2f5c0313…`) equals the value
+  recomputed from the verified release payload, and both INFs install
+  verbatim. The archive itself was downloaded and verified against the
+  installer's pins (118,879,222 B, SHA-256 `00145C23…`; `Core.dll` =
+  `ADADD9E2…`, the HIDMAESTRO.md pin).
 - `HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro` does **not** exist. Expected:
   the UMDF service materialises only when a `root\HIDMaestro` devnode is created.
 - `hidmaestro_xusb.inf_amd64_*` is **also** staged (`oem207.inf`, `HMXInput.dll`).
@@ -79,9 +85,25 @@ All `[MEASURED 2026-08-20]`.
   service running. **No XInput INF needs shipping.**
 - ViGEmBus 1.21.442.0 running, zero child pads.
 
-Why `ksx doctor` says the package is bad: `installed` requires *exactly one
-package dir* **and** *both hashes exact* **and** *the service key present*
-`[SOURCE crates/ksx-platform/src/win/mod.rs:154]`. Two of three fail here.
+The old probe (`installed` = exactly-one dir ∧ both hashes ∧ service key) had
+two structural defects, both fixed 2026-08-20: the DLL-byte pin could never
+match (per-install signing, above), and requiring the service key deadlocked
+the first spawn — the UMDF service materialises only when the FIRST
+`root\HIDMaestro` devnode binds the INF, so the host refused to create the
+device that would create the key. The probe (ksx-platform), doctor, the host's
+`ProvePreinstalledDualSensePackage` and `runtime-contract.json` now prove:
+exactly-one package ∧ INF hash (deterministic ✓) ∧ DLL present ∧
+`InstalledManifestSha256 == 2f5c0313…`; the service key is reported,
+never required. A THIRD defect surfaced while proving the fix on the live
+machine: the Driver Store keeps a `<package>.ini` sidecar FILE beside every
+package directory, the prefix filter counted it, and "exactly one package" saw
+two — so even correct hashes could never pass. Both probes (Rust and the C#
+host) now count directories only.
+
+`[MEASURED 2026-08-20]` After the fix, the rebuilt `ksx doctor` on this
+machine: `[OK] installed — production DualSense package is staged` +
+`[INFO] service not yet registered — it appears on first controller creation`.
+**The first time any ksx build has recognised a legitimate install.**
 
 ---
 
@@ -135,10 +157,14 @@ no main HID device and no XUSB companion. `[SOURCE ControllerProfile.cs:223]`
 `UsesXinputhid` is literally `DriverMode == "xinputhid"`, and **every** Xbox
 profile in the catalog sets it `[MEASURED 2026-08-20]`.
 
-`hmswd.exe` exists as `driver/hmswd/hmswd.c` in the pinned upstream — ~200 lines
-of C wrapping `SwDeviceCreate`, needed because direct P/Invoke returns
-`0x8007007E` on .NET 10 `[SOURCE SwdDeviceFactory.cs:12-22]`. It is not shipped;
-we compile it.
+`hmswd.exe` **ships pre-built inside the SDK's embedded payload** — extracted
+and hashed 2026-08-20 from the verified release `Core.dll`: 155,648 B, SHA-256
+`C94D654A…` (`[MEASURED 2026-08-20]`; it is one of the five resources the
+installed-payload manifest covers, and it is NOT in the DriverStore package on
+this machine, so upstream's `SwdDeviceFactory` extracts it at device-creation
+time). Source is `driver/hmswd/hmswd.c`, needed because direct P/Invoke to
+`SwDeviceCreate` returns `0x8007007E` on .NET 10
+`[SOURCE SwdDeviceFactory.cs:12-22]`. Nothing to compile.
 
 ---
 
@@ -161,7 +187,6 @@ Nothing here may be written into a contract as a fact until it is measured.
 
 | Question | What settles it |
 |---|---|
-| Is the installed `HIDMaestro.dll` (`287CE56C…`) or the pin (`D68EF6C3…`) the stale side? | Download the pinned archive and hash its `HIDMaestro.dll`. Human, any networked machine. |
 | Does a `root\HIDMaestro` devnode actually enumerate and bind? | Elevated: run the ksx HIDMaestro setup task, then `ksx pads --persona dualsense --hold-secs 20`, then `Get-PnpDevice \| ? InstanceId -match 'HIDMAESTRO'`. |
 | Does the SWD companion's HID child come out as `HID\VID_045E&PID_0B13&IG_00` (the string inbox `xinputhid` binds)? | Elevated, disposable box: `hmswd.exe create …`, then read `%windir%\INF\setupapi.dev.log` for the selected-driver / Driver Rank lines. |
 | Does `SwDeviceCreate` need elevation, or only the registry staging? | Run the same `hmswd.exe create` twice, standard then elevated, and diff the HRESULTs in `%TEMP%\HIDMaestro\hmswd_self.log`. |
@@ -220,7 +245,9 @@ with why it cannot be fixed immediately.
 | 2026-08-20 | `3968ff8` | Living state doc; first 362 retraction |
 | 2026-08-20 | `1e0e63b` | Plan doc points at the state doc |
 | 2026-08-20 | `06cc5cb` | Sweep corrections; XUSB→inbox-xinputhid; "live"→staged |
-| 2026-08-20 | (HEAD) | Switch Pro rewritten to the 48-byte `0x30` body; second 362 retraction executed; trigger axis-read verifier gap closed; s1_5e README 244/15 |
+| 2026-08-20 | `02a27c0` | Switch Pro rewritten to the 48-byte `0x30` body; second 362 retraction executed; trigger axis-read verifier gap closed; s1_5e README 244/15 |
+| 2026-08-20 | `ebbadfa` | The three host seams named with sources |
+| 2026-08-20 | (HEAD) | Install proof redesigned: the impossible DLL-byte pin and the service-key deadlock replaced by INF hash + the SDK's own payload manifest (byte-verified against the downloaded release); runtime-contract re-pinned in its four places |
 
 Contract topology as of the last entry: candidate tree **15 files**, compile
 items **14**, S1.5d **612 checks**, S1.5e staged inputs **244**.

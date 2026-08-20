@@ -8,7 +8,7 @@ namespace Ksx.HidMaestroHost;
 
 internal sealed class RuntimeHostSession : IDisposable
 {
-    private static readonly byte[] RuntimeSha = Convert.FromHexString("1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0");
+    private static readonly byte[] RuntimeSha = Convert.FromHexString("4F76F31C049390A1342388E09F9D0D0E3547162D08EA501FD829AF3CF64F67DA");
     private static readonly byte[] CatalogSha = Convert.FromHexString("8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A");
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(5);
 

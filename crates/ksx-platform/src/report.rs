@@ -43,11 +43,15 @@ pub struct DriverReport {
 /// evidence a user can check, not a claim they have to take on faith.
 #[derive(Debug, Clone, Serialize)]
 pub struct HidMaestroReport {
-    /// Exactly one non-reparse Driver Store package matches the pinned v1.6.1
-    /// INF and UMDF DLL hashes. A service key or similarly named DLL alone is
-    /// not a usable install.
+    /// Exactly one non-reparse Driver Store package whose INF matches the
+    /// pinned v1.6.1 bytes, with the driver DLL present and the SDK's own
+    /// `InstalledManifestSha256` equal to the v1.6.1 payload manifest. The
+    /// installed DLL's bytes are deliberately NOT pinned: the SDK re-signs
+    /// them with an install-time certificate, so no fixed hash can match.
     pub installed: bool,
     /// Service key exists under `HKLM\SYSTEM\CurrentControlSet\Services`.
+    /// Informational: it materialises when the first devnode binds the INF,
+    /// so a fresh install correctly reports `false` here until first use.
     pub service_key: bool,
     /// The exact UMDF driver DLL when ready, otherwise the first incompatible
     /// candidate found so the report can describe the broken installation.

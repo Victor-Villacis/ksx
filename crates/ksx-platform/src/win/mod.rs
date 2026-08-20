@@ -50,8 +50,18 @@ const HIDMAESTRO_REPOSITORY: &str = r"System32\DriverStore\FileRepository";
 const HIDMAESTRO_PACKAGE_PREFIX: &str = "hidmaestro.inf_amd64_";
 const HIDMAESTRO_INF_SHA256: &str =
     "187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704";
-const HIDMAESTRO_DLL_SHA256: &str =
-    "D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C";
+/// SHA-256 the SDK's own installer writes over the five unsigned payload
+/// resources. Deterministic per SDK version, unlike the installed driver
+/// DLL's bytes: `InstallDriver()` signs that DLL with a test certificate it
+/// GENERATES AT INSTALL TIME (measured 2026-08-20: cert NotBefore equals the
+/// install second minus a day, and signing appends ~1.4 KB), so a fixed pin
+/// on the installed DLL bytes can never match any real installation. An
+/// earlier revision of this probe pinned exactly that and refused every
+/// legitimate install, this machine's included.
+const HIDMAESTRO_MANIFEST_KEY: &str = r"SOFTWARE\HIDMaestro";
+const HIDMAESTRO_MANIFEST_VALUE: &str = "InstalledManifestSha256";
+const HIDMAESTRO_MANIFEST_SHA256: &str =
+    "2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c";
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// Just the ViGEm bus's children, without the rest of the driver stack.
@@ -120,8 +130,13 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            name.starts_with(HIDMAESTRO_PACKAGE_PREFIX)
-                .then(|| entry.path())
+            // Directories only: the Driver Store keeps a "<package>.ini"
+            // sidecar FILE beside every package directory, and it matches the
+            // name prefix. Counting it made "exactly one package" see two on
+            // every machine with the package staged (measured 2026-08-20).
+            (name.starts_with(HIDMAESTRO_PACKAGE_PREFIX)
+                && entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .then(|| entry.path())
         })
         .collect::<Vec<_>>();
     package_directories.sort();
@@ -138,10 +153,12 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
             if !inf.is_file() || !dll.is_file() {
                 return None;
             }
+            // The INF installs verbatim, so its hash is deterministic and
+            // stays pinned. The DLL only has to EXIST here: its bytes are
+            // re-signed per install, and its version identity is proven by
+            // the SDK's own manifest value below.
             let exact = sha256::hash_file(&inf)
-                .is_ok_and(|digest| sha256::digest_matches(&digest, HIDMAESTRO_INF_SHA256))
-                && sha256::hash_file(&dll)
-                    .is_ok_and(|digest| sha256::digest_matches(&digest, HIDMAESTRO_DLL_SHA256));
+                .is_ok_and(|digest| sha256::digest_matches(&digest, HIDMAESTRO_INF_SHA256));
             Some((dll, exact))
         })
         .collect::<Vec<_>>();
@@ -151,14 +168,19 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
         .filter(|(_, exact)| *exact)
         .map(|(dll, _)| dll)
         .collect::<Vec<_>>();
-    let installed = package_directories.len() == 1 && exact.len() == 1 && service_present;
+    let manifest_ok = registry::read_string(HIDMAESTRO_MANIFEST_KEY, HIDMAESTRO_MANIFEST_VALUE)
+        .is_some_and(|value| value.eq_ignore_ascii_case(HIDMAESTRO_MANIFEST_SHA256));
+    // The service key is deliberately NOT part of `installed`: the UMDF
+    // service materialises when the first `root\HIDMaestro` devnode binds the
+    // INF, so requiring it here refuses the very install whose first spawn
+    // would create it.
+    let installed = package_directories.len() == 1 && exact.len() == 1 && manifest_ok;
     let reported_dll = if exact.len() == 1 {
         Some(exact[0].clone())
     } else {
         candidates.first().map(|(dll, _)| dll).cloned()
     };
     let looked_for = vec![
-        format!("HKLM\\{service_key}"),
         repository
             .join(format!(
                 "hidmaestro.inf_amd64_*\\hidmaestro.inf (SHA256 {HIDMAESTRO_INF_SHA256})"
@@ -166,11 +188,13 @@ fn hidmaestro(windir: &str) -> HidMaestroReport {
             .display()
             .to_string(),
         repository
-            .join(format!(
-                "hidmaestro.inf_amd64_*\\HIDMaestro.dll (SHA256 {HIDMAESTRO_DLL_SHA256})"
-            ))
+            .join("hidmaestro.inf_amd64_*\\HIDMaestro.dll (present; bytes are re-signed per install)")
             .display()
             .to_string(),
+        format!(
+            "HKLM\\{HIDMAESTRO_MANIFEST_KEY}\\{HIDMAESTRO_MANIFEST_VALUE} == {HIDMAESTRO_MANIFEST_SHA256}"
+        ),
+        format!("HKLM\\{service_key} (informational; registers on first controller creation)"),
     ];
     HidMaestroReport {
         // The exact package, not just the service key or a similarly named
@@ -339,3 +363,4 @@ fn whql_evaluation() -> Option<WhqlEvaluationReport> {
         system_uptime_secs: registry::read_u64(WHQL_EVAL, "SystemUptime").map(|t| t / 10_000_000),
     })
 }
+

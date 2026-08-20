@@ -1,5 +1,6 @@
 ---
 source: crates/ksx-backend/src/doctor.rs
+assertion_line: 615
 expression: "render_human(&report, &advice)"
 ---
 ksx doctor — driver health
@@ -27,9 +28,10 @@ HIDMaestro (production DualSense backend)
   [INFO] switchpro/xboxseries remain unavailable — those profile runtimes are not implemented
   [INFO]   use persona 'playstation' or 'xbox360' instead
   [INFO] not installed — DualSense needs the HIDMaestro installer task
-  [INFO]   looked for HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro
   [INFO]   looked for C:\Windows\System32\DriverStore\FileRepository\hidmaestro.inf_amd64_*\hidmaestro.inf (SHA256 187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704)
-  [INFO]   looked for C:\Windows\System32\DriverStore\FileRepository\hidmaestro.inf_amd64_*\HIDMaestro.dll (SHA256 D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C)
+  [INFO]   looked for C:\Windows\System32\DriverStore\FileRepository\hidmaestro.inf_amd64_*\HIDMaestro.dll (present; bytes are re-signed per install)
+  [INFO]   looked for HKLM\SOFTWARE\HIDMaestro\InstalledManifestSha256 == 2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c
+  [INFO]   looked for HKLM\SYSTEM\CurrentControlSet\Services\HIDMaestro (informational; registers on first controller creation)
 
 Code integrity (2026 cross-signed-trust removal)
   [WARN] Microsoft Windows Cross Certificates for Code Integrity Exceptions Audit Policy ({784C4414-79F4-4C32-A6A5-F0FB42A51D0D}) — audit mode
@@ -39,5 +41,5 @@ Code integrity (2026 cross-signed-trust removal)
 Advice
   [WARN] interception-borrowed-time: Interception is on borrowed time: its driver is cross-signed with a certificate that expired 2012-10-21, and the 'Microsoft Windows Cross Certificates for Code Integrity Exceptions Audit Policy' CI policy ({784C4414-79F4-4C32-A6A5-F0FB42A51D0D}, id 10.0.0.0) is active on this machine in Audit mode. When Windows flips it to enforcement the driver is blocked from loading. Do NOT take Windows feature updates on the cabinet; the M6 WinUSB backend removes this dependency.
   [INFO] scpvbus-present: ScpVBus (1.21.442.0) is installed but KSX does not use it. Remove it only after confirming that no other app on this PC depends on it.
-  [INFO] personas-not-implemented: The switchpro/xboxseries personas have not completed their independent production runtimes. DualSense is live; use xbox360 for the unfinished profiles.
+  [INFO] personas-not-implemented: The switchpro/xboxseries personas have not completed their independent production runtimes. DualSense is the enabled HIDMaestro persona; use xbox360 for the unfinished profiles.
   [INFO] hidmaestro-missing: HIDMaestro is not installed, so the production DualSense persona cannot start. Re-run the KSX installer with the HIDMaestro driver task selected. xbox360/playstation slots continue to run on ViGEmBus.

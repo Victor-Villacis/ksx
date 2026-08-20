@@ -363,4 +363,3 @@ fn whql_evaluation() -> Option<WhqlEvaluationReport> {
         system_uptime_secs: registry::read_u64(WHQL_EVAL, "SystemUptime").map(|t| t / 10_000_000),
     })
 }
-

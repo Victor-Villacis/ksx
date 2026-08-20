@@ -323,9 +323,9 @@ jobs:
             throw 'A frozen S1.5c/S1.5d API, profile, feedback, or input source contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
-                '0F9624230CEC8739CA169A91D9EEDDF3A46AF587D23384D954D947FD2ED8BBD2' -or
+                'D729BAB33EC5FD56650779DE551309501DBB31245EBB19FFEEE04A765EAFA0B2' -or
               (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
-                '8A4D2E147DCCDD56A2727D7A4D170DAB4A6CB2AD571754B1E1A6395F79C6810C') {
+                '9B6199DD88DAC26B24E71F60CC048FF414927D761C6ECE69542B8852169D6CAE') {
             throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
           }
           $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
@@ -671,8 +671,8 @@ jobs:
                   $s1dReport.counts.inputScenarios -ne 9 -or
                   $s1dReport.counts.inputFrames -ne 37 -or
                   $s1dReport.counts.lockedInputSourceVerifierChecks -ne 538 -or
-                  $s1dReport.counts.checks -ne 602 -or
-                  $s1dChecks.Count -ne 602 -or
+                  $s1dReport.counts.checks -ne 605 -or
+                  $s1dChecks.Count -ne 605 -or
                   @($s1dChecks | Where-Object passed -ne $true).Count -ne 0 -or
                   $s1dReport.sourceOnly.verifierBuiltCandidate -ne $false -or
                   $s1dReport.sourceOnly.verifierLoadedCandidate -ne $false -or
@@ -685,7 +685,7 @@ jobs:
                     'artifactPublicApiAllowlistFrozen,artifactCompileAllowlistFrozen,profileSourceCatalogBound,rawFeedbackDecoderFrozen,driverRuntimeAbiBound,distributionReady' -or
                   @($s1dReport.gateState.PSObject.Properties |
                     Where-Object Value -ne $false).Count -ne 0) {
-                throw 'the exact 602-check S1.5d inert source-candidate contract did not pass'
+                throw 'the exact 605-check S1.5d inert source-candidate contract did not pass'
               }
               $s1dDocument.Dispose()
             } catch {
@@ -1129,7 +1129,7 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'FB61FB64C0DA0FC16D55C76DA5B5B38911D3D5F2214D2EAA89CE979C9AE0226F' -or
+                'AAC21D801BAD42AA33E3635F1D80BAC6219068F96FCD2FE5CEBC4DE3B76A1F3B' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
                 '860E282852FED86C5618C845A5FC9B2D24E2130867E192934160FA0B53DF9657') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'

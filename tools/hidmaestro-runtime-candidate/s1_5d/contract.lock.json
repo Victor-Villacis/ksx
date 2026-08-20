@@ -4,7 +4,7 @@
   "status": "source-frozen-verifier-does-not-build-or-load",
   "assurance": "hash-pinned-static-candidate-source-and-project-xml-closure-only",
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
-  "expectedVerifierCheckCount": 602,
+  "expectedVerifierCheckCount": 605,
   "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
   "candidateTreeSha256": "625C18E0F37A98F42D95A120561F214F8D9A755FC7941D7C47A0BD39BBCEB63A",
   "expectedCounts": {
@@ -110,7 +110,7 @@
       "id": "input-contract-switch-pro",
       "path": "../../hidmaestro-input-contract-switch-pro/contract.json",
       "format": "json",
-      "sha256": "3534C8CAC6938158F9555D7596AD5CCBDB5BF3ADD364B05AB61E8549CCBDFD2A"
+      "sha256": "08C4A3F53817ED702265CE2170F6AFECFD2081FF00D1758FEF211D22F79D654B"
     },
     {
       "id": "input-vectors-switch-pro",
@@ -1330,12 +1330,24 @@
         "text": "_inputReport = new byte[_wireShape.FullWireLength];"
       },
       {
-        "id": "encode-then-publish",
-        "text": "_sharedState.SubmitFullWireInput(_inputReport, in _wireShape);"
-      },
-      {
         "id": "switch-pro-encoder-field",
         "text": "private readonly RuntimeSwitchProInputEncoder? _switchProEncoder;"
+      },
+      {
+        "id": "encode-dualsense",
+        "text": "_dualSenseEncoder.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "encode-xbox-series",
+        "text": "_xboxSeriesEncoder.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "encode-switch-pro",
+        "text": "_switchProEncoder!.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "publish-after-encode",
+        "text": "_sharedState.SubmitFullWireInput(_inputReport, in _wireShape);"
       }
     ]
   },

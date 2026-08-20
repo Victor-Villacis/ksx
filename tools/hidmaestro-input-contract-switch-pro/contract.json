@@ -34,8 +34,9 @@
     "name": "bluetooth-simple-hid-report-3f",
     "selectedBy": "HMController.SubmitState",
     "reportSelectionReason": "The profile's own notes state that report 0x3F is a real HID gamepad and that DirectInput parses only 0x3F, while 0x21/0x30 and 0x31-0x33 are vendor blobs. Only 0x3F is described field by field in the descriptor, so only 0x3F is derivable and therefore encodable.",
-    "profileExtendedReportPresent": true,
-    "profileExtendedReportActive": false
+    "profileExtendedReportPresent": false,
+    "profileExtendedReportActive": false,
+    "profileExtendedReportPresentNote": "switch-pro.json declares no extendedReport block at all."
   },
   "report": {
     "wireByteLength": 12,
@@ -224,7 +225,7 @@
       2
     ],
     "descriptorButtonCount": 16,
-    "mapSource": "profile layout faceButtons/shoulderButtons/systemButtons/sticks",
+    "mapSource": "profile layout roles (faceButtons/shoulderButtons/systemButtons/sticks) \u2014 a DELIBERATE DIVERGENCE from upstream, see divergenceFromUpstream",
     "faceMappingRule": "Nintendo labels the bottom face button B and the right one A. The mapping is POSITIONAL, so HMButton.A is the bottom button (descriptor index 0, role face_b) exactly as it is on every other persona; a player pressing the bottom button gets A in the game.",
     "entries": [
       {
@@ -338,7 +339,8 @@
         "name": "LeftPaddle2",
         "reason": "absent from the descriptor"
       }
-    ]
+    ],
+    "divergenceFromUpstream": "switch-pro.json carries no buttonMap, and upstream's HidReportBuilder falls back to identity when ButtonMap is null (descBtn = b), so upstream's own encoder would place Back/Start/LeftStick/RightStick/Guide/Share at descriptor indices 6/7/8/9/10/12. Upstream also states that layout's button-role information is exposed without affecting the encoder. This contract instead uses the layout roles (8/9/10/11/12/13) because they describe where a real Pro Controller reports those buttons, and a pad whose minus/plus/home land on the wrong indices reads wrong in games that know the Switch layout. The descriptor itself declares only 'sixteen buttons' and cannot settle this: it is a HARDWARE question, and it must be measured before this persona ships."
   },
   "derivedTriggerButtons": [
     {
@@ -388,9 +390,11 @@
     "integrationRule": "The descriptor declares a report ID, so the leading byte is stripped exactly as it is for DualSense."
   },
   "resolution": {
-    "sourceFieldsSettled": true,
-    "unresolvedFields": [],
-    "sourceContractVerdict": "GO",
+    "sourceFieldsSettled": false,
+    "unresolvedFields": [
+      "Button index mapping: layout roles (used here) versus upstream's identity fallback. The descriptor declares button count only. Settle by creating the device and reading which indices a game and joy.cpl report for minus, plus, the stick clicks, home and capture."
+    ],
+    "sourceContractVerdict": "GO-WITH-OPEN-QUESTION",
     "runtimeVerdict": "NO-GO",
     "runtimeNoGoReasons": [
       "no artifact has been built",

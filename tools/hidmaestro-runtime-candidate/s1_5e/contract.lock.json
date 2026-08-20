@@ -268,11 +268,11 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json",
-      "sha256": "0F9624230CEC8739CA169A91D9EEDDF3A46AF587D23384D954D947FD2ED8BBD2"
+      "sha256": "D729BAB33EC5FD56650779DE551309501DBB31245EBB19FFEEE04A765EAFA0B2"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
-      "sha256": "8A4D2E147DCCDD56A2727D7A4D170DAB4A6CB2AD571754B1E1A6395F79C6810C"
+      "sha256": "9B6199DD88DAC26B24E71F60CC048FF414927D761C6ECE69542B8852169D6CAE"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/HIDMaestro.ArtifactInspector.csproj",

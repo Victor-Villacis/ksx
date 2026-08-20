@@ -1343,7 +1343,7 @@ try {
             }
             Add-Check "inputBinding.${p}axis.$($axis.stateKey)" `
                 ($binding.Count -eq 1 -and
-                 $null -ne $writeTemplate -and
+                 ![string]::IsNullOrWhiteSpace($writeTemplate) -and
                  [int]$axis.wireByte -eq ([int]$axis.sharedDataByte + $reportIdOffset) -and
                  (Test-ContainsNormalized $encoderCode $readAnchor) -and
                  (Test-ContainsNormalized $encoderCode $writeAnchor)) `

@@ -325,7 +325,7 @@ jobs:
           if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
                 '87715E832EC44039CA5413B02DFC04E29A9476D78363BB6F599A1CD9DAF6BB3A' -or
               (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
-                'CD6A49D1718EB6212136CE3DFA56522E3908BE2EE48CF0A836E5AAB85D8BAC6B') {
+                '8A4D2E147DCCDD56A2727D7A4D170DAB4A6CB2AD571754B1E1A6395F79C6810C') {
             throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
           }
           $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
@@ -1129,7 +1129,7 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                'F473E62111DF15A5900CE66F979B3CFD558B8C1B731B6C610BC3B13FD843ACFF' -or
+                'A2529DE6CE92C992C04F40E9884B0DE94C075D916D698917680859BCD23BE03F' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
                 'A2236C827E2E9BAEA179983A65EB6B2F51A4B2D61ECB7B7B1D1D4333CE2CA8B9') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'

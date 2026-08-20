@@ -1287,7 +1287,7 @@ try {
     foreach ($encoderBinding in @($lock.inputBinding.encoders)) {
         $p = [string]$encoderBinding.checkPrefix
         $encoderCode = $candidateRecords[$encoderBinding.encoderPath].code
-        $inputContract = $loadedInputs[$encoderBinding.inputContractInputId].json
+        $encoderContract = $loadedInputs[$encoderBinding.inputContractInputId].json
         $encoderVectors = $loadedInputs[$encoderBinding.inputVectorsInputId].json
         $templates = $encoderBinding.templates
 
@@ -1310,7 +1310,7 @@ try {
                 }
                 catch { $parsed = $false }
             }
-            [uint64]$expected = Get-ObjectPathValue $inputContract $numeric.contractPath
+            [uint64]$expected = Get-ObjectPathValue $encoderContract $numeric.contractPath
             Add-Check "inputBinding.${p}numeric.$($numeric.id)" `
                 ($match.Success -and $parsed -and $actual -eq $expected) `
                 "expected $expected from $($numeric.contractPath); got $(if ($parsed) { $actual } else { '<absent-or-unparsed>' })"
@@ -1322,15 +1322,15 @@ try {
                 "encoder contains source-relation anchor: $($anchor.text)"
         }
 
-        $contractAxisKeys = @(@($inputContract.axes.entries | ForEach-Object stateKey) +
-            @($inputContract.derivedTriggerButtons | Where-Object { $null -ne $_ } | ForEach-Object axisStateKey) |
+        $contractAxisKeys = @(@($encoderContract.axes.entries | ForEach-Object stateKey) +
+            @($encoderContract.derivedTriggerButtons | Where-Object { $null -ne $_ } | ForEach-Object axisStateKey) |
             Sort-Object -Unique)
         $lockedAxisKeys = @($encoderBinding.axisLocals | ForEach-Object stateKey)
         Add-Check "inputBinding.${p}axisKeySet" `
             (Test-SameStringSet $contractAxisKeys $lockedAxisKeys) `
             'axis-local bindings cover exactly the descriptor-derived axis keys'
         $reportIdOffset = if ($encoderBinding.hasReportId) { 1 } else { 0 }
-        foreach ($axis in @($inputContract.axes.entries)) {
+        foreach ($axis in @($encoderContract.axes.entries)) {
             $binding = @($encoderBinding.axisLocals | Where-Object stateKey -ceq $axis.stateKey)
             $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
             $bitLength = if ($null -ne $axis.wireBitLength) { [string]$axis.wireBitLength } else { '8' }
@@ -1351,12 +1351,12 @@ try {
         }
 
         Add-Check "inputBinding.${p}hatContractShape" `
-            (@($inputContract.hat.values).Count -eq 9 -and
-             [int]$inputContract.hat.wireByte -eq [int]$encoderBinding.expectedHatWireByte -and
-             [int]$inputContract.hat.wireByte -eq ([int]$inputContract.hat.sharedDataByte + $reportIdOffset) -and
-             $inputContract.hat.hasNullState -eq $true) `
+            (@($encoderContract.hat.values).Count -eq 9 -and
+             [int]$encoderContract.hat.wireByte -eq [int]$encoderBinding.expectedHatWireByte -and
+             [int]$encoderContract.hat.wireByte -eq ([int]$encoderContract.hat.sharedDataByte + $reportIdOffset) -and
+             $encoderContract.hat.hasNullState -eq $true) `
             "hat contract retains eight octants plus null-state value at full-wire byte $($encoderBinding.expectedHatWireByte)"
-        foreach ($hat in @($inputContract.hat.values)) {
+        foreach ($hat in @($encoderContract.hat.values)) {
             $hatAnchor = Expand-AnchorTemplate $templates.hat @{
                 name = $hat.name; wireValue = $hat.wireValue
             }
@@ -1366,11 +1366,11 @@ try {
         }
 
         Add-Check "inputBinding.${p}buttonContractShape" `
-            (@($inputContract.buttons.entries).Count -eq [int]$encoderBinding.expectedButtonCounts.carried -and
-             @($inputContract.buttons.aliases).Count -eq [int]$encoderBinding.expectedButtonCounts.aliased -and
-             @($inputContract.buttons.dropped).Count -eq [int]$encoderBinding.expectedButtonCounts.dropped) `
+            (@($encoderContract.buttons.entries).Count -eq [int]$encoderBinding.expectedButtonCounts.carried -and
+             @($encoderContract.buttons.aliases).Count -eq [int]$encoderBinding.expectedButtonCounts.aliased -and
+             @($encoderContract.buttons.dropped).Count -eq [int]$encoderBinding.expectedButtonCounts.dropped) `
             "input contract retains $($encoderBinding.expectedButtonCounts.carried) carried, $($encoderBinding.expectedButtonCounts.aliased) aliased, and $($encoderBinding.expectedButtonCounts.dropped) dropped button names"
-        foreach ($button in @($inputContract.buttons.entries)) {
+        foreach ($button in @($encoderContract.buttons.entries)) {
             [uint64]$mask = [uint64]1 -shl [int]$button.wireBit
             $maskLiteral = '0x{0:X2}' -f $mask
             $buttonAnchor = Expand-AnchorTemplate $templates.button @{
@@ -1385,7 +1385,7 @@ try {
                 "button $($button.name) maps to full-wire byte $($button.wireByte), bit $($button.wireBit)"
         }
         $buttonApiTypes = @($api.types | Where-Object id -ceq 'HIDMaestro.HMButton')
-        foreach ($alias in @($inputContract.buttons.aliases)) {
+        foreach ($alias in @($encoderContract.buttons.aliases)) {
             $aliasValue = @(if ($buttonApiTypes.Count -eq 1) {
                 $buttonApiTypes[0].values | Where-Object name -ceq $alias.name
             })
@@ -1397,13 +1397,13 @@ try {
                  [uint64]$aliasValue[0].value -eq [uint64]$targetValue[0].value) `
                 "button alias $($alias.name) has the same frozen enum mask as $($alias.sameAs)"
         }
-        foreach ($dropped in @($inputContract.buttons.dropped)) {
+        foreach ($dropped in @($encoderContract.buttons.dropped)) {
             Add-Check "inputBinding.${p}buttonDropped.$($dropped.name)" `
                 (Test-IdentifierAbsent $encoderCode $dropped.name) `
                 "unsupported button $($dropped.name) is not aliased into the encoder"
         }
 
-        foreach ($trigger in @($inputContract.derivedTriggerButtons | Where-Object { $null -ne $_ })) {
+        foreach ($trigger in @($encoderContract.derivedTriggerButtons | Where-Object { $null -ne $_ })) {
             $binding = @($encoderBinding.axisLocals | Where-Object stateKey -ceq $trigger.axisStateKey)
             $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
             [uint64]$mask = [uint64]1 -shl [int]$trigger.wireBit
@@ -1422,7 +1422,7 @@ try {
 
         # A usage the profile's buttonMap drops but the descriptor still
         # carries in a field of its own (Xbox's Guide on System Main Menu).
-        foreach ($usage in @($inputContract.separateUsages | Where-Object { $null -ne $_ })) {
+        foreach ($usage in @($encoderContract.separateUsages | Where-Object { $null -ne $_ })) {
             [uint64]$mask = [uint64]1 -shl [int]$usage.wireBit
             $maskLiteral = '0x{0:X2}' -f $mask
             $usageAnchor = Expand-AnchorTemplate $templates.separateUsage @{
@@ -1469,12 +1469,12 @@ try {
              $destinationMemberCalls[0] -ceq 'Clear') `
             'Clear is the encoder destination span''s only member call; no fill, copy, or range mutation is present'
         Add-Check "inputBinding.${p}completeFrameSemantics" `
-            ($inputContract.report.clearedBeforeEveryEncode -eq $true -and
-             $inputContract.report.statefulFields -eq $false -and
-             $inputContract.report.rollingSequence -eq $false -and
-             $inputContract.report.inputDefaultsOverlay -eq $false -and
-             $inputContract.fullStateBehavior.priorFrameCarry -eq $false -and
-             @($inputContract.fixedZeroRegions).Count -eq [int]$encoderBinding.expectedFixedZeroRegionCount -and
+            ($encoderContract.report.clearedBeforeEveryEncode -eq $true -and
+             $encoderContract.report.statefulFields -eq $false -and
+             $encoderContract.report.rollingSequence -eq $false -and
+             $encoderContract.report.inputDefaultsOverlay -eq $false -and
+             $encoderContract.fullStateBehavior.priorFrameCarry -eq $false -and
+             @($encoderContract.fixedZeroRegions).Count -eq [int]$encoderBinding.expectedFixedZeroRegionCount -and
              ![regex]::IsMatch($encoderCode,
                  '(?m)^\s*(?:private|internal|protected|public)\s+(?!const\b)(?:static\s+)?(?:readonly\s+)?[^\r\n(){}=]+\s+_[A-Za-z0-9_]+\s*;\s*$')) `
             'encoder is a cleared complete-frame transform with no candidate instance state or rolling sequence'
@@ -1482,18 +1482,18 @@ try {
         # Each encoder's wire coordinates must agree with the frozen wire-shape
         # entry the seam will use for that profile.
         Add-Check "inputBinding.${p}wireCoordinates" `
-            ([int]$inputContract.coordinates.candidateFullWireEncoder.byteLength -eq
-                [int]$inputContract.report.wireByteLength -and
-             $inputContract.coordinates.candidateFullWireEncoder.includesReportId -eq
+            ([int]$encoderContract.coordinates.candidateFullWireEncoder.byteLength -eq
+                [int]$encoderContract.report.wireByteLength -and
+             $encoderContract.coordinates.candidateFullWireEncoder.includesReportId -eq
                 [bool]$encoderBinding.hasReportId -and
-             [int]$inputContract.coordinates.upstreamLegacySharedInput.dataOffset -eq
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.dataOffset -eq
                 [int]$encoderBinding.sharedSlice.offset -and
-             [int]$inputContract.coordinates.upstreamLegacySharedInput.dataLen -eq
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.dataLen -eq
                 [int]$encoderBinding.sharedSlice.length -and
-             [int]$inputContract.coordinates.upstreamLegacySharedInput.byteLength -eq
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.byteLength -eq
                 [int]$encoderBinding.sharedSlice.length -and
-             $inputContract.coordinates.upstreamLegacySharedInput.includesReportId -eq $false) `
-            "full-wire report of $($inputContract.report.wireByteLength) bytes yields the endpoint slice ($($encoderBinding.sharedSlice.offset), $($encoderBinding.sharedSlice.length))"
+             $encoderContract.coordinates.upstreamLegacySharedInput.includesReportId -eq $false) `
+            "full-wire report of $($encoderContract.report.wireByteLength) bytes yields the endpoint slice ($($encoderBinding.sharedSlice.offset), $($encoderBinding.sharedSlice.length))"
 
         $encoderFramesAreFullWire = $true
         foreach ($scenario in @($encoderVectors.vectors)) {

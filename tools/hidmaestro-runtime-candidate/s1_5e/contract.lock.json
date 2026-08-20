@@ -272,7 +272,7 @@
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1",
-      "sha256": "CD6A49D1718EB6212136CE3DFA56522E3908BE2EE48CF0A836E5AAB85D8BAC6B"
+      "sha256": "8A4D2E147DCCDD56A2727D7A4D170DAB4A6CB2AD571754B1E1A6395F79C6810C"
     },
     {
       "path": "tools/hidmaestro-runtime-candidate/s1_5e/inspector/HIDMaestro.ArtifactInspector.csproj",

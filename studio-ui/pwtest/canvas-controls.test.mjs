@@ -527,6 +527,44 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("every marker says which seat it is", async () => {
+    const page = await openCanvas();
+    try {
+      const markers = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".forma-canvas-navigator .navigator-item")).map(
+          (el) => ({
+            id: el.dataset.instanceId,
+            text: (el.textContent ?? "").trim(),
+            title: el.getAttribute("title") ?? "",
+            seatColoured: /\bnp\d+\b/.test(el.className),
+          }),
+        ),
+      );
+      assert.ok(markers.length >= 3, "the fixture stages a board and two controllers");
+      const board = markers.find((marker) => marker.id === "keyboard");
+      assert.equal(board?.text, "KB", "the board names itself on the map");
+      for (const marker of markers.filter((m) => m.id !== "keyboard")) {
+        assert.match(
+          marker.text,
+          /^P\d+$/,
+          `a controller marker carries its seat (${marker.id} said "${marker.text}")`,
+        );
+        assert.ok(
+          marker.seatColoured,
+          `${marker.id} wears its seat colour, the same one the rack and badge use`,
+        );
+        assert.match(
+          marker.title,
+          /^P\d+ · /,
+          `${marker.id}'s tooltip carries the full name the box has no room for`,
+        );
+      }
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("the map hides and comes back, and comes back drawn", async () => {
     const page = await openCanvas();
     try {
@@ -535,12 +573,32 @@ describe("the canvas navigation controls", () => {
           () => document.querySelectorAll(".forma-canvas-navigator .navigator-item").length,
         );
       assert.ok((await markerCount()) > 0, "the map starts shown");
+      assert.equal(
+        await page.evaluate(() => document.querySelector(".n-mapshow").hidden),
+        true,
+        "and its stand-in stays out of the way while it is shown",
+      );
 
-      await page.click('[data-nx="canvas-map"]');
+      // The map's own × puts it away…
+      await page.click(".n-mapclose");
       assert.equal(await page.evaluate(() => document.querySelector(".forma-canvas-navigator").hidden), true);
-      assert.equal(await page.getAttribute('[data-nx="canvas-map"]', "aria-pressed"), "false");
+      // …and what brings it back is in the same corner, not in a bar at the
+      // other end of the page.
+      const corner = await page.evaluate(() => {
+        const button = document.querySelector(".n-mapshow");
+        const canvas = document.querySelector(".n-canvas");
+        const b = button.getBoundingClientRect();
+        const c = canvas.getBoundingClientRect();
+        return {
+          hidden: button.hidden,
+          nearRight: c.right - b.right < 40,
+          nearBottom: c.bottom - b.bottom < 40,
+        };
+      });
+      assert.equal(corner.hidden, false, "the stand-in appears when the map goes away");
+      assert.ok(corner.nearRight && corner.nearBottom, "and it sits in the bottom-right corner");
 
-      await page.click('[data-nx="canvas-map"]');
+      await page.click(".n-mapshow");
       await page.waitForTimeout(200);
       assert.equal(await page.evaluate(() => document.querySelector(".forma-canvas-navigator").hidden), false);
       // A hidden map has no box to project onto, so this is the assertion

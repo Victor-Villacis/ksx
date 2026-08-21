@@ -8058,14 +8058,123 @@ a.wsrow-title:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* A marker is a SEAT, so it says which one. The engine sizes and places
+   these boxes; the name and the colour are this page's, and they are what
+   turn the map from "click around until you find it" into "P2 is there". */
 .nocturne .navigator-item {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
   border-color: color-mix(in srgb, var(--n-accent) 46%, transparent);
   background: color-mix(in srgb, var(--n-accent) 26%, transparent);
+  color: var(--n-text);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .nocturne .navigator-item.is-active {
   border-color: var(--n-accent);
   background: color-mix(in srgb, var(--n-accent) 62%, transparent);
+}
+
+/* The board reads as the ground everything else sits on: quieter than the
+   seats, and never wearing a player's colour. */
+.nocturne .navigator-item.nm-kb {
+  border-color: color-mix(in srgb, var(--n-text) 40%, transparent);
+  background: color-mix(in srgb, var(--n-text) 16%, transparent);
+  color: var(--n-text-2);
+}
+
+/* Seat colour, the same `--pcs{N}` the rack row, the pad badge and the
+   legend chip wear — one identity everywhere it appears. */
+.nocturne .navigator-item.nm-pad.np1 {
+  border-color: var(--pcs1);
+  background: color-mix(in srgb, var(--pcs1) 52%, transparent);
+  color: var(--pcs1-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np2 {
+  border-color: var(--pcs2);
+  background: color-mix(in srgb, var(--pcs2) 52%, transparent);
+  color: var(--pcs2-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np3 {
+  border-color: var(--pcs3);
+  background: color-mix(in srgb, var(--pcs3) 52%, transparent);
+  color: var(--pcs3-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np4 {
+  border-color: var(--pcs4);
+  background: color-mix(in srgb, var(--pcs4) 52%, transparent);
+  color: var(--pcs4-ink);
+}
+
+/* Past four seats the ramp keeps going; the map follows it. */
+.nocturne .navigator-item.nm-pad.np5 {
+  border-color: var(--pcs5);
+  background: color-mix(in srgb, var(--pcs5) 52%, transparent);
+  color: var(--pcs5-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np6 {
+  border-color: var(--pcs6);
+  background: color-mix(in srgb, var(--pcs6) 52%, transparent);
+  color: var(--pcs6-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np7 {
+  border-color: var(--pcs7);
+  background: color-mix(in srgb, var(--pcs7) 52%, transparent);
+  color: var(--pcs7-ink);
+}
+
+.nocturne .navigator-item.nm-pad.np8 {
+  border-color: var(--pcs8);
+  background: color-mix(in srgb, var(--pcs8) 52%, transparent);
+  color: var(--pcs8-ink);
+}
+
+/* The map's stand-in while it is away: same corner, same size language as
+   its own hide button, so putting it away and bringing it back happen in
+   one place. */
+.n-mapshow {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--n-panel-2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--n-bg) 88%, transparent);
+  color: var(--n-text-2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.n-mapshow:hover {
+  border-color: color-mix(in srgb, var(--n-accent) 60%, transparent);
+  color: var(--n-text);
+}
+
+.n-mapshow[hidden] {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .nocturne .n-mapshow {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .nocturne .forma-canvas-navigator-viewport {
@@ -8137,6 +8246,7 @@ a.wsrow-title:hover {
 .nocturne:not(.js) .widget-chrome,
 .nocturne:not(.js) .n-selbar,
 .nocturne:not(.js) .forma-canvas-navigator,
+.nocturne:not(.js) .n-mapshow,
 .nocturne:not(.js) .n-stageword {
   display: none;
 }

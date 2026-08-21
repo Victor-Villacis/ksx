@@ -1084,22 +1084,53 @@ function persistCanvas(): void {
   saveCanvasPrefs();
 }
 
-/** Show or hide the map. ⚠️The engine projects onto the map's MEASURED box,
- *  so a hidden one has no size to project onto — bringing it back has to
- *  re-render it once it has been laid out again, or it comes back blank. */
+/** Show or hide the map, and swap in the small corner button that brings it
+ *  back — the control for a thing in the corner belongs in that corner, not
+ *  in a bar at the other end of the page.
+ *  ⚠️The engine projects onto the map's MEASURED box, so a hidden one has no
+ *  size to project onto: bringing it back has to re-render once it has been
+ *  laid out again, or it returns blank. */
 function setCanvasMap(hidden: boolean): void {
   const root = learnRoot;
   const map = root?.querySelector<HTMLElement>(".forma-canvas-navigator");
-  const button = root?.querySelector<HTMLElement>('[data-nx="canvas-map"]');
+  const show = root?.querySelector<HTMLElement>(".n-mapshow");
   if (!map) return;
   map.hidden = hidden;
-  if (button) {
-    button.setAttribute("aria-pressed", String(!hidden));
-    button.title = hidden ? "Show the canvas map" : "Hide the canvas map";
-  }
+  if (show) show.hidden = !hidden;
   canvasPrefs = { ...canvasPrefs, mapHidden: hidden };
   saveCanvasPrefs();
   if (!hidden) window.requestAnimationFrame(() => nCanvas?.refreshNavigator());
+}
+
+/** Name the markers on the map. The engine draws one box per widget and
+ *  gives it a title and an aria-label; what it cannot know is that on THIS
+ *  page a box is a seat — so the boxes get the seat's short name and the
+ *  seat's colour, the same pair the rack and the badges wear. A map you can
+ *  read is the difference between "click around until you find it" and
+ *  "P2 is over there". */
+function labelCanvasMarkers(): void {
+  const root = learnRoot;
+  const v = lastBindView;
+  if (!root) return;
+  const markers = root.querySelectorAll<HTMLElement>(".forma-canvas-navigator .navigator-item");
+  for (const marker of Array.from(markers)) {
+    const id = marker.dataset.instanceId ?? "";
+    if (id === "keyboard") {
+      marker.textContent = "KB";
+      marker.classList.add("nm-kb");
+      continue;
+    }
+    const slot = Number(id.startsWith("pad-") ? id.slice(4) : NaN);
+    if (!Number.isFinite(slot)) continue;
+    marker.textContent = "P" + slot;
+    // The seat's own colour, exactly as the rack and the pad badge wear it.
+    for (const cls of Array.from(marker.classList)) {
+      if (/^np\d+$/.test(cls)) marker.classList.remove(cls);
+    }
+    marker.classList.add("nm-pad", "np" + slot);
+    const pv = (v?.pads ?? []).find((pad) => pad.slot === slot);
+    if (pv) marker.title = "P" + slot + " · " + pv.title;
+  }
 }
 
 let canvasPersistTimer = 0;
@@ -1341,6 +1372,9 @@ export function syncPadWidgets(): void {
       el.textContent = parts.join("\u00b7");
     }
   }
+  // The engine mints a marker per widget as it mounts, so naming them
+  // belongs at the end of every roster pass, not once at startup.
+  labelCanvasMarkers();
 }
 
 /** Adopt the served canvas skeleton and keyboard widget, then mount the
@@ -1422,6 +1456,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   setCanvasMap(canvasPrefs.mapHidden === true);
   const kb = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
   if (kb) nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
+  labelCanvasMarkers();
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
   if (Object.keys(canvasPrefs.widgets).length === 0) {
@@ -4231,17 +4266,6 @@ export function NocturneIsland() {
             },
             "+",
           ),
-          h(
-            "button",
-            {
-              type: "button",
-              "data-nx": "canvas-map",
-              "aria-pressed": "true",
-              title: "Hide the canvas map",
-              class: "n-autobtn",
-            },
-            "Map",
-          ),
           // ── The selected widget's own controls ──────────────────────────
           // One group that retargets (the upstream app's shape), not four
           // buttons on every card. Served in its RESTING state — nothing is
@@ -5123,6 +5147,20 @@ export function NocturneIsland() {
                 "aria-hidden": "true",
                 "data-client-canvas": "",
               }),
+            ),
+            // What brings the map back, in the corner the map lives in.
+            // Served hidden: the map starts shown, and this is its stand-in.
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-mapshow",
+                "data-nx": "canvas-map",
+                "aria-label": "Show the canvas map",
+                title: "Show the canvas map",
+                hidden: "",
+              },
+              "▦",
             ),
           ), // .forma-canvas-viewport
         ), // .n-canvas

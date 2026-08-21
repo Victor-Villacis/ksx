@@ -111,8 +111,13 @@ interface NavigatorProjection extends WorldRect {
   visible: WorldRect;
 }
 
-/** ksx: the extent of the bounded world (see DEFAULT_WORLD_BOUNDS). */
+/** ksx: how far a widget may travel (see DEFAULT_WORLD_BOUNDS). The ORIGIN
+ *  matters as much as the size: a bound that starts at (0, 0) puts a wall
+ *  just above whatever sits near the top of the arrangement, and walls you
+ *  cannot see read as bugs. Defaults place it far to the negative side. */
 export interface WorldSize {
+  x?: number;
+  y?: number;
   width: number;
   height: number;
 }
@@ -179,7 +184,16 @@ const WORLD_PADDING = 180;
 // canvas: its projection FREEZES for the length of a drag (see
 // #navigatorBounds), and its camera rectangle is clamped to the box it is
 // drawn on (see #renderNavigator).
-const DEFAULT_WORLD_BOUNDS: WorldSize = { width: 4000, height: 3000 };
+// Deliberately enormous and centred well outside anything a person would
+// arrange: this is a runaway rail, not a workspace edge. You should never
+// meet it by dragging; if you do, the bound is wrong, because an invisible
+// wall in the middle of an empty canvas is indistinguishable from a bug.
+const DEFAULT_WORLD_BOUNDS: WorldSize = {
+  x: -8000,
+  y: -8000,
+  width: 20000,
+  height: 20000,
+};
 const KEYBOARD_MOVE_STEP = 16;
 const KEYBOARD_CANVAS_PAN_STEP_PX = 64;
 const KEYBOARD_CANVAS_PAN_LARGE_STEP_PX = 256;
@@ -2525,7 +2539,12 @@ export class WidgetCanvas {
 
   /** ksx: the bounded world, as a rect. */
   #worldRect(): WorldRect {
-    return { x: 0, y: 0, width: this.#worldBounds.width, height: this.#worldBounds.height };
+    return {
+      x: this.#worldBounds.x ?? 0,
+      y: this.#worldBounds.y ?? 0,
+      width: this.#worldBounds.width,
+      height: this.#worldBounds.height,
+    };
   }
 
   /** ksx: a widget stays inside the world, whatever moved it. Its manual
@@ -2541,11 +2560,15 @@ export class WidgetCanvas {
     const world = this.#worldRect();
     const overhangX = (state.width * state.manualScale - state.width) / 2;
     const overhangY = (state.height * state.manualScale - state.height) / 2;
-    const maxX = world.width - state.width - overhangX;
-    const maxY = world.height - state.height - overhangY;
+    // The rail is a RECT, not a size: its origin is usually far negative, so
+    // the near edges sit nowhere near the arrangement.
+    const minX = world.x + overhangX;
+    const minY = world.y + overhangY;
+    const maxX = world.x + world.width - state.width - overhangX;
+    const maxY = world.y + world.height - state.height - overhangY;
     return {
-      x: clamp(x, overhangX, Math.max(overhangX, maxX)),
-      y: clamp(y, overhangY, Math.max(overhangY, maxY)),
+      x: clamp(x, minX, Math.max(minX, maxX)),
+      y: clamp(y, minY, Math.max(minY, maxY)),
     };
   }
 

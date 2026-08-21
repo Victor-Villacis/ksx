@@ -953,13 +953,17 @@ const CANVAS_STORE = "ksx-nocturne-canvas";
  *  press should be a visible move, not a nudge. */
 const CANVAS_ZOOM_STEP = 1.2;
 
-/** How far a WIDGET may travel — not how far you may look. The camera pans
- *  freely (that is what every canvas tool in this shape does, and caging it
- *  reads as a broken app); this only stops a widget being dragged somewhere
- *  nothing can reach. Roomy on purpose: the fullest arrangement this page
- *  can hold — the board with eight controllers tidied two to a row — is
- *  about 1200 × 2100, so this is several screens of elbow room around it. */
-const CANVAS_WORLD = { width: 4000, height: 3000 };
+/** The runaway rail for widgets — NOT a workspace edge, and not a camera
+ *  limit (the view pans freely, the way every canvas tool in this shape
+ *  works). It exists only so a widget cannot be flung somewhere nothing can
+ *  reach; you should never meet it by dragging.
+ *
+ *  ⚠️Its ORIGIN is the part that matters. A bound starting at (0, 0) put a
+ *  wall 140px above the tidied board — an invisible wall in the middle of an
+ *  empty canvas, which is indistinguishable from a bug. It reaches far into
+ *  the negative on both axes now, and Fit / Tidy / the map are what actually
+ *  bring a stray widget home. */
+const CANVAS_WORLD = { x: -8000, y: -8000, width: 20000, height: 20000 };
 
 interface CanvasItemGeometry {
   x: number;
@@ -1203,15 +1207,15 @@ function arrangeCanvas(): void {
     const state = canvas.getItemState(item);
     return { w: state.width * state.manualScale, h: state.height * state.manualScale };
   };
-  // Centred in the world rather than parked in its top-left corner: the
-  // canvas is a bounded place now, and an arrangement pinned to one corner
-  // reads on the map as if everything had drifted off to one side.
+  // A fixed, near-origin corner. Tidying twice must land in the same place,
+  // and the arrangement's world coordinates are nobody's business: Fit is
+  // what decides where you are looking afterwards.
   const widest = Math.max(
     kb ? footprint(kb).w : 0,
     ...pads.map((item) => footprint(item).w),
     1,
   );
-  const ORIGIN_X = Math.max(120, Math.round((CANVAS_WORLD.width - widest) / 2));
+  const ORIGIN_X = 160;
   let y = ORIGIN_Y;
   let boardWidth = 0;
   if (kb) {

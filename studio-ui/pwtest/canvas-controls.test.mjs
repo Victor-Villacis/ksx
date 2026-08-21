@@ -367,13 +367,45 @@ describe("the canvas navigation controls", () => {
           height: Number(item.dataset.canvasHeight),
         };
       });
-      // CANVAS_WORLD in NocturneIsland.ts. Widgets are bounded; the CAMERA
+      // CANVAS_WORLD in NocturneIsland.ts: a runaway rail at -8000 spanning
+      // 20 000, NOT a workspace edge. Widgets are bounded; the CAMERA
       // deliberately is not — see "you can look anywhere" below.
       assert.ok(
-        landed.x + landed.width <= 4000 + 1 && landed.y + landed.height <= 3000 + 1,
-        `a widget dragged 40 000px away stays in the world (landed at ${landed.x}, ${landed.y})`,
+        landed.x + landed.width <= 12_000 + 1 && landed.y + landed.height <= 12_000 + 1,
+        `a widget dragged 40 000px away is still on the rail (landed at ${landed.x}, ${landed.y})`,
       );
-      assert.ok(landed.x >= -1 && landed.y >= -1, "and not off the near edge either");
+      // And the near edges are nowhere near the arrangement. A bound
+      // anchored at (0, 0) put a wall 140px above the tidied board, which
+      // is an invisible wall in the middle of an empty canvas — the exact
+      // thing this rail must never feel like. Dragging up and left has to
+      // sail through zero into negative coordinates.
+      const upLeft = await page.evaluate(() => {
+        const item = document.querySelector('[data-instance-id="pad-2"]');
+        const handle = item.querySelector(".widget-drag-handle");
+        const rect = handle.getBoundingClientRect();
+        const send = (type, x, y) =>
+          handle.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 2,
+              isPrimary: true,
+              button: 0,
+              clientX: x,
+              clientY: y,
+            }),
+          );
+        send("pointerdown", rect.x + 8, rect.y + 8);
+        send("pointermove", rect.x - 3000, rect.y - 3000);
+        send("pointerup", rect.x - 3000, rect.y - 3000);
+        return { x: Number(item.dataset.canvasX), y: Number(item.dataset.canvasY) };
+      });
+      assert.ok(
+        upLeft.y < -500 && upLeft.x < -500,
+        `a widget dragged up and left goes past zero, not into a wall (${
+          JSON.stringify(upLeft)
+        })`,
+      );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

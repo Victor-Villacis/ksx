@@ -137,6 +137,21 @@ matching quote pair. Guide copy names both default keys, the Windows Game Bar
 controller prerequisite and a direct Settings link; ksx does not silently
 change the per-user Windows setting.
 
+**Studio theming (TK0–TK3, 2026-08-20):** the whole palette lives in ONE
+source, `studio-ui/tokens/` (DTCG-flavored JSON compiled by
+`tokens/build-tokens.mjs` inside `node build.mjs` into the hashed sheet, the
+generated `theme_tokens.rs` and the pad-art sheet — the four hand-mirrored
+palette copies are gone). Themes are user-selectable at runtime: `/setup`
+carries the picker, the choice persists as `Settings.theme` in config.toml,
+every page stamps `data-theme` on `<html>` (only roster ids; anything else
+renders as System = follow the OS), and the contrast gate enumerates every
+shipped theme with per-theme exemption pins. Three ship: dark (default),
+light, matrix — matrix cost one JSON file plus two pin rows, which is the
+system working as designed. Adding a theme touches no component CSS, no TS
+and no hand-written Rust. Design record with the open decisions (Nocturne
+prototype palette as a fourth theme vs. deletion at M5, theme fonts):
+`docs/research/token-system-design.md`.
+
 **Milestones:** M0–M3, M6.5, M7, M9, M10a are done. M4, M5, M6 are
 code-complete and **cabinet-gate pending** (§4). M8 now has the production
 adapter (`ksx-output::HidMaestroBackend` through the router), the

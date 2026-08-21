@@ -130,13 +130,14 @@ pub(crate) struct BrandAssets;
 ///
 /// # Why this is spliced in rather than passed to `render_page`
 ///
-/// forma-server 0.1.4's `PageConfig` has no head hook — `title`,
-/// `config_script`, `body_class`, `personality_css`, `body_prefix` is the
-/// whole list, and none of them reaches `<head>`'s link section. One
-/// `</head>` insertion is a smaller and more honest workaround than forking
-/// the template, and the tests below fail the moment upstream grows a real
-/// hook or changes the markup — which is the point at which this should go
-/// away.
+/// forma-server 0.2.0's `PageConfig` has no head hook — the field list
+/// (title, route_pattern, manifest, config_script, config_json, body_class,
+/// personality_css, body_prefix, render_mode, ir_module, slots) reaches many
+/// places, but not `<head>`'s link section and not the `<html>` opener
+/// (which is why [`with_theme`] splices too). One `</head>` insertion is a
+/// smaller and more honest workaround than forking the template, and the
+/// tests below fail the moment upstream grows a real hook or changes the
+/// markup — which is the point at which this should go away.
 ///
 const ICON_LINKS: &str = concat!(
     r#"<link rel="icon" href="/favicon.svg" type="image/svg+xml">"#,

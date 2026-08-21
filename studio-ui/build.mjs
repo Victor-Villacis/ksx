@@ -6,7 +6,7 @@
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// NINE routes — "/start" (the first run), "/workspace" (the Nocturne
+// TEN routes — "/start" (the first run), "/workspace" (the Nocturne
 // workspace shell, growing toward v0.5's single main screen), "/" (status),
 // "/map" (the mapper), "/check", "/pads", "/devices", "/profiles" and
 // "/setup" (the configuration: import, export, first run) — plus the vendored
@@ -30,7 +30,6 @@ import { build } from "@getforma/build";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { brotliCompressSync, gzipSync, constants as zlibConstants } from "zlib";
 import { buildTokens } from "./tokens/build-tokens.mjs";
 
 // NOTHING BUT THIS SCRIPT'S OUTPUT MAY LIVE HERE. `build()` below calls

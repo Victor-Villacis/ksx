@@ -7415,7 +7415,19 @@ a.wsrow-title:hover {
   order: 0;
 }
 
+/* THE BOARD'S UNIT. Every cap width, cluster gap, cap label and homing bump
+   is derived from these two, so the whole board grows or shrinks by editing
+   one number — the ladder the old fixed pixels were computed from is
+   `width(n) = n × unit + (n−1) × gap` (1.25u was 38.5 = 1.25×30 + 0.25×4).
+   35.5px fills the keyboard widget's 980px card: at the old 30px the board
+   drew 812px inside a 978px body and left 168px of dead plate on the right,
+   which is exactly the space the caps use now. Do not round it up to 36 —
+   that lands the plate 1.4px WIDER than its scroll container, which shows
+   as a scrollbar under the board rather than as an error. */
 .n-kb {
+  --nku: 35.5px;
+  --nkg: 4px;
+
   overflow-x: auto;
   padding-bottom: 6px;
 }
@@ -7478,11 +7490,11 @@ a.wsrow-title:hover {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 9px;
+  bottom: calc(var(--nku) * 9 / 30);
   z-index: 1;
-  width: 8px;
-  height: 2px;
-  margin-left: -4px;
+  width: calc(var(--nku) * 8 / 30);
+  height: calc(var(--nku) * 2 / 30);
+  margin-left: calc(var(--nku) * -4 / 30);
   border-radius: 1px;
   background: rgba(233, 233, 237, 0.16);
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
@@ -7504,8 +7516,8 @@ a.wsrow-title:hover {
 
 .n-kbrow {
   display: flex;
-  gap: 4px;
-  margin-bottom: 4px;
+  gap: var(--nkg);
+  margin-bottom: var(--nkg);
   width: max-content;
 }
 
@@ -7517,8 +7529,8 @@ a.wsrow-title:hover {
    the plate), and ::before is the sculpted TOP FACE, lit from above. */
 .n-key {
   position: relative;
-  width: 30px;
-  height: 34px;
+  width: var(--nku);
+  height: calc(var(--nku) * 34 / 30);
   flex: none;
   border: none;
   border-radius: 6px;
@@ -7652,49 +7664,49 @@ a.wsrow-title:hover {
 }
 
 .n-key.sp {
-  margin-left: 21px;
+  margin-left: calc((var(--nku) + var(--nkg)) * 21 / 34);
 }
 
 /* The F-row cluster gaps absorb the width difference so Prt aligns over Ins:
    (506px main-block width - 438px of F-row keys and gaps) / 3 gaps. */
 .n-kbrow:first-child .n-key.sp {
-  margin-left: 22.66px;
+  margin-left: calc((var(--nku) + var(--nkg)) * 22.66 / 34);
 }
 
 .n-key.u1_25 {
-  width: 38.5px;
+  width: calc(1.25 * var(--nku) + 0.25 * var(--nkg));
 }
 
 .n-key.u1_5 {
-  width: 47px;
+  width: calc(1.5 * var(--nku) + 0.5 * var(--nkg));
 }
 
 .n-key.u1_75 {
-  width: 55.5px;
+  width: calc(1.75 * var(--nku) + 0.75 * var(--nkg));
 }
 
 .n-key.u2 {
-  width: 64px;
+  width: calc(2 * var(--nku) + 1 * var(--nkg));
 }
 
 .n-key.u2_25 {
-  width: 72.5px;
+  width: calc(2.25 * var(--nku) + 1.25 * var(--nkg));
 }
 
 .n-key.u2_75 {
-  width: 89.5px;
+  width: calc(2.75 * var(--nku) + 1.75 * var(--nkg));
 }
 
 .n-key.u6_25 {
-  width: 208.5px;
+  width: calc(6.25 * var(--nku) + 5.25 * var(--nkg));
 }
 
 .n-key-cap {
   position: absolute;
-  top: 3px;
-  left: 5px;
+  top: calc(var(--nku) * 3 / 30);
+  left: calc(var(--nku) * 5 / 30);
   z-index: 1;
-  font-size: 9.5px;
+  font-size: calc(var(--nku) * 9.5 / 30);
   color: #a9adbf;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
   transition: transform 70ms ease;
@@ -7706,10 +7718,10 @@ a.wsrow-title:hover {
 
 .n-key-short {
   position: absolute;
-  right: 4px;
-  bottom: 8px;
+  right: calc(var(--nku) * 4 / 30);
+  bottom: calc(var(--nku) * 8 / 30);
   z-index: 1;
-  font-size: 8.5px;
+  font-size: calc(var(--nku) * 8.5 / 30);
   font-weight: 700;
   color: var(--n-accent-2);
   transition: transform 70ms ease;

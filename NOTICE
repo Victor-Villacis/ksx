@@ -229,6 +229,6 @@ installed Interception DLL or drivers.
              between his own projects; not third-party material, recorded
              here for provenance in the same shape as everything else.
     Used in: studio-ui/src/genui/** and studio-ui/src/genui-canvas.css
-             (upstream; three marked engine divergences — see
+             (upstream; four marked engine divergences — see
              studio-ui/src/genui/README.md for what was taken, what was
              left, the divergence ledger and the re-sync rule).

@@ -8,7 +8,7 @@ from KSX" section ("Vendor the reviewed `src/canvas`, optional `src/forma`,
 and `styles/canvas.css` files into KSX and record the source commit" —
 `docs/KSX_HANDOFF.md` endorses the same route).
 
-What was taken (byte-identical to upstream except the three marked
+What was taken (byte-identical to upstream except the four marked
 divergences in `widget-canvas.ts` — see below):
 
 - `canvas/` — the whole engine: `widget-canvas.ts` (camera, world
@@ -51,8 +51,19 @@ integration; none is ksx-specific policy, all are engine correctness):
    `AbortSignal.any` keeps `dispose()` authoritative. (`AbortSignal.any` is
    baseline since Chrome 116 / Safari 17.4 — fine for Studio's targets.)
 
+4. **`placeItem(item, x, y)`** — a public door onto the placement
+   `#moveItem` already performs for drags and keyboard nudges. Without it a
+   host cannot lay its own widgets out; ksx's "Tidy up" (board on top,
+   controllers in seat order beneath) is written against it. Upstream has
+   no auto-arrange of any kind — verified against
+   `getforma-dev/forma-generative-ui` @ `1dd1823`, which has no tidy,
+   pack, align or reflow anywhere — so this is an addition rather than a
+   correction, and the most obviously upstreamable of the four.
+
 Re-syncing against a newer upstream commit means re-applying (or better,
-upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying.
+upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying. As of
+`93c3871` (2026-08-21) upstream's `src/canvas` and `styles/` are unchanged
+since `c91d34c`, so the vendored copy is current apart from these four.
 Everything else ksx needs differently is done outside these files: skin and
 no-JS rules in `studio.css`, wiring in `NocturneIsland.ts`
 (`initNocturneCanvas` adopts a server-rendered skeleton instead of calling

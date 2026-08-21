@@ -1069,6 +1069,19 @@ export class WidgetCanvas {
     };
   }
 
+  // ksx: divergence from upstream c91d34c. The engine can move an item by
+  // drag and by keyboard nudge, but exposes no way for a HOST to place one —
+  // so an app-level "arrange everything tidily" command had no door in.
+  // Placement is exactly what #moveItem already does for those two paths;
+  // this only opens it, keeping the same derived updates a nudge performs.
+  // Worth upstreaming: any host with an auto-layout needs it.
+  placeItem(item: HTMLElement, x: number, y: number): void {
+    if (!this.#items.has(this.#itemId(item))) return;
+    this.#moveItem(item, x, y);
+    this.#requestNavigatorRender();
+    this.#scheduleChange();
+  }
+
   adjustItemScale(item: HTMLElement, direction: -1 | 1): number {
     if (!this.#items.has(this.#itemId(item))) return 1;
     const current = this.getItemState(item).manualScale;

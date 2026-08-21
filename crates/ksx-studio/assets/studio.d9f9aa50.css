@@ -7814,8 +7814,13 @@ a.wsrow-title:hover {
 
 .n-meta {
   display: flex;
+  /* The bar carries the draft's name AND every canvas verb; on a 390px
+     screen that is more than one line's worth, and a nowrap row would push
+     the whole document sideways (measured: 903px in a 390px viewport). */
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  row-gap: 6px;
   padding: 10px 4px;
 }
 
@@ -7927,6 +7932,95 @@ a.wsrow-title:hover {
   border-radius: 14px;
 }
 
+/* ── The selected widget's controls ──────────────────────────────────────
+   One group that retargets, sitting in the meta bar beside the camera's
+   own verbs. It is always present — a control that appears and disappears
+   moves everything beside it — and says plainly when nothing is selected.
+   The divider is what separates "the canvas" from "this widget". */
+
+.n-selbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--n-line);
+}
+
+/* Wrapped onto its own line, a left divider marks nothing — the line break
+   already separates the widget's controls from the canvas's. */
+@media (width <= 720px) {
+  .n-selbar {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+.n-sel-name {
+  max-width: 15ch;
+  overflow: hidden;
+  color: var(--n-text-2);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.n-selbar[data-nsel-state="selected"] .n-sel-name {
+  color: var(--n-text);
+}
+
+.n-selsize {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A disabled control in this group means "nothing is selected", which is a
+   state the group ALREADY says in words — so it reads as quiet, not
+   broken. */
+.n-selbar .n-autobtn[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.n-selbar .n-autobtn[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--n-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--n-accent) 20%, transparent);
+  color: var(--n-text);
+}
+
+/* The meta bar's zoom pair: same chrome as its neighbours, tighter box —
+   a glyph does not need a word's width. */
+.n-zbtn {
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The map in the corner ───────────────────────────────────────────────
+   The engine sheet gives it its box and its markers; this repaints both in
+   the Nocturne palette. Everything inside is engine-written. */
+
+.n-navigator {
+  border-color: var(--n-panel-2);
+  background: color-mix(in srgb, var(--n-bg) 92%, transparent);
+}
+
+.nocturne .navigator-item {
+  border-color: color-mix(in srgb, var(--n-accent) 46%, transparent);
+  background: color-mix(in srgb, var(--n-accent) 26%, transparent);
+}
+
+.nocturne .navigator-item.is-active {
+  border-color: var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent) 62%, transparent);
+}
+
+.nocturne .forma-canvas-navigator-viewport {
+  border-color: color-mix(in srgb, var(--n-text) 62%, transparent);
+  background: color-mix(in srgb, var(--n-text) 8%, transparent);
+}
+
 /* The served keyboard lays out at its declared geometry BEFORE the engine
    adopts it — without this it spends its first frame at auto width until
    the inline writes land. The engine's style.width wins once mounted, and
@@ -7941,6 +8035,14 @@ a.wsrow-title:hover {
    make the floor, or moving a widget becomes a precision exercise. */
 @media (pointer: coarse) {
   .nocturne .widget-drag-handle {
+    min-width: 44px;
+    min-height: 40px;
+  }
+
+  /* §2's 40px floor reaches the selection group's glyph buttons, which are
+     the tightest boxes in the meta bar. */
+  .nocturne .n-zbtn,
+  .nocturne .n-selsize {
     min-width: 44px;
     min-height: 40px;
   }
@@ -7977,9 +8079,13 @@ a.wsrow-title:hover {
   animation: none;
 }
 
+/* Without the engine there is no camera to move, no map to read and no
+   widget to scale — every one of these controls would be a dead button. */
 .nocturne:not(.js) .forma-canvas-grid,
 .nocturne:not(.js) .forma-canvas-zoom-status,
 .nocturne:not(.js) .widget-chrome,
+.nocturne:not(.js) .n-selbar,
+.nocturne:not(.js) .forma-canvas-navigator,
 .nocturne:not(.js) .n-stageword {
   display: none;
 }

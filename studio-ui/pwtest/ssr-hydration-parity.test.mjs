@@ -156,6 +156,18 @@ const SNAPSHOT = `(() => {
   //    widget deliberately carries NO such marker — it is served markup the
   //    engine adopts, and its content stays fully asserted.
   clone.querySelectorAll("[data-client-widget]").forEach((el) => el.remove());
+  // 3f. CLIENT-POPULATED SUBTREE, by contract. A node marked
+  //    data-client-subtree is a served, asserted CONTAINER whose CHILDREN
+  //    the client fills from live state (the canvas map's one marker per
+  //    mounted widget). Its children — and only its children — are dropped
+  //    before comparing: the container itself, its attributes and its
+  //    position among its siblings still compare byte-for-byte, so deleting
+  //    the map or renaming it still fails. Deliberately NOT the same rule as
+  //    3e: those nodes are absent server-side by contract, while this one
+  //    must be SERVED and empty.
+  clone.querySelectorAll("[data-client-subtree]").forEach((el) => {
+    el.replaceChildren();
+  });
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.

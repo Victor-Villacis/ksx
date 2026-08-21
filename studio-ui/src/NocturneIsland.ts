@@ -949,6 +949,10 @@ let lastBindView: NocturneView | null = null;
 // engine's own durable commits.
 const CANVAS_STORE = "ksx-nocturne-canvas";
 
+/** One press of canvas zoom. The engine's own wheel step is finer; a button
+ *  press should be a visible move, not a nudge. */
+const CANVAS_ZOOM_STEP = 1.2;
+
 interface CanvasItemGeometry {
   x: number;
   y: number;
@@ -1091,6 +1095,131 @@ function capForBoard(root: HTMLElement): (name: string) => string {
   };
 }
 
+/** The selected widget's controls, retargeted instead of cloned — the
+ *  upstream app's own shape (one contextual group, not four buttons on
+ *  every card), and the reason the page can carry a live size readout and
+ *  honest disabled states at the scale limits.
+ *
+ *  ⚠️PARITY: every write here is imperative, so what it writes for "nothing
+ *  selected" must be EXACTLY what the server serves — see the markup's
+ *  `data-nsel` group. Nothing is selected at first paint (mounting passes
+ *  `focus: false`), so the two agree byte-for-byte with no exemption. */
+function syncWidgetSelection(): void {
+  const root = learnRoot;
+  const canvas = nCanvas;
+  if (!root) return;
+  const group = root.querySelector<HTMLElement>(".n-selbar");
+  if (!group) return;
+  const item = canvas?.activeItem() ?? null;
+  const name = item?.dataset.widgetName ?? "";
+  const state = item && canvas ? canvas.getItemState(item) : null;
+  const percent = state ? Math.round(state.manualScale * 100) : 100;
+  const focused = Boolean(item && canvas?.isFocusModeActive(item));
+  group.dataset.nselState = item ? "selected" : "none";
+  const label = group.querySelector<HTMLElement>(".n-sel-name");
+  if (label) label.textContent = item ? name : "Nothing selected";
+  const size = group.querySelector<HTMLElement>('[data-nx="w-scale-reset"]');
+  if (size) {
+    size.textContent = percent + "%";
+    size.title = item ? name + " is at " + percent + "% — click for 100%" : "Widget size";
+    size.setAttribute(
+      "aria-label",
+      item ? name + " size " + percent + "%; reset to 100%" : "Widget size",
+    );
+  }
+  for (const button of Array.from(group.querySelectorAll<HTMLButtonElement>("button[data-nx]"))) {
+    const nx = button.dataset.nx ?? "";
+    // The scale buttons also die at the engine's own clamp, so a press that
+    // could not move anything never looks available.
+    const atFloor = nx === "w-zoom-out" && state !== null && state.manualScale <= 0.6;
+    const atCeiling = nx === "w-zoom-in" && state !== null && state.manualScale >= 1.6;
+    button.disabled = item === null || atFloor || atCeiling;
+    if (nx === "w-focus") {
+      button.setAttribute("aria-pressed", String(focused));
+      button.textContent = focused ? "Unfocus" : "Focus";
+      button.setAttribute(
+        "aria-label",
+        focused ? "Leave focus and restore the previous view" : "Focus " + (name || "widget"),
+      );
+    }
+  }
+}
+
+/** Lay the whole canvas out the way a person would if they were tidy:
+ *  the keyboard on top, the controllers in seat order in a row beneath it,
+ *  wrapping onto further rows when they do not fit, every row centered on
+ *  the board. Then frame the result. Deliberately NOT a persistent grid
+ *  mode — it is one tidy-up you ask for, and anything you drag afterwards
+ *  stays where you drop it. */
+function arrangeCanvas(): void {
+  const canvas = nCanvas;
+  const root = learnRoot;
+  if (!canvas || !root) return;
+  const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
+  const pads = Array.from(padItems.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([, item]) => item);
+  if (!kb && pads.length === 0) return;
+  const GAP = 48;
+  const ORIGIN_X = 120;
+  const ORIGIN_Y = 120;
+  // A widget's world footprint includes its manual scale: a widget the user
+  // made bigger must be given the room it actually occupies.
+  const footprint = (item: HTMLElement): { w: number; h: number } => {
+    const state = canvas.getItemState(item);
+    return { w: state.width * state.manualScale, h: state.height * state.manualScale };
+  };
+  let y = ORIGIN_Y;
+  let boardWidth = 0;
+  if (kb) {
+    const board = footprint(kb);
+    boardWidth = board.w;
+    canvas.placeItem(kb, ORIGIN_X, y);
+    y += board.h + GAP;
+  }
+  if (pads.length > 0) {
+    // Rows are as wide as the board (or the widest pad, whichever is more),
+    // so the arrangement reads as one column of stuff rather than a sprawl.
+    const widest = Math.max(...pads.map((item) => footprint(item).w));
+    const budget = Math.max(boardWidth, widest);
+    const rows: HTMLElement[][] = [];
+    let row: HTMLElement[] = [];
+    let rowWidth = 0;
+    for (const item of pads) {
+      const { w } = footprint(item);
+      const next = row.length === 0 ? w : rowWidth + GAP + w;
+      if (row.length > 0 && next > budget) {
+        rows.push(row);
+        row = [item];
+        rowWidth = w;
+      } else {
+        row.push(item);
+        rowWidth = next;
+      }
+    }
+    if (row.length > 0) rows.push(row);
+    for (const members of rows) {
+      const width = members.reduce(
+        (total, item, index) => total + footprint(item).w + (index > 0 ? GAP : 0),
+        0,
+      );
+      let x = ORIGIN_X + (budget - width) / 2;
+      let tallest = 0;
+      for (const item of members) {
+        const { w, h } = footprint(item);
+        canvas.placeItem(item, x, y);
+        x += w + GAP;
+        tallest = Math.max(tallest, h);
+      }
+      y += tallest + GAP;
+    }
+  }
+  persistCanvas();
+  // The arrangement is only half the ask: "bring all widgets in the
+  // viewport" is the other half.
+  canvas.fitAll();
+}
+
 /** Every staged controller as a canvas widget, rebuilt when the roster
  *  changes: the engine's own item factory around the same badge-and-clone
  *  card the pad grid used to build. Client-created on purpose (the padgrid
@@ -1196,13 +1325,19 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
     }
     return;
   }
-  // The minimap navigator is OFF for now. The engine requires its elements,
-  // so it renders markers into DETACHED nodes that never join the document
-  // — zero DOM, zero parity surface, and turning it on later is one flip.
-  const navigator = document.createElement("div");
-  const navigatorItems = document.createElement("div");
-  const navigatorViewport = document.createElement("div");
-  navigator.append(navigatorItems, navigatorViewport);
+  // The minimap navigator: served skeleton, engine-filled. Its markers are
+  // one button per widget (click jumps to it) and the pale rectangle is the
+  // camera — dragging inside the map pans. Both are the engine's own; this
+  // only hands it the served nodes. A page missing the skeleton falls back
+  // to DETACHED nodes so the canvas still runs with no map.
+  const navigator = surface.querySelector<HTMLElement>(".forma-canvas-navigator") ??
+    document.createElement("aside");
+  const navigatorItems = navigator.querySelector<HTMLElement>(".forma-canvas-navigator-items") ??
+    document.createElement("div");
+  const navigatorViewport = navigator
+    .querySelector<HTMLElement>(".forma-canvas-navigator-viewport") ??
+    document.createElement("div");
+  if (!navigatorItems.isConnected) navigator.append(navigatorItems, navigatorViewport);
   loadCanvasPrefs();
   nCanvas = new WidgetCanvas(
     { viewport, stage, zoomStatus, navigator, navigatorItems, navigatorViewport },
@@ -1211,6 +1346,11 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
       // The trail behind onCommit: pans and in-flight drags reach the store
       // within a second even if the tab dies before a durable boundary.
       onChange: scheduleCanvasPersist,
+      // The selection group follows the canvas, never the other way round:
+      // selecting, scaling and focusing all report here.
+      onActiveChange: syncWidgetSelection,
+      onActiveItemStateChange: syncWidgetSelection,
+      onFocusModeChange: syncWidgetSelection,
       // The engine has no live region of its own; the meta bar's sr status
       // line is this page's.
       onKeyboardNavigation: (message) => {
@@ -2899,7 +3039,20 @@ export function nocturneWire(root: HTMLElement): void {
       cancelAssign();
       return;
     }
-    if (!anyDialogOpen()) return;
+    if (!anyDialogOpen()) {
+      // LAST in the Escape order, after an armed assignment and any open
+      // dialog have had their say: focus mode is a whole-canvas state, so
+      // leaving it must not depend on which control the user last touched.
+      // (The engine binds Escape on the widget shell alone — reachable only
+      // when the widget itself holds focus, which it does not after a
+      // button press.)
+      if (ev.key === "Escape" && nCanvas?.isFocusModeActive()) {
+        ev.preventDefault();
+        nCanvas.exitFocusMode();
+        syncWidgetSelection();
+      }
+      return;
+    }
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeOpenDialog();
@@ -3183,6 +3336,26 @@ export function nocturneWire(root: HTMLElement): void {
       nCanvas?.fitAll();
     } else if (hit === "canvas-zoom-reset") {
       nCanvas?.resetZoom();
+    } else if (hit === "canvas-zoom-in") {
+      nCanvas?.zoomBy(CANVAS_ZOOM_STEP);
+    } else if (hit === "canvas-zoom-out") {
+      nCanvas?.zoomBy(1 / CANVAS_ZOOM_STEP);
+    } else if (hit === "canvas-tidy") {
+      arrangeCanvas();
+    } else if (
+      hit === "w-zoom-in" || hit === "w-zoom-out" || hit === "w-scale-reset" ||
+      hit === "w-center" || hit === "w-focus"
+    ) {
+      // The selection group: the button says WHAT, the canvas says WHICH.
+      const widget = nCanvas?.activeItem();
+      if (widget && nCanvas) {
+        if (hit === "w-zoom-in") nCanvas.adjustItemScale(widget, 1);
+        else if (hit === "w-zoom-out") nCanvas.adjustItemScale(widget, -1);
+        else if (hit === "w-scale-reset") nCanvas.resetItemScale(widget);
+        else if (hit === "w-center") nCanvas.centerItem(widget);
+        else nCanvas.toggleFocusMode(widget);
+        syncWidgetSelection();
+      }
     } else if (hit === "kb-colors") {
       const leaving = ui.kbSolo;
       ui.kbSolo = !ui.kbSolo;
@@ -3929,8 +4102,19 @@ export function NocturneIsland() {
             },
             "Map all…",
           ),
-          // The canvas camera's two verbs, scripting-only like Map all —
-          // wheel, Space-drag and the arrow keys carry the rest.
+          // The canvas camera's verbs, scripting-only like Map all — wheel,
+          // Space-drag and the arrow keys carry the same moves for anyone
+          // who would rather not aim at a button.
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "canvas-tidy",
+              title: "Arrange every widget: the board on top, the controllers in seat order below",
+              class: "n-autobtn",
+            },
+            "Tidy up",
+          ),
           h(
             "button",
             {
@@ -3945,11 +4129,109 @@ export function NocturneIsland() {
             "button",
             {
               type: "button",
+              "data-nx": "canvas-zoom-out",
+              "aria-label": "Zoom out",
+              title: "Zoom out",
+              class: "n-autobtn n-zbtn",
+            },
+            "−",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
               "data-nx": "canvas-zoom-reset",
               title: "Zoom to 100%",
               class: "n-autobtn",
             },
             "100%",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "canvas-zoom-in",
+              "aria-label": "Zoom in",
+              title: "Zoom in",
+              class: "n-autobtn n-zbtn",
+            },
+            "+",
+          ),
+          // ── The selected widget's own controls ──────────────────────────
+          // One group that retargets (the upstream app's shape), not four
+          // buttons on every card. Served in its RESTING state — nothing is
+          // selected at first paint — and `syncWidgetSelection` writes
+          // exactly these strings back when the selection clears, so the
+          // parity gate sees no drift with no exemption to hide behind.
+          h(
+            "div",
+            {
+              class: "n-selbar",
+              role: "group",
+              "aria-label": "Selected widget",
+              "data-nsel-state": "none",
+            },
+            h("span", { class: "n-sel-name" }, "Nothing selected"),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-autobtn n-zbtn",
+                "data-nx": "w-zoom-out",
+                "aria-label": "Make the selected widget smaller",
+                title: "Smaller",
+                disabled: "",
+              },
+              "−",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-autobtn n-selsize",
+                "data-nx": "w-scale-reset",
+                "aria-label": "Widget size",
+                title: "Widget size",
+                disabled: "",
+              },
+              "100%",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-autobtn n-zbtn",
+                "data-nx": "w-zoom-in",
+                "aria-label": "Make the selected widget bigger",
+                title: "Bigger",
+                disabled: "",
+              },
+              "+",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-autobtn",
+                "data-nx": "w-center",
+                title: "Bring the selected widget to the middle of the view",
+                disabled: "",
+              },
+              "Center",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-autobtn",
+                "data-nx": "w-focus",
+                "aria-pressed": "false",
+                "aria-label": "Focus widget",
+                title: "Spotlight it alone — Esc restores the view",
+                disabled: "",
+              },
+              "Focus",
+            ),
           ),
           // The live echo's readouts: written IMPERATIVELY at frame rate,
           // both hidden from assistive tech (the sr twin below announces
@@ -4725,6 +5007,29 @@ export function NocturneIsland() {
               "data-live-chatter": "",
               "aria-live": "polite",
             }),
+            // The map in the corner: a button per widget (click to jump) and
+            // a pale rectangle for the camera (drag inside to pan). Both are
+            // filled by the engine — the ITEMS box is client-populated by
+            // contract (parity rule 3f), the camera rectangle rides the
+            // client-canvas exemption for its inline geometry.
+            h(
+              "aside",
+              {
+                class: "forma-canvas-navigator n-navigator",
+                "data-forma-canvas-navigator": "",
+                "aria-label": "Canvas map",
+                "data-client-canvas": "",
+              },
+              h("div", {
+                class: "forma-canvas-navigator-items",
+                "data-client-subtree": "",
+              }),
+              h("div", {
+                class: "forma-canvas-navigator-viewport",
+                "aria-hidden": "true",
+                "data-client-canvas": "",
+              }),
+            ),
           ), // .forma-canvas-viewport
         ), // .n-canvas
       ),

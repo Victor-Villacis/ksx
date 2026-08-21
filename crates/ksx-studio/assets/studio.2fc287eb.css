@@ -8288,58 +8288,390 @@ a.wsrow-title:hover {
   display: none;
 }
 
-/* ── The DualSense: art under, hooks over ────────────────────────────────
-   The photoreal body is an <img>, so it carries its own colours and cannot
-   be repainted by the page (an <img> SVG is its own document). Everything
-   interactive is the transparent overlay stacked exactly on top of it —
-   same box, same coordinates — which is why the live echo can light a
-   control without touching the picture. */
+/* ── The DualShock 4: dualshock-tools MIT semantic geometry ────────────
+   The source's named runtime parts are preserved as data-ds4-part
+   attributes. Shared carbon paints replace its default-black appearance;
+   hooks and app dressing stay separate in the same native coordinate space. */
 
-.ps5a {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
+.n-center .ds4free {
+  overflow: visible;
 }
 
-.ps5a-art,
-.ps5a-hooks {
-  grid-area: 1 / 1;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.n-center .ds4free .ds4free-body,
+.n-center .ds4free .ds4free-dressing {
+  pointer-events: none;
 }
 
-.ps5a-art {
-  user-select: none;
-  /* The export is lit for a white product shot; the workspace is not. */
-  filter: brightness(0.86) saturate(0.92);
+.n-center .ds4free .ds4free-trigger-bridge {
+  fill: url(#nxg-shell);
+  stroke: #3d4257;
+  stroke-width: 1.35;
+  stroke-linejoin: round;
 }
 
-.ps5a-hooks {
-  position: relative;
-  z-index: 1;
+/* Source shell and its two source-authored analog decks. */
+.n-center .ds4free [data-ds4-part="Controller_infills"] > path:first-child {
+  fill: url(#nxg-shell);
+  stroke: #4b5068;
+  stroke-width: 2.4;
+  stroke-linejoin: round;
 }
 
-/* Our shoulder pills: the art draws its shell as one piece, so these are
-   drawn rather than hooked — quiet until a key lights them. */
-.ps5a-rail .wspad-zone {
-  fill: rgba(10, 12, 20, 0.42);
-  stroke: rgba(233, 233, 237, 0.22);
-  stroke-width: 2;
+.n-center .ds4free [data-ds4-part="Controller_infills"] > path:nth-child(2),
+.n-center .ds4free [data-ds4-part="Controller_infills"] > path:nth-child(3) {
+  fill: #11131b;
+  stroke: #303447;
+  stroke-width: 1.6;
 }
 
-.ps5a-sys {
-  font-size: 22px;
-  fill: rgba(233, 233, 237, 0.66);
+/* The semantic button infills are the visible controls, never the hooks. */
+.n-center .ds4free [data-ds4-part="Button_infills"] > g > * {
+  fill: url(#nxg-btn);
+  stroke: #555b74;
+  stroke-width: 1.35;
+  stroke-linejoin: round;
 }
 
-/* The hit shapes over the art's own controls stay invisible until they
-   light: the button underneath is already drawn. */
-.ps5a-hit .wspad-zone {
+.n-center .ds4free [data-ds4-part="L2_infill"] > *,
+.n-center .ds4free [data-ds4-part="R2_infill"] > * {
+  fill: url(#nxg-well);
+  stroke: #444960;
+  stroke-width: 2.35;
+}
+
+.n-center .ds4free [data-ds4-part="L1_infill"] > *,
+.n-center .ds4free [data-ds4-part="R1_infill"] > * {
+  fill: url(#nxg-btn);
+  stroke: #565c75;
+  stroke-width: 1.8;
+}
+
+.n-center .ds4free [data-ds4-part="PS_infill"] > * {
+  fill: url(#nxg-lamp);
+  stroke: rgba(210, 202, 248, 0.7);
+}
+
+/* Compound source outline paths are real edge geometry, not CSS strokes. */
+.n-center .ds4free [data-ds4-part="Outline"] path,
+.n-center .ds4free [data-ds4-part="Outline"] rect {
+  fill: #454a60;
+}
+
+.n-center .ds4free [data-ds4-part="Button_outlines_behind"] path {
+  fill: #5b6179;
+}
+
+.n-center .ds4free [data-ds4-part="Button_outlines"] path {
+  fill: #090a10;
+}
+
+.n-center .ds4free [data-ds4-part="Controller"] > path:nth-child(1),
+.n-center .ds4free [data-ds4-part="Controller"] > path:nth-child(3) {
+  fill: #535970;
+}
+
+.n-center .ds4free [data-ds4-part="Controller"] > path:nth-child(2),
+.n-center .ds4free [data-ds4-part="Controller"] > path:nth-child(4),
+.n-center .ds4free [data-ds4-part="Controller"] > rect {
+  fill: #11131b;
+  opacity: 0.8;
+}
+
+.n-center .ds4free [data-ds4-part="Trackpad_infill"] path {
+  fill: url(#nxg-touch);
+}
+
+.n-center .ds4free [data-ds4-part="Trackpad_outline"] path {
+  fill: #34384a;
+}
+
+.n-center .ds4free [data-ds4-part="L3_infill"] circle,
+.n-center .ds4free [data-ds4-part="R3_infill"] circle {
+  fill: url(#nxg-stick);
+  stroke: #555b74;
+  stroke-width: 1.5;
+}
+
+.n-center .ds4free [data-ds4-part="L3_outline"] path,
+.n-center .ds4free [data-ds4-part="R3_outline"] path {
+  fill: #666c83;
+}
+
+.n-center .ds4free [data-ds4-part="Speaker_grill"] circle {
+  fill: #07080d;
+  stroke: #303345;
+  stroke-width: 0.45;
+}
+
+.n-center .ds4free .ds4free-grip-shade {
+  fill: #151722;
+  opacity: 0.48;
+}
+
+.n-center .ds4free .ds4free-touch-texture {
+  fill: url(#nxp-ds4-touch);
+  opacity: 0.42;
+}
+
+.n-center .ds4free .ds4free-lightbar {
+  fill: none;
+  stroke: url(#nxg-lamp);
+  stroke-width: 3;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.72));
+}
+
+.n-center .ds4free .ds4free-touch-sheen,
+.n-center .ds4free .ds4free-stick-highlight {
+  fill: none;
+  stroke: rgba(225, 228, 241, 0.25);
+  stroke-width: 1.35;
+  stroke-linecap: round;
+}
+
+.n-center .ds4free .ds4free-dpad-mark {
+  fill: #a0a6bd;
+}
+
+.n-center .ds4free .ds4free-face-mark {
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.n-center .ds4free .ds4free-square-mark {
+  stroke: #d39bdc;
+}
+
+.n-center .ds4free .ds4free-circle-mark {
+  stroke: #df909f;
+}
+
+.n-center .ds4free .ds4free-triangle-mark {
+  stroke: #75c7c8;
+}
+
+.n-center .ds4free .ds4free-cross-mark {
+  stroke: #78a3e7;
+}
+
+.n-center .ds4free .ds4free-guide-mark,
+.n-center .ds4free .ds4free-sys,
+.n-center .ds4free .ds4free-legend {
+  fill: rgba(225, 228, 241, 0.78);
+  font-family: inherit;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: #0c0d12;
+  stroke-width: 1.1px;
+  pointer-events: none;
+}
+
+.n-center .ds4free .ds4free-guide-mark {
+  font-size: 7px;
+  letter-spacing: -0.08em;
+}
+
+.n-center .ds4free .ds4free-sys {
+  font-size: 8px;
+}
+
+.n-center .ds4free .ds4free-legend {
+  font-size: 6px;
+  letter-spacing: 0.04em;
+}
+
+/* Hooks are transparent at rest but retain pointer input and live/arm paint. */
+.n-center .ds4free .ds4free-hook {
   fill: transparent;
   stroke: none;
+  pointer-events: all;
+}
+
+.n-center .ds4free .ds4free-hook:hover,
+.n-center .ds4free .ds4free-hook.arm,
+.n-center .ds4free .ds4free-hook.live {
+  stroke-width: 3.4px;
+}
+
+.n-center .ds4free text.n-fnkey {
+  font-size: 10.5px;
+  stroke-width: 1.7px;
+}
+
+/* ── The DualSense: inline geometry, shared carbon paint ─────────────────
+   The supplied export contributes the silhouette and control geometry only.
+   Its product-shot filters and private Figma paints are deliberately absent:
+   the one inline SVG draws through nxg-* and layers transparent hooks above
+   the body, then glyphs/callouts above the hooks. */
+
+.n-center .ps5a {
+  overflow: visible;
+}
+
+.n-center .ps5a .ps5a-body {
+  pointer-events: none;
+}
+
+.n-center .ps5a .ps5a-trigger-bed {
+  fill: #0b0d14;
+  stroke: #3b3f52;
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-shoulder,
+.n-center .ps5a .ps5a-face-key,
+.n-center .ps5a .ps5a-sidekey,
+.n-center .ps5a .ps5a-mic {
+  fill: url(#nxg-btn);
+  stroke: #50556e;
+  stroke-width: 2.8;
+}
+
+.n-center .ps5a .ps5a-core {
+  fill: url(#nxg-well);
+  stroke: #0b0d13;
+  stroke-width: 3.5;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-shell {
+  fill: url(#nxg-shell);
+  stroke: #4b5068;
+  stroke-width: 3.2;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-upper {
+  fill: url(#nxg-touch);
+  stroke: rgba(150, 138, 224, 0.48);
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-edge {
+  fill: #5a5f79;
+  opacity: 0.72;
+}
+
+.n-center .ps5a .ps5a-grip-line,
+.n-center .ps5a .ps5a-touch-sheen {
+  fill: none;
+  stroke: rgba(224, 226, 239, 0.15);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.n-center .ps5a .ps5a-lightbar {
+  fill: url(#nxg-lamp);
+  stroke: rgba(207, 198, 247, 0.72);
+  stroke-width: 1.8;
+  opacity: 0.82;
+}
+
+.n-center .ps5a .ps5a-touch {
+  fill: url(#nxg-touch);
+  stroke: #454a61;
+  stroke-width: 3.2;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-dpad path {
+  fill: url(#nxg-btn);
+  stroke: #555b75;
+  stroke-width: 2.8;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-stick-well,
+.n-center .ps5a .ps5a-guide-well {
+  fill: url(#nxg-well);
+  stroke: #363a4e;
+  stroke-width: 3;
+}
+
+.n-center .ps5a .ps5a-stick-rim {
+  fill: #191b26;
+  stroke: #4a4f67;
+  stroke-width: 3;
+}
+
+.n-center .ps5a .ps5a-stick {
+  fill: url(#nxg-stick);
+  stroke: #555b73;
+  stroke-width: 3;
+}
+
+.n-center .ps5a .ps5a-stick-cap {
+  fill: url(#nxg-btn);
+  stroke: #60667f;
+  stroke-width: 2.5;
+}
+
+.n-center .ps5a .ps5a-face-key {
+  stroke-width: 2.6;
+}
+
+.n-center .ps5a .ps5a-guide {
+  fill: url(#nxg-lamp);
+  stroke: var(--n-accent-line);
+  stroke-width: 2.4;
+  filter: none;
+}
+
+.n-center .ps5a .ps5a-speaker {
+  fill: #070910;
+  stroke: #2c3040;
+  stroke-width: 1.2;
+}
+
+/* A dedicated hook class avoids the later shared .wspad-zone paint rule.
+   .live/.arm are intentionally more specific and repaint these on demand. */
+.n-center .ps5a .ps5a-hook {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
+.n-center .ps5a .ps5a-dressing {
+  pointer-events: none;
+}
+
+.n-center .ps5a .ps5a-sys {
+  fill: rgba(225, 228, 241, 0.68);
+  font-family: inherit;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  paint-order: stroke;
+  stroke: #0c0d12;
+  stroke-width: 2.5px;
+}
+
+.n-center .ps5a .ps5a-dpad-mark {
+  fill: #9ba0b7;
+}
+
+.n-center .ps5a .ps5a-face-mark,
+.n-center .ps5a .ps5a-side-mark,
+.n-center .ps5a .ps5a-stick-mark,
+.n-center .ps5a .ps5a-mic-mark {
+  fill: none;
+  stroke: #9ba0b7;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.n-center .ps5a .ps5a-stick-mark {
+  stroke: rgba(207, 211, 229, 0.32);
+  stroke-width: 2.5;
+}
+
+.n-center .ps5a .ps5a-logo {
+  fill: #171923;
 }
 
 .n-center .nx-defs {
@@ -9557,7 +9889,7 @@ button.n-krow-tg {
   user-select: none;
 }
 
-.n-center svg.wspad:not(.x360a) text.n-fnkey {
+.n-center svg.wspad:not(.x360a):not(.ps5a):not(.ds4a) text.n-fnkey {
   font-size: 4.4px;
   stroke-width: 0.75px;
 }
@@ -13391,5 +13723,3 @@ a.nm-link {
 .n-kbpane {
   display: contents;
 }
-
-

@@ -683,6 +683,114 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("a ViGEm PlayStation seat wears the free semantic DualShock 4 art", async () => {
+    const page = await openCanvas();
+    try {
+      const art = await page.evaluate(() => {
+        const widget = Array.from(
+          document.querySelectorAll(".forma-canvas-stage .widget-instance"),
+        ).find((el) => el.querySelector("svg.ds4free"));
+        if (!widget) return { found: false };
+        const svg = widget.querySelector("svg.ds4free");
+        const body = svg?.querySelector(".ds4free-body");
+        const hooks = svg?.querySelector(".ds4free-hooks");
+        const dressing = svg?.querySelector(".ds4free-dressing");
+        const callouts = svg?.querySelector(".ds4free-callouts");
+        const shell = body?.querySelector(
+          '[data-ds4-part="Controller_infills"] > path:first-child',
+        );
+        const touch = body?.querySelector('[data-ds4-part="Trackpad_infill"] path');
+        const face = body?.querySelector('[data-ds4-part="Triangle_infill"] circle');
+        const texture = dressing?.querySelector(".ds4free-touch-texture");
+        const hookShapes = Array.from(svg?.querySelectorAll(".ds4free-hook") ?? []);
+        const hookFns = hookShapes.map((el) => el.getAttribute("data-fn"));
+        const orderedLayers = [body, hooks, dressing, callouts];
+        return {
+          found: true,
+          tag: svg?.tagName ?? null,
+          hasImage: widget.querySelector("img") !== null,
+          privateEffects: svg?.querySelectorAll("defs, filter, mask, foreignObject").length ?? -1,
+          sourceIds: body?.querySelectorAll("[id]").length ?? -1,
+          semanticParts: body?.querySelectorAll("[data-ds4-part]").length ?? 0,
+          sourceShapes: body?.querySelectorAll(
+            ".ds4free-source path, .ds4free-source circle, .ds4free-source rect",
+          ).length ?? 0,
+          sourceSignature: shell?.getAttribute("d")?.slice(0, 16) ?? "",
+          viewBox: svg?.getAttribute("viewBox") ?? null,
+          hooksInsideArt: !!svg && !!hooks && svg.contains(hooks),
+          hookLayerTag: hooks?.tagName ?? null,
+          hookCount: hookShapes.length,
+          transparentHookCount: hookShapes.filter(
+            (el) => el.getAttribute("fill") === "transparent",
+          ).length,
+          renderedTransparentHookCount: hookShapes.filter((el) => {
+            const style = getComputedStyle(el);
+            return style.fill === "rgba(0, 0, 0, 0)"
+              && style.stroke === "none"
+              && style.pointerEvents !== "none";
+          }).length,
+          uniqueHookCount: new Set(hookFns).size,
+          calloutCount: callouts?.querySelectorAll("text.n-fnkey").length ?? 0,
+          layerOrder: orderedLayers.every(Boolean) && orderedLayers.slice(1).every(
+            (layer, index) => !!(
+              orderedLayers[index].compareDocumentPosition(layer)
+              & Node.DOCUMENT_POSITION_FOLLOWING
+            ),
+          ),
+          bodyOwnsNoHooks: (body?.querySelectorAll("[data-fn]").length ?? -1) === 0,
+          dressingShapes: dressing?.querySelectorAll("path, circle, rect").length ?? 0,
+          shellFill: shell ? getComputedStyle(shell).fill : "",
+          touchFill: touch ? getComputedStyle(touch).fill : "",
+          faceFill: face ? getComputedStyle(face).fill : "",
+          textureFill: texture ? getComputedStyle(texture).fill : "",
+          hooks: hookFns,
+        };
+      });
+
+      assert.ok(art.found, "the fixture's P2 PlayStation seat gets the free DS4 master");
+      assert.equal(art.tag, "svg", "the controller is inline vector geometry");
+      assert.equal(art.hasImage, false, "no flat controller image is pasted into the canvas");
+      assert.equal(art.privateEffects, 0, "clones carry no source-private effects or defs");
+      assert.equal(art.sourceIds, 0, "semantic source IDs cannot collide across clones");
+      assert.equal(art.semanticParts, 49, "the source's semantic part structure is retained");
+      assert.equal(art.sourceShapes, 59, "all active source geometry survives as real SVG elements");
+      assert.match(art.sourceSignature, /^M622\.95,326\.87/, "the MIT shell is the active silhouette");
+      assert.equal(art.viewBox, "-28 -18 696 550", "art and hooks share one native source space");
+      assert.ok(art.hooksInsideArt, "the hook layer is inside the art SVG");
+      assert.equal(art.hookLayerTag, "g", "hooks are an overlay group, not a second SVG");
+      assert.equal(art.hookCount, 25, "the DS4 exposes exactly the mapper's 25 controls");
+      assert.equal(art.transparentHookCount, 25, "every hook starts transparent");
+      assert.equal(
+        art.renderedTransparentHookCount,
+        25,
+        "resting hooks render transparent but remain interactive",
+      );
+      assert.equal(art.uniqueHookCount, 25, "no control hook is duplicated");
+      assert.equal(art.calloutCount, 25, "every live hook has one key callout");
+      assert.ok(art.layerOrder, "body, hooks, dressing and callouts retain their paint order");
+      assert.ok(art.bodyOwnsNoHooks, "visible MIT geometry is presentation-only");
+      assert.ok(art.dressingShapes >= 15, "app-owned depth and glyph detail sit above live hooks");
+      assert.match(art.shellFill, /nxg-shell/, "the source shell uses shared carbon paint");
+      assert.match(art.touchFill, /nxg-touch/, "the source touchpad uses shared carbon paint");
+      assert.match(art.faceFill, /nxg-btn/, "the source face buttons use shared carbon paint");
+      assert.match(art.textureFill, /nxp-ds4-touch/, "the app touch texture stays vector");
+      for (const fn of [
+        "a", "b", "x", "y",
+        "dpad.up", "dpad.down", "dpad.left", "dpad.right",
+        "lb", "rb", "lt", "rt",
+        "back", "start", "guide",
+        "lthumb", "rthumb",
+        "lx.min", "lx.max", "ly.min", "ly.max",
+        "rx.min", "rx.max", "ry.min", "ry.max",
+      ]) {
+        assert.ok(art.hooks.includes(fn), `the DualShock 4 art hooks ${fn}`);
+      }
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a DualSense wears its own body, with its hooks on its buttons", async () => {
     // The fixture's roster is Xbox + PlayStation; stage a PS5 pad to see the
     // third art. (A DualSense drew a DualShock 4 until the family rule
@@ -702,23 +810,22 @@ describe("the canvas navigation controls", () => {
           document.querySelectorAll(".forma-canvas-stage .widget-instance"),
         ).find((el) => el.querySelector(".ps5a"));
         if (!widget) return { found: false };
-        const image = widget.querySelector(".ps5a-art");
-        const hooks = widget.querySelector(".ps5a-hooks");
-        const imageBox = image.getBoundingClientRect();
-        const hookBox = hooks.getBoundingClientRect();
+        const svg = widget.querySelector("svg.ps5a");
+        const hooks = svg?.querySelector(".ps5a-hooks");
+        const shell = svg?.querySelector(".ps5a-shell");
+        const hookShapes = Array.from(svg?.querySelectorAll(".ps5a-hook") ?? []);
         return {
           found: true,
-          src: image.getAttribute("src"),
-          // The picture and the overlay must occupy the SAME box: they share
-          // one coordinate system, so a hook is only over its button while
-          // these agree. (They did not when the overlay carried `.wspad`,
-          // whose height:auto shrank it inside the picture.)
-          boxesAgree:
-            Math.abs(imageBox.x - hookBox.x) <= 1 &&
-            Math.abs(imageBox.y - hookBox.y) <= 1 &&
-            Math.abs(imageBox.width - hookBox.width) <= 1 &&
-            Math.abs(imageBox.height - hookBox.height) <= 1,
-          viewBox: hooks.getAttribute("viewBox"),
+          tag: svg?.tagName ?? null,
+          hasImage: widget.querySelector("img") !== null,
+          viewBox: svg?.getAttribute("viewBox") ?? null,
+          hooksInsideArt: !!svg && !!hooks && svg.contains(hooks),
+          hookLayerTag: hooks?.tagName ?? null,
+          transparentHookCount: hookShapes.filter(
+            (el) => el.getAttribute("fill") === "transparent",
+          ).length,
+          bodyPaths: svg?.querySelectorAll(".ps5a-body path").length ?? 0,
+          shellFill: shell ? getComputedStyle(shell).fill : "",
           hooks: Array.from(widget.querySelectorAll(".ps5a-hooks [data-fn]")).map(
             (el) => el.getAttribute("data-fn"),
           ),
@@ -726,13 +833,18 @@ describe("the canvas navigation controls", () => {
       });
 
       assert.ok(art.found, "a DualSense seat gets the PS5 art, not the DualShock");
-      assert.equal(art.src, "/_assets/pad-ps5.svg");
-      assert.ok(art.boxesAgree, "the hook overlay covers exactly the picture it annotates");
+      assert.equal(art.tag, "svg", "the controller is inline vector geometry");
+      assert.equal(art.hasImage, false, "no product-shot image is pasted into the canvas");
       assert.equal(
         art.viewBox,
         "70 216 940 640",
-        "the overlay's box is build.mjs's DUALSENSE_VIEWBOX — one number in two files",
+        "art and hooks occupy one source-derived coordinate space",
       );
+      assert.ok(art.hooksInsideArt, "the transparent hooks live inside the art SVG");
+      assert.equal(art.hookLayerTag, "g", "hooks are an overlay group, not a second SVG box");
+      assert.equal(art.transparentHookCount, 25, "every interactive hook starts transparent");
+      assert.ok(art.bodyPaths >= 15, "the inline body carries source geometry, not a flat stand-in");
+      assert.match(art.shellFill, /nxg-shell/, "the shell draws through the shared carbon paint");
       // Every control the mapper can actually drive has a hook. The
       // touchpad, the mic button and adaptive-trigger force are NOT here on
       // purpose: the binding vocabulary has no way to express them, and a

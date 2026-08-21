@@ -1087,6 +1087,10 @@ fn installer_and_portable_zip_carry_complete_license_material() {
             "Copyright (c) 2024 Al. Lopez",
         ),
         (
+            "THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt",
+            "Copyright (c) 2024 the_al",
+        ),
+        (
             "THIRD-PARTY-LICENSES/Lucide-ISC.txt",
             "Lucide Contributors 2022",
         ),

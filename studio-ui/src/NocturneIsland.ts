@@ -2,6 +2,7 @@ import { createList, createShow, createSignal, h } from "@getforma/core";
 import { fetchJSON } from "@getforma/core/http";
 
 import { WidgetCanvas, createCanvasItem } from "./genui/canvas/index";
+import { Ds4FreeGeometry } from "./ds4FreeGeometry";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -4381,12 +4382,12 @@ export function NocturneIsland() {
           h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
         ),
         // ── The pad masters: hidden clone templates ───────────────────────
-        // The vendored Gamepad-Asset-Pack silhouettes (the workspace's M2c
-        // art) live here ONCE, invisible: every controller widget on the
-        // canvas deep-clones its family's master — the pad grid's own
-        // economy, kept. Every control element still carries its canonical
-        // mapper function(s) as data-fn, so the delegated handlers and the
-        // live echo light the clones exactly as they lit the stage.
+        // The family-specific inline controller vectors live here ONCE,
+        // invisible: every controller widget on the canvas deep-clones its
+        // family's master — the pad grid's own economy, kept. Provenance
+        // differs by family and is recorded in art/README.md + NOTICE.
+        // Every hook still carries its canonical mapper function as data-fn,
+        // so delegated handlers and live echo light every clone.
         // The paint servers both silhouettes draw with: one zero-size SVG
         // whose defs resolve document-wide, so the CSS can fill shells,
         // wells, sticks and buttons with real gradients instead of flats.
@@ -4439,6 +4440,13 @@ export function NocturneIsland() {
                 h("stop", { offset: "0", "stop-color": "#cfc6f7" }),
                 h("stop", { offset: "0.45", "stop-color": "#968ae0" }),
                 h("stop", { offset: "1", "stop-color": "#5d5494" }),
+              ),
+              // A compact touch texture for the free DS4's 640-unit source.
+              // Hoisting it keeps every clone on the same app-owned paint.
+              h(
+                "pattern",
+                { id: "nxp-ds4-touch", width: "5.48", height: "5.48", patternUnits: "userSpaceOnUse" },
+                h("circle", { cx: "1.1", cy: "1.1", r: "0.72", fill: "#080910" }),
               ),
             ),
           ),
@@ -4648,190 +4656,283 @@ export function NocturneIsland() {
               ),
             ),
           ),
+          // ── Free DualShock 4 comparison (ViGEm PlayStation) ──────────
+          // MIT geometry from dualshock-tools, kept semantic as data-part
+          // attributes rather than IDs because this hidden master is cloned.
+          // The source is deliberately presented at its native proportions:
+          // the owner can compare it honestly with the richer paid drawing.
           h(
             "div",
             { class: () => nPadPsCls(), "data-pad-family": "ps" },
             h(
               "svg",
-              { class: "wspad", viewBox: "0 0 112.69 92", "aria-hidden": "true", focusable: "false" },
+              {
+                class: "wspad ds4a ds4free",
+                viewBox: "-28 -18 696 550",
+                preserveAspectRatio: "xMidYMid meet",
+                "aria-hidden": "true",
+                focusable: "false",
+              },
               h(
                 "g",
-                null,
-                h("rect", { "data-fn": "lt", class: "wspad-zone", x: "20", y: "1", width: "22", height: "6.4", rx: "3.2" }),
-                h("rect", { "data-fn": "rt", class: "wspad-zone", x: "70.5", y: "1", width: "22", height: "6.4", rx: "3.2" }),
-                h("text", { class: "wspad-sys", x: "31", y: "5.6", "text-anchor": "middle" }, "L2"),
-                h("text", { class: "wspad-sys", x: "81.5", y: "5.6", "text-anchor": "middle" }, "R2"),
-                h("rect", { "data-fn": "lb", class: "wspad-zone", x: "15", y: "10.4", width: "32", height: "5.6", rx: "2.8" }),
-                h("rect", { "data-fn": "rb", class: "wspad-zone", x: "65.5", y: "10.4", width: "32", height: "5.6", rx: "2.8" }),
-                h("text", { class: "wspad-sys", x: "31", y: "14.6", "text-anchor": "middle" }, "L1"),
-                h("text", { class: "wspad-sys", x: "81.5", y: "14.6", "text-anchor": "middle" }, "R1"),
-              ),
-              h(
-                "g",
-                { transform: "translate(0,18.5)" },
-                // The vendored DualShock silhouette, exactly as /pads ships it.
-                h("path", {
-                  class: "wspad-shell",
-                  transform: "translate(-26.849948,-130.35184)",
-                  d: "m 48.4429,130.35201 c -2.656321,0.002 -5.205853,1.07801 -7.101494,2.99569 l -0.0057,-0.006 c -0.543507,0.54745 -1.098321,1.10607 -1.766298,2.11925 -0.667974,1.01319 -1.449449,2.47725 -2.442013,4.66586 -0.992562,2.18863 -2.195525,5.10062 -3.130175,7.74217 -0.93465,2.64154 -1.600236,5.01268 -2.344001,8.06669 -0.743765,3.054 -1.566531,6.79477 -2.252212,10.36887 -0.685683,3.57409 -1.234914,6.98145 -1.666211,10.78125 -0.431294,3.79979 -0.744851,7.98921 -1.05843,12.17755 l 0.0052,5.3e-4 c -0.01899,0.28002 -0.02902,0.5606 -0.03008,0.84129 -3e-6,7.05731 5.55134,12.77843 12.399351,12.77855 5.847836,-5.3e-4 10.900403,-4.21164 12.123982,-10.10481 1.382724,-4.83452 2.76621,-9.66981 3.610381,-12.32586 0.422087,-1.32802 0.710036,-2.11109 0.936565,-2.59002 0.22653,-0.47893 0.37992,-0.64455 0.56059,-0.77722 0.09034,-0.0663 0.164736,-0.11328 0.380122,-0.16019 0.188466,-0.041 0.490903,-0.0763 0.960937,-0.10646 1.873045,1.96002 4.430062,3.06486 7.099419,3.06752 2.757373,-5.3e-4 5.391548,-1.17723 7.277292,-3.25045 6.91036,-0.0284 15.424475,-0.0399 22.013906,-0.017 1.886814,2.08385 4.528252,3.26716 7.293889,3.2675 2.59502,-0.002 5.08708,-1.04648 6.94748,-2.91093 0.27817,0.0481 0.47234,0.1011 0.64149,0.15916 0.78442,0.26923 1.13782,0.61666 1.6268,1.62884 0.48898,1.01219 1.08143,2.66601 1.86379,5.02502 0.78234,2.35902 1.75609,5.42473 2.73034,8.49044 l 0.008,-0.003 c 1.02509,6.12639 6.17972,10.60355 12.21214,10.6071 6.84801,-1.2e-4 12.39935,-5.72124 12.39935,-12.77855 -0.003,-0.8035 -0.0793,-1.60493 -0.22818,-2.39365 l 0.007,-5.3e-4 c -0.23788,-2.90974 -0.47492,-5.82205 -0.94486,-9.36325 -0.46992,-3.54121 -1.17227,-7.70778 -1.93432,-11.66234 -0.76205,-3.95456 -1.5852,-7.69624 -2.32896,-10.75024 -0.74377,-3.05401 -1.40937,-5.42463 -2.34401,-8.06618 -0.93466,-2.64154 -2.13553,-5.55353 -3.1281,-7.74216 -0.99256,-2.18861 -1.77611,-3.65268 -2.44408,-4.66587 -0.66798,-1.01319 -1.22072,-1.5718 -1.76423,-2.11925 l -0.0129,0.0124 c -1.89832,-1.92388 -4.4541,-3.00212 -7.11656,-3.00234 -3.26568,0.002 -6.33073,1.62411 -8.23615,4.35735 H 56.685815 c -1.906805,-2.73523 -4.974838,-4.35705 -8.242898,-4.35735 z",
-                }),
-                // The touchpad — the DualShock's signature, front and centre.
-                h("rect", { class: "wspad-touch", x: "37.11", y: "6.5", width: "38.39", height: "18.31", rx: "1.74" }),
-                // Create · Options, the slim edge buttons beside it.
-                h("rect", { "data-fn": "back", class: "wspad-zone", x: "32.6", y: "7.2", width: "2.4", height: "5.2", rx: "1.2" }),
-                h("rect", { "data-fn": "start", class: "wspad-zone", x: "77.6", y: "7.2", width: "2.4", height: "5.2", rx: "1.2" }),
-                // Dpad: the four petals, each its OWN direction.
+                { class: "ds4free-body" },
                 h(
                   "g",
-                  { class: "wspad-petals", transform: "translate(-26.849948,-130.35184)" },
-                  h("path", { "data-fn": "dpad.right", d: "m 57.303118,151.6163 c 0,1.25891 -0.201292,2.31652 -0.692974,2.8445 -0.440536,0.47354 -0.89262,0.58903 -1.407403,0.53623 -0.513135,-0.0528 -3.128295,-0.26234 -3.128295,-0.26234 0,0 -0.483433,-0.0957 -0.829925,-0.38938 -0.259041,-0.22109 -1.889184,-1.83639 -1.889184,-1.83639 0,0 -0.356388,-0.33659 -0.356388,-0.89262 0,-0.55603 0.356388,-0.89262 0.356388,-0.89262 0,0 1.630143,-1.61695 1.889184,-1.83804 0.346492,-0.29369 0.829925,-0.38774 0.829925,-0.38774 0,0 2.61516,-0.21119 3.128295,-0.26234 0.514783,-0.0528 0.966867,0.0627 1.407403,0.53458 0.491682,0.52799 0.692974,1.5856 0.692974,2.84616" }),
-                  h("path", { "data-fn": "dpad.left", d: "m 37.936241,151.6163 c 0,1.25891 0.201292,2.31652 0.692974,2.8445 0.440536,0.47354 0.89262,0.58903 1.407403,0.53623 0.513135,-0.0528 3.128295,-0.26234 3.128295,-0.26234 0,0 0.483433,-0.0957 0.829925,-0.38938 0.259041,-0.22109 1.889184,-1.83639 1.889184,-1.83639 0,0 0.356388,-0.33659 0.356388,-0.89262 0,-0.55603 -0.356388,-0.89262 -0.356388,-0.89262 0,0 -1.630143,-1.61695 -1.889184,-1.83804 -0.346492,-0.29369 -0.829925,-0.38774 -0.829925,-0.38774 0,0 -2.61516,-0.21119 -3.128295,-0.26234 -0.514783,-0.0528 -0.966867,0.0627 -1.407403,0.53458 -0.491682,0.52799 -0.692974,1.5856 -0.692974,2.84616" }),
-                  h("path", { "data-fn": "dpad.down", d: "m 47.730582,161.09428 c -1.25891,0 -2.31652,-0.20129 -2.8445,-0.69298 -0.47354,-0.44053 -0.58903,-0.89262 -0.53623,-1.4074 0.0528,-0.51313 0.26234,-3.12829 0.26234,-3.12829 0,0 0.0957,-0.48344 0.38938,-0.82993 0.22109,-0.25904 1.83639,-1.88918 1.83639,-1.88918 0,0 0.33659,-0.35639 0.89262,-0.35639 0.55603,0 0.89262,0.35639 0.89262,0.35639 0,0 1.61695,1.63014 1.83804,1.88918 0.29369,0.34649 0.38774,0.82993 0.38774,0.82993 0,0 0.21119,2.61516 0.26234,3.12829 0.0528,0.51478 -0.0627,0.96687 -0.53458,1.4074 -0.52799,0.49169 -1.5856,0.69298 -2.84616,0.69298" }),
-                  h("path", { "data-fn": "dpad.up", d: "m 47.666334,141.82316 c -1.25891,0 -2.31652,0.20129 -2.8445,0.69297 -0.47354,0.44054 -0.58903,0.89262 -0.53623,1.40741 0.0528,0.51313 0.26234,3.12829 0.26234,3.12829 0,0 0.0957,0.48343 0.38938,0.82993 0.22109,0.25904 1.83639,1.88918 1.83639,1.88918 0,0 0.33659,0.35639 0.89262,0.35639 0.55603,0 0.89262,-0.35639 0.89262,-0.35639 0,0 1.61695,-1.63014 1.83804,-1.88918 0.29369,-0.3465 0.38774,-0.82993 0.38774,-0.82993 0,0 0.21119,-2.61516 0.26234,-3.12829 0.0528,-0.51479 -0.0627,-0.96687 -0.53458,-1.40741 -0.52799,-0.49168 -1.5856,-0.69297 -2.84616,-0.69297" }),
+                  { class: "ds4free-trigger-bridges" },
+                  h("path", { class: "ds4free-trigger-bridge", d: "M96 77 C109 68 151 68 164 78 L166 123 C143 120 116 120 90 126 L90 96 C90 87 92 82 96 77 Z" }),
+                  h("path", { class: "ds4free-trigger-bridge", d: "M544 77 C531 68 489 68 476 78 L474 123 C497 120 524 120 550 126 L550 96 C550 87 548 82 544 77 Z" }),
                 ),
-                // Sticks: symmetric and low, the PlayStation way.
-                h("circle", { class: "wspad-well", cx: "38.1", cy: "36.12", r: "9.6" }),
-                h("circle", { class: "wspad-stick", cx: "38.1", cy: "36.12", r: "6.6" }),
-                h("circle", { "data-fn": "lthumb", cx: "38.1", cy: "36.12", r: "3.0", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.max", cx: "38.1", cy: "31.9", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.min", cx: "38.1", cy: "40.3", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.min", cx: "33.9", cy: "36.12", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.max", cx: "42.3", cy: "36.12", r: "2.3", fill: "transparent" }),
-                h("circle", { class: "wspad-well", cx: "74.46", cy: "36.12", r: "9.6" }),
-                h("circle", { class: "wspad-stick", cx: "74.46", cy: "36.12", r: "6.6" }),
-                h("circle", { "data-fn": "rthumb", cx: "74.46", cy: "36.12", r: "3.0", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.max", cx: "74.46", cy: "31.9", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.min", cx: "74.46", cy: "40.3", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.min", cx: "70.26", cy: "36.12", r: "2.3", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.max", cx: "78.66", cy: "36.12", r: "2.3", fill: "transparent" }),
-                // The face shapes, drawn as SHAPES: triangle, circle, cross, square.
-                h("circle", { "data-fn": "y", class: "wspad-zone", cx: "91.52", cy: "12.85", r: "4.1" }),
-                h("circle", { "data-fn": "b", class: "wspad-zone", cx: "99.61", cy: "20.89", r: "4.1" }),
-                h("circle", { "data-fn": "a", class: "wspad-zone", cx: "91.56", cy: "28.79", r: "4.1" }),
-                h("circle", { "data-fn": "x", class: "wspad-zone", cx: "83.37", cy: "20.82", r: "4.1" }),
-                h("path", { class: "wspad-glyph", d: "M 91.52,10.95 94.535,15.05 88.505,15.05 Z" }),
-                h("circle", { class: "wspad-glyph", cx: "99.61", cy: "20.89", r: "1.9" }),
-                h("path", { class: "wspad-glyph", d: "M 89.86,27.09 93.26,30.49 M 93.26,27.09 89.86,30.49" }),
-                h("rect", { class: "wspad-glyph", x: "81.67", y: "19.12", width: "3.4", height: "3.4" }),
-                // The PS lamp.
-                h("circle", { class: "wspad-well", cx: "56.34", cy: "41.33", r: "3.4" }),
-                h("circle", { "data-fn": "guide", class: "wspad-guide", cx: "56.34", cy: "41.33", r: "1.7" }),
+                h(Ds4FreeGeometry, null),
+              ),
+              // The mapper's 25 controls live in the source's own 640-unit
+              // coordinate space. Nothing is fitted from the paid drawing.
+              h(
+                "g",
+                { class: "ds4free-hooks" },
+                h("path", { "data-fn": "lt", class: "ds4free-hook", d: "M167.27,80.69l-2.79-35.54c-1.25-15.98-14.77-28.21-30.8-27.85-13.24.3-24.75,9.19-28.38,21.93L93.72,79.86c-.77,2.71,1.26,5.4,4.08,5.4h65.24c2.47,0,4.42-2.11,4.23-4.57Z", fill: "transparent" }),
+                h("path", { "data-fn": "rt", class: "ds4free-hook", d: "M472.73,80.69l2.79-35.54c1.25-15.98,14.77-28.21,30.8-27.85,13.24.3,24.75,9.19,28.38,21.93l11.58,40.63c.77,2.71-1.26,5.4-4.08,5.4h-65.24c-2.47,0-4.42-2.11-4.23-4.57Z", fill: "transparent" }),
+                h("path", { "data-fn": "lb", class: "ds4free-hook", d: "M165.32,123.06v-3.76c0-3.2-2.11-6.02-5.17-6.96-31.09-9.5-55.53-1.1-65.02,3.2-2.6,1.18-4.28,3.76-4.28,6.62v3.34s38.5-2.96,74.48-2.44Z", fill: "transparent" }),
+                h("path", { "data-fn": "rb", class: "ds4free-hook", d: "M549.16,125.5v-3.34c0-2.86-1.68-5.44-4.28-6.62-9.49-4.3-33.93-12.7-65.02-3.2-3.06.94-5.17,3.75-5.17,6.96v3.76s34.84-.67,74.48,2.44Z", fill: "transparent" }),
+                h("rect", { "data-fn": "back", class: "ds4free-hook", x: "183", y: "141", width: "22", height: "39", rx: "10", fill: "transparent" }),
+                h("rect", { "data-fn": "start", class: "ds4free-hook", x: "435", y: "141", width: "22", height: "39", rx: "10", fill: "transparent" }),
+                h("path", { "data-fn": "dpad.up", class: "ds4free-hook", d: "M140.7,184.19v6.44c0,5.03-1.96,9.87-5.46,13.49l-7.64,7.89c-3,3.09-8,2.99-10.87-.22l-6.95-7.79c-3.17-3.55-4.92-8.14-4.92-12.9v-6.9c0-6.43,5.21-11.64,11.64-11.64h12.57c6.43,0,11.64,5.21,11.64,11.64Z", fill: "transparent" }),
+                h("path", { "data-fn": "dpad.right", class: "ds4free-hook", d: "M163.28,242.61h-6.44c-5.03,0-9.87-1.96-13.49-5.46l-7.89-7.64c-3.09-3-2.99-8,.22-10.87l7.79-6.95c3.55-3.17,8.14-4.92,12.9-4.92h6.9c6.43,0,11.64,5.21,11.64,11.64v12.57c0,6.43-5.21,11.64-11.64,11.64Z", fill: "transparent" }),
+                h("path", { "data-fn": "dpad.down", class: "ds4free-hook", d: "M104.86,265.19v-6.44c0-5.03,1.96-9.87,5.46-13.49l7.64-7.89c3-3.09,8-2.99,10.87.22l6.95,7.79c3.17,3.55,4.92,8.14,4.92,12.9v6.9c0,6.43-5.21,11.64-11.64,11.64h-12.57c-6.43,0-11.64-5.21-11.64-11.64Z", fill: "transparent" }),
+                h("path", { "data-fn": "dpad.left", class: "ds4free-hook", d: "M82.28,206.77h6.44c5.03,0,9.87,1.96,13.49,5.46l7.89,7.64c3.09,3,2.99,8-.22,10.87l-7.79,6.95c-3.55,3.17-8.14,4.92-12.9,4.92h-6.9c-6.43,0-11.64-5.21-11.64-11.64v-12.57c0-6.43,5.21-11.64,11.64-11.64Z", fill: "transparent" }),
+                // y=triangle, b=circle, a=cross, x=square.
+                h("circle", { "data-fn": "y", class: "ds4free-hook", cx: "517.22", cy: "178.98", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "b", class: "ds4free-hook", cx: "563.04", cy: "224.8", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "a", class: "ds4free-hook", cx: "517.22", cy: "270.62", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "x", class: "ds4free-hook", cx: "471.4", cy: "224.8", r: "22", fill: "transparent" }),
+                h("circle", { "data-fn": "guide", class: "ds4free-hook", cx: "320.16", cy: "314.85", r: "17", fill: "transparent" }),
+                h("circle", { "data-fn": "lthumb", class: "ds4free-hook", cx: "219.94", cy: "314.85", r: "24", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.max", class: "ds4free-hook", cx: "219.94", cy: "280", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "ly.min", class: "ds4free-hook", cx: "219.94", cy: "350", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.min", class: "ds4free-hook", cx: "185", cy: "314.85", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "lx.max", class: "ds4free-hook", cx: "255", cy: "314.85", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "rthumb", class: "ds4free-hook", cx: "420.06", cy: "314.85", r: "24", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.max", class: "ds4free-hook", cx: "420.06", cy: "280", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "ry.min", class: "ds4free-hook", cx: "420.06", cy: "350", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.min", class: "ds4free-hook", cx: "385", cy: "314.85", r: "13", fill: "transparent" }),
+                h("circle", { "data-fn": "rx.max", class: "ds4free-hook", cx: "455", cy: "314.85", r: "13", fill: "transparent" }),
+              ),
+              // The free source intentionally has no retail face symbols or
+              // lightbar; this app-owned dressing supplies those details.
+              h(
+                "g",
+                { class: "ds4free-dressing" },
+                h("path", { class: "ds4free-grip-shade", d: "M18 328 C8 372 5 433 27 470 C43 497 75 504 99 491 C119 480 133 457 143 429 C126 449 107 460 84 463 C52 466 29 443 24 410 C20 378 24 349 32 320 Z" }),
+                h("path", { class: "ds4free-grip-shade", d: "M622 328 C632 372 635 433 613 470 C597 497 565 504 541 491 C521 480 507 457 497 429 C514 449 533 460 556 463 C588 466 611 443 616 410 C620 378 616 349 608 320 Z" }),
+                h("path", { class: "ds4free-touch-texture", d: "M419.35,234.87v-102.38c0-2.12-1.73-3.85-3.85-3.85h-191.01c-2.12,0-3.85,1.73-3.85,3.85v102.38c0,4.13,3.36,7.5,7.5,7.5h183.71c4.13,0,7.5-3.36,7.5-7.5Z" }),
+                h("path", { class: "ds4free-lightbar", d: "M235 131 Q320 119 405 131" }),
+                h("path", { class: "ds4free-touch-sheen", d: "M235 142 Q320 132 405 142" }),
+                h("path", { class: "ds4free-dpad-mark", d: "M122.78 179 l-6.2 10.5 h12.4 Z" }),
+                h("path", { class: "ds4free-dpad-mark", d: "M168.3 224.69 l-10.5 -6.2 v12.4 Z" }),
+                h("path", { class: "ds4free-dpad-mark", d: "M122.78 270.2 l-6.2 -10.5 h12.4 Z" }),
+                h("path", { class: "ds4free-dpad-mark", d: "M77.3 224.69 l10.5 -6.2 v12.4 Z" }),
+                h("rect", { class: "ds4free-face-mark ds4free-square-mark", x: "463.2", y: "216.6", width: "16.4", height: "16.4", rx: "1" }),
+                h("circle", { class: "ds4free-face-mark ds4free-circle-mark", cx: "563.04", cy: "224.8", r: "8.7" }),
+                h("path", { class: "ds4free-face-mark ds4free-triangle-mark", d: "M517.22 169.1 l9.1 16.1 h-18.2 Z" }),
+                h("path", { class: "ds4free-face-mark ds4free-cross-mark", d: "M510.7 264.1 l13 13 M523.7 264.1 l-13 13" }),
+                h("path", { class: "ds4free-stick-highlight", d: "M196 304 A27 27 0 0 1 243 304" }),
+                h("path", { class: "ds4free-stick-highlight", d: "M396 304 A27 27 0 0 1 444 304" }),
+                h("text", { class: "ds4free-guide-mark", x: "320.16", y: "318.5", "text-anchor": "middle" }, "PS"),
+                h("text", { class: "ds4free-sys", x: "133", y: "63", "text-anchor": "middle" }, "L2"),
+                h("text", { class: "ds4free-sys", x: "507", y: "63", "text-anchor": "middle" }, "R2"),
+                h("text", { class: "ds4free-sys", x: "129", y: "121", "text-anchor": "middle" }, "L1"),
+                h("text", { class: "ds4free-sys", x: "511", y: "121", "text-anchor": "middle" }, "R1"),
+                h("text", { class: "ds4free-legend", x: "194", y: "137", "text-anchor": "middle" }, "SHARE"),
+                h("text", { class: "ds4free-legend", x: "446", y: "137", "text-anchor": "middle" }, "OPTIONS"),
               ),
               h(
                 "g",
-                null,
-                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "17", y: "5.6", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "17", y: "14.6", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "94.5", y: "5.6", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "94.5", y: "14.6", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "35.2", y: "23", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "77.4", y: "23", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "23.1", y: "28.8", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "23.1", y: "51.6", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "12.6", y: "41.2", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "33.6", y: "41.2", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "39.3", y: "56", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "39.3", y: "46", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "39.3", y: "64.8", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "31.2", y: "56", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "47.4", y: "56", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "73.3", y: "56", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "73.3", y: "46", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "73.3", y: "64.8", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "65.2", y: "56", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "81.4", y: "56", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "56.3", y: "66.5", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "89.3", y: "25.6", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "103.5", y: "40.8", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "76.4", y: "40.8", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "89.3", y: "53.8", "text-anchor": "middle" }),
+                { class: "ds4free-callouts" },
+                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "88", y: "48", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "82", y: "122", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "552", y: "48", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "558", y: "122", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "194", y: "193", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "446", y: "193", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "123", y: "159", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "123", y: "298", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "56", y: "229", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "190", y: "229", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "220", y: "319", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "220", y: "270", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "220", y: "382", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "171", y: "319", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "269", y: "319", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "420", y: "319", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "420", y: "270", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "420", y: "382", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "371", y: "319", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "469", y: "319", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "320", y: "350", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "517", y: "149", "text-anchor": "middle" }),
+                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "592", y: "229", "text-anchor": "start" }),
+                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "442", y: "229", "text-anchor": "end" }),
+                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "517", y: "317", "text-anchor": "middle" }),
               ),
             ),
           ),
           // ── The DualSense (PS5) ───────────────────────────────────────
-          // A photoreal pad, so it ships as ART rather than as shapes: the
-          // body is `/_assets/pad-ps5.svg` (build.mjs vendors it from
-          // `art/src-dualsense.svg`, backdrop removed and the viewBox
-          // cropped to the pad), and every hook rides a transparent overlay
-          // above it — the same split the 360 art uses, which is what lets
-          // the live echo light a control without repainting the picture.
+          // Real geometry from art/src-dualsense.svg, pared back from the
+          // Figma product render to the pieces that define the controller.
+          // The source's 47 filters, masks and private paint IDs stay OUT:
+          // this drawing uses the page-wide nxg-* carbon paints, just like
+          // the other inline pads, and remains safe when the master clones.
           //
-          // ⚠️The overlay's viewBox MUST equal build.mjs's DUALSENSE_VIEWBOX.
-          // Hooks are placed in the art's own coordinates, measured from
-          // every control's bbox in the export; a different box slides every
-          // one of them off its button.
+          // Art, transparent hooks and dressing share ONE SVG/viewBox. That
+          // makes hook drift structurally impossible: there is no second box
+          // to size differently. Only the transparent layer carries data-fn;
+          // live input can light it without repainting the authored geometry.
           h(
             "div",
             { class: () => nPadPs5Cls(), "data-pad-family": "ps5" },
             h(
-              "div",
-              { class: "ps5a" },
-              h("img", {
-                class: "ps5a-art",
-                src: "/_assets/pad-ps5.svg",
-                alt: "",
+              "svg",
+              {
+                class: "wspad ps5a",
+                viewBox: "70 216 940 640",
+                preserveAspectRatio: "xMidYMid meet",
                 "aria-hidden": "true",
-                draggable: "false",
-              }),
+                focusable: "false",
+              },
+              // ── Body: authentic source paths, Studio paint servers ────
               h(
-                "svg",
-                {
-                  // ⚠️NOT `.wspad`: that class sizes an art SVG with
-                  // `height: auto` and a max-height, which made this overlay
-                  // 326×222 inside a 347×236 picture — every hook then sat
-                  // slightly up and out from the control it names. The
-                  // overlay must fill exactly the art's box; the zone and
-                  // label classes below are independent of `.wspad`.
-                  class: "ps5a-hooks",
-                  viewBox: "70 216 940 640",
-                  "aria-hidden": "true",
-                  focusable: "false",
-                },
-                // Shoulders and triggers: OUR pills, over the art's own
-                // shoulder line — the export draws them as one shell, so
-                // there is nothing underneath to hook individually.
+                "g",
+                { class: "ps5a-body" },
+                // Shoulder silhouettes from the supplied export, with four
+                // restrained control pills dressed in the shared btn paint.
+                h("path", { class: "ps5a-trigger-bed", d: "M192.655 261.747L190.039 281.444L314.978 261.747L311.707 238.853C301.895 236.672 276.123 233.096 251.527 236.236C226.932 239.376 202.031 254.552 192.655 261.747Z" }),
+                h("path", { class: "ps5a-trigger-bed", d: "M888.496 261.747L891.113 281.444L766.173 261.747L769.444 238.853C779.256 236.672 805.029 233.096 829.624 236.236C854.219 239.376 879.12 254.552 888.496 261.747Z" }),
+                h("rect", { class: "ps5a-shoulder", x: "190", y: "231", width: "126", height: "48", rx: "22" }),
+                h("rect", { class: "ps5a-shoulder", x: "766", y: "231", width: "126", height: "48", rx: "22" }),
+                h("rect", { class: "ps5a-shoulder", x: "152", y: "288", width: "132", height: "36", rx: "17" }),
+                h("rect", { class: "ps5a-shoulder", x: "798", y: "288", width: "132", height: "36", rx: "17" }),
+                // The black inner chassis is still the DualSense's defining
+                // two-tone split; here it is a deep carbon well, not a photo.
+                h("path", { class: "ps5a-core", d: "M199.851 843.999L152.753 834.187L362.076 348.165C362.948 351.436 366.655 367.135 374.504 403.767C382.354 440.398 413.098 452.172 427.489 453.481H540V542.443V586.924V635.33H396.745C388.895 634.676 369.01 629.704 344.414 628.134C313.67 626.172 289.467 661.495 271.805 688.315C254.144 715.134 217.686 820.284 212.279 834.187C207.7 845.961 202.685 845.525 199.851 843.999Z" }),
+                h("path", { class: "ps5a-core", d: "M880.149 843.999L927.247 834.187L717.924 348.165C717.052 351.436 713.345 367.135 705.496 403.767C697.646 440.398 666.902 452.172 652.511 453.481H540V542.443V586.924L539.987 635.33H681.28C689.129 634.676 710.99 629.704 735.586 628.134C766.33 626.172 790.533 661.495 808.195 688.315C825.856 715.134 862.314 820.284 867.721 834.187C872.3 845.961 877.315 845.525 880.149 843.999Z" }),
+                // The large white source shells become carbon wings through
+                // nxg-shell; their exact source curves preserve the stance.
+                h("path", { class: "wspad-shell ps5a-shell", d: "M80.144 643.18C76.4809 525.435 143.595 354.27 177.61 283.406C268.142 257.24 337.873 253.97 366.001 253.97C344.414 262.474 348.121 276.646 349.647 283.406C352.264 299.541 361.278 342.278 370.435 384.143C381.929 436.686 336.98 465.927 292.083 534.593C247.602 602.623 192.459 759.405 177.61 800.826C165.181 835.495 150.791 843.999 129.204 832.878C107.618 821.758 84.723 790.36 80.144 643.18Z" }),
+                h("path", { class: "wspad-shell ps5a-shell", d: "M999.856 643.18C1003.52 525.435 936.405 354.27 902.39 283.406C811.858 257.24 742.127 253.97 713.999 253.97C735.586 262.474 731.879 276.646 730.353 283.406C727.736 299.541 718.435 342.278 709.277 384.143C697.783 436.686 743.02 465.927 787.917 534.593C832.398 602.623 887.541 759.405 902.39 800.826C914.819 835.495 929.209 843.999 950.796 832.878C972.382 821.758 995.277 790.36 999.856 643.18Z" }),
+                // Upper planes and grip-edge slivers keep the source's layered
+                // construction while giving the dark palette readable seams.
+                h("path", { class: "ps5a-upper", d: "M349.648 285.994C346.503 270.31 363.404 261.16 377.816 260.507L540.273 255.932L540 454.789C516.451 454.789 473.98 455.443 440.572 455.443C419.61 455.443 404.401 448.418 396.815 442.186C377.121 426.007 374.822 410.618 370.612 393.172C362.096 357.882 350.303 289.262 349.648 285.994Z" }),
+                h("path", { class: "ps5a-upper", d: "M731.504 285.994C734.648 270.31 717.747 261.16 703.336 260.507L539.987 257.241V454.789H640.724C661.686 454.789 675.442 448.418 683.028 442.186C702.722 426.007 705.021 410.618 709.231 393.172C717.747 357.882 730.849 289.262 731.504 285.994Z" }),
+                h("path", { class: "ps5a-edge", d: "M218.821 832.224C210.448 850.017 201.813 846.179 198.542 842.69L244.332 736.721L293.392 645.142C272.024 700.089 227.194 814.432 218.821 832.224Z" }),
+                h("path", { class: "ps5a-edge", d: "M861.18 832.224C869.553 850.017 878.187 846.179 881.458 842.69L835.668 736.721L786.608 645.142C807.977 700.089 852.807 814.432 861.18 832.224Z" }),
+                h("path", { class: "ps5a-grip-line", d: "M111 577C104 665 119 758 158 807" }),
+                h("path", { class: "ps5a-grip-line", d: "M969 577C976 665 961 758 922 807" }),
+                // Touch surface and its lavender light-bar hairline.
+                h("rect", { class: "ps5a-lightbar", x: "485", y: "438", width: "112", height: "16", rx: "8" }),
+                h("path", { class: "wspad-touch ps5a-touch", d: "M435.357 440.398C415.884 440.398 392.517 433.226 382.131 390.195C372.195 349.026 363.956 310.652 357.466 280.009C356.6 271.316 360.322 252.886 382.131 248.713C409.393 243.497 503.512 241.541 540.51 241.541C577.508 241.541 671.627 243.497 698.889 248.713C720.698 252.886 724.42 271.316 723.555 280.009C717.064 310.652 708.825 349.026 698.889 390.195C688.503 433.226 665.136 440.398 645.663 440.398H435.357Z" }),
+                h("path", { class: "ps5a-touch-sheen", d: "M388 277C430 259 650 259 693 277" }),
+                // Source-derived D-pad petals, now real carbon buttons.
+                h("g", { class: "ps5a-dpad" },
+                  h("path", { d: "M250.86 395.249C252.822 395.917 254.785 395.917 254.785 395.917C254.785 395.917 256.747 395.917 258.709 395.249C260.672 394.581 274.409 381.22 276.371 376.543C278.333 371.867 279.642 351.826 279.642 346.481C279.642 341.137 276.402 335.798 269.176 334.456C261.949 333.114 254.785 333.12 254.785 333.12C254.785 333.12 247.62 333.114 240.394 334.456C233.167 335.798 229.927 341.137 229.927 346.481C229.927 351.826 231.236 371.867 233.198 376.543C235.161 381.22 248.897 394.581 250.86 395.249Z" }),
+                  h("path", { d: "M242.342 412.924C243.01 410.962 243.01 409 243.01 409C243.01 409 243.01 407.037 242.342 405.075C241.674 403.112 228.313 389.376 223.637 387.413C218.96 385.451 198.919 384.143 193.574 384.143C188.23 384.143 182.891 387.382 181.549 394.609C180.208 401.835 180.213 409 180.213 409C180.213 409 180.208 416.164 181.549 423.391C182.891 430.617 188.23 433.857 193.574 433.857C198.919 433.857 218.96 432.548 223.637 430.586C228.313 428.624 241.674 414.887 242.342 412.924Z" }),
+                  h("path", { d: "M258.71 422.75C256.747 422.082 254.785 422.082 254.785 422.082C254.785 422.082 252.822 422.082 250.86 422.75C248.898 423.418 235.161 436.779 233.198 441.456C231.236 446.132 229.928 466.174 229.928 471.518C229.928 476.863 233.167 482.201 240.394 483.543C247.62 484.885 254.785 484.879 254.785 484.879C254.785 484.879 261.949 484.885 269.176 483.543C276.402 482.201 279.642 476.863 279.642 471.518C279.642 466.174 278.334 446.132 276.371 441.456C274.409 436.779 260.672 423.418 258.71 422.75Z" }),
+                  h("path", { d: "M268.535 403.767C267.867 405.729 267.867 407.691 267.867 407.691C267.867 407.691 267.867 409.654 268.535 411.616C269.203 413.579 282.564 427.315 287.241 429.278C291.917 431.24 311.959 432.548 317.303 432.548C322.647 432.548 327.986 429.309 329.328 422.082C330.67 414.856 330.664 407.691 330.664 407.691C330.664 407.691 330.67 400.527 329.328 393.3C327.986 386.074 322.647 382.834 317.303 382.834C311.959 382.834 291.917 384.143 287.241 386.105C282.564 388.067 269.203 401.804 268.535 403.767Z" }),
+                ),
+                // Symmetric PlayStation sticks rebuilt without the source's
+                // foreignObject/conic-gradient filter stack.
+                h("g", { class: "ps5a-sticks" },
+                  h("circle", { class: "ps5a-stick-well", cx: "396", cy: "548", r: "84" }),
+                  h("circle", { class: "ps5a-stick-rim", cx: "396", cy: "536", r: "65" }),
+                  h("circle", { class: "wspad-stick ps5a-stick", cx: "396", cy: "536", r: "52" }),
+                  h("circle", { class: "ps5a-stick-cap", cx: "396", cy: "536", r: "31" }),
+                  h("circle", { class: "ps5a-stick-well", cx: "685", cy: "548", r: "84" }),
+                  h("circle", { class: "ps5a-stick-rim", cx: "685", cy: "536", r: "65" }),
+                  h("circle", { class: "wspad-stick ps5a-stick", cx: "685", cy: "536", r: "52" }),
+                  h("circle", { class: "ps5a-stick-cap", cx: "685", cy: "536", r: "31" }),
+                ),
+                // Face-button wells, Create/Options, speaker and system key.
+                h("g", { class: "ps5a-mechanics" },
+                  h("circle", { class: "ps5a-face-key", cx: "830", cy: "342", r: "30" }),
+                  h("circle", { class: "ps5a-face-key", cx: "898", cy: "410", r: "30" }),
+                  h("circle", { class: "ps5a-face-key", cx: "830", cy: "478", r: "30" }),
+                  h("circle", { class: "ps5a-face-key", cx: "762", cy: "410", r: "30" }),
+                  h("rect", { class: "ps5a-sidekey", x: "312.349", y: "291.498", width: "20.9323", height: "41.8646", rx: "10.4661", transform: "rotate(-11.4824 312.349 291.498)" }),
+                  h("rect", { class: "ps5a-sidekey", width: "20.9323", height: "41.8646", rx: "10.4661", transform: "matrix(-0.979986 -0.199066 -0.199066 0.979986 771.616 291.498)" }),
+                  h("rect", { class: "ps5a-mic", x: "517", y: "580", width: "49", height: "12", rx: "6" }),
+                  h("circle", { class: "ps5a-guide-well", cx: "542", cy: "527", r: "30" }),
+                  h("circle", { class: "wspad-guide ps5a-guide", cx: "542", cy: "527", r: "23" }),
+                  h("circle", { class: "ps5a-speaker", cx: "509", cy: "468", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "524", cy: "468", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "540", cy: "468", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "556", cy: "468", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "571", cy: "468", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "516", cy: "482", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "532", cy: "482", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "548", cy: "482", r: "5" }),
+                  h("circle", { class: "ps5a-speaker", cx: "564", cy: "482", r: "5" }),
+                ),
+              ),
+              // ── Transparent hooks: interaction only, never body paint ──
+              h(
+                "g",
+                { class: "ps5a-hooks" },
                 h("g", { class: "ps5a-rail" },
-                  h("rect", { "data-fn": "lt", class: "wspad-zone", x: "190", y: "231", width: "126", height: "48", rx: "22" }),
-                  h("rect", { "data-fn": "rt", class: "wspad-zone", x: "766", y: "231", width: "126", height: "48", rx: "22" }),
-                  h("text", { class: "wspad-sys ps5a-sys", x: "253", y: "262", "text-anchor": "middle" }, "L2"),
-                  h("text", { class: "wspad-sys ps5a-sys", x: "829", y: "262", "text-anchor": "middle" }, "R2"),
-                  h("rect", { "data-fn": "lb", class: "wspad-zone", x: "152", y: "288", width: "132", height: "36", rx: "17" }),
-                  h("rect", { "data-fn": "rb", class: "wspad-zone", x: "798", y: "288", width: "132", height: "36", rx: "17" }),
-                  h("text", { class: "wspad-sys ps5a-sys", x: "218", y: "313", "text-anchor": "middle" }, "L1"),
-                  h("text", { class: "wspad-sys ps5a-sys", x: "864", y: "313", "text-anchor": "middle" }, "R1"),
+                  h("rect", { "data-fn": "lt", class: "ps5a-hook", x: "190", y: "231", width: "126", height: "48", rx: "22", fill: "transparent" }),
+                  h("rect", { "data-fn": "rt", class: "ps5a-hook", x: "766", y: "231", width: "126", height: "48", rx: "22", fill: "transparent" }),
+                  h("rect", { "data-fn": "lb", class: "ps5a-hook", x: "152", y: "288", width: "132", height: "36", rx: "17", fill: "transparent" }),
+                  h("rect", { "data-fn": "rb", class: "ps5a-hook", x: "798", y: "288", width: "132", height: "36", rx: "17", fill: "transparent" }),
                 ),
                 // The D-pad's four petals, each its own direction.
                 h("g", { class: "ps5a-hit" },
-                  h("rect", { "data-fn": "dpad.up", class: "wspad-zone", x: "229", y: "332", width: "52", height: "65", rx: "14" }),
-                  h("rect", { "data-fn": "dpad.left", class: "wspad-zone", x: "179", y: "383", width: "65", height: "52", rx: "14" }),
-                  h("rect", { "data-fn": "dpad.down", class: "wspad-zone", x: "229", y: "421", width: "52", height: "65", rx: "14" }),
-                  h("rect", { "data-fn": "dpad.right", class: "wspad-zone", x: "267", y: "382", width: "65", height: "52", rx: "14" }),
+                  h("rect", { "data-fn": "dpad.up", class: "ps5a-hook", x: "229", y: "332", width: "52", height: "65", rx: "14", fill: "transparent" }),
+                  h("rect", { "data-fn": "dpad.left", class: "ps5a-hook", x: "179", y: "383", width: "65", height: "52", rx: "14", fill: "transparent" }),
+                  h("rect", { "data-fn": "dpad.down", class: "ps5a-hook", x: "229", y: "421", width: "52", height: "65", rx: "14", fill: "transparent" }),
+                  h("rect", { "data-fn": "dpad.right", class: "ps5a-hook", x: "267", y: "382", width: "65", height: "52", rx: "14", fill: "transparent" }),
                   // Faces, in the PlayStation arrangement. The mapper's
                   // names stay Xbox-shaped (a persona is a re-skin, not a
                   // second vocabulary): y=△ b=○ a=✕ x=□.
-                  h("circle", { "data-fn": "y", class: "wspad-zone", cx: "830", cy: "342", r: "31" }),
-                  h("circle", { "data-fn": "b", class: "wspad-zone", cx: "898", cy: "410", r: "31" }),
-                  h("circle", { "data-fn": "a", class: "wspad-zone", cx: "830", cy: "478", r: "31" }),
-                  h("circle", { "data-fn": "x", class: "wspad-zone", cx: "762", cy: "410", r: "31" }),
+                  h("circle", { "data-fn": "y", class: "ps5a-hook", cx: "830", cy: "342", r: "31", fill: "transparent" }),
+                  h("circle", { "data-fn": "b", class: "ps5a-hook", cx: "898", cy: "410", r: "31", fill: "transparent" }),
+                  h("circle", { "data-fn": "a", class: "ps5a-hook", cx: "830", cy: "478", r: "31", fill: "transparent" }),
+                  h("circle", { "data-fn": "x", class: "ps5a-hook", cx: "762", cy: "410", r: "31", fill: "transparent" }),
                   // Create and Options, the slim pair either side of the
                   // touchpad — Back and Start to the mapper.
-                  h("rect", { "data-fn": "back", class: "wspad-zone", x: "310", y: "285", width: "31", height: "49", rx: "15" }),
-                  h("rect", { "data-fn": "start", class: "wspad-zone", x: "741", y: "285", width: "31", height: "49", rx: "15" }),
+                  h("rect", { "data-fn": "back", class: "ps5a-hook", x: "310", y: "285", width: "31", height: "49", rx: "15", fill: "transparent" }),
+                  h("rect", { "data-fn": "start", class: "ps5a-hook", x: "741", y: "285", width: "31", height: "49", rx: "15", fill: "transparent" }),
                   // The PS button.
-                  h("circle", { "data-fn": "guide", class: "wspad-zone", cx: "542", cy: "527", r: "26" }),
+                  h("circle", { "data-fn": "guide", class: "ps5a-hook", cx: "542", cy: "527", r: "26", fill: "transparent" }),
                 ),
                 // Sticks: the click, then the four directions around it.
                 h("g", { class: "ps5a-hit" },
-                  h("circle", { "data-fn": "lthumb", cx: "396", cy: "547", r: "34", fill: "transparent" }),
-                  h("circle", { "data-fn": "ly.max", cx: "396", cy: "492", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "ly.min", cx: "396", cy: "602", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "lx.min", cx: "341", cy: "547", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "lx.max", cx: "451", cy: "547", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rthumb", cx: "685", cy: "549", r: "34", fill: "transparent" }),
-                  h("circle", { "data-fn": "ry.max", cx: "685", cy: "494", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "ry.min", cx: "685", cy: "604", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rx.min", cx: "630", cy: "549", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rx.max", cx: "740", cy: "549", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "lthumb", class: "ps5a-hook", cx: "396", cy: "547", r: "34", fill: "transparent" }),
+                  h("circle", { "data-fn": "ly.max", class: "ps5a-hook", cx: "396", cy: "492", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "ly.min", class: "ps5a-hook", cx: "396", cy: "602", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "lx.min", class: "ps5a-hook", cx: "341", cy: "547", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "lx.max", class: "ps5a-hook", cx: "451", cy: "547", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rthumb", class: "ps5a-hook", cx: "685", cy: "549", r: "34", fill: "transparent" }),
+                  h("circle", { "data-fn": "ry.max", class: "ps5a-hook", cx: "685", cy: "494", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "ry.min", class: "ps5a-hook", cx: "685", cy: "604", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rx.min", class: "ps5a-hook", cx: "630", cy: "549", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rx.max", class: "ps5a-hook", cx: "740", cy: "549", r: "24", fill: "transparent" }),
+                ),
+                // ── Dressing: always above a lit hook ────────────────────
+                h("g", { class: "ps5a-dressing" },
+                  h("text", { class: "ps5a-sys", x: "253", y: "262", "text-anchor": "middle" }, "L2"),
+                  h("text", { class: "ps5a-sys", x: "829", y: "262", "text-anchor": "middle" }, "R2"),
+                  h("text", { class: "ps5a-sys", x: "218", y: "313", "text-anchor": "middle" }, "L1"),
+                  h("text", { class: "ps5a-sys", x: "864", y: "313", "text-anchor": "middle" }, "R1"),
+                  // Source chevrons and the four PlayStation face marks.
+                  h("path", { class: "ps5a-dpad-mark", d: "M249.61 352.412L254.016 347.125C254.416 346.645 255.153 346.645 255.553 347.125L259.959 352.412C260.502 353.064 260.039 354.052 259.191 354.052H250.378C249.53 354.052 249.067 353.064 249.61 352.412Z" }),
+                  h("path", { class: "ps5a-dpad-mark", d: "M199.506 414.174L194.218 409.768C193.738 409.368 193.738 408.631 194.218 408.231L199.506 403.825C200.157 403.282 201.146 403.745 201.146 404.593L201.146 413.406C201.146 414.254 200.157 414.717 199.506 414.174Z" }),
+                  h("path", { class: "ps5a-dpad-mark", d: "M259.959 465.587L255.553 470.875C255.153 471.354 254.416 471.354 254.017 470.875L249.61 465.587C249.068 464.936 249.531 463.947 250.379 463.947L259.191 463.947C260.039 463.947 260.502 464.936 259.959 465.587Z" }),
+                  h("path", { class: "ps5a-dpad-mark", d: "M311.372 402.517L316.659 406.923C317.139 407.323 317.139 408.06 316.659 408.46L311.372 412.866C310.721 413.409 309.732 412.945 309.732 412.098L309.732 403.285C309.732 402.437 310.721 401.974 311.372 402.517Z" }),
+                  h("path", { class: "ps5a-face-mark", d: "M847.03 352.397L830.001 352.399L813.153 352.397L830.005 322.087L847.03 352.397Z" }),
+                  h("circle", { class: "ps5a-face-mark", cx: "898", cy: "410", r: "18" }),
+                  h("path", { class: "ps5a-face-mark", d: "M814.723 462.639L844.813 492.729M844.813 462.639L814.723 492.729" }),
+                  h("rect", { class: "ps5a-face-mark", x: "748", y: "396", width: "28", height: "28" }),
+                  h("path", { class: "ps5a-side-mark", d: "M316 300H326M316 306H323M316 312H326M755 300H767M755 306H767M755 312H767" }),
+                  h("path", { class: "ps5a-stick-mark", d: "M374 526C381 512 411 507 422 524M663 526C670 512 700 507 711 524" }),
+                  h("path", { class: "ps5a-logo", transform: "translate(542 527) scale(.68) translate(-542 -527)", "fill-rule": "evenodd", "clip-rule": "evenodd", d: "M565.686 542.054C565.686 542.054 568.441 541.011 569.565 539.549C570.688 538.087 570.19 535.963 565.767 534.522C561.842 532.989 556.842 532.462 552.759 532.925C552.418 532.964 552.085 533.007 551.761 533.054V531.114C555.237 530.882 557.587 527.829 557.587 522.339C557.587 514.46 554.895 510.963 546.955 508.154C543.833 507.069 538.025 505.266 534.038 504.503V535.902H532.217V530.327L518.773 535.254C518.773 535.254 515.52 536.354 513.607 537.814C511.538 539.396 512.293 542.143 516.834 543.461C521.706 545.115 526.65 545.441 531.291 544.66C531.392 544.642 531.496 544.625 531.6 544.607C531.809 544.571 532.021 544.535 532.217 544.499V542.443H534.038V547.226L543.414 550.293V545.059H545.22L545.874 550.293L565.686 542.054Z" }),
+                  h("path", { class: "ps5a-mic-mark", d: "M538 584V587C538 591 546 591 546 587V584M536 587C536 594 548 594 548 587M542 592V596" }),
                 ),
                 // The glance callouts, in the same places the eye already
                 // looks for each control.

@@ -247,12 +247,43 @@ installed Interception DLL or drivers.
     License:  UNRESOLVED. This is NOT a claim of permission. The art is
               committed because it is what the owner chose to use; the line
               above must be filled in before ksx ships this asset publicly.
-    Used in:  studio-ui/art/src-dualsense.svg      (as supplied)
-              crates/ksx-studio/assets/pad-ps5.svg (backdrop removed, viewBox
-                                                    cropped — geometry and
-                                                    colours untouched)
+    Used in:  studio-ui/art/src-dualsense.svg       (as supplied)
+              studio-ui/src/NocturneIsland.ts       (selected silhouette and
+                                                     control geometry redrawn
+                                                     inline in Studio colours;
+                                                     filters/masks omitted)
+              crates/ksx-studio/assets/pad-ps5.svg  (backdrop removed, viewBox
+                                                     cropped — geometry and
+                                                     colours untouched)
 
     Sony Interactive Entertainment owns the DualSense trade dress the drawing
     depicts; ksx claims no affiliation. The same is already true of the two
     Gamepad-Asset-Pack drawings above, whose MIT licence covers the DRAWINGS,
     not the hardware they depict.
+
+
+--------------------------------------------------------------------------
+11. Semantic DualShock 4 controller drawing
+--------------------------------------------------------------------------
+
+    Upstream: https://github.com/dualshock-tools/dualshock-tools.github.io
+    Revision: 53e4ba84c7784ffb1aa6c4df79b01384dfd843ec
+    Source:   assets/dualshock-controller.svg
+    SHA-256:  4A3DF18DA942FB581A513546686CD1FEC136A6318F98DF66DB7CF2FB4BD576C0
+    License:  MIT; Copyright (c) 2024 the_al
+    Full text: THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt
+    Used in:  studio-ui/art/src-dualshock-tools-ds4.svg (verbatim source)
+              studio-ui/src/ds4FreeGeometry.ts (SVG elements expressed as
+                                                compiler-visible h() nodes)
+              studio-ui/src/NocturneIsland.ts (shared carbon paint,
+                                                transparent mapper hooks and
+                                                app-owned dressing/callouts)
+    Modifications: the root wrapper, comments, inactive trigger-percentage
+                   labels and source IDs are omitted. Semantic IDs became
+                   data-ds4-part attributes to remain valid when the hidden
+                   master is cloned. Geometry is recolored through Studio's
+                   shared gradients; face marks, touch texture, grip shade,
+                   lightbar, mapper hooks and callouts are app-owned layers.
+
+    Sony Interactive Entertainment owns the DualShock trade dress depicted;
+    ksx claims no affiliation.

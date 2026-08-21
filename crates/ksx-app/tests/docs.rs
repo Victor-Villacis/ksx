@@ -190,6 +190,7 @@ fn every_governing_doc_is_cited_from_the_code_it_governs() {
         "M9-DECISION.md",
         "MAPPER-UX.md",
         "SURFACES.md",
+        "UNIVERSAL-IO.md",
     ];
 
     let sources = source_files();

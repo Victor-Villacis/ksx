@@ -376,15 +376,13 @@ for (const [source, out, extra] of ART) {
 //      Studio's own ground, not on its export's blue gradient;
 //   2. the fixed width/height go and the viewBox is cropped to the pad's own
 //      extents (measured from every top-level element's bbox: x 80…1000,
-//      y 226…846 in the export's 1080² canvas). Two things depend on that
-//      crop: the <img> scales to whatever box the canvas widget gives it with
-//      no dead margin, and the island's transparent hook overlay can share
-//      these exact coordinates — the hooks are placed in ART space, so a
-//      1:1 box is what keeps a D-pad hook over the D-pad.
+//      y 226…846 in the export's 1080² canvas). The crop keeps the standalone
+//      asset free of dead margin and records the same source coordinates used
+//      by NocturneIsland's inline carbon derivative.
 const DUALSENSE_BACKDROP = '<rect width="1080" height="1080" rx="3" fill="url(#paint0_linear_5_4069)"/>';
 /** The pad's own extents in the export's canvas, plus a hair of air. The
- *  island's hook overlay declares the SAME box (`PS5_VIEWBOX`) — if this
- *  changes, that changes with it or every hook slides off its control. */
+ *  island's inline SVG declares the same box so both derivatives keep one
+ *  documented coordinate system. */
 export const DUALSENSE_VIEWBOX = "70 216 940 640";
 const dualsenseSource = readFileSync(join("art", "src-dualsense.svg"), "utf8");
 if (!dualsenseSource.includes(DUALSENSE_BACKDROP)) {

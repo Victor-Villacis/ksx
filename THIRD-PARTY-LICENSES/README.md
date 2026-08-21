@@ -5,6 +5,8 @@ bundled component to the KSX files that contain it. This directory carries the
 corresponding full license texts.
 
 - `Gamepad-Asset-Pack-MIT.txt` covers the controller drawings used by Studio.
+- `dualshock-tools-MIT.txt` covers the semantic DualShock 4 geometry used by
+  the Nocturne canvas.
 - `Lucide-ISC.txt` covers the `gamepad-2` geometry used in the detailed KSX
   mark and its generated images/icons.
 - `vigem-client-MIT.txt` covers the vendored Rust ViGEm client.

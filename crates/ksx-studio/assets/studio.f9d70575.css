@@ -351,6 +351,470 @@
   --dur-3: 180ms;
 }
 
+[data-forma-canvas] {
+  --forma-canvas-background: #090c12;
+  --forma-canvas-accent: #8ba6ff;
+  --forma-canvas-text: #edf0f7;
+  --forma-canvas-muted: #929aaf;
+  position: relative;
+  display: block;
+  min-width: 0;
+  min-height: 320px;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--forma-canvas-text);
+  background: var(--forma-canvas-background);
+}
+
+[data-forma-canvas] *,
+[data-forma-canvas] *::before,
+[data-forma-canvas] *::after {
+  box-sizing: border-box;
+}
+
+[data-forma-canvas] .forma-canvas-viewport {
+  --canvas-grid-size: 28px;
+  --canvas-grid-x: 0px;
+  --canvas-grid-y: 0px;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+[data-forma-canvas] .forma-canvas-viewport:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--forma-canvas-accent) 75%, white);
+  outline-offset: -2px;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-pan-ready,
+[data-forma-canvas] .forma-canvas-viewport.is-panning,
+[data-forma-canvas] .forma-canvas-viewport.is-navigating {
+  cursor: grabbing;
+}
+
+[data-forma-canvas] .forma-canvas-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.42;
+  background-image:
+    radial-gradient(circle, rgb(139 166 255 / 24%) 1px, transparent 1.2px),
+    linear-gradient(rgb(255 255 255 / 2.5%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2.5%) 1px, transparent 1px);
+  background-position:
+    var(--canvas-grid-x) var(--canvas-grid-y),
+    var(--canvas-grid-x) var(--canvas-grid-y),
+    var(--canvas-grid-x) var(--canvas-grid-y);
+  background-size:
+    var(--canvas-grid-size) var(--canvas-grid-size),
+    calc(var(--canvas-grid-size) * 5) calc(var(--canvas-grid-size) * 5),
+    calc(var(--canvas-grid-size) * 5) calc(var(--canvas-grid-size) * 5);
+  mask-image: radial-gradient(circle at center, black 16%, transparent 94%);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-panning .forma-canvas-grid {
+  opacity: 0.68;
+}
+
+[data-forma-canvas] .forma-canvas-viewport[data-widget-focus-mode="active"]
+  .forma-canvas-grid {
+  opacity: 0.14;
+}
+
+[data-forma-canvas] .forma-canvas-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+  opacity: 1;
+  transition: opacity 120ms ease;
+  will-change: transform;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-panning .forma-canvas-stage {
+  opacity: 0.84;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-camera-animating .forma-canvas-stage {
+  transition: transform 200ms cubic-bezier(0.2, 0.75, 0.25, 1), opacity 120ms ease;
+}
+
+[data-forma-canvas] .forma-canvas-zoom-status {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  min-width: 48px;
+  padding: 5px 8px;
+  border: 1px solid rgb(139 166 255 / 24%);
+  border-radius: 999px;
+  color: var(--forma-canvas-muted);
+  background: rgb(10 13 20 / 78%);
+  font: 600 11px/1 ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  pointer-events: none;
+}
+
+[data-forma-canvas] .widget-instance {
+  --widget-attention-scale: 1;
+  --widget-attention-opacity: 1;
+  position: absolute;
+  display: block;
+  width: var(--widget-preferred-width, 480px);
+  min-height: var(--widget-min-height, 300px);
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+  opacity: var(--widget-attention-opacity);
+  transform: scale(var(--widget-attention-scale));
+  transform-origin: center;
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms ease;
+  animation: forma-widget-materialize 170ms ease-out both;
+}
+
+[data-forma-canvas] .widget-instance[data-widget-navigation-item]:focus {
+  outline: none;
+}
+
+[data-forma-canvas] .widget-instance[data-widget-navigation-item]:focus-visible
+  [data-forma-runtime-host] {
+  outline-color: rgb(195 206 255 / 98%);
+  outline-offset: 6px;
+  filter: drop-shadow(0 20px 44px rgb(73 94 176 / 30%));
+}
+
+[data-forma-canvas] .widget-instance::after {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border-radius: 24px;
+  background: rgb(139 166 255 / 3.5%);
+  box-shadow: 0 18px 42px rgb(4 8 20 / 34%);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-forma-canvas] .widget-instance[data-attention-state="parked"]
+  [data-forma-runtime-host] {
+  content-visibility: hidden;
+  contain-intrinsic-size: var(--widget-min-height, 300px);
+  pointer-events: none;
+}
+
+[data-forma-canvas] .forma-virtualized-placeholder {
+  display: block;
+  min-height: var(--widget-min-height, 300px);
+  contain: strict;
+  pointer-events: none;
+}
+
+[data-forma-canvas] .widget-instance.is-dragging {
+  user-select: none;
+}
+
+[data-forma-canvas] .widget-instance.is-dragging::after {
+  opacity: 1;
+  transform: translateY(var(--widget-drag-lift, -2px)) scale(1.006);
+  transition-duration: 90ms;
+}
+
+[data-forma-canvas] .forma-canvas-viewport[data-widget-focus-mode="active"]
+  .widget-instance:not(.is-focus-mode) {
+  opacity: 0.22;
+}
+
+[data-forma-canvas] .widget-instance [data-forma-runtime-host] {
+  display: block;
+  min-height: var(--widget-min-height, 300px);
+  border-radius: 22px;
+  cursor: default;
+  transform-origin: center;
+  transition:
+    filter 140ms ease,
+    outline-color 140ms ease,
+    outline-offset 140ms ease,
+    outline-width 140ms ease,
+    transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-forma-canvas] .widget-instance.is-active [data-forma-runtime-host] {
+  outline: 2px solid rgb(139 166 255 / 76%);
+  outline-offset: 4px;
+  filter: drop-shadow(0 20px 44px rgb(40 56 112 / 20%));
+}
+
+[data-forma-canvas] .widget-instance.is-dragging [data-forma-runtime-host] {
+  outline-color: rgb(195 206 255 / 98%);
+  outline-offset: var(--widget-drag-outline-offset, 5px);
+  outline-width: var(--widget-drag-outline-width, 2px);
+  transform: translateY(var(--widget-drag-lift, -2px)) scale(1.006);
+  transition-duration: 90ms;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-pan-ready [data-forma-runtime-host],
+[data-forma-canvas] .forma-canvas-viewport.is-panning [data-forma-runtime-host],
+[data-forma-canvas] .forma-canvas-viewport.is-dragging-widget [data-forma-runtime-host],
+[data-forma-canvas] .forma-canvas-viewport.is-navigating [data-forma-runtime-host] {
+  pointer-events: none;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-pan-ready .widget-instance,
+[data-forma-canvas] .forma-canvas-viewport.is-panning .widget-instance,
+[data-forma-canvas] .forma-canvas-viewport.is-navigating .widget-instance,
+[data-forma-canvas] .forma-canvas-viewport.is-pan-ready .widget-drag-handle,
+[data-forma-canvas] .forma-canvas-viewport.is-panning .widget-drag-handle,
+[data-forma-canvas] .forma-canvas-viewport.is-navigating .widget-drag-handle {
+  cursor: grabbing;
+}
+
+[data-forma-canvas] .forma-canvas-viewport.is-dragging-widget,
+[data-forma-canvas] .forma-canvas-viewport.is-dragging-widget .widget-instance,
+[data-forma-canvas] .forma-canvas-viewport.is-dragging-widget .widget-drag-handle {
+  cursor: move;
+}
+
+[data-forma-canvas] .widget-chrome {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+[data-forma-canvas] .widget-command-region {
+  position: absolute;
+  top: var(--widget-command-attachment-y, 0);
+  left: var(--widget-command-attachment-x, 50%);
+  z-index: 4;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  transform: scale(var(--widget-chrome-control-scale, 1));
+  transform-origin: 0 0;
+}
+
+[data-forma-canvas] .widget-instance.is-dragging .widget-command-region {
+  transform: translateY(var(--widget-drag-lift, -2px))
+    scale(var(--widget-chrome-control-scale, 1));
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="dormant"]
+  .widget-command-region,
+[data-forma-canvas] .widget-instance:not(.is-active) .widget-command-region {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+[data-forma-canvas] .widget-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #69738d;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+[data-forma-canvas] .widget-drag-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 2px rgb(139 166 255 / 36%);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+[data-forma-canvas] .widget-drag-rail {
+  display: block;
+  border-radius: 999px;
+  background-color: rgb(14 18 29 / 96%);
+  background-image: radial-gradient(circle, currentcolor 0 1px, transparent 1.2px);
+  background-position: center;
+  box-shadow: 0 0 0 1px rgb(11 15 24 / 72%);
+  color: #78839d;
+  opacity: 0.8;
+  transition: color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+}
+
+[data-forma-canvas] .widget-instance:is(
+  [data-widget-command-edge="top"],
+  [data-widget-command-edge="bottom"]
+) .widget-drag-rail {
+  width: calc(32px * var(--widget-command-rail-visual-scale, 1));
+  height: max(3px, calc(5px * var(--widget-command-rail-visual-scale, 1)));
+  background-repeat: repeat-x;
+  background-size: 4px 4px;
+}
+
+[data-forma-canvas] .widget-instance:is(
+  [data-widget-command-edge="left"],
+  [data-widget-command-edge="right"]
+) .widget-drag-rail {
+  width: max(3px, calc(5px * var(--widget-command-rail-visual-scale, 1)));
+  height: calc(32px * var(--widget-command-rail-visual-scale, 1));
+  background-repeat: repeat-y;
+  background-size: 4px 4px;
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="ready"][data-widget-command-edge="top"]
+  .widget-drag-handle {
+  transform: translate(-50%, calc(-50% - 8px - var(--widget-command-rail-half-thickness, 2.5px)));
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="ready"][data-widget-command-edge="bottom"]
+  .widget-drag-handle {
+  transform: translate(-50%, calc(-50% + 8px + var(--widget-command-rail-half-thickness, 2.5px)));
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="ready"][data-widget-command-edge="left"]
+  .widget-drag-handle {
+  width: 28px;
+  height: 44px;
+  transform: translate(calc(-50% - 8px - var(--widget-command-rail-half-thickness, 2.5px)), -50%);
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="ready"][data-widget-command-edge="right"]
+  .widget-drag-handle {
+  width: 28px;
+  height: 44px;
+  transform: translate(calc(-50% + 8px + var(--widget-command-rail-half-thickness, 2.5px)), -50%);
+}
+
+[data-forma-canvas] .widget-instance[data-widget-command-state="rescue"]
+  .widget-drag-handle {
+  transform: translate(-50%, -50%);
+}
+
+[data-forma-canvas] .widget-drag-handle:hover .widget-drag-rail,
+[data-forma-canvas] .widget-drag-handle:focus-visible .widget-drag-rail {
+  background-color: rgb(39 49 82 / 96%);
+  color: #c3ceff;
+  opacity: 1;
+}
+
+[data-forma-canvas] .widget-instance.is-dragging .widget-drag-rail {
+  background-color: var(--forma-canvas-accent);
+  color: #111728;
+  opacity: 1;
+}
+
+[data-forma-canvas] .widget-drag-handle:focus-visible {
+  outline: none;
+}
+
+[data-forma-canvas] .widget-drag-handle:focus-visible::after {
+  opacity: 1;
+}
+
+[data-forma-canvas] .forma-canvas-navigator {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 6;
+  width: 176px;
+  height: 124px;
+  overflow: hidden;
+  border: 1px solid rgb(139 166 255 / 36%);
+  border-radius: 13px;
+  background: rgb(10 13 20 / 90%);
+  box-shadow: 0 14px 44px rgb(0 0 0 / 36%);
+  cursor: crosshair;
+}
+
+[data-forma-canvas] .forma-canvas-navigator[hidden] {
+  display: none;
+}
+
+[data-forma-canvas] .forma-canvas-navigator-items,
+[data-forma-canvas] .forma-canvas-navigator-viewport {
+  position: absolute;
+}
+
+[data-forma-canvas] .forma-canvas-navigator-items {
+  inset: 0;
+}
+
+[data-forma-canvas] .navigator-item {
+  position: absolute;
+  min-width: 5px;
+  min-height: 4px;
+  padding: 0;
+  border: 1px solid rgb(139 166 255 / 48%);
+  border-radius: 2px;
+  background: rgb(79 104 185 / 36%);
+  cursor: pointer;
+}
+
+[data-forma-canvas] .navigator-item.is-active {
+  border-color: #b9c8ff;
+  background: rgb(139 166 255 / 72%);
+}
+
+[data-forma-canvas] .forma-canvas-navigator-viewport {
+  z-index: 2;
+  border: 1px solid rgb(167 232 189 / 82%);
+  background: rgb(83 194 125 / 9%);
+  pointer-events: none;
+}
+
+@keyframes forma-widget-materialize {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(var(--widget-attention-scale));
+  }
+  to {
+    transform: scale(var(--widget-attention-scale));
+  }
+}
+
+@media (pointer: coarse) {
+  [data-forma-canvas] .widget-drag-handle,
+  [data-forma-canvas] .widget-instance[data-widget-command-edge="left"] .widget-drag-handle,
+  [data-forma-canvas] .widget-instance[data-widget-command-edge="right"] .widget-drag-handle {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-forma-canvas] *,
+  [data-forma-canvas] *::before,
+  [data-forma-canvas] *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+
+  [data-forma-canvas] .widget-instance.is-dragging::after,
+  [data-forma-canvas] .widget-instance.is-dragging [data-forma-runtime-host] {
+    transform: none !important;
+  }
+}
+
 /* ksx Studio — the design system.
  *
  * See docs/DESIGN-SYSTEM.md for the rationale and
@@ -7406,17 +7870,91 @@ a.wsrow-title:hover {
   user-select: none;
 }
 
-.n-stage {
-  position: relative;
+/* ══ THE CANVAS (genui) ════════════════════════════════════════════════════
+   The center's surface is the vendored forma-genui-runtime engine
+   (studio-ui/src/genui/, provenance in its README). Its own sheet ships as
+   genui-canvas.css BEFORE this file, palette-neutral; everything here is
+   the Nocturne skin — the engine's four tokens pointed at --n-*, with this
+   sheet's later position winning the literal overrides. The keyboard and
+   every staged controller are widgets on the surface; the panes and the
+   header stay put. */
+
+.n-canvas {
   flex: 1;
   min-height: 260px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
   border: 1px solid var(--n-panel-2);
   border-radius: 14px;
+  --forma-canvas-background: var(--n-bg);
+  --forma-canvas-accent: var(--n-accent);
+  --forma-canvas-text: var(--n-text);
+  --forma-canvas-muted: var(--n-text-2);
   background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
+}
+
+/* The pad masters: clone templates only, never rendered directly. */
+.n-padmasters {
+  display: none;
+}
+
+/* Widget shells stay the engine's transparent hulls; the LOOK lives on the
+   content, which carries data-forma-runtime-host so the engine sheet's
+   active/drag/focus outlines apply to plain-content widgets too — recolored
+   here from the engine's blues to the proof's accent. */
+.nocturne .widget-instance.is-active [data-forma-runtime-host] {
+  outline-color: color-mix(in srgb, var(--n-accent) 76%, transparent);
+}
+
+.nocturne .widget-instance.is-dragging [data-forma-runtime-host],
+.nocturne
+  .widget-instance[data-widget-navigation-item]:focus-visible
+  [data-forma-runtime-host] {
+  outline-color: var(--n-accent);
+}
+
+.n-widget-kb .n-widget-body {
+  display: block;
+  border: 1px solid var(--n-line);
+  background: var(--n-bg);
+  padding: 10px 14px 14px;
+}
+
+.nocturne .n-widget .n-mini,
+.nocturne .n-widget .n-widget-body {
+  border-radius: 14px;
+}
+
+/* No JavaScript: the engine never runs, so the canvas relaxes into a
+   document — widgets stack in flow, chrome and camera UI vanish, and the
+   served keyboard stays fully readable (the page's no-JS contract). */
+.nocturne:not(.js) .n-canvas {
+  min-height: 0;
+  overflow: visible;
+}
+
+.nocturne:not(.js) .forma-canvas-viewport {
+  position: static;
+  overflow: visible;
+  cursor: default;
+}
+
+.nocturne:not(.js) .forma-canvas-stage {
+  position: static;
+  width: auto;
+  height: auto;
+}
+
+.nocturne:not(.js) .widget-instance {
+  position: static;
+  width: auto;
+  min-height: 0;
+  margin: 10px;
+  animation: none;
+}
+
+.nocturne:not(.js) .forma-canvas-grid,
+.nocturne:not(.js) .forma-canvas-zoom-status,
+.nocturne:not(.js) .widget-chrome {
+  display: none;
 }
 
 /* ── The stage silhouettes: the workspace's vendored Gamepad-Asset-Pack
@@ -7436,20 +7974,20 @@ a.wsrow-title:hover {
   display: none;
 }
 
-.n-stage .nx-defs {
+.n-center .nx-defs {
   position: absolute;
 }
 
 /* The photoreal Xbox's face letters: color rides the element (the real
    ABXY palette); this rule carries only the type. */
-.n-stage .nxr-face {
+.n-center .nxr-face {
   font-size: 4.2px;
   font-weight: 700;
   font-family: inherit;
   pointer-events: none;
 }
 
-.n-stage .wspad {
+.n-center .wspad {
   width: min(560px, 94%);
   height: auto;
   max-height: 94%;
@@ -7457,39 +7995,39 @@ a.wsrow-title:hover {
   filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.5));
 }
 
-.n-stage .wspad-shell {
+.n-center .wspad-shell {
   fill: url(#nxg-shell);
   stroke: #3d4154;
   stroke-width: 0.5;
   stroke-linejoin: round;
 }
 
-.n-stage .wspad-well {
+.n-center .wspad-well {
   fill: url(#nxg-well);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
-.n-stage .wspad-zone {
+.n-center .wspad-zone {
   fill: url(#nxg-btn);
   stroke: #454960;
   stroke-width: 0.35;
   stroke-linejoin: round;
 }
 
-.n-stage .wspad-stick {
+.n-center .wspad-stick {
   fill: url(#nxg-stick);
   stroke: #50546b;
   stroke-width: 0.4;
 }
 
-.n-stage .wspad-touch {
+.n-center .wspad-touch {
   fill: url(#nxg-touch);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
-.n-stage .wspad-petals path {
+.n-center .wspad-petals path {
   fill: url(#nxg-btn);
   stroke: #454960;
   stroke-width: 0.35;
@@ -7497,14 +8035,14 @@ a.wsrow-title:hover {
 }
 
 /* The guide/PS lamp — LIT: a real lamp with its own soft halo. */
-.n-stage .wspad-guide {
+.n-center .wspad-guide {
   fill: url(#nxg-lamp);
   stroke: var(--n-accent-line);
   stroke-width: 0.3;
   filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.55));
 }
 
-.n-stage .wspad-glyph {
+.n-center .wspad-glyph {
   fill: none;
   stroke: #9397ab;
   stroke-width: 0.55;
@@ -7512,7 +8050,7 @@ a.wsrow-title:hover {
   stroke-linecap: round;
 }
 
-.n-stage .wspad-face {
+.n-center .wspad-face {
   fill: #cfd3e5;
   font-size: 4.6px;
   font-weight: 600;
@@ -7520,7 +8058,7 @@ a.wsrow-title:hover {
   pointer-events: none;
 }
 
-.n-stage .wspad-sys {
+.n-center .wspad-sys {
   fill: #75798c;
   font-size: 3.4px;
   font-family: inherit;
@@ -8561,13 +9099,13 @@ button.n-krow-tg {
 
 /* The armed CONTROL glows on the art while its learn waits — the armed
    key's mirror. Transparent hooks gain a visible ring; callouts recolor. */
-.n-stage [data-fn].arm {
+.n-center [data-fn].arm {
   stroke: var(--n-accent);
   stroke-width: 3px;
   fill: rgba(150, 138, 224, 0.15);
 }
 
-.n-stage text.n-fnkey.arm {
+.n-center text.n-fnkey.arm {
   fill: var(--n-accent-2);
   stroke-width: 0;
 }
@@ -8627,7 +9165,7 @@ button.n-krow-tg {
 
 /* The stage's glance callouts: which key presses each control. Outlined
    so they read on any art ground; sized per art viewBox scale. */
-.n-stage text.n-fnkey {
+.n-center text.n-fnkey {
   fill: var(--n-text-2);
   stroke: #0c0d12;
   stroke-width: 3.2px;
@@ -8639,12 +9177,12 @@ button.n-krow-tg {
   user-select: none;
 }
 
-.n-stage svg.wspad:not(.x360a) text.n-fnkey {
+.n-center svg.wspad:not(.x360a) text.n-fnkey {
   font-size: 4.4px;
   stroke-width: 0.75px;
 }
 
-.n-stage text.n-fnkey.live {
+.n-center text.n-fnkey.live {
   fill: var(--n-accent-2);
 }
 
@@ -8808,7 +9346,7 @@ button.n-keychip:hover {
 /* Hovering a control answers like the keycaps do: visible shapes lift
    and brighten, transparent hooks gain a soft accent ring — either way
    the pad says "clickable" before the click. */
-.n-stage [data-fn] {
+.n-center [data-fn] {
   transform-box: fill-box;
   transform-origin: center;
   transition:
@@ -8816,29 +9354,29 @@ button.n-keychip:hover {
     filter 120ms ease;
 }
 
-.n-stage [data-fn]:hover {
+.n-center [data-fn]:hover {
   transform: scale(1.08);
   stroke: var(--n-accent-line);
   stroke-width: 2.5px;
   filter: brightness(1.15);
 }
 
-.n-stage circle[fill="transparent"][data-fn]:hover {
+.n-center circle[fill="transparent"][data-fn]:hover {
   fill: rgba(150, 138, 224, 0.12);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .n-stage [data-fn] {
+  .n-center [data-fn] {
     transition: none;
   }
 
-  .n-stage [data-fn]:hover {
+  .n-center [data-fn]:hover {
     transform: none;
   }
 }
 
 /* Stage art is clickable: any control jumps to its binding row. */
-.n-stage [data-fn] {
+.n-center [data-fn] {
   cursor: pointer;
 }
 
@@ -8895,7 +9433,7 @@ button.n-keychip:hover {
     border-left: none;
   }
 
-  .n-stage {
+  .n-canvas {
     min-height: 220px;
   }
 }
@@ -9576,7 +10114,7 @@ button.n-keychip:hover {
   background: var(--n-accent);
 }
 
-.n-stage.live {
+.n-canvas.live {
   border-color: rgba(150, 138, 224, 0.4);
   box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
 }
@@ -9941,60 +10479,6 @@ button.n-keychip:hover {
 /* ── The multi-pad grid: every staged controller at once ── */
 
 /* The grid's zoom: only meaningful (and only shown) in multi mode. */
-.n-zoomctl {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  z-index: 6;
-  display: none;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--n-panel);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-.n-stage.multi .n-zoomctl {
-  display: flex;
-}
-
-.n-zfit {
-  width: auto;
-  padding: 0 9px;
-  font-size: 11px;
-}
-
-.n-zfit[aria-pressed="true"] {
-  background: var(--n-panel-2);
-  color: var(--n-text);
-}
-
-
-.n-padgrid {
-  display: none;
-}
-
-.n-stage.multi .n-padwrap {
-  display: none;
-}
-
-.n-stage.multi {
-  overflow-y: auto;
-  min-height: 300px;
-}
-
-.n-stage.multi .n-padgrid {
-  display: grid;
-  width: 100%;
-  grid-template-columns: repeat(auto-fill, var(--padw, 340px));
-  justify-content: center;
-  padding-bottom: 16px;
-  gap: 14px;
-  align-content: start;
-  align-self: stretch;
-  padding: 10px;
-}
-
 .n-mini {
   border: 1px solid var(--n-line);
   border-radius: 12px;
@@ -12454,8 +12938,8 @@ a.nm-link {
   }
 }
 
-.n-stage [data-fn].live,
-.n-stage .wspad-petals path[data-fn].live {
+.n-center [data-fn].live,
+.n-center .wspad-petals path[data-fn].live {
   fill: var(--n-accent);
   stroke: var(--n-accent);
 }
@@ -12495,19 +12979,19 @@ a.nm-link {
 
 
 /* Scenario A: the CC0 art's own coordinate space is 6.68x ours. */
-.n-stage .x360a-sys {
+.n-center .x360a-sys {
   font-size: 23px;
 }
 
 
-.n-stage .x360a-face {
+.n-center .x360a-face {
   font-size: 32px;
   font-weight: 700;
   font-family: inherit;
   pointer-events: none;
 }
 
-.n-stage .x360a-lab {
+.n-center .x360a-lab {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -12515,7 +12999,7 @@ a.nm-link {
   pointer-events: none;
 }
 
-.n-stage .x360a-num {
+.n-center .x360a-num {
   font-size: 14px;
   font-family: inherit;
   pointer-events: none;
@@ -12528,22 +13012,4 @@ a.nm-link {
   display: contents;
 }
 
-.n-center.kb-closed .n-kbpane {
-  display: none;
-}
 
-.n-kbtoggle {
-  flex: none;
-  order: 3;
-  transition: transform 0.15s ease;
-}
-
-.n-center.kb-closed .n-kbtoggle {
-  transform: rotate(-90deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .n-kbtoggle {
-    transition: none;
-  }
-}

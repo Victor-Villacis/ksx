@@ -9,13 +9,13 @@ import {
   applyFlash,
   applyNocturne,
   applyNocturneUnreachable,
+  initNocturneCanvas,
   NocturneIsland,
   paintStageCallouts,
-  syncPadGrid,
+  syncPadWidgets,
   nocturneLiveConnect,
   nocturneWire,
   restoreNocturneFilter,
-  scheduleKbFit,
   setNocturnePoll,
   type NocturnePayload,
 } from "./NocturneIsland";
@@ -181,15 +181,17 @@ activateIslands({
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) void poll();
     });
-    // The filter input and the board exist only after the island mounts:
-    // restore ?q= and run the first fit on the next frame.
+    // The filter input, the board and the canvas exist only after the
+    // island mounts: restore ?q=, adopt the canvas (which mounts the
+    // keyboard widget and the controller widgets), and paint the masters'
+    // key callouts on the next frame.
     window.requestAnimationFrame(() => {
       restoreNocturneFilter();
-      scheduleKbFit();
-      // The seed applied before the island existed: paint the stage's key
-      // callouts now that it does.
+      // The seed applied before the island existed: paint the key callouts
+      // now that it does, then let the canvas clone the dressed masters.
       paintStageCallouts();
-      syncPadGrid();
+      initNocturneCanvas(el);
+      syncPadWidgets();
     });
     // A no-JS POST landed us on ?flash=…: the server already painted the
     // line; strip the query so a manual reload does not replay feedback for

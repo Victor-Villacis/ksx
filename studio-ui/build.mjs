@@ -99,6 +99,15 @@ writeFileSync("../crates/ksx-studio/src/theme_tokens.rs", tokens.rustModule, "ut
 const cssTempDir = mkdtempSync(join(tmpdir(), "ksx-studio-css-"));
 const tokensCssTmp = join(cssTempDir, "tokens.gen.css");
 writeFileSync(tokensCssTmp, tokens.css, "utf8");
+// The vendored genui canvas sheet (studio-ui/src/genui/README.md carries the
+// provenance) rides BETWEEN the tokens and the authored sheet, so studio.css
+// §9's canvas skin can override its literals at equal specificity by order.
+const canvasCssTmp = join(cssTempDir, "genui-canvas.css");
+writeFileSync(
+  canvasCssTmp,
+  readFileSync("src/genui-canvas.css", "utf8").replace(/\r\n?/g, "\n"),
+  "utf8",
+);
 const normalizedCss = join(cssTempDir, "studio.css");
 writeFileSync(normalizedCss, authoredCss, "utf8");
 
@@ -116,7 +125,7 @@ try {
       { entry: "src/profiles.ts", outfile: "profiles.js" },
       { entry: "src/setup.ts", outfile: "setup.js" },
     ],
-    cssEntries: [{ input: [tokensCssTmp, normalizedCss], outfile: "studio.css" }],
+    cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
       "/start": { js: ["start"], css: ["studio"] },
       "/workspace": { js: ["workspace"], css: ["studio"] },

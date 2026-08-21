@@ -1,6 +1,9 @@
 import { createList, createShow, createSignal, h } from "@getforma/core";
 import { fetchJSON } from "@getforma/core/http";
 
+import { WidgetCanvas, createCanvasItem } from "./genui/canvas/index";
+import type { WidgetCanvasItemState } from "./genui/canvas/widget-canvas";
+
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
 // Migration state (2026-08-17, pass 5): the KEYBOARD pane, the CONTROLLER
@@ -896,12 +899,11 @@ export function applyNocturne(p: NocturnePayload): void {
   // The live echo's license rides the same payload (fail-closed origin).
   reconcileLiveSession(p);
   // Reconciliation may have replaced rows or keycaps: the live paint's
-  // cached node lists re-query on the next frame, the board refits, and
-  // the filter re-applies — a fresh row arrives without the imperative
-  // `.hide` class its predecessor carried.
+  // cached node lists re-query on the next frame and the filter re-applies
+  // — a fresh row arrives without the imperative `.hide` class its
+  // predecessor carried.
   liveKeyNodes = null;
   liveFnNodes = null;
-  scheduleKbFit();
   const root = learnRoot;
   if (root) {
     const query = root.querySelector<HTMLInputElement>(".n-filter-in")?.value ?? "";
@@ -919,7 +921,7 @@ export function applyNocturne(p: NocturnePayload): void {
   lastBindView = v;
   if (learnRoot) {
     paintStageCallouts();
-    syncPadGrid();
+    syncPadWidgets();
     // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
     pruneHiddenStrips();
@@ -965,7 +967,7 @@ export function paintStageCallouts(): void {
     if (name.startsWith("Right") && name.length > 5 && !cap.startsWith("R")) return "R" + cap;
     return cap;
   };
-  for (const el of Array.from(root.querySelectorAll<SVGTextElement>(".n-stage text.n-fnkey"))) {
+  for (const el of Array.from(root.querySelectorAll<SVGTextElement>(".n-padmasters text.n-fnkey"))) {
     const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
     const parts: string[] = [];
     for (const fn of fns) {
@@ -978,53 +980,118 @@ export function paintStageCallouts(): void {
   }
 }
 
-/** The multi-pad grid: every staged controller cloned from its family's
- *  master art, color-framed, slot-stamped — all mappable at once. Clones
- *  are built imperatively AFTER hydration from browser-kept preference
- *  (the parity gate's empty-storage run stays single-pad), and rebuilt
- *  only when the pad roster changes. */
-let padGridPrint = "";
+// ── THE CANVAS (genui) ─────────────────────────────────────────────────────────
+// The center is a real pan/zoom canvas (the vendored forma-genui-runtime
+// engine, studio-ui/src/genui/) and the keyboard and every staged controller
+// are WIDGETS on it. The keyboard widget is SSR markup the engine ADOPTS
+// (mountItem takes the served article; the engine's geometry writes ride the
+// parity contract's client-canvas exemption); the controller widgets are
+// client-built from the payload roster — the padgrid precedent made
+// contractual (data-client-widget). Geometry is browser-kept like every
+// other chrome preference: keyed by PRESET (the color-store lesson — seats
+// renumber, identity travels), loaded before the engine mounts, saved on the
+// engine's own durable commits.
+const CANVAS_STORE = "ksx-nocturne-canvas";
 
-/** The zoom ladder: EXACT pad widths (fixed tracks, so every step is a
- *  visible size change; auto-fill wraps the columns). `padZoom` of -1 is
- *  FIT: the largest width that shows every pad without scrolling, solved
- *  against the stage's box and re-solved on resize. */
-const PAD_STEPS = [240, 300, 380, 480, 600, 760];
-
-function fitPadWidth(grid: HTMLElement, count: number): number {
-  const stage = grid.closest<HTMLElement>(".n-stage");
-  const cw = grid.clientWidth - 20;
-  const ch = (stage?.clientHeight ?? 0) - 24;
-  if (cw <= 0 || ch <= 0 || count === 0) return 340;
-  // A card's height follows its width; measure a real card when one
-  // exists, else start from the art's rough aspect.
-  const sample = grid.querySelector<HTMLElement>(".n-mini");
-  const ratio =
-    sample && sample.offsetWidth > 0 ? sample.offsetHeight / sample.offsetWidth : 0.95;
-  const gap = 14;
-  let best = 220;
-  for (let cols = 1; cols <= count; cols += 1) {
-    const rows = Math.ceil(count / cols);
-    // Width capped by BOTH axes: the columns' share of the width AND the
-    // rows' share of the height — a wide short stage fits pads by height,
-    // not by collapsing to the floor.
-    const byWidth = (cw - gap * (cols - 1)) / cols;
-    const byHeight = (ch - gap * (rows - 1)) / rows / ratio;
-    const w = Math.floor(Math.min(byWidth, byHeight));
-    if (w < 220) continue;
-    best = Math.max(best, Math.min(w, 820));
-  }
-  return best;
+interface CanvasItemGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z: number;
+  manualScale: number;
 }
 
-let padFitQueued = false;
-function schedulePadFit(): void {
-  if (padFitQueued) return;
-  padFitQueued = true;
-  window.requestAnimationFrame(() => {
-    padFitQueued = false;
-    if (ui.padsAll) syncPadGrid();
-  });
+interface CanvasPrefs {
+  camera?: { panX: number; panY: number; zoom: number };
+  widgets: Record<string, CanvasItemGeometry>;
+}
+
+let canvasPrefs: CanvasPrefs = { widgets: {} };
+let nCanvas: WidgetCanvas | null = null;
+let padWidgetPrint = "";
+const padItems = new Map<number, HTMLElement>();
+
+/** Where the board and the first pads land with an empty store: keyboard
+ *  low, controllers in a row above — a deliberate opening arrangement, not
+ *  the engine's generic staircase. */
+const KB_HOME: CanvasItemGeometry = { x: 90, y: 540, width: 980, height: 360, z: 1, manualScale: 1 };
+function padHome(index: number): CanvasItemGeometry {
+  return {
+    x: 90 + (index % 3) * 480,
+    y: 60 + Math.floor(index / 3) * 460,
+    width: 440,
+    height: 400,
+    z: 2 + index,
+    manualScale: 1,
+  };
+}
+
+function isGeometry(g: unknown): g is CanvasItemGeometry {
+  const v = g as CanvasItemGeometry;
+  return (
+    typeof v === "object" && v !== null &&
+    [v.x, v.y, v.width, v.height, v.z, v.manualScale].every(
+      (n) => typeof n === "number" && Number.isFinite(n),
+    )
+  );
+}
+
+function loadCanvasPrefs(): void {
+  try {
+    const raw = window.localStorage.getItem(CANVAS_STORE);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as CanvasPrefs;
+    const widgets: Record<string, CanvasItemGeometry> = {};
+    for (const [key, g] of Object.entries(saved.widgets ?? {})) {
+      if (isGeometry(g)) widgets[key] = g;
+    }
+    const cam = saved.camera;
+    canvasPrefs = {
+      widgets,
+      camera:
+        cam &&
+        [cam.panX, cam.panY, cam.zoom].every(
+          (n) => typeof n === "number" && Number.isFinite(n),
+        )
+          ? { panX: cam.panX, panY: cam.panY, zoom: Math.min(2, Math.max(0.2, cam.zoom)) }
+          : undefined,
+    };
+  } catch {
+    // A blocked or corrupt store reads as the defaults.
+  }
+}
+
+function saveCanvasPrefs(): void {
+  try {
+    window.localStorage.setItem(CANVAS_STORE, JSON.stringify(canvasPrefs));
+  } catch {
+    // The arrangement simply will not survive this session.
+  }
+}
+
+/** A widget's durable identity in the store: the keyboard is itself; a
+ *  controller is its PRESET, so its spot survives seat renumbering. */
+function padStoreKey(preset: string): string {
+  return "p:" + preset;
+}
+
+/** Read every mounted widget's geometry plus the camera back into the store
+ *  — called from the engine's onCommit, its own durable boundary. */
+function persistCanvas(): void {
+  const canvas = nCanvas;
+  const root = learnRoot;
+  const v = lastBindView;
+  if (!canvas || !root) return;
+  const widgets: Record<string, CanvasItemGeometry> = { ...canvasPrefs.widgets };
+  const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
+  if (kb && kb.dataset.canvasX !== undefined) widgets["kb"] = canvas.getItemState(kb);
+  for (const [slot, item] of padItems) {
+    const preset = (v?.pads ?? []).find((p) => p.slot === slot)?.preset;
+    if (preset !== undefined) widgets[padStoreKey(preset)] = canvas.getItemState(item);
+  }
+  canvasPrefs = { camera: canvas.getCamera(), widgets };
+  saveCanvasPrefs();
 }
 
 function calloutText(chip: string, capFor: (name: string) => string): string {
@@ -1048,42 +1115,35 @@ function capForBoard(root: HTMLElement): (name: string) => string {
   };
 }
 
-export function syncPadGrid(): void {
+/** Every staged controller as a canvas widget, rebuilt when the roster
+ *  changes: the engine's own item factory around the same badge-and-clone
+ *  card the pad grid used to build. Client-created on purpose (the padgrid
+ *  precedent made contractual): the wrappers carry `data-client-widget`, so
+ *  the parity gate removes them before comparing — their SSR absence is the
+ *  contract, and the keyboard widget deliberately has no such marker. */
+export function syncPadWidgets(): void {
   const root = learnRoot;
   const v = lastBindView;
-  if (!root || !v) return;
-  const stage = root.querySelector<HTMLElement>(".n-stage");
-  const grid = root.querySelector<HTMLElement>(".n-padgrid");
-  if (!stage || !grid) return;
+  const canvas = nCanvas;
+  if (!root || !v || !canvas) return;
   const pads = v.pads ?? [];
-  const on = ui.padsAll && pads.length > 0;
-  const was = stage.classList.contains("multi");
-  stage.classList.toggle("multi", on);
-  // The board's height budget depends on this mode; refit it on a flip.
-  if (was !== on) scheduleKbFit();
-  const btn = root.querySelector<HTMLElement>(".n-padsbtn");
-  btn?.setAttribute("aria-pressed", on ? "true" : "false");
-  if (!on) {
-    if (grid.firstChild) {
-      grid.textContent = "";
-      padGridPrint = "";
-      liveFnNodes = null;
-    }
-    return;
-  }
   const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.title).join("|");
-  if (print !== padGridPrint) {
-    padGridPrint = print;
-    grid.textContent = "";
-    // The two masters, in template order: [0] Xbox, [1] DualShock.
+  if (print !== padWidgetPrint) {
+    padWidgetPrint = print;
+    for (const [, item] of padItems) canvas.removeItem(item, { selectFallback: false });
+    padItems.clear();
+    // The two hidden masters, in template order: [0] Xbox, [1] DualShock.
     const masters = root.querySelectorAll<HTMLElement>(".n-padwrap");
-    for (const pv of pads) {
+    pads.forEach((pv, index) => {
       const master = pv.family === "ps" ? masters[1] : masters[0];
       const svg = master?.querySelector("svg");
-      if (!svg) continue;
-      const wrap = document.createElement("div");
-      wrap.className = "n-mini np" + pv.slot;
-      wrap.setAttribute("data-pad-slot", String(pv.slot));
+      if (!svg) return;
+      const content = document.createElement("div");
+      content.className = "n-mini np" + pv.slot;
+      content.setAttribute("data-pad-slot", String(pv.slot));
+      // CSS marker only: the engine's active/drag outlines target
+      // [data-forma-runtime-host]; no runtime adapter ever claims this.
+      content.setAttribute("data-forma-runtime-host", "");
       const head = document.createElement("div");
       head.className = "n-mini-head";
       const badge = document.createElement("span");
@@ -1093,40 +1153,32 @@ export function syncPadGrid(): void {
       title.className = "n-mini-title";
       title.textContent = pv.title;
       head.append(badge, title);
-      wrap.append(head, svg.cloneNode(true));
-      grid.append(wrap);
-    }
+      content.append(head, svg.cloneNode(true));
+      const item = createCanvasItem({
+        instanceId: "pad-" + pv.slot,
+        displayName: "P" + pv.slot + " \u00b7 " + pv.title,
+        preferredWidth: 440,
+        minHeight: 300,
+        content,
+      });
+      item.classList.add("n-widget", "n-widget-pad", "np" + pv.slot);
+      item.dataset.clientWidget = "";
+      const restored = canvasPrefs.widgets[padStoreKey(pv.preset)] ?? padHome(index);
+      canvas.mountItem(item, restored, { focus: false });
+      padItems.set(pv.slot, item);
+    });
     liveFnNodes = null;
   }
-  // Size the tracks AFTER the clones exist, so Fit can measure a real
-  // card's aspect instead of guessing.
-  let width = ui.padZoom < 0 ? fitPadWidth(grid, pads.length) : (PAD_STEPS[ui.padZoom] ?? 340);
-  grid.style.setProperty("--padw", `${width}px`);
-  if (ui.padZoom < 0) {
-    // The estimate can miss by a hair (constant card chrome, paddings):
-    // measure the real overflow and shrink once to guarantee the fit.
-    const stageBox = grid.closest<HTMLElement>(".n-stage");
-    if (stageBox && stageBox.scrollHeight > stageBox.clientHeight) {
-      width = Math.max(
-        220,
-        Math.floor((width * stageBox.clientHeight) / stageBox.scrollHeight) - 2,
-      );
-      grid.style.setProperty("--padw", `${width}px`);
-    }
-  }
-  root
-    .querySelector('[data-nx="pad-zoom-fit"]')
-    ?.setAttribute("aria-pressed", ui.padZoom < 0 ? "true" : "false");
-  // Dress every clone's callouts from ITS slot's own table.
+  // Dress every widget's callouts from ITS slot's own table.
   const capFor = capForBoard(root);
-  for (const wrap of Array.from(grid.querySelectorAll<HTMLElement>("[data-pad-slot]"))) {
-    const pv = pads.find((x) => String(x.slot) === wrap.getAttribute("data-pad-slot"));
+  for (const [slot, item] of padItems) {
+    const pv = pads.find((x) => x.slot === slot);
     if (!pv) continue;
     const byFn = new Map<string, string>();
     for (const [fnName, keys] of Object.entries(pv.fn_keys)) {
       byFn.set(fnName.toLowerCase(), keys);
     }
-    for (const el of Array.from(wrap.querySelectorAll<SVGTextElement>("text.n-fnkey"))) {
+    for (const el of Array.from(item.querySelectorAll<SVGTextElement>("text.n-fnkey"))) {
       const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
       const parts: string[] = [];
       for (const fnName of fns) {
@@ -1136,6 +1188,50 @@ export function syncPadGrid(): void {
       el.textContent = parts.join("\u00b7");
     }
   }
+}
+
+/** Adopt the served canvas skeleton and keyboard widget, then mount the
+ *  controller widgets. Runs once, strictly AFTER adoption (the entry's
+ *  post-mount frame): the engine annotates the served nodes, and every one
+ *  of its writes rides the parity contract's client-canvas exemption. */
+export function initNocturneCanvas(root: HTMLElement): void {
+  if (nCanvas) return;
+  const surface = root.querySelector<HTMLElement>(".n-canvas");
+  const viewport = surface?.querySelector<HTMLElement>(".forma-canvas-viewport");
+  const stage = surface?.querySelector<HTMLElement>(".forma-canvas-stage");
+  const zoomStatus = surface?.querySelector<HTMLElement>(".forma-canvas-zoom-status");
+  if (!surface || !viewport || !stage || !zoomStatus) return;
+  // The minimap navigator is OFF for now. The engine requires its elements,
+  // so it renders markers into DETACHED nodes that never join the document
+  // — zero DOM, zero parity surface, and turning it on later is one flip.
+  const navigator = document.createElement("div");
+  const navigatorItems = document.createElement("div");
+  const navigatorViewport = document.createElement("div");
+  navigator.append(navigatorItems, navigatorViewport);
+  loadCanvasPrefs();
+  nCanvas = new WidgetCanvas(
+    { viewport, stage, zoomStatus, navigator, navigatorItems, navigatorViewport },
+    {
+      onCommit: persistCanvas,
+      // The engine has no live region of its own; the meta bar's sr status
+      // line is this page's.
+      onKeyboardNavigation: (message) => {
+        const sr = root.querySelector<HTMLElement>(".n-live-sr");
+        if (sr) sr.textContent = message;
+      },
+    },
+  );
+  const kb = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
+  if (kb) nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
+  if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
+  syncPadWidgets();
+  if (!canvasPrefs.camera) {
+    // First visit (no stored camera): open with everything framed instead of
+    // the home arrangement's own crop. One frame later, so the widgets have
+    // laid out and measure true.
+    window.requestAnimationFrame(() => nCanvas?.fitAll());
+  }
+  window.addEventListener("pagehide", () => nCanvas?.flushPendingChange());
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -1176,21 +1272,15 @@ const ui: {
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
-  kbClosed: boolean;
   identify: boolean;
   rightView: "controls" | "keys";
-  padsAll: boolean;
-  padZoom: number;
   kbSolo: boolean;
 } = {
   dlg: false,
   leftRail: false,
   rightRail: false,
-  kbClosed: false,
   identify: false,
   rightView: "controls",
-  padsAll: false,
-  padZoom: -1,
   kbSolo: false,
 };
 
@@ -1203,15 +1293,12 @@ function applyNocturneUi(): void {
   const pads = lastBindView?.pads ?? [];
   setNCenterCls(
     "n-center" +
-      (ui.kbClosed ? " kb-closed" : "") +
       (ui.kbSolo ? " solo" : "") +
       pads
         .filter((pv) => hiddenStrips.has(pv.preset))
         .map((pv) => ` mute${pv.slot}`)
         .join(""),
   );
-  // Any pane change resizes the center: the board refits.
-  scheduleKbFit();
   setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
   setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
   setNIdText("Press a key on the keyboard you want to use");
@@ -1233,21 +1320,12 @@ function loadUiPrefs(): void {
     const saved = JSON.parse(raw) as {
       leftRail?: boolean;
       rightRail?: boolean;
-      kbClosed?: boolean;
       rightView?: string;
-      padsAll?: boolean;
-      padZoom?: number;
       kbSolo?: boolean;
     };
     ui.leftRail = saved.leftRail === true;
     ui.rightView = saved.rightView === "keys" ? "keys" : "controls";
     ui.rightRail = saved.rightRail === true;
-    ui.kbClosed = saved.kbClosed === true;
-    ui.padsAll = saved.padsAll === true;
-    ui.padZoom =
-      typeof saved.padZoom === "number"
-        ? Math.min(5, Math.max(-1, Math.round(saved.padZoom)))
-        : -1;
     ui.kbSolo = saved.kbSolo === true;
   } catch {
     // A blocked or corrupt store reads as the defaults.
@@ -1467,10 +1545,7 @@ function saveUiPrefs(): void {
       JSON.stringify({
         leftRail: ui.leftRail,
         rightRail: ui.rightRail,
-        kbClosed: ui.kbClosed,
         rightView: ui.rightView,
-        padsAll: ui.padsAll,
-        padZoom: ui.padZoom,
         kbSolo: ui.kbSolo,
       }),
     );
@@ -1505,46 +1580,6 @@ export function restoreNocturneFilter(): void {
 }
 
 let filterUrlTimer: number | undefined;
-
-let kbFitRaf = 0;
-
-export function scheduleKbFit(): void {
-  if (kbFitRaf !== 0) return;
-  kbFitRaf = window.requestAnimationFrame(() => {
-    kbFitRaf = 0;
-    fitKeyboard();
-  });
-}
-
-function fitKeyboard(): void {
-  const root = learnRoot;
-  if (!root) return;
-  const kb = root.querySelector<HTMLElement>(".n-kb");
-  const kbcase = root.querySelector<HTMLElement>(".n-kbcase");
-  if (!kb || !kbcase) return;
-  const available = kb.clientWidth;
-  const naturalW = kbcase.offsetWidth;
-  const naturalH = kbcase.offsetHeight;
-  if (available === 0 || naturalW === 0) return; // collapsed or not laid out
-  // Width alone is not the fit: on a wide short window a width-scaled
-  // board balloons and starves the stage. The board's height is budgeted
-  // to a share of the centre column — tighter when the multi-pad grid is
-  // open, because the pads are the point of that view.
-  const center = root.querySelector<HTMLElement>(".n-center");
-  const multi = Boolean(root.querySelector(".n-stage.multi"));
-  const budget = center ? center.clientHeight * (multi ? 0.42 : 0.52) : Number.POSITIVE_INFINITY;
-  const byWidth = available / naturalW;
-  const byHeight = naturalH > 0 ? budget / naturalH : byWidth;
-  const f = Math.min(1.9, Math.max(0.45, Math.min(byWidth, byHeight)));
-  const next = "scale(" + f + ")";
-  const changed = kbcase.style.transform !== next;
-  kbcase.style.transform = next;
-  kbcase.style.transformOrigin = "top left";
-  kb.style.height = Math.ceil(naturalH * f) + "px";
-  // The stage's height just moved; a fitted pad grid re-solves against
-  // it. Converges: the second pass computes the same scale and stops.
-  if (changed && multi) schedulePadFit();
-}
 
 /** Close the configuration menu (a native details, not signal state). */
 function closeMenu(): void {
@@ -1719,7 +1754,7 @@ function disarmFocusGuard(): void {
 function markArmedRow(fnName: string | null, slot?: string): void {
   if (!learnRoot) return;
   for (const el of Array.from(
-    learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-ctlchip.arm, .n-stage .arm"),
+    learnRoot.querySelectorAll<HTMLElement>(".n-bind.arm, .n-ctlchip.arm, .n-center .arm"),
   )) {
     el.classList.remove("arm");
   }
@@ -1744,7 +1779,7 @@ function markArmedRow(fnName: string | null, slot?: string): void {
     // The waiting control glows on ITS pad — clones are slot-stamped, the
     // master speaks for the selected slot.
     const want = fnName.toLowerCase();
-    for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-stage [data-fn]"))) {
+    for (const el of Array.from(learnRoot.querySelectorAll<HTMLElement>(".n-canvas [data-fn]"))) {
       const padSlot =
         el.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ?? nSlotVal();
       if (padSlot !== armSlot) continue;
@@ -2639,10 +2674,7 @@ export function nocturneWire(root: HTMLElement): void {
   // auto-map button) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
   applySlotColors();
-  syncPadGrid();
   syncBoardFilter();
-  window.addEventListener("resize", scheduleKbFit);
-  window.addEventListener("resize", schedulePadFit);
   // Drag-to-reorder on the rack: a pointer enhancement over the SAME
   // whole-order verb the ▴▾ twins post — the drop rewrites the dragged
   // row's own move form and submits it through the ordinary fetch path.
@@ -2964,7 +2996,7 @@ export function nocturneWire(root: HTMLElement): void {
     // carries its mapper function(s) in data-fn (the live-echo hooks), so a
     // click jumps the right pane to that row. A POINTER ENHANCEMENT only —
     // the rows themselves stay the accessible, no-JS path.
-    const zone = target?.closest<Element>(".n-stage [data-fn]");
+    const zone = target?.closest<Element>(".n-canvas [data-fn]");
     if (zone) {
       closeMenu();
       const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
@@ -3114,9 +3146,6 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "pane-right") {
       ui.rightRail = !ui.rightRail;
       saveUiPrefs();
-    } else if (hit === "pane-bottom") {
-      ui.kbClosed = !ui.kbClosed;
-      saveUiPrefs();
     } else if (hit === "filter-reset") {
       const inp = root.querySelector<HTMLInputElement>(".n-filter-in");
       if (inp) inp.value = "";
@@ -3146,32 +3175,10 @@ export function nocturneWire(root: HTMLElement): void {
       // the submit event so the ordinary fetch path handles the form.
       ev.preventDefault();
       target?.closest("form")?.requestSubmit();
-    } else if (hit === "pad-zoom-in" || hit === "pad-zoom-out" || hit === "pad-zoom-fit") {
-      const grid = root.querySelector<HTMLElement>(".n-padgrid");
-      const currentW = parseFloat(grid?.style.getPropertyValue("--padw") || "") || 340;
-      if (hit === "pad-zoom-fit") {
-        ui.padZoom = -1;
-      } else if (hit === "pad-zoom-in") {
-        // From Fit, step to the first ladder rung ABOVE the fitted size.
-        ui.padZoom =
-          ui.padZoom >= 0
-            ? Math.min(PAD_STEPS.length - 1, ui.padZoom + 1)
-            : PAD_STEPS.findIndex((w) => w > currentW + 1) === -1
-              ? PAD_STEPS.length - 1
-              : PAD_STEPS.findIndex((w) => w > currentW + 1);
-      } else {
-        ui.padZoom =
-          ui.padZoom >= 0
-            ? Math.max(0, ui.padZoom - 1)
-            : (() => {
-                for (let i = PAD_STEPS.length - 1; i >= 0; i -= 1) {
-                  if (PAD_STEPS[i] < currentW - 1) return i;
-                }
-                return 0;
-              })();
-      }
-      saveUiPrefs();
-      syncPadGrid();
+    } else if (hit === "canvas-fit") {
+      nCanvas?.fitAll();
+    } else if (hit === "canvas-zoom-reset") {
+      nCanvas?.resetZoom();
     } else if (hit === "kb-colors") {
       const leaving = ui.kbSolo;
       ui.kbSolo = !ui.kbSolo;
@@ -3210,10 +3217,6 @@ export function nocturneWire(root: HTMLElement): void {
         applyNocturneUi();
         syncBoardFilter();
       }
-    } else if (hit === "pads-toggle") {
-      ui.padsAll = !ui.padsAll;
-      saveUiPrefs();
-      syncPadGrid();
     } else if (hit === "auto-map") {
       startAutoMap();
     } else if (hit === "learn-skip") {
@@ -3329,7 +3332,7 @@ export function nocturneWire(root: HTMLElement): void {
       // panel contains real form controls.
       return;
     }
-    if (hit === "slot-new" || hit === "dlg-close" || hit === "mac-close" || hit === "pane-left" || hit === "pane-right" || hit === "pane-bottom" || hit === "filter-reset") {
+    if (hit === "slot-new" || hit === "dlg-close" || hit === "mac-close" || hit === "pane-left" || hit === "pane-right" || hit === "filter-reset") {
       ev.preventDefault();
     }
     applyNocturneUi();
@@ -3922,21 +3925,27 @@ export function NocturneIsland() {
             },
             "Map all…",
           ),
-          // The multi-pad view: every staged controller on stage at once,
-          // each mappable in place. Scripting-only chrome, like Map all.
+          // The canvas camera's two verbs, scripting-only like Map all —
+          // wheel, Space-drag and the arrow keys carry the rest.
           h(
             "button",
             {
               type: "button",
-              "data-nx": "pads-toggle",
-              // The default state ships in the markup so the wire's
-              // re-stamp is byte-identical (the parity gate's rule).
-              "aria-pressed": "false",
-              title:
-                "Show every staged controller at once — click any pad's control to map it; the pane keeps following the selected one.",
-              class: "n-autobtn n-padsbtn",
+              "data-nx": "canvas-fit",
+              title: "Fit every widget on screen",
+              class: "n-autobtn",
             },
-            "All pads",
+            "Fit",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "canvas-zoom-reset",
+              title: "Zoom to 100%",
+              class: "n-autobtn",
+            },
+            "100%",
           ),
           // The live echo's readouts: written IMPERATIVELY at frame rate,
           // both hidden from assistive tech (the sr twin below announces
@@ -3970,69 +3979,16 @@ export function NocturneIsland() {
           h("button", { type: "button", "data-nx": "learn-skip", class: () => nLearnSkipCls() }, "Skip"),
           h("button", { type: "button", class: "n-bbtn sm", "data-nx": "learn-cancel" }, "Cancel"),
         ),
-        // The stage: the vendored Gamepad-Asset-Pack silhouettes (the
-        // workspace's M2c art) with the token-painted control layer —
-        // persona-aware Xbox vs true DualShock, which one shows being the
-        // server's call (class pair, so both SSR-paint and neither needs a
-        // hydration marker). Every control element carries its canonical
-        // mapper function(s) as data-fn — space-separated where one element
-        // stands for several (a stick, the Xbox cross) — so the live echo
-        // lights this art with the same sweep that lights the board.
+        // ── The pad masters: hidden clone templates ───────────────────────
+        // The vendored Gamepad-Asset-Pack silhouettes (the workspace's M2c
+        // art) live here ONCE, invisible: every controller widget on the
+        // canvas deep-clones its family's master — the pad grid's own
+        // economy, kept. Every control element still carries its canonical
+        // mapper function(s) as data-fn, so the delegated handlers and the
+        // live echo light the clones exactly as they lit the stage.
         h(
           "div",
-          { class: "n-stage" },
-          // The across-the-room read: one quiet word from the polled
-          // session, visual only (the sr status line announces transitions).
-          h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
-          // The multi-pad grid: filled imperatively from browser-kept
-          // preference; SSR and the no-JS page stay single-pad.
-          h("div", { class: "n-padgrid" }),
-          // Its zoom, shown only in multi mode (CSS-gated on .multi).
-          h(
-            "div",
-            { class: "n-zoomctl" },
-            h(
-              "button",
-              {
-                type: "button",
-                "data-nx": "pad-zoom-out",
-                title: "Smaller pads — more on screen",
-                "aria-label": "Zoom out",
-                class: "n-sact",
-              },
-              h(
-                "svg",
-                { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
-                h("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }),
-              ),
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                "data-nx": "pad-zoom-fit",
-                "aria-pressed": "true",
-                title: "Fit every pad on screen",
-                class: "n-sact n-zfit",
-              },
-              "Fit",
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                "data-nx": "pad-zoom-in",
-                title: "Bigger pads — a closer look",
-                "aria-label": "Zoom in",
-                class: "n-sact",
-              },
-              h(
-                "svg",
-                { class: "n-ico", viewBox: "0 0 256 256", "aria-hidden": "true" },
-                h("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }),
-              ),
-            ),
-          ),
+          { class: "n-padmasters", "aria-hidden": "true" },
           // The paint servers both silhouettes draw with: one zero-size SVG
           // whose defs resolve document-wide, so the CSS can fill shells,
           // wells, sticks and buttons with real gradients instead of flats.
@@ -4389,6 +4345,82 @@ export function NocturneIsland() {
             ),
           ),
         ),
+        // ── THE CANVAS ────────────────────────────────────────────────────
+        // A real pan/zoom surface: this served skeleton is exactly what the
+        // vendored genui engine builds for itself, so `initNocturneCanvas`
+        // ADOPTS it after hydration instead of creating structure the parity
+        // gate would see. Everything the engine writes on the marked nodes
+        // (geometry styles, its data- families) rides the parity contract's
+        // client-canvas exemption; the zoom readout is connection chatter.
+        h(
+          "section",
+          { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
+          // The across-the-room read: one quiet word from the polled
+          // session, visual only (the sr status line announces transitions).
+          h("span", { "aria-hidden": "true", class: "n-stageword" }, () => nStageWord()),
+          h(
+            "div",
+            {
+              class: "forma-canvas-viewport",
+              "data-forma-canvas-viewport": "",
+              "data-client-canvas": "",
+              tabindex: "0",
+              "aria-label": "Controller canvas",
+            },
+            h("div", { class: "forma-canvas-grid", "aria-hidden": "true" }),
+            h(
+              "div",
+              {
+                class: "forma-canvas-stage",
+                "data-forma-canvas-stage": "",
+                "data-client-canvas": "",
+                role: "list",
+              },
+              // The keyboard, as a canvas widget: the article shell carries
+              // exactly the attributes the engine writes on mount, so
+              // adoption re-stamps bytes that are already there.
+              h(
+                "article",
+                {
+                  class: "widget-instance n-widget n-widget-kb",
+                  role: "listitem",
+                  "aria-label": "Keyboard",
+                  tabindex: "-1",
+                  "data-client-canvas": "",
+                  "data-instance-id": "keyboard",
+                  "data-widget-name": "Keyboard",
+                  "data-widget-navigation-item": "",
+                  "data-canvas-preferred-width": "980",
+                  "data-canvas-min-height": "320",
+                  "data-canvas-resizable": "false",
+                  "aria-keyshortcuts":
+                    "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
+                },
+                h(
+                  "header",
+                  { class: "widget-chrome" },
+                  h(
+                    "div",
+                    { class: "widget-command-region", "data-widget-command-region": "" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        class: "widget-drag-handle",
+                        "aria-label": "Move Keyboard",
+                        title: "Drag to move \u00b7 Arrow keys nudge \u00b7 Enter opens the widget",
+                      },
+                      h("span", {
+                        class: "widget-drag-rail",
+                        "data-widget-command-rail": "",
+                        "aria-hidden": "true",
+                      }),
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  { class: "n-widget-body", "data-forma-runtime-host": "" },
         h(
           "div",
           { class: "n-kbhead" },
@@ -4455,16 +4487,6 @@ export function NocturneIsland() {
               class: "n-kbcolors",
             },
             () => nSoloLbl(),
-          ),
-          h(
-            "button",
-            {
-              class: "n-collapse n-kbtoggle",
-              type: "button",
-              title: "Show or hide the keyboard",
-              "data-nx": "pane-bottom",
-            },
-            "▾",
           ),
         ),
         h(
@@ -4568,10 +4590,10 @@ export function NocturneIsland() {
         ),
         h(
           "div",
-          { "data-client-fit": "", class: () => nKbCls() },
+          { class: () => nKbCls() },
           h(
             "div",
-            { class: "n-kbcase", "data-client-fit": "" },
+            { class: "n-kbcase" },
           h(
             "div",
             { class: "n-kbrow" },
@@ -4688,6 +4710,16 @@ export function NocturneIsland() {
         ),
         h("p", { class: "n-devnote" }, () => nKbNote()),
         ),
+                ), // n-widget-body
+              ), // article.widget-instance (the keyboard widget)
+            ), // .forma-canvas-stage
+            h("output", {
+              class: "forma-canvas-zoom-status",
+              "data-live-chatter": "",
+              "aria-live": "polite",
+            }),
+          ), // .forma-canvas-viewport
+        ), // .n-canvas
       ),
       // ── Right pane: the binding list, off the mapper's own machinery ─────
       h(

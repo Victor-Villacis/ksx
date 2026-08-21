@@ -127,6 +127,36 @@ const SNAPSHOT = `(() => {
   //    exempt; the node, its content and every other attribute still
   //    compare, and any un-marked inline style still fails.
   clone.querySelectorAll("[data-client-fit]").forEach((el) => { el.removeAttribute("style"); });
+  // 3d. CLIENT CANVAS, by contract. A node marked data-client-canvas is
+  //    managed by the workspace canvas engine after adoption (the vendored
+  //    genui runtime): camera and widget geometry ride its STYLE attribute,
+  //    and the engine annotates its own state through five data- namespaces
+  //    (data-canvas-* geometry mirrors; data-widget-* navigation, chrome
+  //    dock and focus mode; data-attention-*, data-runtime-* and
+  //    data-virtualization-* visibility ranking) — all browser-side facts
+  //    the server can never know. Exactly those channels are exempt ON THE
+  //    MARKED NODE ITSELF — stripped from BOTH captures, so the served
+  //    identity attrs that share a prefix (data-widget-name) vanish equally
+  //    rather than escaping the compare. Everything else on the node
+  //    (data-instance-id, class, role, aria-*, tabindex), its whole content
+  //    subtree (the keyboard widget's served rows above all) and every
+  //    unmarked node still compare byte-for-byte.
+  clone.querySelectorAll("[data-client-canvas]").forEach((el) => {
+    el.removeAttribute("style");
+    for (const attr of Array.from(el.attributes)) {
+      if (/^data-(canvas-|widget-|attention-|runtime-|virtualization-)/.test(attr.name)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  // 3e. CLIENT WIDGETS, by contract. Elements marked data-client-widget are
+  //    canvas widgets the island BUILDS from the payload roster after
+  //    adoption (the controller cards — the old pad grid's clones, made
+  //    contractual): their SSR absence is the point, exactly like the grid
+  //    they replace, so they are removed before comparing. The keyboard
+  //    widget deliberately carries NO such marker — it is served markup the
+  //    engine adopts, and its content stays fully asserted.
+  clone.querySelectorAll("[data-client-widget]").forEach((el) => el.remove());
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.

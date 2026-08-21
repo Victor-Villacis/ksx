@@ -64,6 +64,8 @@ use std::collections::BTreeMap;
 const CSS: &str = concat!(
     include_str!("../../../studio-ui/src/tokens.gen.css"),
     "\n", // generateCss joins array inputs with \n — keep the constant byte-exact
+    include_str!("../../../studio-ui/src/genui-canvas.css"),
+    "\n",
     include_str!("../../../studio-ui/src/studio.css"),
 );
 /// The generated Rust module the anti-flash pin reads. An integration test

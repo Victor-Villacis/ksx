@@ -7053,17 +7053,91 @@ a.wsrow-title:hover {
   user-select: none;
 }
 
-.n-stage {
-  position: relative;
+/* ══ THE CANVAS (genui) ════════════════════════════════════════════════════
+   The center's surface is the vendored forma-genui-runtime engine
+   (studio-ui/src/genui/, provenance in its README). Its own sheet ships as
+   genui-canvas.css BEFORE this file, palette-neutral; everything here is
+   the Nocturne skin — the engine's four tokens pointed at --n-*, with this
+   sheet's later position winning the literal overrides. The keyboard and
+   every staged controller are widgets on the surface; the panes and the
+   header stay put. */
+
+.n-canvas {
   flex: 1;
   min-height: 260px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
   border: 1px solid var(--n-panel-2);
   border-radius: 14px;
+  --forma-canvas-background: var(--n-bg);
+  --forma-canvas-accent: var(--n-accent);
+  --forma-canvas-text: var(--n-text);
+  --forma-canvas-muted: var(--n-text-2);
   background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
+}
+
+/* The pad masters: clone templates only, never rendered directly. */
+.n-padmasters {
+  display: none;
+}
+
+/* Widget shells stay the engine's transparent hulls; the LOOK lives on the
+   content, which carries data-forma-runtime-host so the engine sheet's
+   active/drag/focus outlines apply to plain-content widgets too — recolored
+   here from the engine's blues to the proof's accent. */
+.nocturne .widget-instance.is-active [data-forma-runtime-host] {
+  outline-color: color-mix(in srgb, var(--n-accent) 76%, transparent);
+}
+
+.nocturne .widget-instance.is-dragging [data-forma-runtime-host],
+.nocturne
+  .widget-instance[data-widget-navigation-item]:focus-visible
+  [data-forma-runtime-host] {
+  outline-color: var(--n-accent);
+}
+
+.n-widget-kb .n-widget-body {
+  display: block;
+  border: 1px solid var(--n-line);
+  background: var(--n-bg);
+  padding: 10px 14px 14px;
+}
+
+.nocturne .n-widget .n-mini,
+.nocturne .n-widget .n-widget-body {
+  border-radius: 14px;
+}
+
+/* No JavaScript: the engine never runs, so the canvas relaxes into a
+   document — widgets stack in flow, chrome and camera UI vanish, and the
+   served keyboard stays fully readable (the page's no-JS contract). */
+.nocturne:not(.js) .n-canvas {
+  min-height: 0;
+  overflow: visible;
+}
+
+.nocturne:not(.js) .forma-canvas-viewport {
+  position: static;
+  overflow: visible;
+  cursor: default;
+}
+
+.nocturne:not(.js) .forma-canvas-stage {
+  position: static;
+  width: auto;
+  height: auto;
+}
+
+.nocturne:not(.js) .widget-instance {
+  position: static;
+  width: auto;
+  min-height: 0;
+  margin: 10px;
+  animation: none;
+}
+
+.nocturne:not(.js) .forma-canvas-grid,
+.nocturne:not(.js) .forma-canvas-zoom-status,
+.nocturne:not(.js) .widget-chrome {
+  display: none;
 }
 
 /* ── The stage silhouettes: the workspace's vendored Gamepad-Asset-Pack
@@ -7083,20 +7157,20 @@ a.wsrow-title:hover {
   display: none;
 }
 
-.n-stage .nx-defs {
+.n-center .nx-defs {
   position: absolute;
 }
 
 /* The photoreal Xbox's face letters: color rides the element (the real
    ABXY palette); this rule carries only the type. */
-.n-stage .nxr-face {
+.n-center .nxr-face {
   font-size: 4.2px;
   font-weight: 700;
   font-family: inherit;
   pointer-events: none;
 }
 
-.n-stage .wspad {
+.n-center .wspad {
   width: min(560px, 94%);
   height: auto;
   max-height: 94%;
@@ -7104,39 +7178,39 @@ a.wsrow-title:hover {
   filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.5));
 }
 
-.n-stage .wspad-shell {
+.n-center .wspad-shell {
   fill: url(#nxg-shell);
   stroke: #3d4154;
   stroke-width: 0.5;
   stroke-linejoin: round;
 }
 
-.n-stage .wspad-well {
+.n-center .wspad-well {
   fill: url(#nxg-well);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
-.n-stage .wspad-zone {
+.n-center .wspad-zone {
   fill: url(#nxg-btn);
   stroke: #454960;
   stroke-width: 0.35;
   stroke-linejoin: round;
 }
 
-.n-stage .wspad-stick {
+.n-center .wspad-stick {
   fill: url(#nxg-stick);
   stroke: #50546b;
   stroke-width: 0.4;
 }
 
-.n-stage .wspad-touch {
+.n-center .wspad-touch {
   fill: url(#nxg-touch);
   stroke: #2e3142;
   stroke-width: 0.35;
 }
 
-.n-stage .wspad-petals path {
+.n-center .wspad-petals path {
   fill: url(#nxg-btn);
   stroke: #454960;
   stroke-width: 0.35;
@@ -7144,14 +7218,14 @@ a.wsrow-title:hover {
 }
 
 /* The guide/PS lamp — LIT: a real lamp with its own soft halo. */
-.n-stage .wspad-guide {
+.n-center .wspad-guide {
   fill: url(#nxg-lamp);
   stroke: var(--n-accent-line);
   stroke-width: 0.3;
   filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.55));
 }
 
-.n-stage .wspad-glyph {
+.n-center .wspad-glyph {
   fill: none;
   stroke: #9397ab;
   stroke-width: 0.55;
@@ -7159,7 +7233,7 @@ a.wsrow-title:hover {
   stroke-linecap: round;
 }
 
-.n-stage .wspad-face {
+.n-center .wspad-face {
   fill: #cfd3e5;
   font-size: 4.6px;
   font-weight: 600;
@@ -7167,7 +7241,7 @@ a.wsrow-title:hover {
   pointer-events: none;
 }
 
-.n-stage .wspad-sys {
+.n-center .wspad-sys {
   fill: #75798c;
   font-size: 3.4px;
   font-family: inherit;
@@ -8208,13 +8282,13 @@ button.n-krow-tg {
 
 /* The armed CONTROL glows on the art while its learn waits — the armed
    key's mirror. Transparent hooks gain a visible ring; callouts recolor. */
-.n-stage [data-fn].arm {
+.n-center [data-fn].arm {
   stroke: var(--n-accent);
   stroke-width: 3px;
   fill: rgba(150, 138, 224, 0.15);
 }
 
-.n-stage text.n-fnkey.arm {
+.n-center text.n-fnkey.arm {
   fill: var(--n-accent-2);
   stroke-width: 0;
 }
@@ -8274,7 +8348,7 @@ button.n-krow-tg {
 
 /* The stage's glance callouts: which key presses each control. Outlined
    so they read on any art ground; sized per art viewBox scale. */
-.n-stage text.n-fnkey {
+.n-center text.n-fnkey {
   fill: var(--n-text-2);
   stroke: #0c0d12;
   stroke-width: 3.2px;
@@ -8286,12 +8360,12 @@ button.n-krow-tg {
   user-select: none;
 }
 
-.n-stage svg.wspad:not(.x360a) text.n-fnkey {
+.n-center svg.wspad:not(.x360a) text.n-fnkey {
   font-size: 4.4px;
   stroke-width: 0.75px;
 }
 
-.n-stage text.n-fnkey.live {
+.n-center text.n-fnkey.live {
   fill: var(--n-accent-2);
 }
 
@@ -8455,7 +8529,7 @@ button.n-keychip:hover {
 /* Hovering a control answers like the keycaps do: visible shapes lift
    and brighten, transparent hooks gain a soft accent ring — either way
    the pad says "clickable" before the click. */
-.n-stage [data-fn] {
+.n-center [data-fn] {
   transform-box: fill-box;
   transform-origin: center;
   transition:
@@ -8463,29 +8537,29 @@ button.n-keychip:hover {
     filter 120ms ease;
 }
 
-.n-stage [data-fn]:hover {
+.n-center [data-fn]:hover {
   transform: scale(1.08);
   stroke: var(--n-accent-line);
   stroke-width: 2.5px;
   filter: brightness(1.15);
 }
 
-.n-stage circle[fill="transparent"][data-fn]:hover {
+.n-center circle[fill="transparent"][data-fn]:hover {
   fill: rgba(150, 138, 224, 0.12);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .n-stage [data-fn] {
+  .n-center [data-fn] {
     transition: none;
   }
 
-  .n-stage [data-fn]:hover {
+  .n-center [data-fn]:hover {
     transform: none;
   }
 }
 
 /* Stage art is clickable: any control jumps to its binding row. */
-.n-stage [data-fn] {
+.n-center [data-fn] {
   cursor: pointer;
 }
 
@@ -8542,7 +8616,7 @@ button.n-keychip:hover {
     border-left: none;
   }
 
-  .n-stage {
+  .n-canvas {
     min-height: 220px;
   }
 }
@@ -9223,7 +9297,7 @@ button.n-keychip:hover {
   background: var(--n-accent);
 }
 
-.n-stage.live {
+.n-canvas.live {
   border-color: rgba(150, 138, 224, 0.4);
   box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
 }
@@ -9588,60 +9662,6 @@ button.n-keychip:hover {
 /* ── The multi-pad grid: every staged controller at once ── */
 
 /* The grid's zoom: only meaningful (and only shown) in multi mode. */
-.n-zoomctl {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  z-index: 6;
-  display: none;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--n-panel);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-.n-stage.multi .n-zoomctl {
-  display: flex;
-}
-
-.n-zfit {
-  width: auto;
-  padding: 0 9px;
-  font-size: 11px;
-}
-
-.n-zfit[aria-pressed="true"] {
-  background: var(--n-panel-2);
-  color: var(--n-text);
-}
-
-
-.n-padgrid {
-  display: none;
-}
-
-.n-stage.multi .n-padwrap {
-  display: none;
-}
-
-.n-stage.multi {
-  overflow-y: auto;
-  min-height: 300px;
-}
-
-.n-stage.multi .n-padgrid {
-  display: grid;
-  width: 100%;
-  grid-template-columns: repeat(auto-fill, var(--padw, 340px));
-  justify-content: center;
-  padding-bottom: 16px;
-  gap: 14px;
-  align-content: start;
-  align-self: stretch;
-  padding: 10px;
-}
-
 .n-mini {
   border: 1px solid var(--n-line);
   border-radius: 12px;
@@ -12101,8 +12121,8 @@ a.nm-link {
   }
 }
 
-.n-stage [data-fn].live,
-.n-stage .wspad-petals path[data-fn].live {
+.n-center [data-fn].live,
+.n-center .wspad-petals path[data-fn].live {
   fill: var(--n-accent);
   stroke: var(--n-accent);
 }
@@ -12142,19 +12162,19 @@ a.nm-link {
 
 
 /* Scenario A: the CC0 art's own coordinate space is 6.68x ours. */
-.n-stage .x360a-sys {
+.n-center .x360a-sys {
   font-size: 23px;
 }
 
 
-.n-stage .x360a-face {
+.n-center .x360a-face {
   font-size: 32px;
   font-weight: 700;
   font-family: inherit;
   pointer-events: none;
 }
 
-.n-stage .x360a-lab {
+.n-center .x360a-lab {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -12162,7 +12182,7 @@ a.nm-link {
   pointer-events: none;
 }
 
-.n-stage .x360a-num {
+.n-center .x360a-num {
   font-size: 14px;
   font-family: inherit;
   pointer-events: none;
@@ -12175,22 +12195,4 @@ a.nm-link {
   display: contents;
 }
 
-.n-center.kb-closed .n-kbpane {
-  display: none;
-}
 
-.n-kbtoggle {
-  flex: none;
-  order: 3;
-  transition: transform 0.15s ease;
-}
-
-.n-center.kb-closed .n-kbtoggle {
-  transform: rotate(-90deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .n-kbtoggle {
-    transition: none;
-  }
-}

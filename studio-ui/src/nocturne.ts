@@ -11,7 +11,6 @@ import {
   applyNocturneUnreachable,
   initNocturneCanvas,
   NocturneIsland,
-  paintStageCallouts,
   syncPadWidgets,
   nocturneLiveConnect,
   nocturneWire,
@@ -182,14 +181,11 @@ activateIslands({
       if (!document.hidden) void poll();
     });
     // The filter input, the board and the canvas exist only after the
-    // island mounts: restore ?q=, adopt the canvas (which mounts the
-    // keyboard widget and the controller widgets), and paint the masters'
-    // key callouts on the next frame.
+    // island mounts: restore ?q=, then adopt the canvas on the next frame —
+    // it mounts the keyboard widget and the controller widgets, and
+    // syncPadWidgets dresses each clone's key callouts from its own slot.
     window.requestAnimationFrame(() => {
       restoreNocturneFilter();
-      // The seed applied before the island existed: paint the key callouts
-      // now that it does, then let the canvas clone the dressed masters.
-      paintStageCallouts();
       initNocturneCanvas(el);
       syncPadWidgets();
     });

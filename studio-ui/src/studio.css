@@ -7060,7 +7060,11 @@ a.wsrow-title:hover {
    the Nocturne skin — the engine's four tokens pointed at --n-*, with this
    sheet's later position winning the literal overrides. The keyboard and
    every staged controller are widgets on the surface; the panes and the
-   header stay put. */
+   header stay put.
+
+   LIFESPAN: unlike the M2 stage this section replaced, the canvas is NOT
+   scaffolding awaiting an M5 death sentence — it IS the workspace's center.
+   Later milestones restyle widgets; the surface stays. */
 
 .n-canvas {
   flex: 1;
@@ -7106,6 +7110,25 @@ a.wsrow-title:hover {
   border-radius: 14px;
 }
 
+/* The served keyboard lays out at its declared geometry BEFORE the engine
+   adopts it — without this it spends its first frame at auto width until
+   the inline writes land. The engine's style.width wins once mounted, and
+   the no-JS relaxation below wins without it. */
+.n-canvas .n-widget-kb {
+  width: 980px;
+  min-height: 320px;
+}
+
+/* DESIGN-SYSTEM §2: coarse pointers get ≥40px targets. The engine's drag
+   rail is a slim desktop affordance; under touch the grab area itself must
+   make the floor, or moving a widget becomes a precision exercise. */
+@media (pointer: coarse) {
+  .nocturne .widget-drag-handle {
+    min-width: 44px;
+    min-height: 40px;
+  }
+}
+
 /* No JavaScript: the engine never runs, so the canvas relaxes into a
    document — widgets stack in flow, chrome and camera UI vanish, and the
    served keyboard stays fully readable (the page's no-JS contract). */
@@ -7118,6 +7141,9 @@ a.wsrow-title:hover {
   position: static;
   overflow: visible;
   cursor: default;
+  /* The engine sheet's touch-action: none serves pan gestures that will
+     never come — without JS it would only eat touch scrolling. */
+  touch-action: auto;
 }
 
 .nocturne:not(.js) .forma-canvas-stage {
@@ -7136,8 +7162,29 @@ a.wsrow-title:hover {
 
 .nocturne:not(.js) .forma-canvas-grid,
 .nocturne:not(.js) .forma-canvas-zoom-status,
-.nocturne:not(.js) .widget-chrome {
+.nocturne:not(.js) .widget-chrome,
+.nocturne:not(.js) .n-stageword {
   display: none;
+}
+
+/* The document taller than the pane needs an honest scroll path — the JS
+   canvas absorbs overflow into its own camera, the no-JS document cannot. */
+.nocturne:not(.js) .n-center {
+  overflow-y: auto;
+}
+
+/* Without JS no controller widgets exist; the masters come back as the
+   static silhouette. The SERVED family classes on the wraps (the same
+   slots that classed the old stage) still pick which family shows. */
+.nocturne:not(.js) .n-padmasters {
+  display: block;
+  margin: 10px;
+}
+
+.nocturne:not(.js) .n-padwrap {
+  height: auto;
+  max-width: 520px;
+  margin: 0 auto 12px;
 }
 
 /* ── The stage silhouettes: the workspace's vendored Gamepad-Asset-Pack

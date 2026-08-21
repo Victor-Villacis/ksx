@@ -121,12 +121,11 @@ const SNAPSHOT = `(() => {
   //    fails. Durable state goes through separate announcers and show pairs,
   //    which stay fully asserted.
   clone.querySelectorAll("[data-live-chatter]").forEach((el) => { el.textContent = ""; });
-  // 3c. CLIENT FIT, by contract. A node marked data-client-fit is scaled to
-  //    the viewer's viewport after adoption (the board's zoom-to-fit) — a
-  //    fact the server can never know. Exactly its STYLE attribute is
-  //    exempt; the node, its content and every other attribute still
-  //    compare, and any un-marked inline style still fails.
-  clone.querySelectorAll("[data-client-fit]").forEach((el) => { el.removeAttribute("style"); });
+  // 3c. RETIRED (was CLIENT FIT, data-client-fit: the old stage's
+  //    zoom-to-fit style exemption). The canvas replaced fit-scaling with
+  //    real camera geometry — nothing emits the marker any more, and a
+  //    normalization no node can trigger is a hole waiting for a tenant.
+  //    3d is the successor. Letters stay stable; do not reuse 3c.
   // 3d. CLIENT CANVAS, by contract. A node marked data-client-canvas is
   //    managed by the workspace canvas engine after adoption (the vendored
   //    genui runtime): camera and widget geometry ride its STYLE attribute,
@@ -187,6 +186,18 @@ async function ssrDom(url) {
   try {
     const page = await ctx.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded" });
+    // 3e removes [data-client-widget] from BOTH captures, so a server that
+    // wrongly SERVED one would sail through the compare. Their SSR absence
+    // is the contract — assert it on the raw document, before normalizing.
+    const servedClientWidgets = await page.evaluate(
+      () => document.querySelectorAll("[data-client-widget]").length,
+    );
+    assert.equal(
+      servedClientWidgets,
+      0,
+      `${url} SERVED ${servedClientWidgets} data-client-widget node(s) — ` +
+        "client-built widgets must not exist in SSR markup (parity rule 3e)",
+    );
     return await page.evaluate(SNAPSHOT);
   } finally {
     await ctx.close();
@@ -201,6 +212,25 @@ async function hydratedDom(url) {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(
       () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+      null,
+      { timeout: 20_000 },
+    );
+    // The canvas adopts in the island's post-mount frame and then opens on
+    // an animated fitAll. Capturing in either window would compare a
+    // half-annotated page against a settled one, and `is-camera-animating`
+    // is a CLASS, which no exemption covers. Note the adoption wait cannot
+    // be a plain delay: it is not a fixed distance behind hydration. Both
+    // waits pass instantly on the routes that have no canvas.
+    await page.waitForFunction(
+      () => {
+        const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
+        return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+      },
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () => !document.querySelector(".is-camera-animating"),
       null,
       { timeout: 20_000 },
     );

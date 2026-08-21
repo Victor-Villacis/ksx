@@ -223,6 +223,26 @@ for (const config of CONTEXTS) {
             null,
             { timeout: 20_000 },
           );
+          // Canvas adoption happens in the island's post-mount FRAME, which
+          // is not a fixed distance behind hydration — measured between 100
+          // and 300 ms here, longer on a loaded runner. Waiting a flat
+          // interval would assert against a canvas that simply has not been
+          // adopted yet (a flaky gate that reads as a dead canvas), so wait
+          // for the adoption itself, then for the opening fitAll to settle.
+          // Both waits pass instantly on the routes that have no canvas.
+          await page.waitForFunction(
+            () => {
+              const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
+              return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+            },
+            null,
+            { timeout: 20_000 },
+          );
+          await page.waitForFunction(
+            () => !document.querySelector(".is-camera-animating"),
+            null,
+            { timeout: 20_000 },
+          );
           // Inspect the adopted first paint, before the fixture's two-second
           // poll can turn the screenshot into a timing-dependent sample.
           await page.waitForTimeout(300);
@@ -246,6 +266,29 @@ for (const config of CONTEXTS) {
                 width: rect.width,
               };
             });
+            // The nocturne canvas can die silently: every other assertion
+            // here passes with an unadopted keyboard sitting at auto layout.
+            // Adoption's one observable is the engine's geometry write.
+            const kbWidget = document.querySelector(
+              '.n-canvas [data-instance-id="keyboard"]',
+            );
+            const canvas = document.querySelector(".n-canvas");
+            let canvasAdoption = null;
+            if (canvas) {
+              const kbRect = kbWidget?.getBoundingClientRect();
+              const canvasRect = canvas.getBoundingClientRect();
+              canvasAdoption = {
+                kbPositioned: kbWidget?.dataset.canvasX !== undefined,
+                kbIntersectsCanvas: Boolean(
+                  kbRect &&
+                    kbRect.width > 0 &&
+                    kbRect.right > canvasRect.left &&
+                    kbRect.left < canvasRect.right &&
+                    kbRect.bottom > canvasRect.top &&
+                    kbRect.top < canvasRect.bottom,
+                ),
+              };
+            }
             return {
               status: document.querySelector("[data-forma-island]")?.dataset.formaStatus ?? null,
               viewportWidth,
@@ -253,6 +296,7 @@ for (const config of CONTEXTS) {
               coarse: matchMedia("(pointer: coarse)").matches,
               light: matchMedia("(prefers-color-scheme: light)").matches,
               containers,
+              canvasAdoption,
               escaped: containers.filter(
                 (box) => box.width > 0 && (box.left < -1 || box.right > viewportWidth + 1),
               ),
@@ -266,6 +310,18 @@ for (const config of CONTEXTS) {
               `${layout.documentWidth}px document in ${layout.viewportWidth}px viewport`,
           );
           assert.ok(layout.containers.length > 0, `${route.path} exposed no responsive root`);
+          if (layout.canvasAdoption) {
+            assert.ok(
+              layout.canvasAdoption.kbPositioned,
+              `${route.path}: the canvas engine never adopted the keyboard ` +
+                "widget (no data-canvas-x) — a dead canvas passes every other check",
+            );
+            assert.ok(
+              layout.canvasAdoption.kbIntersectsCanvas,
+              `${route.path}: the keyboard widget does not intersect the ` +
+                "visible canvas — the camera or the stored geometry lost it",
+            );
+          }
           assert.deepEqual(
             layout.escaped,
             [],

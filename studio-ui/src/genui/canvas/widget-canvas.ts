@@ -311,6 +311,13 @@ export class WidgetCanvas {
   readonly #canRaiseSelection: () => boolean;
   readonly #interactionBlocked: () => boolean;
   readonly #items = new Map<string, HTMLElement>();
+  // ksx: divergence from upstream c91d34c (review-caught). Item-scoped
+  // listeners were registered on the canvas-lifetime #abort signal, so every
+  // removeItem/remount cycle (ksx rebuilds pad widgets on each roster print)
+  // stranded the old closures — and their captured detached DOM — until the
+  // whole canvas was disposed. Each item gets its own controller, aborted on
+  // removal; dispose() still wins through AbortSignal.any.
+  readonly #itemAborts = new Map<string, AbortController>();
   readonly #navigatorMarkers = new Map<string, HTMLButtonElement>();
   readonly #runtimeHosts = new Map<string, CanvasRuntimeHost>();
   readonly #runtimeAdapter: CanvasRuntimeAdapter;
@@ -406,7 +413,16 @@ export class WidgetCanvas {
           changed = itemChanged = true;
         }
 
-        const heightSource = item.dataset.canvasResizable === "true"
+        // ksx: divergence from upstream c91d34c (review-caught). An
+        // adapter-less item (plain `content` widgets — /nocturne's adopted
+        // keyboard) has NO runtime host, so upstream's adapter-owned height
+        // source never fires and the recorded height stays the mount-time
+        // guess forever — which mis-frames fitAll and, worse, "parks" a
+        // widget whose real content is still on screen (inert +
+        // content-visibility: hidden on visible keys). When no runtime host
+        // is registered for the item, its own border box is the truth.
+        const heightSource = item.dataset.canvasResizable === "true" ||
+            !this.#runtimeHosts.has(item.dataset.instanceId ?? "")
           ? entry.target === item
           : this.#runtimeAdapter.ownsEventTarget(entry.target);
         if (heightSource && height > 0 && item.dataset.canvasHeight !== nextHeight) {
@@ -579,8 +595,13 @@ export class WidgetCanvas {
       });
     }
     this.#topZ = Math.max(this.#topZ, placement.z);
-    this.#bindItemDrag(item);
-    this.#bindItemKeyboardNavigation(item);
+    // ksx: divergence — item-scoped listeners live on a per-item signal (see
+    // #itemAborts). AbortSignal.any keeps dispose() authoritative.
+    const itemAbort = new this.#window.AbortController();
+    this.#itemAborts.set(id, itemAbort);
+    const itemSignal = AbortSignal.any([this.#abort.signal, itemAbort.signal]);
+    this.#bindItemDrag(item, itemSignal);
+    this.#bindItemKeyboardNavigation(item, itemSignal);
     item.addEventListener("pointerdown", (event) => {
       // Middle-button and Space gestures belong exclusively to canvas pan; they
       // must not select/raise the widget underneath before bubbling to viewport.
@@ -595,7 +616,7 @@ export class WidgetCanvas {
       if (!eventOriginatesInInteractiveControl(event)) {
         item.focus({ preventScroll: true });
       }
-    }, { signal: this.#abort.signal });
+    }, { signal: itemSignal });
     this.#createNavigatorMarker(item);
     this.#resizeObserver.observe(item);
     if (runtimeHost) this.#resizeObserver.observe(runtimeHost);
@@ -659,6 +680,10 @@ export class WidgetCanvas {
     if (id && this.#focusSession?.itemId === id) this.#endFocusMode(true, true);
     const runtimeHost = id ? this.#runtimeHosts.get(id) : undefined;
     if (id) this.#items.delete(id);
+    if (id) {
+      this.#itemAborts.get(id)?.abort();
+      this.#itemAborts.delete(id);
+    }
     if (id) this.#runtimeHosts.delete(id);
     if (id) this.#virtualizedHosts.delete(id);
     if (id) this.#parkedAt.delete(id);
@@ -694,6 +719,8 @@ export class WidgetCanvas {
     for (const item of this.#items.values()) this.#resizeObserver.unobserve(item);
     for (const host of this.#runtimeHosts.values()) this.#resizeObserver.unobserve(host);
     this.#items.clear();
+    for (const abort of this.#itemAborts.values()) abort.abort();
+    this.#itemAborts.clear();
     this.#runtimeHosts.clear();
     this.#virtualizedHosts.clear();
     this.#parkedAt.clear();
@@ -1114,7 +1141,7 @@ export class WidgetCanvas {
     item.focus({ preventScroll: true });
   }
 
-  #bindItemKeyboardNavigation(item: HTMLElement): void {
+  #bindItemKeyboardNavigation(item: HTMLElement, signal: AbortSignal): void {
     item.addEventListener("focus", () => {
       if (
         this.activeItem() !== item ||
@@ -1128,7 +1155,7 @@ export class WidgetCanvas {
       } else if (this.#applyNavigationReveal(item)) {
         this.#animateCamera({ itemId: this.#itemId(item), mode: "navigate" });
       }
-    }, { signal: this.#abort.signal });
+    }, { signal });
     item.addEventListener("keydown", (event) => {
       const origin = event.composedPath()[0];
       if (origin !== item) {
@@ -1231,7 +1258,7 @@ export class WidgetCanvas {
       const neighbor = this.#spatialNeighbor(item, direction);
       if (neighbor) this.#selectNavigationTarget(neighbor, direction);
       else this.#onKeyboardNavigation(`No widget ${direction} of the current selection.`);
-    }, { signal: this.#abort.signal });
+    }, { signal });
   }
 
   #navigationCandidates(): WidgetNavigationCandidate[] {
@@ -1429,10 +1456,16 @@ export class WidgetCanvas {
     restored?: Partial<WidgetCanvasItemState>,
   ): WidgetCanvasItemState {
     const index = this.#items.size - 1;
+    // ksx: divergence from upstream c91d34c (review-caught): the 720px
+    // preferred-width ceiling silently discarded the keyboard widget's
+    // declared 980px (clamp(980,300,720)=720), cropping the board into its
+    // own scrollbar. The declared attribute is the widget author's own
+    // claim; the ceiling only needs to stop nonsense. Same for the
+    // resizable-restore ceiling below.
     const preferredWidth = clamp(
       finiteNumber(Number(item.dataset.canvasPreferredWidth), 440),
       300,
-      720,
+      1600,
     );
     const minHeight = clamp(
       finiteNumber(Number(item.dataset.canvasMinHeight), 300),
@@ -1444,7 +1477,7 @@ export class WidgetCanvas {
       x: finiteNumber(restored?.x, 110 + (index % 3) * 520),
       y: finiteNumber(restored?.y, 100 + Math.floor(index / 3) * 440 + (index % 2) * 36),
       width: resizable
-        ? clamp(finiteNumber(restored?.width, preferredWidth), 280, 840)
+        ? clamp(finiteNumber(restored?.width, preferredWidth), 280, 1600)
         : preferredWidth,
       height: resizable
         ? clamp(finiteNumber(restored?.height, minHeight), 220, 920)
@@ -1598,7 +1631,7 @@ export class WidgetCanvas {
     }
   }
 
-  #bindItemDrag(item: HTMLElement): void {
+  #bindItemDrag(item: HTMLElement, signal: AbortSignal): void {
     const handle = item.querySelector<HTMLElement>(".widget-drag-handle");
     if (!handle) return;
     handle.addEventListener("pointerdown", (event) => {
@@ -1702,7 +1735,7 @@ export class WidgetCanvas {
         this.#window.addEventListener("pointerup", onEnd);
         this.#window.addEventListener("pointercancel", onEnd);
       }
-    }, { signal: this.#abort.signal });
+    }, { signal });
 
     handle.addEventListener("keydown", (event) => {
       if (
@@ -1748,7 +1781,7 @@ export class WidgetCanvas {
       this.#moveItem(item, state.x + direction[0] * step, state.y + direction[1] * step);
       this.#requestNavigatorRender();
       this.#scheduleChange();
-    }, { signal: this.#abort.signal });
+    }, { signal });
   }
 
   #bindCameraInteractions(): void {

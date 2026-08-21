@@ -2,7 +2,6 @@ import { createList, createShow, createSignal, h } from "@getforma/core";
 import { fetchJSON } from "@getforma/core/http";
 
 import { WidgetCanvas, createCanvasItem } from "./genui/canvas/index";
-import type { WidgetCanvasItemState } from "./genui/canvas/widget-canvas";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -915,12 +914,10 @@ export function applyNocturne(p: NocturnePayload): void {
       el.open = openRows.has(el.getAttribute("data-fn") ?? "");
     }
     syncExpandLabel();
-    paintStageCallouts();
     if (assignKey) markAssignTargets(assignKey);
   }
   lastBindView = v;
   if (learnRoot) {
-    paintStageCallouts();
     syncPadWidgets();
     // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
@@ -931,54 +928,13 @@ export function applyNocturne(p: NocturnePayload): void {
   }
 }
 
-/** The last applied view, for repainting the stage callouts after the
- *  island mounts — the seed applies BEFORE `learnRoot` exists, and an idle
- *  page's deduped polls never re-apply. */
+/** The last applied view, for the canvas dressers (`syncPadWidgets`,
+ *  `persistCanvas`) after the island mounts — the seed applies BEFORE
+ *  `learnRoot` exists, and an idle page's deduped polls never re-apply.
+ *  (The old `paintStageCallouts` died with the pad grid: it dressed the
+ *  display:none masters, which nobody sees — each widget CLONE is dressed
+ *  from its own slot's table inside `syncPadWidgets`.) */
 let lastBindView: NocturneView | null = null;
-
-/** The stage's glance callouts: every control shows the key(s) that press
- *  it, straight from the served rows. Imperative textContent on
- *  data-live-chatter nodes (the ticker's contract). */
-export function paintStageCallouts(): void {
-  const root = learnRoot;
-  const v = lastBindView;
-  if (!root || !v) return;
-  const fnKeys = new Map<string, string>();
-  for (const rows of [
-    v.bind_face,
-    v.bind_dpad,
-    v.bind_shoulders,
-    v.bind_lstick,
-    v.bind_rstick,
-    v.bind_system,
-  ]) {
-    for (const bindRow of rows) {
-      if (bindRow.chip !== "Unbound") fnKeys.set(bindRow.function.toLowerCase(), bindRow.chip);
-    }
-  }
-  // Callouts speak the BOARD's printed-cap vocabulary ("9", "LShift") \u2014 the
-  // full key name lives in the pane; the diagram gets the keycap spelling.
-  const capFor = (name: string): string => {
-    const cap = root
-      .querySelector<HTMLElement>(`.n-kb .n-key[data-key="${CSS.escape(name)}"] .n-key-cap`)
-      ?.textContent?.trim();
-    if (!cap || cap === name) return name;
-    if (name.startsWith("Left") && name.length > 4 && !cap.startsWith("L")) return "L" + cap;
-    if (name.startsWith("Right") && name.length > 5 && !cap.startsWith("R")) return "R" + cap;
-    return cap;
-  };
-  for (const el of Array.from(root.querySelectorAll<SVGTextElement>(".n-padmasters text.n-fnkey"))) {
-    const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
-    const parts: string[] = [];
-    for (const fn of fns) {
-      const keys = fnKeys.get(fn.toLowerCase());
-      if (keys) parts.push(keys.split(" \u00b7 ").map(capFor).join("\u00b7"));
-    }
-    let text = parts.join("\u00b7");
-    if (text.length > 9) text = text.slice(0, 8) + "\u2026";
-    el.textContent = text;
-  }
-}
 
 // ── THE CANVAS (genui) ─────────────────────────────────────────────────────────
 // The center is a real pan/zoom canvas (the vendored forma-genui-runtime
@@ -1071,13 +1027,26 @@ function saveCanvasPrefs(): void {
 }
 
 /** A widget's durable identity in the store: the keyboard is itself; a
- *  controller is its PRESET, so its spot survives seat renumbering. */
-function padStoreKey(preset: string): string {
-  return "p:" + preset;
+ *  controller is its PRESET, so its spot survives seat renumbering. Twin
+ *  seats on the SAME preset get #2/#3… suffixes in slot order — without
+ *  them both twins would fight over one saved spot. */
+function padStoreKeys(
+  pads: readonly { slot: number; preset: string }[],
+): Map<number, string> {
+  const seen = new Map<string, number>();
+  const keys = new Map<number, string>();
+  for (const pv of pads) {
+    const n = (seen.get(pv.preset) ?? 0) + 1;
+    seen.set(pv.preset, n);
+    keys.set(pv.slot, "p:" + pv.preset + (n > 1 ? "#" + n : ""));
+  }
+  return keys;
 }
 
 /** Read every mounted widget's geometry plus the camera back into the store
- *  — called from the engine's onCommit, its own durable boundary. */
+ *  — called from the engine's onCommit (its own durable boundary), from the
+ *  debounced onChange trail (so a kill mid-arrangement loses at most the
+ *  last second), and synchronously on pagehide. */
 function persistCanvas(): void {
   const canvas = nCanvas;
   const root = learnRoot;
@@ -1086,12 +1055,19 @@ function persistCanvas(): void {
   const widgets: Record<string, CanvasItemGeometry> = { ...canvasPrefs.widgets };
   const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
   if (kb && kb.dataset.canvasX !== undefined) widgets["kb"] = canvas.getItemState(kb);
+  const storeKeys = padStoreKeys(v?.pads ?? []);
   for (const [slot, item] of padItems) {
-    const preset = (v?.pads ?? []).find((p) => p.slot === slot)?.preset;
-    if (preset !== undefined) widgets[padStoreKey(preset)] = canvas.getItemState(item);
+    const key = storeKeys.get(slot);
+    if (key !== undefined) widgets[key] = canvas.getItemState(item);
   }
   canvasPrefs = { camera: canvas.getCamera(), widgets };
   saveCanvasPrefs();
+}
+
+let canvasPersistTimer = 0;
+function scheduleCanvasPersist(): void {
+  window.clearTimeout(canvasPersistTimer);
+  canvasPersistTimer = window.setTimeout(persistCanvas, 1000);
 }
 
 function calloutText(chip: string, capFor: (name: string) => string): string {
@@ -1134,6 +1110,7 @@ export function syncPadWidgets(): void {
     padItems.clear();
     // The two hidden masters, in template order: [0] Xbox, [1] DualShock.
     const masters = root.querySelectorAll<HTMLElement>(".n-padwrap");
+    const storeKeys = padStoreKeys(pads);
     pads.forEach((pv, index) => {
       const master = pv.family === "ps" ? masters[1] : masters[0];
       const svg = master?.querySelector("svg");
@@ -1163,7 +1140,7 @@ export function syncPadWidgets(): void {
       });
       item.classList.add("n-widget", "n-widget-pad", "np" + pv.slot);
       item.dataset.clientWidget = "";
-      const restored = canvasPrefs.widgets[padStoreKey(pv.preset)] ?? padHome(index);
+      const restored = canvasPrefs.widgets[storeKeys.get(pv.slot) ?? ""] ?? padHome(index);
       canvas.mountItem(item, restored, { focus: false });
       padItems.set(pv.slot, item);
     });
@@ -1193,14 +1170,32 @@ export function syncPadWidgets(): void {
 /** Adopt the served canvas skeleton and keyboard widget, then mount the
  *  controller widgets. Runs once, strictly AFTER adoption (the entry's
  *  post-mount frame): the engine annotates the served nodes, and every one
- *  of its writes rides the parity contract's client-canvas exemption. */
-export function initNocturneCanvas(root: HTMLElement): void {
+ *  of its writes rides the parity contract's client-canvas exemption.
+ *
+ *  ⚠️It WAITS for the skeleton instead of assuming one frame is enough.
+ *  Adoption rebuilds the island subtree, so the four queries can legitimately
+ *  miss on the frame this first runs — and a bare early return would leave a
+ *  canvas that never comes alive: no error, no console line, just a keyboard
+ *  sitting at plain CSS size, which every gate but the dead-canvas assert
+ *  reads as healthy. Re-asking each frame costs nothing and removes any
+ *  dependence on one frame's timing; the budget stops a page that
+ *  legitimately has no canvas from asking forever. */
+const CANVAS_ADOPT_FRAMES = 60;
+export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   if (nCanvas) return;
-  const surface = root.querySelector<HTMLElement>(".n-canvas");
+  // The island root itself can be replaced by adoption; a detached one would
+  // hand the engine a tree nobody sees.
+  const scope = root.isConnected ? root : (learnRoot?.isConnected ? learnRoot : document.body);
+  const surface = scope.querySelector<HTMLElement>(".n-canvas");
   const viewport = surface?.querySelector<HTMLElement>(".forma-canvas-viewport");
   const stage = surface?.querySelector<HTMLElement>(".forma-canvas-stage");
   const zoomStatus = surface?.querySelector<HTMLElement>(".forma-canvas-zoom-status");
-  if (!surface || !viewport || !stage || !zoomStatus) return;
+  if (!surface || !viewport || !stage || !zoomStatus || !surface.isConnected) {
+    if (attempt < CANVAS_ADOPT_FRAMES) {
+      window.requestAnimationFrame(() => initNocturneCanvas(root, attempt + 1));
+    }
+    return;
+  }
   // The minimap navigator is OFF for now. The engine requires its elements,
   // so it renders markers into DETACHED nodes that never join the document
   // — zero DOM, zero parity surface, and turning it on later is one flip.
@@ -1213,10 +1208,13 @@ export function initNocturneCanvas(root: HTMLElement): void {
     { viewport, stage, zoomStatus, navigator, navigatorItems, navigatorViewport },
     {
       onCommit: persistCanvas,
+      // The trail behind onCommit: pans and in-flight drags reach the store
+      // within a second even if the tab dies before a durable boundary.
+      onChange: scheduleCanvasPersist,
       // The engine has no live region of its own; the meta bar's sr status
       // line is this page's.
       onKeyboardNavigation: (message) => {
-        const sr = root.querySelector<HTMLElement>(".n-live-sr");
+        const sr = (learnRoot ?? scope).querySelector<HTMLElement>(".n-live-sr");
         if (sr) sr.textContent = message;
       },
     },
@@ -1231,7 +1229,13 @@ export function initNocturneCanvas(root: HTMLElement): void {
     // laid out and measure true.
     window.requestAnimationFrame(() => nCanvas?.fitAll());
   }
-  window.addEventListener("pagehide", () => nCanvas?.flushPendingChange());
+  window.addEventListener("pagehide", () => {
+    // flushPendingChange only fires the onChange callback — whose debounce
+    // timer will never tick in a dying page. The synchronous persist IS the
+    // durability; the flush just settles the engine's pending rAF first.
+    nCanvas?.flushPendingChange();
+    persistCanvas();
+  });
 }
 
 /** The poll could not reach the server: say so, change nothing else. */
@@ -3986,12 +3990,12 @@ export function NocturneIsland() {
         // economy, kept. Every control element still carries its canonical
         // mapper function(s) as data-fn, so the delegated handlers and the
         // live echo light the clones exactly as they lit the stage.
-        h(
-          "div",
-          { class: "n-padmasters", "aria-hidden": "true" },
-          // The paint servers both silhouettes draw with: one zero-size SVG
-          // whose defs resolve document-wide, so the CSS can fill shells,
-          // wells, sticks and buttons with real gradients instead of flats.
+        // The paint servers both silhouettes draw with: one zero-size SVG
+        // whose defs resolve document-wide, so the CSS can fill shells,
+        // wells, sticks and buttons with real gradients instead of flats.
+        // Hoisted OUTSIDE the display:none masters on purpose: non-Chromium
+        // engines refuse gradient url() references into a display:none
+        // subtree, and the visible widget clones resolve against THESE defs.
           h(
             "svg",
             { class: "nx-defs", width: "0", height: "0", "aria-hidden": "true", focusable: "false" },
@@ -4041,6 +4045,9 @@ export function NocturneIsland() {
               ),
             ),
           ),
+        h(
+          "div",
+          { class: "n-padmasters", "aria-hidden": "true" },
           h(
             "div",
             { class: () => nPadXboxCls() },

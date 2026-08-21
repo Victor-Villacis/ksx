@@ -6749,6 +6749,28 @@ fn nocturne_serves_the_migrated_keyboard_section_over_http() {
     assert!(page.contains("LeftCtrl five times"), "{page}");
     assert!(!page.contains("16 of 24 inputs bound"), "{page}");
 
+    // The canvas contract: the keyboard widget is SERVED carrying the exact
+    // attributes the engine's mountItem would write, so adoption is a no-op
+    // for parity. Losing any of these breaks the canvas silently — the
+    // island would still hydrate, the engine would just restyle the article
+    // one frame later and the parity gate would light up instead of this.
+    for pin in [
+        r#"data-instance-id="keyboard""#,
+        "data-widget-navigation-item",
+        r#"data-canvas-preferred-width="980""#,
+        r#"data-canvas-resizable="false""#,
+        "widget-instance n-widget n-widget-kb",
+        "widget-drag-handle",
+    ] {
+        assert!(
+            page.contains(pin),
+            "served keyboard widget lost {pin:?}: {page}"
+        );
+    }
+    // And the client-built side of the same contract: controller widgets
+    // must NOT be served (their SSR absence is parity rule 3e).
+    assert!(!page.contains("data-client-widget"), "{page}");
+
     // Only copy this page can emit is reflected back onto it.
     let hostile = rendered_body(&get(
         addr,

@@ -3,11 +3,13 @@
 Upstream: `getforma-dev/forma-genui-runtime` (private, internal getforma-dev
 source — Victor's own; `UNLICENSED`, never published).
 Source revision: **`c91d34c`** ("feat: extract Forma generative UI runtime"),
-vendored 2026-08-21 per the upstream's own `docs/KSX_HANDOFF.md` option 1
-("Vendor the reviewed `src/canvas`, optional `src/forma`, and
-`styles/canvas.css` files into KSX and record the source commit").
+vendored 2026-08-21 per option 1 of the upstream `README.md`'s "Using this
+from KSX" section ("Vendor the reviewed `src/canvas`, optional `src/forma`,
+and `styles/canvas.css` files into KSX and record the source commit" —
+`docs/KSX_HANDOFF.md` endorses the same route).
 
-What was taken, byte-identical to upstream:
+What was taken (byte-identical to upstream except the three marked
+divergences in `widget-canvas.ts` — see below):
 
 - `canvas/` — the whole engine: `widget-canvas.ts` (camera, world
   coordinates, drag, focus/fit, spatial keyboard navigation, capacity),
@@ -24,11 +26,36 @@ Deliberately left behind: `src/forma/` (the Forma artifact host —
 linkage), the Rust crate (catalog/plan/semantic routing — a planner concern
 this integration does not have), and every test/build file.
 
-Local divergences from upstream: **none.** The engine files must stay
-byte-identical — re-syncing against a newer upstream commit is a plain copy
-plus updating the revision above. Anything ksx needs differently is done
-outside these files: skin and no-JS rules in `studio.css`, wiring in
-`NocturneIsland.ts` (`initNocturneCanvas` adopts a server-rendered skeleton
-instead of calling `createCanvasSurface`, and feeds the navigator DETACHED
-nodes to keep the minimap out of the DOM), persistence in the island's
-`ksx-nocturne-canvas` localStorage store.
+Local divergences from upstream — every one carries a `// ksx:` comment in
+`widget-canvas.ts` and should be offered back upstream at the next sync
+(all four came out of the 2026-08-21 adversarial review of the /nocturne
+integration; none is ksx-specific policy, all are engine correctness):
+
+1. **Preferred-width ceiling 720 → 1600** (`#normalizedPlacement`): the old
+   clamp silently discarded any `data-canvas-preferred-width` above 720px —
+   ksx's keyboard declares 980px and was cropped into its own scrollbar.
+   The resizable-restore ceiling (840) was raised to 1600 to match.
+2. **Height source for adapter-less items** (ResizeObserver callback):
+   items mounted as plain `content` register no runtime host, so upstream's
+   adapter-owned height source never fired and the recorded height stayed
+   the mount-time guess forever — mis-framing `fitAll` and "parking"
+   (inert + `content-visibility: hidden`) widgets that were actually on
+   screen. When no runtime host exists for the item, its own border box is
+   now the height source.
+3. **Per-item listener lifetime** (`#itemAborts`): item-scoped listeners
+   (item focus/keydown/pointerdown, drag-handle pointerdown/keydown) were
+   registered on the canvas-lifetime abort signal, stranding closures over
+   detached DOM on every `removeItem`/remount cycle — ksx rebuilds pad
+   widgets on each roster print, so this compounded. Each item now gets its
+   own `AbortController`, aborted in `removeItem`/`clearItems`;
+   `AbortSignal.any` keeps `dispose()` authoritative. (`AbortSignal.any` is
+   baseline since Chrome 116 / Safari 17.4 — fine for Studio's targets.)
+
+Re-syncing against a newer upstream commit means re-applying (or better,
+upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying.
+Everything else ksx needs differently is done outside these files: skin and
+no-JS rules in `studio.css`, wiring in `NocturneIsland.ts`
+(`initNocturneCanvas` adopts a server-rendered skeleton instead of calling
+`createCanvasSurface`, and feeds the navigator DETACHED nodes to keep the
+minimap out of the DOM), persistence in the island's `ksx-nocturne-canvas`
+localStorage store.

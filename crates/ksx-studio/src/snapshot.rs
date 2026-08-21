@@ -4232,8 +4232,10 @@ pub struct NocturneDerived {
     pub pad_badge_cls: String,
     pub pad_name: String,
     pub pad_sub: String,
-    /// The stage's silhouette pair: exactly one visible, by the selected
-    /// slot's family (`"n-padwrap"` / `"n-padwrap none"`).
+    /// The hidden master pair's family classes (`"n-padwrap"` /
+    /// `"n-padwrap none"`): with JS the masters are clone templates and the
+    /// class is moot, but WITHOUT JS the canvas relaxes into a document and
+    /// the served class is what picks which silhouette shows.
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
     pub bind_title: String,
@@ -4792,10 +4794,12 @@ impl NocturneDerived {
             ),
             None => (String::new(), String::new(), String::new()),
         };
-        // Which vendored silhouette the stage draws — the selected slot's
-        // OWN family (the workspace's `pad_ps` rule), so a PlayStation draft
-        // is a DualShock on screen, not an Xbox with relabelled pills. An
-        // empty stage keeps the neutral Xbox outline as its ground.
+        // Which vendored silhouette the no-JS page draws — the selected
+        // slot's OWN family (the workspace's `pad_ps` rule), so a
+        // PlayStation draft is a DualShock on screen, not an Xbox with
+        // relabelled pills. An empty roster keeps the neutral Xbox outline
+        // as its ground. (With JS the masters are display:none clone
+        // templates and every staged pad is its own canvas widget.)
         let pad_is_ps = selected.is_some_and(|slot| !slot.is_xinput);
         let pad_xbox_cls = if pad_is_ps {
             "n-padwrap none".to_owned()

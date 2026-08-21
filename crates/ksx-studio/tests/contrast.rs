@@ -7,9 +7,12 @@
 //! a doc does not defend itself.
 //!
 //! So this file re-derives every ratio from the CSS that actually ships, on
-//! every `cargo test`. It parses `studio-ui/src/studio.css` rather than
-//! restating its values, because a test that hardcodes the palette is a second
-//! copy of the palette and would drift in exactly the same way.
+//! every `cargo test`. It parses the sheet — since TK0 the generated
+//! `tokens.gen.css` (compiled from `studio-ui/tokens/`, the single palette
+//! source) concatenated with the authored `studio.css`, the same order the
+//! build hashes them — rather than restating values, because a test that
+//! hardcodes the palette is a second copy of the palette and would drift in
+//! exactly the same way.
 //!
 //! # What it checks, and why those pairs
 //!
@@ -51,10 +54,29 @@
 
 use std::collections::BTreeMap;
 
-const CSS: &str = include_str!("../../../studio-ui/src/studio.css");
-const BUILD_MJS: &str = include_str!("../../../studio-ui/build.mjs");
-const RENDER_RS: &str = include_str!("../src/render.rs");
-const RENDER_MAP_RS: &str = include_str!("../src/render_map.rs");
+/// The sheet as the browser reads it: the GENERATED token CSS first, the
+/// authored component CSS after — the same order build.mjs concatenates them
+/// into the hashed studio.<hash>.css. Since TK0 every token lives in
+/// tokens.gen.css (compiled from studio-ui/tokens/), and build-tokens.mjs
+/// fails the build if a `:root` block or a second light media query creeps
+/// back into studio.css — which is what keeps `split_themes` below reading
+/// the right region.
+const CSS: &str = concat!(
+    include_str!("../../../studio-ui/src/tokens.gen.css"),
+    "\n", // generateCss joins array inputs with \n — keep the constant byte-exact
+    include_str!("../../../studio-ui/src/studio.css"),
+);
+/// The generated Rust module the anti-flash pin reads. An integration test
+/// cannot see a `pub(crate)` const, so the pin matches the module's SOURCE —
+/// which obliges the generator to emit each pinned rule as one unbroken
+/// string literal (no concat seams or line continuations mid-rule).
+const THEME_TOKENS_RS: &str = include_str!("../src/theme_tokens.rs");
+/// The controller art as SHIPPED: the committed embed output, which CI pins
+/// to a fresh build. Parsing the emitted asset (rather than build.mjs's
+/// source, as this file did while the sheet was hand-mirrored) checks the
+/// whole chain: token source → build.mjs templating → the SVG a browser gets.
+const PAD_XBOX_SVG: &str = include_str!("../assets/pad-xbox.svg");
+const PAD_DS4_SVG: &str = include_str!("../assets/pad-ds4.svg");
 
 const TEXT_FLOOR: f64 = 4.5;
 const NON_TEXT_FLOOR: f64 = 3.0;
@@ -150,7 +172,7 @@ fn parse_color(raw: &str) -> Option<Rgba> {
     None
 }
 
-// ── parsing studio.css ───────────────────────────────────────────────────
+// ── parsing the sheet (tokens.gen.css + studio.css) ──────────────────────
 
 /// The light theme lives in `@media (prefers-color-scheme: light)`. Everything
 /// before it is the dark theme plus the theme-agnostic primitives; the media
@@ -159,7 +181,7 @@ fn split_themes(css: &str) -> (String, String) {
     let marker = "@media (prefers-color-scheme: light)";
     let start = css
         .find(marker)
-        .expect("studio.css must contain the light-theme media query");
+        .expect("tokens.gen.css must contain the light-theme media query");
     let after = &css[start..];
     let open = after.find('{').expect("media query must open a block");
     let mut depth = 0usize;
@@ -212,10 +234,13 @@ struct Theme {
 
 impl Theme {
     fn get(&self, name: &str) -> Rgba {
-        *self
-            .tok
-            .get(name)
-            .unwrap_or_else(|| panic!("{}: token --{name} is missing from studio.css", self.name))
+        *self.tok.get(name).unwrap_or_else(|| {
+            panic!(
+                "{}: token --{name} is missing from the token source \
+                     (studio-ui/tokens/, emitted into tokens.gen.css)",
+                self.name
+            )
+        })
     }
 
     /// The four grounds a panel-level color can legitimately sit on.
@@ -508,7 +533,8 @@ fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
             "--{name} is a recorded contrast exemption measured at {expected:.2}:1, \
              but now measures {got:.2}:1. That is fine if it went UP, and a \
              decision either way — update the exemption in \
-             ksx-studio/tests/contrast.rs and the note in studio.css §1."
+             ksx-studio/tests/contrast.rs and the hardware-markings note in \
+             studio-ui/tokens/semantic.json (emitted into tokens.gen.css §1)."
         );
     }
 }
@@ -645,10 +671,13 @@ fn disabled_controls_are_a_pinned_exemption() {
     }
 }
 
-/// The anti-flash `<style>` is a hand copy of `--bg`/`--text`, so it drifts
-/// silently: a wrong anti-flash color looks exactly like the flash it exists
-/// to prevent. It HAD drifted before this test existed (`#0b0e14` against a
-/// stylesheet that had moved to `#0a0d13`).
+/// The anti-flash `<style>` used to be a hand copy of `--bg`/`--text` in two
+/// files, and it HAD drifted before this test existed (`#0b0e14` against a
+/// stylesheet that had moved to `#0a0d13`) — a wrong anti-flash color looks
+/// exactly like the flash it exists to prevent. Since TK0 the const is
+/// GENERATED into `theme_tokens.rs` from the same token source as the sheet,
+/// so it cannot drift by hand — this pin now guards the other failure mode:
+/// the generator emitting CSS and Rust that disagree.
 #[test]
 fn anti_flash_css_matches_the_tokens_it_mirrors() {
     let themes = themes();
@@ -666,38 +695,53 @@ fn anti_flash_css_matches_the_tokens_it_mirrors() {
         css_hex(light.get("text"))
     );
 
-    for (file, src) in [("render.rs", RENDER_RS), ("render_map.rs", RENDER_MAP_RS)] {
-        let compact: String = src.chars().filter(|c| !c.is_whitespace()).collect();
-        let want_dark: String = expect_dark.chars().filter(|c| !c.is_whitespace()).collect();
-        let want_light: String = expect_light
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        assert!(
-            compact.contains(&want_dark),
-            "{file}: PERSONALITY_CSS must open with the dark tokens from \
-             studio.css — expected to find `{expect_dark}`"
-        );
-        assert!(
-            compact.contains(&want_light),
-            "{file}: PERSONALITY_CSS's light override must match studio.css — \
-             expected to find `{expect_light}`"
-        );
-    }
+    let compact: String = THEME_TOKENS_RS
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let want_dark: String = expect_dark.chars().filter(|c| !c.is_whitespace()).collect();
+    let want_light: String = expect_light
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        compact.contains(&want_dark),
+        "theme_tokens.rs: PERSONALITY_CSS must open with the dark tokens from \
+         the token source — expected to find `{expect_dark}`. Regenerate: \
+         cd studio-ui && node build.mjs"
+    );
+    assert!(
+        compact.contains(&want_light),
+        "theme_tokens.rs: PERSONALITY_CSS's light override must match the \
+         token source — expected to find `{expect_light}`. Regenerate: \
+         cd studio-ui && node build.mjs"
+    );
 }
 
-/// The controller art's palette is hand-mirrored into `build.mjs` because an
-/// `<img>`-embedded SVG is its own document and inherits no custom properties.
-/// Same drift risk as the anti-flash CSS, so same treatment.
+/// The controller art carries its own palette sheet because an
+/// `<img>`-embedded SVG is its own document and inherits no custom
+/// properties. Since TK0 build.mjs TEMPLATES the sheet's four token values
+/// from the token source (the bespoke art colors stay literal), so this test
+/// parses the sheet out of the SHIPPED asset — checking the whole chain,
+/// token source → build.mjs → the bytes a browser gets — instead of
+/// build.mjs's source, where the templated values no longer appear as text.
 #[test]
 fn pad_art_palette_stays_separable() {
-    let sheet = BUILD_MJS
-        .split("const PAD_SHEET")
+    let sheet = PAD_XBOX_SVG
+        .split("<style>")
         .nth(1)
-        .expect("build.mjs must define PAD_SHEET");
+        .expect("pad-xbox.svg must carry its injected palette <style>");
     let sheet = &sheet[..sheet
         .find("</style>")
-        .expect("PAD_SHEET must close its <style>")];
+        .expect("the palette sheet must close its <style>")];
+
+    // Both pads get the identical sheet injected; pin that with one substring
+    // so the DS4 cannot quietly ship a different palette.
+    assert!(
+        PAD_DS4_SVG.contains(sheet),
+        "pad-ds4.svg must carry the same palette sheet as pad-xbox.svg — \
+         regenerate both: cd studio-ui && node build.mjs"
+    );
 
     let grab = |class: &str, prop: &str, nth: usize| -> Rgba {
         let hits: Vec<&str> = sheet
@@ -706,13 +750,13 @@ fn pad_art_palette_stays_separable() {
             .collect();
         let block = hits.get(nth).unwrap_or_else(|| {
             panic!(
-                "PAD_SHEET must declare {class} at least {} time(s)",
+                "the pad palette sheet must declare {class} at least {} time(s)",
                 nth + 1
             )
         });
-        let after = &block[block
-            .find(prop)
-            .unwrap_or_else(|| panic!("PAD_SHEET's {class} (occurrence {nth}) must set {prop}"))..];
+        let after = &block[block.find(prop).unwrap_or_else(|| {
+            panic!("the pad palette sheet's {class} (occurrence {nth}) must set {prop}")
+        })..];
         let hex_start = after.find('#').expect("declaration must use a hex color");
         parse_color(&after[hex_start..hex_start + 7]).expect("valid hex color")
     };
@@ -754,11 +798,13 @@ fn pad_art_palette_stays_separable() {
 
     // ── the mirrors, pinned ──────────────────────────────────────────────
     //
-    // Separation alone does NOT catch drift: `PAD_SHEET` is a hand copy of
-    // specific studio.css tokens, and a copy that wanders stays perfectly
-    // separable while quietly disagreeing with the page around it. That is
-    // how the light outline came to be `#6d6180` after `--text-3` had moved
-    // to `#685c7a` — the art kept the old tertiary, and nothing noticed.
+    // Separation alone does NOT catch drift: a sheet that wanders stays
+    // perfectly separable while quietly disagreeing with the page around it.
+    // That is how the light outline came to be `#6d6180` after `--text-3`
+    // had moved to `#685c7a` — the art kept the old tertiary, and nothing
+    // noticed. build.mjs now templates these four values from the token
+    // source, so a mismatch here means the COMMITTED asset is stale (or the
+    // templating broke), and the fix is a rebuild, not a hand edit.
     //
     // Only the values that really ARE token mirrors are pinned. The dark
     // body fill, dark detail and both insets are bespoke art colors chosen
@@ -805,11 +851,11 @@ fn pad_art_palette_stays_separable() {
         assert_eq!(
             css_hex(got),
             css_hex(expect),
-            "build.mjs PAD_SHEET: {theme} {class}{prop} is a hand mirror of \
-             studio.css `--{token}` and has drifted — it reads {} but the token \
-             is {}. Update PAD_SHEET (an <img> SVG is its own document and \
-             cannot use var(), so the copy is unavoidable; letting it rot is \
-             not).",
+            "pad-xbox.svg palette sheet: {theme} {class}{prop} must equal the \
+             `--{token}` token it is templated from, but the shipped asset \
+             reads {} while the token is {}. The committed art is stale — \
+             regenerate: cd studio-ui && node build.mjs (an <img> SVG is its \
+             own document and cannot use var(), so the sheet is baked in).",
             css_hex(got),
             css_hex(expect)
         );

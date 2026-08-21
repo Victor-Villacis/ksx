@@ -16,9 +16,15 @@ both Studio pages carry the visible footer line:
 | `src-ds4.svg` | `VSCView DualShock 4 Controller.svg` | `/_assets/pad-ds4.svg` |
 
 `build.mjs` copies each source into `crates/ksx-studio/assets/` at build
-time, stripped of Inkscape/Sodipodi editor metadata (byte diet only —
-geometry untouched). The committed sources here stay byte-identical to
-upstream for provenance.
+time, stripped of Inkscape/Sodipodi editor metadata (geometry untouched) and
+recolored for the Studio: the solid-black/white source shapes are reclassed to
+`.pad-body`/`.pad-detail`/`.pad-inset` and an injected `<style>` palette sheet
+maps them to the app's colors — its four token values templated from
+`studio-ui/tokens/` (bespoke art colors stay literal), with a
+`prefers-color-scheme:light` override so one asset serves both themes. The
+**emitted** SVGs, not build.mjs, are what `crates/ksx-studio/tests/contrast.rs`
+pins. The committed sources here stay byte-identical to upstream for
+provenance.
 
 Why these two: the upstream repo's full-schematic packs cover DualShock/
 DualSense/Switch/Arcade but (as of 2026-08-05) ship **no Xbox full

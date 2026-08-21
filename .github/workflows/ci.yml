@@ -67,11 +67,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Studio registry install failed' }
           node build.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Studio asset build failed' }
-          git -C .. diff --exit-code -- crates/ksx-studio/assets
+          # The two generated-and-committed token outputs (TK0) ride the same
+          # byte-diff as the assets: src/tokens.gen.css feeds the hashed sheet
+          # and the contrast gate; theme_tokens.rs is the anti-flash const.
+          git -C .. diff --exit-code -- crates/ksx-studio/assets studio-ui/src/tokens.gen.css crates/ksx-studio/src/theme_tokens.rs
           if ($LASTEXITCODE -ne 0) {
             throw 'committed Studio assets differ from a clean Forma build'
           }
-          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets
+          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/src/tokens.gen.css crates/ksx-studio/src/theme_tokens.rs
           if ($untracked) {
             throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
           }
@@ -178,11 +181,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Studio registry install failed' }
           node build.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Studio asset build failed' }
-          git -C .. diff --exit-code -- crates/ksx-studio/assets
+          git -C .. diff --exit-code -- crates/ksx-studio/assets studio-ui/src/tokens.gen.css crates/ksx-studio/src/theme_tokens.rs
           if ($LASTEXITCODE -ne 0) {
             throw 'browser checkout assets differ from the current Studio source'
           }
-          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets
+          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/src/tokens.gen.css crates/ksx-studio/src/theme_tokens.rs
           if ($untracked) {
             throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
           }

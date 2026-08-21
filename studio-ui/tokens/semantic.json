@@ -1,0 +1,761 @@
+{
+  "$description": "ksx Studio semantic tokens — the only tier components consume. cssName is the authoritative custom-property name (preserved from studio.css §1/§2; this is a formalization, not a rename). themeable: true = every theme must provide it; \"optional\" = a theme may override it; untagged = never themeable (geometry, z-order, hardware marking colors). build-tokens.mjs compiles this into src/tokens.gen.css and crates/ksx-studio/src/theme_tokens.rs; docs/research/token-system-design.md is the design record.",
+  "blocks": [
+    {
+      "name": "primitives",
+      "note": "/* ═══ §1 PRIMITIVES ═══════════════════════════════════════════════════════ */",
+      "tokens": [
+        {
+          "comment": "  /* ── Type: a 1.125–1.25 ratio scale, tuned so the small end stays legible\n     at cabinet distance. `--fs-hero` is the across-the-room size. ───────── */"
+        },
+        {
+          "cssName": "--fs-micro",
+          "$value": "0.6875rem",
+          "$description": "11px — uppercase eyebrows, badges",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-xs",
+          "$value": "0.75rem",
+          "$description": "12px — mono tags, meta, footnotes",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-sm",
+          "$value": "0.8125rem",
+          "$description": "13px — secondary body, dense rows",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-md",
+          "$value": "0.875rem",
+          "$description": "14px — body, control text",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-base",
+          "$value": "0.9375rem",
+          "$description": "15px — emphasised body",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-lg",
+          "$value": "1.0625rem",
+          "$description": "17px — card titles, subheads",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-xl",
+          "$value": "1.375rem",
+          "$description": "22px — page title",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-2xl",
+          "$value": "1.75rem",
+          "$description": "28px — screen headline",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fs-hero",
+          "$value": "2.375rem",
+          "$description": "38px — the one line you read across a room",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fw-regular",
+          "$value": "400",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fw-medium",
+          "$value": "500",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fw-semibold",
+          "$value": "600",
+          "$type": "other"
+        },
+        {
+          "cssName": "--fw-bold",
+          "$value": "700",
+          "$description": "mono legends/keycaps only — UI chrome stops at 600",
+          "$type": "other"
+        },
+        {
+          "cssName": "--lh-flat",
+          "$value": "1",
+          "$type": "other"
+        },
+        {
+          "cssName": "--lh-tight",
+          "$value": "1.2",
+          "$type": "other"
+        },
+        {
+          "cssName": "--lh-snug",
+          "$value": "1.35",
+          "$type": "other"
+        },
+        {
+          "cssName": "--lh-normal",
+          "$value": "1.55",
+          "$type": "other"
+        },
+        {
+          "cssName": "--lh-loose",
+          "$value": "1.65",
+          "$type": "other"
+        },
+        {
+          "cssName": "--track-hero",
+          "$value": "-0.02em",
+          "$type": "other"
+        },
+        {
+          "cssName": "--track-title",
+          "$value": "-0.011em",
+          "$type": "other"
+        },
+        {
+          "cssName": "--track-eyebrow",
+          "$value": "0.045em",
+          "$type": "other"
+        },
+        {
+          "cssName": "--track-mono",
+          "$value": "0.01em",
+          "$type": "other"
+        },
+        {
+          "cssName": "--font-sans",
+          "$value": "system-ui, -apple-system, \"Segoe UI Variable Text\", \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--mono",
+          "$value": "ui-monospace, \"Cascadia Mono\", \"Cascadia Code\", Consolas, monospace",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "comment": "  /* ── Space: 4pt base, 8pt rhythm. Nothing between steps. ─────────────── */"
+        },
+        {
+          "cssName": "--sp-0",
+          "$value": "0",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-1",
+          "$value": "0.25rem",
+          "$description": "4",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-2",
+          "$value": "0.5rem",
+          "$description": "8",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-3",
+          "$value": "0.75rem",
+          "$description": "12",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-4",
+          "$value": "1rem",
+          "$description": "16",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-5",
+          "$value": "1.25rem",
+          "$description": "20",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-6",
+          "$value": "1.5rem",
+          "$description": "24",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-8",
+          "$value": "2rem",
+          "$description": "32",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-10",
+          "$value": "2.5rem",
+          "$description": "40",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-12",
+          "$value": "3rem",
+          "$description": "48",
+          "$type": "other"
+        },
+        {
+          "cssName": "--sp-16",
+          "$value": "4rem",
+          "$description": "64",
+          "$type": "other"
+        },
+        {
+          "comment": "  /* ── Radii ───────────────────────────────────────────────────────────── */"
+        },
+        {
+          "cssName": "--r-xs",
+          "$value": "4px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--r-sm",
+          "$value": "6px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--r-md",
+          "$value": "8px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--r-lg",
+          "$value": "12px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--r-xl",
+          "$value": "16px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--r-pill",
+          "$value": "999px",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--radius",
+          "$value": "var(--r-lg)",
+          "$description": "legacy alias",
+          "$type": "alias"
+        },
+        {
+          "comment": "  /* ── Control geometry: one ladder, so a button and a select beside it are\n     the same height without either being told twice. ───────────────────── */"
+        },
+        {
+          "cssName": "--ctl-h-sm",
+          "$value": "1.75rem",
+          "$description": "28 — inline row accelerators",
+          "$type": "other"
+        },
+        {
+          "cssName": "--ctl-h",
+          "$value": "2.25rem",
+          "$description": "36 — the default",
+          "$type": "other"
+        },
+        {
+          "cssName": "--ctl-h-lg",
+          "$value": "2.75rem",
+          "$description": "44 — the primary action of a screen",
+          "$type": "other"
+        },
+        {
+          "comment": "  /* ── Workspace geometry (§8): the Nocturne shell's frame. Dimensions, not\n     colors, so no contrast entry — but they are tokens for the same reason\n     every size is: the three-pane grid, the collapse rails and the coarse\n     re-ladder all read ONE declaration. ─────────────────────────────────── */"
+        },
+        {
+          "cssName": "--tbar-h",
+          "$value": "52px",
+          "$description": "title bar",
+          "$type": "other"
+        },
+        {
+          "cssName": "--pane-l",
+          "$value": "272px",
+          "$description": "left pane — keyboard + player rack",
+          "$type": "other"
+        },
+        {
+          "cssName": "--pane-r",
+          "$value": "clamp(300px, 24%, 368px)",
+          "$description": "right pane — binding list",
+          "$type": "other"
+        },
+        {
+          "comment": "  /* ── Motion: fast, few, purposeful. ──────────────────────────────────── */"
+        },
+        {
+          "cssName": "--dur-1",
+          "$value": "90ms",
+          "$description": "state change on an element under the cursor",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--dur-2",
+          "$value": "150ms",
+          "$description": "something appearing",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--dur-3",
+          "$value": "240ms",
+          "$description": "an overlay",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--ease-out",
+          "$value": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--ease-standard",
+          "$value": "cubic-bezier(0.4, 0, 0.2, 1)",
+          "$type": "other",
+          "themeable": "optional"
+        },
+        {
+          "cssName": "--z-sticky",
+          "$value": "5",
+          "$type": "other"
+        },
+        {
+          "cssName": "--z-selbar",
+          "$value": "8",
+          "$type": "other"
+        },
+        {
+          "cssName": "--z-toast",
+          "$value": "9",
+          "$type": "other"
+        },
+        {
+          "cssName": "--z-modal",
+          "$value": "20",
+          "$type": "other"
+        },
+        {
+          "comment": "  /* ── Hardware markings ────────────────────────────────────────────────\n     The colors PRINTED ON THE PHYSICAL PADS, reproduced on the controller\n     art. Theme-independent on purpose: a real Xbox B is that red under any\n     stylesheet, so these do not belong in either theme block.\n\n     These are NOT the palette and NOT slot identity. Slot identity is\n     `--cool` and only `--cool` — coloring slot 2 red because P2 is red on\n     the mark would read as \"slot 2 has failed\", since red means danger\n     everywhere else in this app.\n\n     CONTRAST EXEMPTION, deliberate: `--hw-xbox-b` and `--hw-xbox-x` carry\n     white letters at 4.00:1 and 3.94:1, under the 4.5 floor. They stay,\n     because this is a PICTURE of a device — repainting it would make the\n     drawing wrong — and because the letter is not the accessible name:\n     every hit zone gets an `aria-label` naming the control and every key\n     bound to it (`render_map.rs`, `zone_label`). The floor applies to text\n     that carries meaning; this glyph is decoration on top of a label that\n     already exists. The contrast gate encodes this exemption explicitly so\n     it is a decision on record, not an oversight. */"
+        },
+        {
+          "cssName": "--hw-xbox-a",
+          "$value": "#57c04a",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-a-on",
+          "$value": "#08170a",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-b",
+          "$value": "#e04b3f",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-x",
+          "$value": "#3f7fe0",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-y",
+          "$value": "#f0b429",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-y-on",
+          "$value": "#201603",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-xbox-on",
+          "$value": "#ffffff",
+          "$description": "B and X take white, as the hardware does",
+          "$type": "color"
+        },
+        {
+          "comment": "  /* The DS4 prints colored SHAPES on grey plastic, so the glyph carries the\n     color and the disc stays neutral. The disc is the one value here that is\n     ours rather than the hardware's — it was blue-grey (#2b3346), which read\n     as a second hue against a violet ground; it is now the same violet-grey\n     family as the rest of the page. All four glyphs gained contrast on it\n     (4.60→5.17 worst, the cross). */"
+        },
+        {
+          "cssName": "--hw-ps-disc",
+          "$value": "#2e2740",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-ps-circle",
+          "$value": "#6ea8ff",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-ps-cross",
+          "$value": "#ff6b7d",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-ps-triangle",
+          "$value": "#46d6a8",
+          "$type": "color"
+        },
+        {
+          "cssName": "--hw-ps-square",
+          "$value": "#f083c6",
+          "$type": "color"
+        }
+      ]
+    },
+    {
+      "name": "theme-base",
+      "note": "/* ── Dark: the default. A deep violet ground — the app's own color, taken\n   from the mark; surfaces climb by LIGHTNESS, borders do the separating,\n   shadows only mark true depth.\n   PURPLE IS THE GROUND, NOT THE ACCENT. That is a measured decision, not a\n   taste: `#8b5cf6` as an accent scores 4.20:1 on `--panel` and fails the\n   4.5 floor, and every lavender that passes is the same hue as the ground,\n   so it stops reading as \"live\". Teal stays the accent and scores BETTER\n   here than it did on the old blue-steel (9.96:1 vs 9.75:1) because teal\n   and violet are near-complementary. See DESIGN-SYSTEM §3. ─────────────── */",
+      "tokens": [
+        {
+          "cssName": "color-scheme",
+          "$value": "dark",
+          "$type": "other",
+          "themeable": true
+        },
+        {
+          "cssName": "--bg",
+          "$value": "#120c1c",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--bg-2",
+          "$value": "#0b0714",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--panel",
+          "$value": "#1c1428",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--panel-2",
+          "$value": "#171021",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--panel-3",
+          "$value": "#241a33",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--line",
+          "$value": "#3b2c52",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--line-soft",
+          "$value": "#2a1f3a",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--line-strong",
+          "$value": "#54406f",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "comment": "  /* Cream, not blue-white: on a violet ground a cool white reads as a second\n     hue. It is also not pure white — that blooms on a cabinet panel. */"
+        },
+        {
+          "cssName": "--text",
+          "$value": "#f0ebe0",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--text-2",
+          "$value": "#bcb0c9",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--text-3",
+          "$value": "#8f83a3",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent",
+          "$value": "#2fd8c5",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-strong",
+          "$value": "#4ee5d4",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-fill",
+          "$value": "#2fd8c5",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-on",
+          "$value": "#04241f",
+          "$description": "text ON an accent fill",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-dim",
+          "$value": "rgba(47, 216, 197, 0.13)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-dim-2",
+          "$value": "rgba(47, 216, 197, 0.22)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-line",
+          "$value": "rgba(47, 216, 197, 0.42)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--accent-glow",
+          "$value": "rgba(47, 216, 197, 0.16)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "comment": "  /* Identity: a device, a persona, a group of keys. Violet, so it belongs to\n     the ground's family — identity is NOT liveness and must not compete with\n     the accent for that meaning. */"
+        },
+        {
+          "cssName": "--cool",
+          "$value": "#a98ae0",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--cool-line",
+          "$value": "rgba(169, 138, 224, 0.45)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--ok",
+          "$value": "#4ed185",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--ok-dim",
+          "$value": "rgba(78, 209, 133, 0.12)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--ok-line",
+          "$value": "rgba(78, 209, 133, 0.4)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--warn",
+          "$value": "#edbb46",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--warn-dim",
+          "$value": "rgba(237, 187, 70, 0.12)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--warn-line",
+          "$value": "rgba(237, 187, 70, 0.42)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--danger",
+          "$value": "#f4675f",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "comment": "  /* Was #d93f36, which put `--danger-on` at 4.16:1 — below the floor, and it\n     had been that way since before this palette (the fill is ground\n     independent, so no theme ever caught it). 5.10:1 now. */"
+        },
+        {
+          "cssName": "--danger-fill",
+          "$value": "#c5312a",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--danger-on",
+          "$value": "#fff5f4",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--danger-dim",
+          "$value": "rgba(244, 103, 95, 0.12)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--danger-line",
+          "$value": "rgba(244, 103, 95, 0.44)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--focus",
+          "$value": "#5ee0d0",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--overlay-scrim",
+          "$value": "rgba(7, 4, 13, 0.72)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--sel-tint",
+          "$value": "rgba(169, 138, 224, 0.07)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--e-1",
+          "$value": "0 1px 2px rgba(0, 0, 0, 0.4)",
+          "$type": "other",
+          "themeable": true
+        },
+        {
+          "cssName": "--e-2",
+          "$value": "0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px -4px rgba(0, 0, 0, 0.5)",
+          "$type": "other",
+          "themeable": true
+        },
+        {
+          "cssName": "--e-3",
+          "$value": "0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 28px -8px rgba(0, 0, 0, 0.6)",
+          "$type": "other",
+          "themeable": true
+        },
+        {
+          "cssName": "--e-4",
+          "$value": "0 4px 10px rgba(0, 0, 0, 0.45), 0 28px 64px -16px rgba(0, 0, 0, 0.75)",
+          "$type": "other",
+          "themeable": true
+        },
+        {
+          "comment": "  /* The page ground is not flat: a single very low-contrast wash gives the\n     screen a top and a bottom, which is most of why a dark UI reads as a\n     surface rather than as \"the app failed to paint\". */"
+        },
+        {
+          "cssName": "--ground",
+          "$value": "radial-gradient(1200px 620px at 50% -10%, #1e1530 0%, transparent 70%), linear-gradient(180deg, #120c1c 0%, #0d0817 100%)",
+          "$type": "other",
+          "themeable": true
+        }
+      ]
+    },
+    {
+      "name": "role-aliases",
+      "note": "/* ═══ §2 ROLE ALIASES ═════════════════════════════════════════════════════\n   Components below reference these, never the raw ramp — so re-theming is a\n   studio-ui/tokens/ edit and nothing else. The old token names stay as the\n   ramp itself, so markup and build.mjs's SVG palette keep working. */",
+      "tokens": [
+        {
+          "cssName": "--surface",
+          "$value": "var(--bg)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--surface-sunken",
+          "$value": "var(--bg-2)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--surface-raised",
+          "$value": "var(--panel)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--surface-inset",
+          "$value": "var(--panel-2)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--surface-hover",
+          "$value": "var(--panel-3)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--surface-overlay",
+          "$value": "var(--panel)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--text-primary",
+          "$value": "var(--text)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--text-secondary",
+          "$value": "var(--text-2)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--text-tertiary",
+          "$value": "var(--text-3)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--border-subtle",
+          "$value": "var(--line-soft)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--border-default",
+          "$value": "var(--line)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--border-strong",
+          "$value": "var(--line-strong)",
+          "$type": "alias"
+        },
+        {
+          "cssName": "--muted",
+          "$value": "var(--text-3)",
+          "$description": "legacy alias, still referenced by markup",
+          "$type": "alias"
+        }
+      ]
+    }
+  ]
+}

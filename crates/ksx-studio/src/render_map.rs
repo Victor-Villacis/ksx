@@ -60,7 +60,9 @@ use forma_ir::parser::IrModule;
 use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
-use crate::render::{art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage};
+use crate::render::{
+    art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage, PERSONALITY_CSS,
+};
 use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot, ShelfKeyRow, ShelfView};
 
 /// List slot names (binding-derived, compiler 0.2.0). The zones list appears
@@ -3294,12 +3296,6 @@ fn build_slots(module: &IrModule, payload: &MapPayload, flash: Option<&str>) -> 
     }
     slots
 }
-
-/// Same anti-flash CSS as the status page (render.rs PERSONALITY_CSS).
-/// Kept byte-identical to it; `tests/contrast.rs` pins both against the
-/// `--bg`/`--text` tokens in studio.css so the copies cannot drift apart.
-const PERSONALITY_CSS: &str = "body{background:#120c1c;color:#f0ebe0;margin:0}\
-@media (prefers-color-scheme:light){body{background:#f6f3ee;color:#1c1428}}";
 
 /// Render `/map` for one payload. The `selected` inside the payload drives
 /// the SSR slot pick; the client keeps its own selection after hydration.

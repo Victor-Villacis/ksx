@@ -1,8 +1,10 @@
 # ksx Studio — design system
 
-The one place that says what a thing should look like. `studio-ui/src/studio.css`
-is the implementation; this file is the reasoning. If the two disagree, the CSS
-is the bug.
+The one place that says what a thing should look like. The implementation is
+`studio-ui/tokens/` (the palette and scales — the single token source, compiled
+into the sheet at build time; TK0, see `docs/research/token-system-design.md`)
+plus `studio-ui/src/studio.css` (the components that consume them); this file
+is the reasoning. If they disagree, the CSS is the bug.
 
 Eight Studio routes use it. The stable product journey is **Keyboard**
 (`/start#keyboard`) → **Controller** (`/start#controller`) → **Mapping**
@@ -398,22 +400,28 @@ contrast (worst: cross, 4.60 → 5.17).
 Numbers in a document do not defend themselves, so these are re-derived on
 every `cargo test`:
 
-- **`crates/ksx-studio/tests/contrast.rs`** — parses `studio-ui/src/studio.css`
-  (it does *not* restate the palette; a test that hardcodes the values is a
-  second copy that drifts the same way), composites every tint over every
-  ground, and checks 154 pairs across both themes. It also pins two
-  hand-mirrored copies of the tokens that had **already drifted**: the
-  anti-flash `PERSONALITY_CSS` in `render.rs`/`render_map.rs` (which was
-  painting `#0b0e14` while the stylesheet had moved to `#0a0d13` — a wrong
-  anti-flash colour looks exactly like the flash it exists to prevent), and
-  the controller-art palette in `build.mjs` (an `<img>`-embedded SVG is its own
-  document and cannot inherit a custom property).
+- **`crates/ksx-studio/tests/contrast.rs`** — parses the shipped sheet (the
+  generated `tokens.gen.css` — compiled from `studio-ui/tokens/` — concatenated
+  with the authored `studio.css`, the same order the build hashes them; it does
+  *not* restate the palette; a test that hardcodes the values is a second copy
+  that drifts the same way), composites every tint over every ground, and
+  checks 154 pairs across both themes. It also cross-pins the token consumers
+  that had **already drifted** back when they were hand copies: the anti-flash
+  `PERSONALITY_CSS` — since TK0 generated into `theme_tokens.rs` from the same
+  token source, and pinned there (it once painted `#0b0e14` while the
+  stylesheet had moved to `#0a0d13` — a wrong anti-flash colour looks exactly
+  like the flash it exists to prevent) — and the controller-art palette, whose
+  four token values `build.mjs` templates from the token source and which the
+  test reads back out of the **shipped** `pad-xbox.svg`/`pad-ds4.svg` (an
+  `<img>`-embedded SVG is its own document and cannot inherit a custom
+  property).
 - **`crates/ksx-cabinet/tests/contrast.rs`** — reads `theme::role` directly,
   because there the Rust constants *are* the theme, and checks the composed
   pairs that only exist on that surface: the focus plate, a state colour on
-  `tint(colour, 38)`, `ACCENT_ON` on `OK`. 58 pairs. It also asserts the two
-  surfaces agree on `--accent` — they diverge on *size* on purpose (body 28 vs
-  14, hero 68 vs 38) and must not diverge on what "you are here" looks like.
+  `tint(colour, 38)`, `ACCENT_ON` on `OK`. 58 pairs. It also pins all 13
+  byte-mirrored roles against the web tokens (`DANGER`/`DANGER_FILL` stay
+  recorded divergences) — the surfaces diverge on *size* on purpose (body 28
+  vs 14, hero 68 vs 38) and must not diverge on what any shared role means.
 
 Both print their full table under `--nocapture`; the failure message names the
 pair, the ratio and the floor, and says to fix the **token**, not the component

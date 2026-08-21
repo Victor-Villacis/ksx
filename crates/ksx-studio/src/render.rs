@@ -266,24 +266,20 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 /// closes it.
 pub(crate) const REFRESH_SECS: u32 = 5;
 
-/// Inline `<style nonce>` applied before the stylesheet arrives (canon
-/// template's anti-flash trick): the body starts on the studio ground color
-/// instead of flashing white. Values mirror `--bg`/`--text` in studio.css,
-/// both schemes.
+/// The anti-flash `<style nonce>` CSS, re-exported from the GENERATED
+/// [`crate::theme_tokens`] module so every page module keeps importing it
+/// from here.
 ///
-/// This is a HAND COPY of two tokens, so it drifts silently — and it had:
-/// before the Street Fighter palette pass these read `#0b0e14`/`#dbe2ef`
-/// while studio.css had moved to `#0a0d13`/`#e3e9f4`, i.e. the first paint
-/// was a *different color* from the stylesheet that replaced it. Nothing
-/// could catch that, because a wrong anti-flash color looks like a flash.
-/// `ksx-studio/tests/contrast.rs` now parses studio.css and pins both.
-/// `pub(crate)` so a THIRD page reuses this copy instead of minting another
-/// one. `render_map.rs` keeps a byte-identical copy from before the rule was
-/// worth stating, and `tests/contrast.rs` pins both against the `--bg`/`--text`
-/// tokens — but a copy that cannot drift is better than a copy that is checked,
-/// and the check only knows about the two files it names.
-pub(crate) const PERSONALITY_CSS: &str = "body{background:#120c1c;color:#f0ebe0;margin:0}\
-@media (prefers-color-scheme:light){body{background:#f6f3ee;color:#1c1428}}";
+/// This used to be a HAND COPY of two tokens, and it had drifted once
+/// (`#0b0e14` against a stylesheet that had moved) — a wrong anti-flash
+/// color looks exactly like the flash it exists to prevent, so nothing could
+/// catch it. Then it was a checked copy (`tests/contrast.rs` pinned this
+/// file and `render_map.rs`'s byte-twin against studio.css). Since TK0 it is
+/// not a copy at all: `studio-ui/tokens/build-tokens.mjs` derives it from
+/// the same token source `tokens.gen.css` is compiled from, and the contrast
+/// gate cross-pins the generated module — a copy that cannot drift, still
+/// checked, because the generator itself could be wrong once.
+pub(crate) use crate::theme_tokens::PERSONALITY_CSS;
 
 /// The minimum number of pad tiles the signature card shows: live pads
 /// first, then ghost outlines up to this floor (a 4-slot XInput cabinet at
@@ -1211,9 +1207,8 @@ mod tests {
             out.html
         );
         assert!(
-            out.html.contains(&format!(
-                r#"<style nonce="{nonce}">body{{background:#120c1c"#
-            )),
+            out.html
+                .contains(&format!(r#"<style nonce="{nonce}">{PERSONALITY_CSS}"#)),
             "personality css must carry the CSP nonce: {}",
             out.html
         );

@@ -1,0 +1,219 @@
+{
+  "id": "light",
+  "label": "Light",
+  "scheme": "light",
+  "note": "/* ── Light: warm paper, not cool grey — the same violet family read as a\n   tint rather than a ground. Every colored role here is DARKER than its\n   pre-purple value, because a cream ground has less luminance headroom than\n   the blue-white one it replaces; the numbers are in DESIGN-SYSTEM §3. ─── */",
+  "tokens": [
+    {
+      "cssName": "color-scheme",
+      "$value": "light",
+      "$type": "other"
+    },
+    {
+      "cssName": "--bg",
+      "$value": "#f6f3ee",
+      "$type": "color"
+    },
+    {
+      "cssName": "--bg-2",
+      "$value": "#ece7df",
+      "$type": "color"
+    },
+    {
+      "cssName": "--panel",
+      "$value": "#ffffff",
+      "$type": "color"
+    },
+    {
+      "cssName": "--panel-2",
+      "$value": "#efe9e2",
+      "$type": "color"
+    },
+    {
+      "cssName": "--panel-3",
+      "$value": "#e8e1d8",
+      "$type": "color"
+    },
+    {
+      "cssName": "--line",
+      "$value": "#ddd3ca",
+      "$type": "color"
+    },
+    {
+      "cssName": "--line-soft",
+      "$value": "#eae3da",
+      "$type": "color"
+    },
+    {
+      "cssName": "--line-strong",
+      "$value": "#bfb2a4",
+      "$type": "color"
+    },
+    {
+      "cssName": "--text",
+      "$value": "#1c1428",
+      "$type": "color"
+    },
+    {
+      "cssName": "--text-2",
+      "$value": "#4c4059",
+      "$type": "color"
+    },
+    {
+      "comment": "    /* Was #6d6180, which clears 4.5 on every ground EXCEPT `--panel-3` — the\n       hover fill — where it lands at 4.41. The gate used to skip that one\n       pair on the grounds that \"every rule that sets --panel-3 also sets\n       --text or --text-2\"; `.tab .tabnum` is a counter-example that already\n       exists in this stylesheet, so the claim was one markup change away from\n       being false. Fixed the token instead of the exclusion (rule 13.6):\n       4.76:1 on `--panel-3`, and every other tertiary pair gains with it. */"
+    },
+    {
+      "cssName": "--text-3",
+      "$value": "#685c7a",
+      "$type": "color"
+    },
+    {
+      "comment": "    /* Was #0b7d72. That is 4.53:1 on `--bg` — the number this palette was\n       specified against — but only 3.33:1 once the accent's own 16 % tint\n       sits on `--bg-2`, which is exactly what `.btn-undo:hover` inside a\n       sunken card draws. Darkened until the WORST composition clears 4.5. */"
+    },
+    {
+      "cssName": "--accent",
+      "$value": "#09645c",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-strong",
+      "$value": "#074f49",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-fill",
+      "$value": "#09645c",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-on",
+      "$value": "#ffffff",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-dim",
+      "$value": "rgba(9, 100, 92, 0.09)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-dim-2",
+      "$value": "rgba(9, 100, 92, 0.16)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-line",
+      "$value": "rgba(9, 100, 92, 0.4)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--accent-glow",
+      "$value": "rgba(9, 100, 92, 0.14)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--cool",
+      "$value": "#6b3fa8",
+      "$type": "color"
+    },
+    {
+      "cssName": "--cool-line",
+      "$value": "rgba(107, 63, 168, 0.4)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--ok",
+      "$value": "#156c43",
+      "$type": "color"
+    },
+    {
+      "cssName": "--ok-dim",
+      "$value": "rgba(21, 108, 67, 0.1)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--ok-line",
+      "$value": "rgba(21, 108, 67, 0.35)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--warn",
+      "$value": "#7c5805",
+      "$type": "color"
+    },
+    {
+      "cssName": "--warn-dim",
+      "$value": "rgba(124, 88, 5, 0.1)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--warn-line",
+      "$value": "rgba(124, 88, 5, 0.35)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--danger",
+      "$value": "#ac2a23",
+      "$type": "color"
+    },
+    {
+      "cssName": "--danger-fill",
+      "$value": "#c0342b",
+      "$type": "color"
+    },
+    {
+      "cssName": "--danger-on",
+      "$value": "#ffffff",
+      "$type": "color"
+    },
+    {
+      "cssName": "--danger-dim",
+      "$value": "rgba(172, 42, 35, 0.08)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--danger-line",
+      "$value": "rgba(172, 42, 35, 0.35)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--focus",
+      "$value": "#09645c",
+      "$type": "color"
+    },
+    {
+      "cssName": "--overlay-scrim",
+      "$value": "rgba(28, 20, 40, 0.42)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--sel-tint",
+      "$value": "rgba(60, 30, 90, 0.04)",
+      "$type": "color"
+    },
+    {
+      "cssName": "--e-1",
+      "$value": "0 1px 2px rgba(28, 20, 40, 0.06)",
+      "$type": "other"
+    },
+    {
+      "cssName": "--e-2",
+      "$value": "0 1px 2px rgba(28, 20, 40, 0.06), 0 4px 12px -4px rgba(28, 20, 40, 0.1)",
+      "$type": "other"
+    },
+    {
+      "cssName": "--e-3",
+      "$value": "0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16)",
+      "$type": "other"
+    },
+    {
+      "cssName": "--e-4",
+      "$value": "0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28)",
+      "$type": "other"
+    },
+    {
+      "cssName": "--ground",
+      "$value": "radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%)",
+      "$type": "other"
+    }
+  ]
+}

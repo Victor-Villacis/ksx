@@ -31,6 +31,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { brotliCompressSync, gzipSync, constants as zlibConstants } from "zlib";
+import { buildTokens } from "./tokens/build-tokens.mjs";
 
 // NOTHING BUT THIS SCRIPT'S OUTPUT MAY LIVE HERE. `build()` below calls
 // `rmSync(outputDir, { recursive: true, force: true })` before it emits
@@ -71,19 +72,36 @@ console.warn = (...args) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// TOKENS FIRST (TK0, docs/research/token-system-design.md): studio-ui/tokens/
+// is the single source of the palette. buildTokens() validates it (throws —
+// fatal, like a slot collision) and emits the two COMMITTED generated files:
+// src/tokens.gen.css (prepended into the hashed sheet below) and
+// crates/ksx-studio/src/theme_tokens.rs (the anti-flash const the render
+// seams share). Both are pinned by the same ci.yml byte-diff as assets/, and
+// both are LF from birth. It also validates that src/studio.css itself stayed
+// token-free — a leftover :root block or prefers-color-scheme query would
+// shadow the generated tokens while the contrast gate (which reads only the
+// FIRST light marker) stayed green.
+// ---------------------------------------------------------------------------
+const authoredCss = readFileSync("src/studio.css", "utf8").replace(/\r\n?/g, "\n");
+const tokens = buildTokens({ authoredCss });
+writeFileSync("src/tokens.gen.css", tokens.css, "utf8");
+writeFileSync("../crates/ksx-studio/src/theme_tokens.rs", tokens.rustModule, "utf8");
+
 // @getforma/build 0.2.0 concatenates plain CSS byte-for-byte. A Windows
 // worktree can therefore hand it mixed/CRLF bytes while a clean Actions
 // checkout hands it LF, producing different content hashes from the same Git
-// commit. Feed the framework an ephemeral LF-normalized copy instead. The CSS
+// commit. Feed the framework ephemeral LF-normalized copies instead. The CSS
 // has no relative @import/url references, so changing its temporary directory
-// cannot change resolution semantics.
+// cannot change resolution semantics. generateCss accepts an ARRAY input and
+// joins the files with "\n" before hashing, so the token sheet is prepended
+// with no framework patch.
 const cssTempDir = mkdtempSync(join(tmpdir(), "ksx-studio-css-"));
+const tokensCssTmp = join(cssTempDir, "tokens.gen.css");
+writeFileSync(tokensCssTmp, tokens.css, "utf8");
 const normalizedCss = join(cssTempDir, "studio.css");
-writeFileSync(
-  normalizedCss,
-  readFileSync("src/studio.css", "utf8").replace(/\r\n?/g, "\n"),
-  "utf8",
-);
+writeFileSync(normalizedCss, authoredCss, "utf8");
 
 try {
   await build({
@@ -99,7 +117,7 @@ try {
       { entry: "src/profiles.ts", outfile: "profiles.js" },
       { entry: "src/setup.ts", outfile: "setup.js" },
     ],
-    cssEntries: [{ input: normalizedCss, outfile: "studio.css" }],
+    cssEntries: [{ input: [tokensCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
       "/start": { js: ["start"], css: ["studio"] },
       "/workspace": { js: ["workspace"], css: ["studio"] },
@@ -240,14 +258,15 @@ for (const logical of Object.keys(manifest.assets)) {
 // /_assets/pad-ds4.svg; the status page's .tileart uses the same files.
 // ---------------------------------------------------------------------------
 
-// Palette sheet: dark values echo --panel-3/--text-3/--text-2 territory from
-// studio.css; light values echo its light scheme. vector-effect keeps the
-// silhouette outline ~1.5 px whatever size the <img> renders at.
-//
-// These are HAND-MIRRORED from studio.css and cannot use var() — an <img>
-// SVG is its own document and inherits no custom properties from the page.
-// That makes them a drift risk, so `contrast.rs` parses this sheet too and
-// checks it against the same floors as everything else.
+// Palette sheet. An <img> SVG is its own document and inherits no custom
+// properties from the page, so var() is impossible here — but the four values
+// that ARE token mirrors (dark stroke = --text-3; light body/stroke/detail =
+// --panel-2/--text-3/--text-2) are TEMPLATED from the token source rather
+// than hand-copied, so they cannot drift. The remaining literals are bespoke
+// art colors chosen against the silhouette (dark body/detail, both insets) —
+// copies of nothing, deliberately not pinned. `contrast.rs` parses the
+// EMITTED pad-xbox.svg (this sheet as shipped) for floors and the token pins.
+// vector-effect keeps the silhouette outline ~1.5 px at any <img> size.
 //
 // Violet family as of the Street Fighter palette pass: the art used to be
 // blue-steel (#1d2534/#8593ad), which read as a foreign hue sitting on a
@@ -256,12 +275,12 @@ for (const logical of Object.keys(manifest.assets)) {
 // art's values (detail/body 9.08 vs 9.44, body/page 1.20 vs 1.27).
 const PAD_SHEET =
   "<style>" +
-  ".pad-body{fill:#261c3b;stroke:#8f83a3;stroke-width:1.5;stroke-linejoin:round;vector-effect:non-scaling-stroke}" +
+  `.pad-body{fill:#261c3b;stroke:${tokens.resolveHex("dark", "--text-3")};stroke-width:1.5;stroke-linejoin:round;vector-effect:non-scaling-stroke}` +
   ".pad-detail{fill:#c9bfd6}" +
   ".pad-inset{fill:#37294e}" +
   "@media (prefers-color-scheme:light){" +
-  ".pad-body{fill:#efe9e2;stroke:#685c7a}" +
-  ".pad-detail{fill:#4c4059}" +
+  `.pad-body{fill:${tokens.resolveHex("light", "--panel-2")};stroke:${tokens.resolveHex("light", "--text-3")}}` +
+  `.pad-detail{fill:${tokens.resolveHex("light", "--text-2")}}` +
   ".pad-inset{fill:#dcd2c8}" +
   "}</style>";
 

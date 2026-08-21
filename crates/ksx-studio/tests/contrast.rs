@@ -717,7 +717,7 @@ fn disabled_controls_are_a_pinned_exemption() {
     // no row here fails loudly rather than inheriting anything. Dark reads
     // noticeably better than light because fading toward a bright parent
     // collapses the pair faster.
-    const DISABLED_PINS: &[(&str, f64)] = &[("dark", 3.45), ("light", 2.36)];
+    const DISABLED_PINS: &[(&str, f64)] = &[("dark", 3.45), ("light", 2.36), ("matrix", 3.66)];
     for t in themes() {
         let expected = DISABLED_PINS
             .iter()
@@ -755,6 +755,8 @@ fn disabled_controls_are_a_pinned_exemption() {
         ("dark", "text-3", 1.81), // a control's own label
         ("light", "accent", 1.85),
         ("light", "text-3", 1.70),
+        ("matrix", "accent", 2.72), // measured 2026-08-20, TK3
+        ("matrix", "text-3", 2.07),
     ];
     for t in themes() {
         for role in ["accent", "text-3"] {

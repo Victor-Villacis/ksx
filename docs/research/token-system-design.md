@@ -1,10 +1,13 @@
 # KSX Studio token system — design proposal
 
-Status: **TK0–TK2 implemented on `codex/studio-nocturne-workspace`, 2026-08-20 — the
-single source, the enumerated contrast gate, and the runtime switch (Settings.theme,
+Status: **TK0–TK3 implemented on `codex/studio-nocturne-workspace`, 2026-08-20 — the
+single source, the enumerated contrast gate, the runtime switch (Settings.theme,
 POST /setup/theme, the /setup picker, the `<html>` stamp with sanitization, per-theme
-anti-flash with `color-scheme`, the stamped-theme browser cells) are all live and
-gate-green. TK3 (the first proof theme) is next.**
+anti-flash with `color-scheme`, the stamped-theme browser cells), and the proof theme:
+`themes/matrix.json` shipped as exactly one JSON file plus two contrast pin rows — zero
+component CSS, zero TS, zero hand-written Rust — and the picker, the stamped browser
+cells and the anti-flash all grew it automatically. The system does what it was designed
+to do.**
 Measured against `codex/studio-nocturne-workspace`
 on 2026-08-20 (studio.css @ 12,489 lines), then adversarially reviewed by three independent
 passes (server seams / build+CI / completeness) against source; their confirmed findings are

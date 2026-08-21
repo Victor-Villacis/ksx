@@ -17,7 +17,7 @@
 /// every rule anyway (a wrong anti-flash color looks exactly like the
 /// flash it exists to prevent, so it gets a loud gate rather than trust).
 pub(crate) const PERSONALITY_CSS: &str =
-    "html{color-scheme:dark}body{background:#120c1c;color:#f0ebe0;margin:0}@media (prefers-color-scheme:light){html{color-scheme:light}body{background:#f6f3ee;color:#1c1428}}html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#120c1c;color:#f0ebe0}html[data-theme=light]{color-scheme:light}html[data-theme=light] body{background:#f6f3ee;color:#1c1428}";
+    "html{color-scheme:dark}body{background:#120c1c;color:#f0ebe0;margin:0}@media (prefers-color-scheme:light){html{color-scheme:light}body{background:#f6f3ee;color:#1c1428}}html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#120c1c;color:#f0ebe0}html[data-theme=light]{color-scheme:light}html[data-theme=light] body{background:#f6f3ee;color:#1c1428}html[data-theme=matrix]{color-scheme:dark}html[data-theme=matrix] body{background:#041008;color:#d8ffe0}";
 
 /// One selectable theme. `scheme` decides the first-paint color-scheme
 /// and which pad-art sheet the theme coexists with.
@@ -36,4 +36,5 @@ pub(crate) struct ThemeMeta {
 pub(crate) const THEMES: &[ThemeMeta] = &[
     ThemeMeta { id: "dark", label: "Dark", scheme: "dark" },
     ThemeMeta { id: "light", label: "Light", scheme: "light" },
+    ThemeMeta { id: "matrix", label: "Matrix", scheme: "dark" },
 ];

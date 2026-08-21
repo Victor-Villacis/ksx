@@ -13,6 +13,13 @@
       "scheme": "light",
       "bg": "#f6f3ee",
       "text": "#1c1428"
+    },
+    {
+      "id": "matrix",
+      "label": "Matrix",
+      "scheme": "dark",
+      "bg": "#041008",
+      "text": "#d8ffe0"
     }
   ]
 }

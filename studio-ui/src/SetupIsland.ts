@@ -114,6 +114,10 @@ export interface SetupLines {
   prove_blocked: string;
   /** What wiring a slot does to the pads of the session there actually is. */
   wire_warning: string;
+  /** What the keyboard does while a game runs, in one sentence. */
+  blocking_line: string;
+  /** Which theme the Studio renders in, in one sentence. */
+  theme_line: string;
 }
 
 /** Every `createShow` boolean on the page, decided in the same place and for
@@ -217,11 +221,23 @@ export interface SetupRows {
   notes: TextRow[];
   blocking: BlockingRow[];
   socd_options: OptionRow[];
+  themes: ThemeRow[];
 }
 
 /** One split-or-freeze answer. Every string is composed in snapshot.rs. */
 export interface BlockingRow {
   name: string;
+  title: string;
+  detail: string;
+  chosen_cls: string;
+  button: string;
+}
+
+/** One theme choice (System first, then the generated roster). Every string
+ *  is composed in snapshot.rs from `theme_tokens::THEMES`, so shipping a new
+ *  theme never edits this file. */
+export interface ThemeRow {
+  value: string;
   title: string;
   detail: string;
   chosen_cls: string;
@@ -286,6 +302,8 @@ const [noteRows, setNoteRows] = createSignal<TextRow[]>([]);
 const [blockingRows, setBlockingRows] = createSignal<BlockingRow[]>([]);
 const [socdOptions, setSocdOptions] = createSignal<OptionRow[]>([]);
 const [blockingLine, setBlockingLine] = createSignal("");
+const [themeRows, setThemeRows] = createSignal<ThemeRow[]>([]);
+const [themeLine, setThemeLine] = createSignal("");
 
 // ── Applying the payload. THERE ARE NO DERIVATIONS HERE ────────────────────
 //
@@ -359,6 +377,8 @@ export function applySetup(p: SetupPayload): void {
   setBlockingRows(p.rows.blocking);
   setSocdOptions(p.rows.socd_options);
   setBlockingLine(p.lines.blocking_line);
+  setThemeRows(p.rows.themes);
+  setThemeLine(p.lines.theme_line);
 }
 
 /** The studio server itself stopped answering /api/setup.
@@ -997,6 +1017,51 @@ export function SetupIsland() {
                     "form",
                     { class: "dv-form", method: "post", action: "/setup/blocking" },
                     h("input", { type: "hidden", name: "blocking", value: o.name }),
+                    h("button", { class: "btn", type: "submit" }, o.button),
+                  ),
+                ),
+            ),
+          ),
+        ),
+        // ── THE STUDIO'S THEME ────────────────────────────────────────────
+        // The blocking card's idiom exactly: the server marks the current
+        // row, each row is its own plain POST, and shipping a new theme adds
+        // a row without touching this file (the list is the generated roster
+        // plus System). `data-native` opts these forms OUT of setup.ts's
+        // fetch enhancement: a theme change repaints the whole page, so the
+        // 303-follow navigation IS the feedback — a fetch that swallowed it
+        // would leave the old theme on screen until the next full load.
+        h(
+          "section",
+          { class: "card wide" },
+          h("h2", null, "How the Studio looks"),
+          h("p", { class: "cardline" }, () => themeLine()),
+          h(
+            "ul",
+            { class: "plist dv-list" },
+            createList(
+              () => themeRows(),
+              (o) => o.value + "|" + o.title + "|" + o.detail + "|" + o.chosen_cls + "|" + o.button,
+              (o) =>
+                h(
+                  "li",
+                  { class: "dv-row" },
+                  h(
+                    "div",
+                    { class: "dv-head" },
+                    h("span", { class: "dv-name" }, o.title),
+                    h("span", { class: o.chosen_cls }, "in use"),
+                  ),
+                  h("p", { class: "dv-note" }, o.detail),
+                  h(
+                    "form",
+                    {
+                      class: "dv-form",
+                      method: "post",
+                      action: "/setup/theme",
+                      "data-native": "",
+                    },
+                    h("input", { type: "hidden", name: "theme", value: o.value }),
                     h("button", { class: "btn", type: "submit" }, o.button),
                   ),
                 ),

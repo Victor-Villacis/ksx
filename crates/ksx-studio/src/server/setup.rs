@@ -65,7 +65,11 @@ pub(super) async fn setup_screen(
 ) -> Response {
     let payload = collect_setup(&state).await;
     let flash = query.flash.as_deref().filter(|f| !f.trim().is_empty());
-    let out = render_setup(&state.setup_page, &payload, flash);
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_setup(&state.setup_page, &payload, flash),
+        theme.as_deref(),
+    );
     (
         [
             (
@@ -343,6 +347,56 @@ pub(super) async fn setup_form_blocking(
                         view.title
                     )
                 }
+            })
+            .map_err(|refusal| refusal.message)
+    })
+    .await
+    .unwrap_or_else(|_| Err("the change did not complete".to_owned()));
+    setup_redirect(outcome)
+}
+
+/// What POST /setup/theme carries: a theme id from the roster, or `system`.
+#[derive(Debug, Deserialize)]
+pub(super) struct SetupThemeForm {
+    theme: String,
+}
+
+/// POST /setup/theme - remember which theme the Studio renders in.
+///
+/// Validated HERE against the generated [`crate::theme_tokens::THEMES`]
+/// roster, not in the machine provider: the roster is a Studio artifact (its
+/// stylesheet ships the theme blocks), so the surface that renders the
+/// choices is the one that knows which choices exist. `system` clears the
+/// stored id — System is the ABSENCE of a choice, not a theme.
+///
+/// No confirm step, same reasoning as blocking — and unlike blocking there is
+/// no session caveat: the theme is read per page render, never by the daemon,
+/// so the redirect this returns already renders in the new theme.
+pub(super) async fn setup_form_theme(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SetupThemeForm>,
+) -> Response {
+    let wanted = form.theme.trim().to_owned();
+    let stored = if wanted == "system" {
+        String::new()
+    } else if let Some(meta) = crate::theme_tokens::THEMES.iter().find(|t| t.id == wanted) {
+        meta.id.to_owned()
+    } else {
+        return setup_redirect(Err(format!(
+            "'{wanted}' is not a theme this build ships - pick one on the page"
+        )));
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .set_theme(&ksx_api::ThemeSpec { theme: stored })
+            .map(|view| {
+                let label = crate::theme_tokens::THEMES
+                    .iter()
+                    .find(|t| t.id == view.theme)
+                    .map(|t| t.label)
+                    .unwrap_or("System - follow the operating system");
+                format!("Saved: {label}. Every page renders in it from now on.")
             })
             .map_err(|refusal| refusal.message)
     })

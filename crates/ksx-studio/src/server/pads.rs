@@ -85,7 +85,11 @@ pub(super) async fn pads_page(
     let mut payload = collect_pads(&state, query.confirm.as_deref() == Some("1")).await;
     let flash = query.flash.as_deref().filter(|f| !f.trim().is_empty());
     payload.flash = flash.map(str::to_owned);
-    let out = crate::render_pads::render_pads(&state.pads_page, &payload);
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        crate::render_pads::render_pads(&state.pads_page, &payload),
+        theme.as_deref(),
+    );
     (
         [
             (

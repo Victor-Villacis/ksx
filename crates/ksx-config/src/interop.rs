@@ -435,6 +435,7 @@ mod tests {
                 block_mice: true,
                 mouse_move_deadzone: 11,
                 starting_user_index: 3,
+                theme: Some("light".to_owned()),
             },
             devices: vec![
                 DeviceEntry {

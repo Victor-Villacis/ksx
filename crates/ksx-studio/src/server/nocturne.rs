@@ -415,7 +415,11 @@ pub(super) async fn nocturne_page_handler(
     )
     .await;
     let flash = nocturne_flash_from_query(query.flash.as_deref());
-    let out = render_nocturne(&state.nocturne_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_nocturne(&state.nocturne_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (

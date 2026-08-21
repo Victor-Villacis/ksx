@@ -50,6 +50,10 @@ function wireForms(root: HTMLElement): void {
   root.addEventListener("submit", (ev) => {
     const form = ev.target as HTMLFormElement | null;
     if (!form || form.method.toLowerCase() !== "post") return;
+    // `data-native` = this form WANTS the full navigation. The theme forms
+    // carry it: the page repaints in the new theme on the 303-follow, and a
+    // fetch would swallow exactly that.
+    if (form.hasAttribute("data-native")) return;
     ev.preventDefault();
     void submitForm(form);
   });

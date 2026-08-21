@@ -150,7 +150,11 @@ pub(super) async fn workspace_page(
 ) -> Response {
     let payload = collect_workspace(&state, query.slot).await;
     let flash = workspace_flash_from_query(query.flash.as_deref());
-    let out = render_workspace(&state.workspace_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_workspace(&state.workspace_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (

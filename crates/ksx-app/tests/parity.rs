@@ -637,6 +637,17 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/setup/blocking"],
     },
     Anchors {
+        capability: "Studio theme",
+        // No CLI verb, same reasoning as blocking: a theme is picked where it
+        // is seen. The egui anchor is the name a cabinet theme prompt would
+        // take, asserted ABSENT — the 10-foot surface is dark-only by design
+        // (theme.rs's own docs), so a face appearing there is a decision this
+        // row exists to surface.
+        cli: &[],
+        egui: &["Ask::Theme"],
+        studio: &["/setup/theme"],
+    },
+    Anchors {
         capability: "Start ksx at sign-in",
         // The CLI keeps every option (--mode, --game, --delay-secs,
         // --task-name); Studio takes the one a first run needs and the
@@ -1141,6 +1152,11 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
               the face is a READ of where each pad actually landed.",
     },
     ConfigSurface {
+        field: "theme",
+        row: Some("Studio theme"),
+        why: "",
+    },
+    ConfigSurface {
         field: "number",
         row: Some("Edit configuration"),
         why: "",
@@ -1245,6 +1261,7 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
         block_mice: true,
         mouse_move_deadzone: 7,
         starting_user_index: 2,
+        theme: Some("light".to_owned()),
     };
     let slot = ksx_config::SlotEntry {
         number: 3,

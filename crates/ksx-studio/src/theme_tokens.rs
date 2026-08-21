@@ -9,11 +9,31 @@
 // gate and `cargo fmt --check` cannot wedge against each other.
 
 /// Inline `<style nonce>` CSS applied before the stylesheet arrives (the
-/// anti-flash trick): the body first-paints on the studio ground instead of
-/// flashing white. Derived from the `--bg`/`--text` tokens in
-/// `studio-ui/tokens/`, both schemes — the same source `tokens.gen.css` is
+/// anti-flash trick): the page first-paints on the right ground AND the
+/// right color-scheme instead of flashing white or OS-schemed scrollbars.
+/// Base + system-light media rules + one rule pair per stamped theme, all
+/// derived from `studio-ui/tokens/` — the same source `tokens.gen.css` is
 /// compiled from, so the copy CANNOT drift; `tests/contrast.rs` cross-pins
-/// it anyway (a wrong anti-flash color looks exactly like the flash it
-/// exists to prevent, so it gets a loud gate rather than trust).
+/// every rule anyway (a wrong anti-flash color looks exactly like the
+/// flash it exists to prevent, so it gets a loud gate rather than trust).
 pub(crate) const PERSONALITY_CSS: &str =
-    "body{background:#120c1c;color:#f0ebe0;margin:0}@media (prefers-color-scheme:light){body{background:#f6f3ee;color:#1c1428}}";
+    "html{color-scheme:dark}body{background:#120c1c;color:#f0ebe0;margin:0}@media (prefers-color-scheme:light){html{color-scheme:light}body{background:#f6f3ee;color:#1c1428}}html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#120c1c;color:#f0ebe0}html[data-theme=light]{color-scheme:light}html[data-theme=light] body{background:#f6f3ee;color:#1c1428}";
+
+/// One selectable theme. `scheme` decides the first-paint color-scheme
+/// and which pad-art sheet the theme coexists with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThemeMeta {
+    pub(crate) id: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) scheme: &'static str,
+}
+
+/// Every selectable theme, default first. "System" is not a theme — it
+/// is the ABSENCE of a stamp, which hands the choice to the
+/// prefers-color-scheme media block. The server validates stamps against
+/// this roster; an unknown id renders as System rather than defeating the
+/// un-stamped light guard with a selector nothing styles.
+pub(crate) const THEMES: &[ThemeMeta] = &[
+    ThemeMeta { id: "dark", label: "Dark", scheme: "dark" },
+    ThemeMeta { id: "light", label: "Light", scheme: "light" },
+];

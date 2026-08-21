@@ -839,6 +839,46 @@ impl ksx_api::MachineSource for LocalMachine {
         })
     }
 
+    /// Remember the Studio's theme choice. `set_blocking`'s discipline exactly:
+    /// one backup, one write, the value re-read from the parsed document.
+    ///
+    /// The contract here is deliberately dumber than the Studio's: any short
+    /// css-ident (or empty = System) is stored. The Studio validates ids
+    /// against its generated roster BEFORE building the spec and sanitizes
+    /// again at render time, so this check only keeps a broken caller from
+    /// wedging the config with something no parser should meet.
+    fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+        let wanted = spec.theme.trim();
+        let ident_ok = wanted.len() <= 64
+            && wanted
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !ident_ok {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                format!("'{}' is not a theme name ksx could store", spec.theme),
+                "pick one of the themes on the page",
+            ));
+        }
+
+        let store = crate::device_edit::store().map_err(config_refusal)?;
+        let mut config = store.load_config().map_err(config_refusal)?.value;
+        config.settings.theme = if wanted.is_empty() {
+            None
+        } else {
+            Some(wanted.to_owned())
+        };
+        let path = store.root().config_path();
+        let backup = store.backup(&path).map_err(config_refusal)?;
+        store.save_config(&config).map_err(config_refusal)?;
+
+        let on_disk = store.load_config().map_err(config_refusal)?.value;
+        Ok(ksx_api::ThemeView {
+            theme: on_disk.settings.theme.unwrap_or_default(),
+            backup: backup.map(|path| path.display().to_string()),
+        })
+    }
+
     /// What ksx left behind, read and composed. See `WinusbResidueView`.
     #[cfg(windows)]
     fn winusb_residue(&self) -> Result<ksx_api::WinusbResidueView, Refusal> {

@@ -106,7 +106,11 @@ pub(super) async fn profiles_page(
 ) -> Response {
     let payload = collect_profiles(&state).await;
     let flash = crate::render_profiles::profiles_flash_from_query(query.flash.as_deref());
-    let out = crate::render_profiles::render_profiles(&state.profiles_page, &payload, flash);
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        crate::render_profiles::render_profiles(&state.profiles_page, &payload, flash),
+        theme.as_deref(),
+    );
     (
         [
             (

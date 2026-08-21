@@ -720,10 +720,14 @@ fn main() {
     }
     impl ksx_api::MachineSource for NoMachine {
         /// The configuration menu's identity row: a config.toml with the two
-        /// seeded controllers.
+        /// seeded controllers. `KSX_FIXTURE_THEME` seeds the stored theme id
+        /// (the `KSX_FIXTURE_SESSION` precedent) so the browser suites can
+        /// exercise the server-stamped `data-theme` without a config file —
+        /// this fixture fabricates state and reads no config.toml.
         fn setup_state(&self) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
             Ok(ksx_api::SetupView {
                 config_exists: true,
+                theme: std::env::var("KSX_FIXTURE_THEME").unwrap_or_default(),
                 slots: vec![
                     ksx_api::SetupSlotRow {
                         number: 1,

@@ -127,7 +127,11 @@ pub(super) async fn devices_page(
         .filter(|f| !f.trim().is_empty())
         .map(str::to_owned);
     payload.flash = flash.clone();
-    let out = render_devices(&state.devices_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_devices(&state.devices_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (

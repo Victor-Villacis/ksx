@@ -252,6 +252,31 @@ impl MachineCache {
     }
 }
 
+/// The theme id to stamp on a page render (`render::with_theme`), or `None`
+/// for System.
+///
+/// Reads the TTL-cached `SetupView` — cheap at navigation rate, and the
+/// invalidation layer below busts the cache before every mutating request,
+/// so the render a POST /setup/theme redirects to always sees the new
+/// choice. A refused machine read (or an unreadable config) is `None`: a
+/// page that cannot know the choice renders as System rather than not at
+/// all. Every page GET handler calls this; the tests/http.rs stamp oracle
+/// is what keeps a new page from forgetting to.
+async fn page_theme(state: &Arc<AppState>) -> Option<String> {
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        state
+            .machine_cache
+            .setup_state(&*state.machine)
+            .ok()
+            .map(|view| view.theme)
+            .filter(|theme| !theme.is_empty())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Serve the page until the process is killed (Ctrl+C included — no
 /// graceful-shutdown plumbing).
 ///
@@ -530,6 +555,9 @@ pub fn serve(
             // says before the click, not after it.
             .route("/setup/slot", post(setup_form_slot))
             .route("/setup/blocking", post(setup_form_blocking))
+            // The Studio theme: a config write like blocking, but read per
+            // page render rather than by the daemon — "saved" IS "in effect".
+            .route("/setup/theme", post(setup_form_theme))
             // Step 3: the daemon's own learner, the two verbs the mapper
             // already uses. The page renders `learn_poll` per request, so this
             // step works with scripting switched off.

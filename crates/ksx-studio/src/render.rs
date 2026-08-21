@@ -157,6 +157,44 @@ pub(crate) fn with_icon_links(mut out: PageOutput) -> PageOutput {
     out
 }
 
+/// Stamp the chosen theme on the root element: `<html lang="en">` becomes
+/// `<html lang="en" data-theme="{id}">`, which the stylesheet's
+/// `:root[data-theme=…]` blocks and the anti-flash CSS both key on. `None`
+/// (System) stamps nothing — the `:root:not([data-theme])` media guard then
+/// follows the OS scheme, exactly the pre-TK2 behavior.
+///
+/// A [`with_icon_links`]-style post-render splice for the same reason that
+/// one exists: forma-server 0.2.0's `PageConfig` has no hook that reaches the
+/// root element (`<html lang="en">` is a template literal in both render
+/// phases), and like that one, this should migrate upstream the moment a real
+/// hook appears.
+///
+/// **Only ids in the generated [`crate::theme_tokens::THEMES`] roster are
+/// stamped.** The config is hand-editable and `/setup/import` writes
+/// `Settings` wholesale, so an id this build does not ship CAN reach this
+/// function — and stamping it would defeat the system-follow light guard
+/// while styling nothing (a light-OS user would silently get base dark).
+/// Unknown means System, out loud in the log.
+pub(crate) fn with_theme(mut out: PageOutput, theme: Option<&str>) -> PageOutput {
+    let Some(id) = theme.filter(|id| !id.is_empty()) else {
+        return out;
+    };
+    if !crate::theme_tokens::THEMES.iter().any(|t| t.id == id) {
+        tracing::warn!(
+            "config names theme '{id}', which this build does not ship; rendering as System"
+        );
+        return out;
+    }
+    const OPENER: &str = "<html lang=\"en\"";
+    match out.html.find(OPENER) {
+        Some(at) => out
+            .html
+            .insert_str(at + OPENER.len(), &format!(" data-theme=\"{id}\"")),
+        None => tracing::warn!("rendered page has no <html lang=\"en\"; theme not stamped"),
+    }
+    out
+}
+
 /// The oracle every page module's tests use: the head carries the icon links
 /// this crate splices AND the viewport meta it does not — each inside
 /// `<head>`, the viewport exactly once.

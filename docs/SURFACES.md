@@ -169,6 +169,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Record / replay a session | owns | planned (§3b) | planned (§3b) |
 | Start ksx at sign-in | owns (all options) | planned | **primary** (`/start`, one tick box) |
 | Split or freeze, after saving | — | — | **primary** (`/setup`) |
+| Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/setup`) |
 | What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/setup`) |
 | What ksx left behind (receipts and signing certificates) | owns (`winusb repair`, `winusb sweep-certificates`) | — | **primary** certificate cleanup (`/devices`); receipt view |
 

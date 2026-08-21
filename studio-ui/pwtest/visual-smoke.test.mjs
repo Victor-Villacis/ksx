@@ -10,7 +10,7 @@ import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -319,6 +319,126 @@ for (const config of CONTEXTS) {
         }
         await page.close();
         if (failure) throw failure;
+      });
+    }
+  });
+}
+
+// ── Stamped themes: the server-side data-theme choice (TK2) ────────────────
+//
+// One fixture per shipped theme, seeded via KSX_FIXTURE_THEME (the
+// KSX_FIXTURE_SESSION precedent — the fixture fabricates state and reads no
+// config.toml). The OS scheme is emulated OPPOSITE to the theme's own, which
+// is the whole claim under test: an explicit choice beats the OS in both
+// directions. The dark theme's stamped values are byte-identical to the base
+// :root, so the PAINT alone cannot detect a missing stamp — the
+// html[data-theme] attribute is asserted alongside the painted ground
+// (tests/http.rs's route oracle covers the served bytes; this covers what a
+// browser actually renders from them). Assertion-only cells: no screenshots,
+// so the main manifest's expectedCount pin stays exact.
+
+const THEMES = JSON.parse(
+  await readFile(path.join(repoRoot, "crates", "ksx-studio", "assets", "themes.json"), "utf8"),
+).themes;
+const THEME_FIRST_PORT = Number(process.env.KSX_PWTEST_THEME_PORT ?? 4510);
+
+const hexToRgb = (hex) =>
+  `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
+
+for (const [index, theme] of THEMES.entries()) {
+  describe(`stamped theme — ${theme.id}`, () => {
+    const port = THEME_FIRST_PORT + index;
+    const base = `http://127.0.0.1:${port}`;
+    let themedServer;
+    let themedStderr = "";
+    let context;
+
+    before(async () => {
+      const squatter = await fetch(`${base}/api/map`).then(
+        () => true,
+        () => false,
+      );
+      assert.equal(squatter, false, `something is already listening on ${base} — stop it first`);
+      themedServer = spawn(exe, [String(port)], {
+        cwd: repoRoot,
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, KSX_FIXTURE_SESSION: "idle", KSX_FIXTURE_THEME: theme.id },
+      });
+      themedServer.stderr?.on("data", (chunk) => (themedStderr += chunk.toString()));
+      const until = Date.now() + 120_000;
+      for (;;) {
+        const up = await fetch(`${base}/api/map`).then(
+          (response) => response.ok,
+          () => false,
+        );
+        if (up) break;
+        assert.ok(
+          Date.now() < until,
+          `themed fixture never answered on ${base}:
+${themedStderr.trim() || "(it said nothing)"}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      context = await browser.newContext({
+        viewport: { width: 1600, height: 1200 },
+        colorScheme: theme.scheme === "dark" ? "light" : "dark",
+        reducedMotion: "reduce",
+        deviceScaleFactor: 1,
+        locale: "en-US",
+        timezoneId: "UTC",
+        serviceWorkers: "block",
+      });
+    });
+
+    after(async () => {
+      const failures = [];
+      try {
+        await context?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await stopFixtureProcess(themedServer, `themed fixture (${theme.id})`);
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "themed teardown failed");
+    });
+
+    for (const route of ROUTES) {
+      test(`${route.path} paints ${theme.id} against the opposite OS scheme`, async () => {
+        const page = await context.newPage();
+        const diagnostics = [];
+        page.on("pageerror", (error) => diagnostics.push(`pageerror: ${error.stack ?? error}`));
+        page.on("console", (message) => {
+          if (message.type() === "error") diagnostics.push(`console: ${message.text()}`);
+        });
+        const response = await page.goto(`${base}${route.path}`, {
+          waitUntil: "domcontentloaded",
+        });
+        assert.ok(response?.ok(), `${route.path} returned HTTP ${response?.status() ?? "none"}`);
+        await page.waitForFunction(
+          () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+          null,
+          { timeout: 20_000 },
+        );
+        const painted = await page.evaluate(() => ({
+          stamp: document.documentElement.dataset.theme ?? null,
+          bg: getComputedStyle(document.body).backgroundColor,
+        }));
+        assert.equal(painted.stamp, theme.id, `${route.path} is missing the data-theme stamp`);
+        assert.equal(
+          painted.bg,
+          hexToRgb(theme.bg),
+          `${route.path} painted the wrong ground for stamped ${theme.id}`,
+        );
+        assert.deepEqual(
+          diagnostics,
+          [],
+          `${route.path} emitted browser errors stamped ${theme.id}`,
+        );
+        await page.close();
       });
     }
   });

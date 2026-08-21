@@ -97,7 +97,11 @@ pub(super) async fn start_page(
     let mut payload = collect_start(&state).await;
     let flash = start_flash_from_query(query.flash.as_deref());
     payload.flash = flash.clone();
-    let out = render_start(&state.start_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_start(&state.start_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (

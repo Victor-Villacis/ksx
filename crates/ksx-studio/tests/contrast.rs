@@ -229,7 +229,20 @@ fn tokens(block: &str) -> BTreeMap<String, Rgba> {
 
 struct Theme {
     name: String,
+    /// `dark` or `light` — what the block's own `color-scheme` declares.
+    /// Scrollbars and form controls follow it, so the anti-flash pin needs it
+    /// per theme.
+    scheme: String,
     tok: BTreeMap<String, Rgba>,
+}
+
+/// The `color-scheme` a block declares — the one non-custom-property line
+/// the theme machinery cares about.
+fn scheme_of(block: &str) -> Option<String> {
+    block
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("color-scheme:"))
+        .map(|v| v.trim().trim_end_matches(';').to_owned())
 }
 
 impl Theme {
@@ -304,10 +317,12 @@ fn themes() -> Vec<Theme> {
     let mut out = vec![
         Theme {
             name: "dark".to_owned(),
+            scheme: scheme_of(&dark_block).expect("the base block must declare color-scheme"),
             tok: base.clone(),
         },
         Theme {
             name: "light".to_owned(),
+            scheme: scheme_of(&light_block).expect("the light block must declare color-scheme"),
             tok: light,
         },
     ];
@@ -332,9 +347,12 @@ fn themes() -> Vec<Theme> {
                 );
             }
         } else {
+            let scheme = scheme_of(&block).unwrap_or_else(|| {
+                panic!("[data-theme={name}]: every theme block declares color-scheme")
+            });
             let mut tok = base.clone();
             tok.extend(declared);
-            out.push(Theme { name, tok });
+            out.push(Theme { name, scheme, tok });
         }
     }
     out
@@ -563,6 +581,7 @@ fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
     let (dark_block, _) = split_themes(CSS);
     let t = Theme {
         name: "hw".to_owned(),
+        scheme: "dark".to_owned(),
         tok: tokens(&dark_block),
     };
     let mut r = Report::default();
@@ -784,38 +803,52 @@ fn anti_flash_css_matches_the_tokens_it_mirrors() {
         .find(|t| t.name == "light")
         .expect("light theme present");
 
-    let expect_dark = format!(
-        "body{{background:{};color:{};margin:0}}",
-        css_hex(dark.get("bg")),
-        css_hex(dark.get("text"))
-    );
-    let expect_light = format!(
-        "body{{background:{};color:{}}}",
-        css_hex(light.get("bg")),
-        css_hex(light.get("text"))
-    );
+    let mut expected = vec![
+        // Base + the system-follow light media rules, color-scheme included:
+        // without it, scrollbars and form controls first-paint in the OS
+        // scheme while the sheet is pending — the same flash class at
+        // smaller scale (review-caught during TK2's design).
+        "html{color-scheme:dark}".to_owned(),
+        format!(
+            "body{{background:{};color:{};margin:0}}",
+            css_hex(dark.get("bg")),
+            css_hex(dark.get("text"))
+        ),
+        "@media (prefers-color-scheme:light){html{color-scheme:light}".to_owned(),
+        format!(
+            "body{{background:{};color:{}}}",
+            css_hex(light.get("bg")),
+            css_hex(light.get("text"))
+        ),
+    ];
+    // One rule pair per ENUMERATED theme: a stamped choice must win first
+    // paint in both OS schemes, and a theme the sheet ships without an
+    // anti-flash rule would flash the base theme at exactly its users.
+    for t in &themes {
+        expected.push(format!(
+            "html[data-theme={}]{{color-scheme:{}}}",
+            t.name, t.scheme
+        ));
+        expected.push(format!(
+            "html[data-theme={}] body{{background:{};color:{}}}",
+            t.name,
+            css_hex(t.get("bg")),
+            css_hex(t.get("text"))
+        ));
+    }
 
     let compact: String = THEME_TOKENS_RS
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
-    let want_dark: String = expect_dark.chars().filter(|c| !c.is_whitespace()).collect();
-    let want_light: String = expect_light
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    assert!(
-        compact.contains(&want_dark),
-        "theme_tokens.rs: PERSONALITY_CSS must open with the dark tokens from \
-         the token source — expected to find `{expect_dark}`. Regenerate: \
-         cd studio-ui && node build.mjs"
-    );
-    assert!(
-        compact.contains(&want_light),
-        "theme_tokens.rs: PERSONALITY_CSS's light override must match the \
-         token source — expected to find `{expect_light}`. Regenerate: \
-         cd studio-ui && node build.mjs"
-    );
+    for want in expected {
+        let want_compact: String = want.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            compact.contains(&want_compact),
+            "theme_tokens.rs: PERSONALITY_CSS must carry `{want}` (derived from \
+             the token source). Regenerate: cd studio-ui && node build.mjs"
+        );
+    }
 }
 
 /// The controller art carries its own palette sheet because an

@@ -689,6 +689,11 @@ struct ScriptedMachine {
     /// The last `profile_new` spec this provider was asked for, so a test can
     /// prove the FORM's values reached the verb rather than a default.
     created_profile: Mutex<Option<ksx_api::NewProfile>>,
+    /// The stored theme id ("" = System) the setup view reports, and every
+    /// `set_theme` spec in arrival order, so a test can prove the form's
+    /// value reached the verb and that a refused id never did.
+    theme: Mutex<String>,
+    set_theme_specs: Mutex<Vec<String>>,
     updated_profile: Mutex<Option<ksx_api::UpdateProfile>>,
     deleted_profile: Mutex<Option<ksx_api::DeleteProfile>>,
     created_preset: Mutex<Option<ksx_api::NewPreset>>,
@@ -727,6 +732,8 @@ impl Default for ScriptedMachine {
             refuse: false,
             blind: false,
             created_profile: Mutex::new(None),
+            theme: Mutex::new(String::new()),
+            set_theme_specs: Mutex::new(Vec::new()),
             updated_profile: Mutex::new(None),
             deleted_profile: Mutex::new(None),
             created_preset: Mutex::new(None),
@@ -1421,9 +1428,22 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 },
             ],
             notes: Vec::new(),
+            theme: self.theme.lock().unwrap().clone(),
             // The ceiling comes from the BACKEND (`ksx_core::MAX_SLOTS`); the
             // default carries it, which is the behaviour a real provider has.
             ..ksx_api::SetupView::default()
+        })
+    }
+
+    fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+        self.set_theme_specs
+            .lock()
+            .unwrap()
+            .push(spec.theme.clone());
+        *self.theme.lock().unwrap() = spec.theme.clone();
+        Ok(ksx_api::ThemeView {
+            theme: spec.theme.clone(),
+            backup: None,
         })
     }
 
@@ -1925,6 +1945,9 @@ fn start_server_with_sources(
         }
         fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
             self.0.setup_state()
+        }
+        fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+            self.0.set_theme(spec)
         }
         fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
             self.0.autostart()
@@ -4765,6 +4788,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
     for path in [
         "/setup/import",
         "/setup/slot",
+        "/setup/theme",
         "/setup/prove",
         "/setup/prove/cancel",
     ] {
@@ -4796,6 +4820,118 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
             "{path} must refuse a rebound read, got: {response}"
         );
     }
+}
+
+/// TK2's stamp oracle: every page GET renders `<html lang="en">` with the
+/// stored theme stamped — and ONLY ids this build ships. The stamp is applied
+/// per handler (`page_theme` + `render::with_theme`), so this loop is what
+/// keeps an eleventh page from forgetting it; the render-layer tests cannot
+/// see it because the splice happens above them.
+#[test]
+fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
+    const PAGES: [&str; 10] = [
+        "/",
+        "/start",
+        "/workspace",
+        "/nocturne",
+        "/map",
+        "/check",
+        "/pads",
+        "/devices",
+        "/profiles",
+        "/setup",
+    ];
+
+    // No stored choice → no stamp: System is the ABSENCE of the attribute,
+    // which is what hands the choice to the stylesheet's
+    // `:root:not([data-theme])` system-follow guard.
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in PAGES {
+        let response = get(addr, path);
+        let body = body_of(&response);
+        assert!(
+            body.contains("<html lang=\"en\">"),
+            "{path}: the un-stamped opener is missing"
+        );
+        // The inline anti-flash CSS legitimately carries `data-theme=`
+        // selectors on every page, so the check is the OPENER, not the token.
+        assert!(
+            !body.contains("<html lang=\"en\" data-theme="),
+            "{path}: stamped with no stored choice"
+        );
+    }
+
+    // A stored, shipped id → stamped on EVERY page.
+    let machine = Arc::new(ScriptedMachine::default());
+    *machine.theme.lock().unwrap() = "light".to_owned();
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
+    for path in PAGES {
+        let response = get(addr, path);
+        assert!(
+            body_of(&response).contains("<html lang=\"en\" data-theme=\"light\">"),
+            "{path}: missing the light stamp"
+        );
+    }
+
+    // A stored id this build does NOT ship → renders as System. The config is
+    // hand-editable and /setup/import writes Settings wholesale, so this path
+    // is reachable — and stamping it would defeat the system-follow guard
+    // while styling nothing (a light-OS user silently gets base dark).
+    let machine = Arc::new(ScriptedMachine::default());
+    *machine.theme.lock().unwrap() = "matrix2".to_owned();
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
+    let response = get(addr, "/");
+    assert!(
+        !body_of(&response).contains("<html lang=\"en\" data-theme="),
+        "an id this build does not ship must render as System"
+    );
+}
+
+/// The theme form's round trip: a shipped id is stored and the very next
+/// render stamps it; `system` clears (the spec carries the empty string, not
+/// a word); an id this build lacks is refused at the door and never reaches
+/// the machine provider.
+#[test]
+fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(false)),
+        Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=light");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert!(response.contains("/setup?flash=Saved"), "got: {response}");
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["light"],
+        "the form's id must reach the verb"
+    );
+    let after = get(addr, "/setup");
+    assert!(
+        body_of(&after).contains("data-theme=\"light\""),
+        "the redirect's render must already stamp the new choice \
+         (the POST busts the machine cache)"
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=system");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["light", ""],
+        "`system` clears: the stored value is the empty string"
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=matrix2");
+    assert!(
+        response.contains("flash=error"),
+        "an unshipped id flashes an error, got: {response}"
+    );
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().len(),
+        2,
+        "a refused id must never reach the machine provider"
+    );
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

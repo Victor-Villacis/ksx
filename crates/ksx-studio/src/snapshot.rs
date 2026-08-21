@@ -826,6 +826,12 @@ pub struct SetupLines {
     /// What this keyboard does while a game is running, in one sentence, with
     /// the honest hedge when nothing is configured yet.
     pub blocking_line: String,
+    /// Which theme the Studio renders in, in one sentence — including the
+    /// case where the config names a theme this build does not ship (which
+    /// renders as System, and the page should say so rather than pretend the
+    /// choice was never made).
+    #[serde(default)]
+    pub theme_line: String,
 }
 
 impl SetupLines {
@@ -857,6 +863,9 @@ impl SetupLines {
                 prove_blocked: prove_blocked_line(session, learn),
                 wire_warning: wire_warning_line(session),
                 blocking_line: "What the keyboard does while you play could not be read."
+                    .to_owned(),
+                theme_line: "The saved theme choice could not be read; pages follow the \
+                             operating system until it can be."
                     .to_owned(),
             };
         }
@@ -897,7 +906,28 @@ impl SetupLines {
             prove_blocked: prove_blocked_line(session, learn),
             wire_warning: wire_warning_line(session),
             blocking_line: blocking_line(view),
+            theme_line: theme_line(view),
         }
+    }
+}
+
+/// Which theme the Studio renders in, as one sentence.
+fn theme_line(view: &ksx_api::SetupView) -> String {
+    if view.theme.is_empty() {
+        return "Pages follow the operating system's light or dark choice.".to_owned();
+    }
+    match crate::theme_tokens::THEMES
+        .iter()
+        .find(|t| t.id == view.theme)
+    {
+        Some(meta) => format!("Every page renders in {}.", meta.label),
+        // Say it, never swallow it: the config names a choice this build
+        // cannot render, and the stamp sanitizer is quietly falling back.
+        None => format!(
+            "The config names theme '{}', which this build does not ship — pages follow \
+             the operating system instead.",
+            view.theme
+        ),
     }
 }
 
@@ -1146,6 +1176,23 @@ pub struct SetupBlockingRowView {
     pub button: String,
 }
 
+/// One theme choice, current one marked — the blocking-row idiom exactly
+/// (member `chosen_cls` + a per-row one-hidden-input POST form), because it
+/// is the repo's one established "pick one of N, server decides which is
+/// current" widget and it works with scripting switched off.
+///
+/// Rows come from the GENERATED roster (`theme_tokens::THEMES`) plus the
+/// System row, so shipping a new theme never edits TS or this composition.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupThemeRowView {
+    /// What the row's form posts: a theme id, or `system`.
+    pub value: String,
+    pub title: String,
+    pub detail: String,
+    pub chosen_cls: String,
+    pub button: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupRows {
     pub steps: Vec<SetupStepRowView>,
@@ -1168,6 +1215,10 @@ pub struct SetupRows {
     /// The SOCD `<select>`'s options, served. The blank "leave it as it is"
     /// entry is the FORM's, not a policy, so it is not in here.
     pub socd_options: Vec<SetupOptionRowView>,
+    /// The theme choices (System first, then the generated roster), current
+    /// one marked. Same rule as blocking: the browser never decides.
+    #[serde(default)]
+    pub themes: Vec<SetupThemeRowView>,
 }
 
 impl SetupRows {
@@ -1277,6 +1328,55 @@ impl SetupRows {
                     }
                 })
                 .collect(),
+            themes: {
+                // System is chosen when nothing is stored AND when the config
+                // names an id this build does not ship — the second case is
+                // what the stamp sanitizer renders, and the row must agree
+                // with the page around it (theme_line says the rest).
+                let known = crate::theme_tokens::THEMES
+                    .iter()
+                    .any(|t| t.id == view.theme);
+                let system_chosen = view.theme.is_empty() || !known;
+                let mark = |chosen: bool| {
+                    if chosen {
+                        "pill pill-ok".to_owned()
+                    } else {
+                        "pill pill-none".to_owned()
+                    }
+                };
+                let mut rows = vec![SetupThemeRowView {
+                    value: "system".to_owned(),
+                    title: "Match the operating system".to_owned(),
+                    detail: "Light or dark follows the system setting on the machine \
+                             viewing the page."
+                        .to_owned(),
+                    chosen_cls: mark(system_chosen),
+                    button: if system_chosen {
+                        "This is how it is set".to_owned()
+                    } else {
+                        "Match the operating system".to_owned()
+                    },
+                }];
+                rows.extend(crate::theme_tokens::THEMES.iter().map(|meta| {
+                    let chosen = view.theme == meta.id;
+                    SetupThemeRowView {
+                        value: meta.id.to_owned(),
+                        title: meta.label.to_owned(),
+                        detail: if meta.scheme == "light" {
+                            "Every page renders light, whatever the system prefers.".to_owned()
+                        } else {
+                            "Every page renders dark, whatever the system prefers.".to_owned()
+                        },
+                        chosen_cls: mark(chosen),
+                        button: if chosen {
+                            "This is how it is set".to_owned()
+                        } else {
+                            meta.label.to_owned()
+                        },
+                    }
+                }));
+                rows
+            },
         }
     }
 }

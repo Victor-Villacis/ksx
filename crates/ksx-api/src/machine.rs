@@ -243,6 +243,19 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Remember the Studio's theme choice on a saved config.**
+    ///
+    /// A whole-config write, so it takes the same backup discipline every
+    /// other config writer here takes and returns what is on disk AFTER the
+    /// write. Unlike [`Self::set_blocking`] there is no session caveat: the
+    /// theme is read per page render, never by the daemon.
+    fn set_theme(&self, _spec: &ThemeSpec) -> Result<ThemeView, Refusal> {
+        Err(Refusal::not_here(
+            "remembering a theme choice",
+            "pick it on the Studio's configuration page",
+        ))
+    }
+
     /// **What ksx left behind**, compared against what Windows reports.
     ///
     /// Read-only: reads the receipt store, the device tree and the driver
@@ -1414,6 +1427,32 @@ pub struct BlockingView {
     /// different claims and a page that conflates them is lying at exactly the
     /// moment somebody is testing whether the change worked.
     pub session_running: bool,
+}
+
+/// What POST /setup/theme carries: a theme id, or empty for System.
+///
+/// The STUDIO validates the id against its own generated roster before this
+/// spec is built - the roster is a Studio artifact (its stylesheet ships the
+/// theme blocks), so neither this crate nor a machine provider can know it.
+/// A provider's only contract is "a short css-ident or empty", so a stale
+/// binary can never wedge the config with a name nothing can render.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeSpec {
+    /// A theme id (`dark`, `light`, ...) or empty = System (follow the OS).
+    pub theme: String,
+}
+
+/// What changing the theme did.
+///
+/// No `session_running` here, unlike [`BlockingView`]: the theme is read per
+/// page render, never by the daemon, so "saved" and "in effect" are the same
+/// claim - the next page load shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeView {
+    /// The value now on disk (empty = System).
+    pub theme: String,
+    /// Where the previous config went.
+    pub backup: Option<String>,
 }
 
 /// **What ksx left behind on this machine, and whether it matters.**
@@ -2640,6 +2679,13 @@ pub struct SetupView {
     /// ways.
     #[serde(default)]
     pub blocking_options: Vec<crate::stage::BlockingOption>,
+    /// **The Studio theme id currently on disk**, or empty for System (follow
+    /// the OS light/dark choice). The Studio owns the roster of valid ids and
+    /// sanitizes at render time; this view reports what the config SAYS, so
+    /// the setup page can show a choice the build does not ship instead of
+    /// silently pretending it was never made.
+    #[serde(default)]
+    pub theme: String,
     /// What opposite directions can be made to do, per slot. Served for the
     /// same reason the blocking answers are: the wording is the domain's.
     #[serde(default)]
@@ -2709,6 +2755,7 @@ impl Default for SetupView {
             // would render the question as unanswerable rather than unread.
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
+            theme: String::new(),
             socd_options: crate::stage::SocdOption::roster(),
             persona_options: default_persona_options(),
             config_root: String::new(),

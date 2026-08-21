@@ -56,7 +56,11 @@ pub(super) async fn status_page(
     let (snap, session) = collect(&state).await;
 
     let flash = query.flash.as_deref().filter(|f| !f.trim().is_empty());
-    let out = render_status(&state.page, &snap, &session, flash);
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_status(&state.page, &snap, &session, flash),
+        theme.as_deref(),
+    );
     // No HTTP `Refresh` header any more: it would reload the page for JS
     // users too, defeating the island poller. The no-JS fallback is the
     // <noscript> meta refresh render.rs emits.

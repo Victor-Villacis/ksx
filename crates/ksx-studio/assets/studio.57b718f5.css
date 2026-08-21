@@ -258,6 +258,52 @@
   --muted: var(--text-3); /* legacy alias, still referenced by markup */
 }
 
+/* ── Stamped themes: an explicit data-theme choice on <html>. Same
+   source as the blocks above; see studio-ui/tokens/themes/. ── */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f3ee;
+  --bg-2: #ece7df;
+  --panel: #ffffff;
+  --panel-2: #efe9e2;
+  --panel-3: #e8e1d8;
+  --line: #ddd3ca;
+  --line-soft: #eae3da;
+  --line-strong: #bfb2a4;
+  --text: #1c1428;
+  --text-2: #4c4059;
+  --text-3: #685c7a;
+  --accent: #09645c;
+  --accent-strong: #074f49;
+  --accent-fill: #09645c;
+  --accent-on: #ffffff;
+  --accent-dim: rgba(9, 100, 92, 0.09);
+  --accent-dim-2: rgba(9, 100, 92, 0.16);
+  --accent-line: rgba(9, 100, 92, 0.4);
+  --accent-glow: rgba(9, 100, 92, 0.14);
+  --cool: #6b3fa8;
+  --cool-line: rgba(107, 63, 168, 0.4);
+  --ok: #156c43;
+  --ok-dim: rgba(21, 108, 67, 0.1);
+  --ok-line: rgba(21, 108, 67, 0.35);
+  --warn: #7c5805;
+  --warn-dim: rgba(124, 88, 5, 0.1);
+  --warn-line: rgba(124, 88, 5, 0.35);
+  --danger: #ac2a23;
+  --danger-fill: #c0342b;
+  --danger-on: #ffffff;
+  --danger-dim: rgba(172, 42, 35, 0.08);
+  --danger-line: rgba(172, 42, 35, 0.35);
+  --focus: #09645c;
+  --overlay-scrim: rgba(28, 20, 40, 0.42);
+  --sel-tint: rgba(60, 30, 90, 0.04);
+  --e-1: 0 1px 2px rgba(28, 20, 40, 0.06);
+  --e-2: 0 1px 2px rgba(28, 20, 40, 0.06), 0 4px 12px -4px rgba(28, 20, 40, 0.1);
+  --e-3: 0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16);
+  --e-4: 0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28);
+  --ground: radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%);
+}
+
 /* ksx Studio — the design system.
  *
  * See docs/DESIGN-SYSTEM.md for the rationale and

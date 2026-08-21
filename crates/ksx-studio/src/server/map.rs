@@ -144,7 +144,11 @@ pub(super) async fn map_page(
                 },
             )
         });
-    let out = render_map(&state.map_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_map(&state.map_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (

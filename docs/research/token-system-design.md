@@ -281,6 +281,16 @@ system-follow guard `:root:not([data-theme])` live on `:root`, so the attribute 
 the element the selectors already target, and the pinned-block/media-guard structure of
 §4.3a falls out with no selector rewrites.
 
+**Shipped as (recorded post-implementation):** the stamp lives in each of the 10 page
+HANDLERS — `page_theme()` (a TTL-cached `SetupView` read) + `render::with_theme()`
+wrapping each render call — with `with_icon_links` unchanged; the coverage that keeps an
+eleventh page from forgetting is the tests/http.rs stamp oracle (a hand-kept 10-route
+loop), not a shared code path. `/setup` itself derives its stamp from the same fresh
+read its content is composed from, so its rows and its paint can never contradict each
+other. The `/setup/import` unknown-theme flash sketched below was **dropped
+deliberately**: the import redirect lands on /setup, whose `theme_line` and marked
+System row already say it, and every layer degrades an unknown id to System anyway.
+
 **The plumbing the wrapper needs (new, and honestly the bulk of TK2):** no render site
 reads settings today — `with_icon_links` takes only a `PageOutput`, the page handlers
 never touch config.toml, and `SetupView`/`MachineCache` carry no theme. TK2 threads a
@@ -443,6 +453,11 @@ that duplicate the `--hw-xbox-*` roles with different values fold onto tokens at
 with M4's schematic port; the ~35 vendored carbon silhouette greys stay literal like the
 pad art's bespoke colors, as a recorded exemption. (No other src/*.ts file carries color
 literals — verified.)
+
+**The proof route under a stamp:** `/nocturne` deliberately ignores themes — its
+`.nocturne` frame paints its own `--n-*` ground over the themed body and dies wholesale
+at M5 per its banner. The stamped browser cells pin that fact (`--n-bg #161826` asserted
+under every stamp), so "dark-only by design" is a tested claim, not a screenshot vibe.
 
 **Nocturne-as-a-theme.** The plan's doctrine is "recolor, not retheme" and the prototype
 palette "dies wholesale" at M5. This design keeps that as the default path — and opens a

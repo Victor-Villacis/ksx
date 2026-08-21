@@ -65,10 +65,17 @@ pub(super) async fn setup_screen(
 ) -> Response {
     let payload = collect_setup(&state).await;
     let flash = query.flash.as_deref().filter(|f| !f.trim().is_empty());
-    let theme = page_theme(&state).await;
+    // The stamp comes from the SAME fresh read the page's content was
+    // composed from — not from the TTL-cached `page_theme` the other nine
+    // pages use. One response, one read: /setup is the page that SHOWS the
+    // choice, and a cached stamp could contradict the rows beside it for a
+    // TTL after a hand-edit (review-caught). `with_theme` still sanitizes
+    // against the roster, so an unknown stored id renders as System here
+    // exactly as everywhere else.
+    let theme = payload.setup.view.theme.clone();
     let out = crate::render::with_theme(
         render_setup(&state.setup_page, &payload, flash),
-        theme.as_deref(),
+        Some(theme.as_str()),
     );
     (
         [
@@ -356,9 +363,12 @@ pub(super) async fn setup_form_blocking(
 }
 
 /// What POST /setup/theme carries: a theme id from the roster, or `system`.
+/// Optional so a malformed post is a flashed refusal rather than axum's bare
+/// 422 — this page's whole feedback channel with scripting off is the flash.
 #[derive(Debug, Deserialize)]
 pub(super) struct SetupThemeForm {
-    theme: String,
+    #[serde(default)]
+    theme: Option<String>,
 }
 
 /// POST /setup/theme - remember which theme the Studio renders in.
@@ -376,14 +386,19 @@ pub(super) async fn setup_form_theme(
     State(state): State<Arc<AppState>>,
     Form(form): Form<SetupThemeForm>,
 ) -> Response {
-    let wanted = form.theme.trim().to_owned();
+    let Some(theme_field) = form.theme else {
+        return setup_redirect(Err(
+            "the form did not say which theme — pick one on the page".to_owned(),
+        ));
+    };
+    let wanted = theme_field.trim().to_owned();
     let stored = if wanted == "system" {
         String::new()
     } else if let Some(meta) = crate::theme_tokens::THEMES.iter().find(|t| t.id == wanted) {
         meta.id.to_owned()
     } else {
         return setup_redirect(Err(format!(
-            "'{wanted}' is not a theme this build ships - pick one on the page"
+            "'{wanted}' is not a theme this build ships — pick one on the page"
         )));
     };
     let outcome = tokio::task::spawn_blocking(move || {
@@ -391,12 +406,22 @@ pub(super) async fn setup_form_theme(
             .machine
             .set_theme(&ksx_api::ThemeSpec { theme: stored })
             .map(|view| {
-                let label = crate::theme_tokens::THEMES
+                // Two sentences, because the two choices claim different
+                // things: a named theme renders everywhere; System is the
+                // ABSENCE of a choice, and "renders in it" would have no
+                // referent (review-caught).
+                match crate::theme_tokens::THEMES
                     .iter()
                     .find(|t| t.id == view.theme)
-                    .map(|t| t.label)
-                    .unwrap_or("System - follow the operating system");
-                format!("Saved: {label}. Every page renders in it from now on.")
+                {
+                    Some(meta) => format!(
+                        "Saved: {} — every page renders in it from now on.",
+                        meta.label
+                    ),
+                    None => "Saved — pages follow the operating system's light or dark \
+                             choice again."
+                        .to_owned(),
+                }
             })
             .map_err(|refusal| refusal.message)
     })

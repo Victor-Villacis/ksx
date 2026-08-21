@@ -426,6 +426,10 @@ ${themedStderr.trim() || "(it said nothing)"}`,
         const painted = await page.evaluate(() => ({
           stamp: document.documentElement.dataset.theme ?? null,
           bg: getComputedStyle(document.body).backgroundColor,
+          nocturneStage: (() => {
+            const stage = document.querySelector(".nocturne");
+            return stage ? getComputedStyle(stage).backgroundColor : null;
+          })(),
         }));
         assert.equal(painted.stamp, theme.id, `${route.path} is missing the data-theme stamp`);
         assert.equal(
@@ -433,6 +437,19 @@ ${themedStderr.trim() || "(it said nothing)"}`,
           hexToRgb(theme.bg),
           `${route.path} painted the wrong ground for stamped ${theme.id}`,
         );
+        if (painted.nocturneStage !== null) {
+          // The design-proof route deliberately ignores themes: its scoped
+          // --n-* palette covers the themed body and dies wholesale at M5
+          // (its own banner's contract). Pinning the frame's ground here
+          // turns "dark-only by design" into an asserted fact under every
+          // stamp, instead of the body assertion above proving only a paint
+          // the frame makes invisible.
+          assert.equal(
+            painted.nocturneStage,
+            "rgb(22, 24, 38)",
+            `${route.path}'s .nocturne frame must keep its own --n-bg under stamped ${theme.id}`,
+          );
+        }
         assert.deepEqual(
           diagnostics,
           [],

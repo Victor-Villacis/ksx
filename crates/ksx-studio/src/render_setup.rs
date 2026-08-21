@@ -695,6 +695,39 @@ mod tests {
     /// The two verbs are on the page, reachable without JavaScript, and Export
     /// is a GET link while Import is a POST form — because one reads and one
     /// writes, and `guard.rs` decides what to police by METHOD.
+    /// The theme card, pinned (TK2/TK3 review finding: the card had zero
+    /// direct coverage — `data-native`, the one attribute that makes a theme
+    /// click repaint under JS, could be deleted with every gate green).
+    #[test]
+    fn the_theme_card_posts_natively_from_the_roster() {
+        let page = EmbeddedPage::load("/setup").unwrap();
+        let out = render_setup(&page, &configured(), None);
+
+        let chunks: Vec<&str> = out.html.split(r#"action="/setup/theme""#).skip(1).collect();
+        assert_eq!(
+            chunks.len(),
+            1 + crate::theme_tokens::THEMES.len(),
+            "one form per row: System plus the generated roster"
+        );
+        let mut values = Vec::new();
+        for chunk in &chunks {
+            let form = &chunk[..chunk.find("</form>").expect("closed theme form")];
+            assert!(
+                form.contains("data-native"),
+                "every theme form opts OUT of the fetch enhancement — the 303-follow                  repaint IS the feedback: {form}"
+            );
+            let value = form
+                .split(r#"name="theme" value=""#)
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("a hidden theme value");
+            values.push(value.to_owned());
+        }
+        let mut expected = vec!["system".to_owned()];
+        expected.extend(crate::theme_tokens::THEMES.iter().map(|t| t.id.to_owned()));
+        assert_eq!(values, expected, "row order: System first, then the roster");
+    }
+
     #[test]
     fn export_is_a_link_and_import_is_a_post_form() {
         let page = EmbeddedPage::load("/setup").unwrap();

@@ -236,6 +236,59 @@ struct Theme {
     tok: BTreeMap<String, Rgba>,
 }
 
+/// Replace every `/* … */` comment with spaces (newlines kept), so the
+/// line-based parsers below cannot be poisoned by declaration-shaped text or
+/// a `:root[data-theme="` marker INSIDE a comment — the concat carries the
+/// authored sheet's prose and every theme file's note, and a changelog line
+/// like `--accent: #0b7d72;` in a comment would otherwise last-wins into the
+/// token map with every gate green (review-caught vector).
+fn strip_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find("*/") {
+            Some(end) => {
+                out.extend(
+                    after[..end]
+                        .chars()
+                        .map(|c| if c == '\n' { '\n' } else { ' ' }),
+                );
+                rest = &after[end + 2..];
+            }
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every declaration in a block, TEXTUALLY: custom properties AND
+/// `color-scheme`, values whitespace-normalized but otherwise verbatim. The
+/// mirror check below uses this because parsed-color comparison has subset
+/// semantics and color-only coverage — an omitted token or a diverging
+/// `--ground`/`--e-*`/`--font-sans` would slip through it.
+fn declarations(block: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in block.lines() {
+        let line = line.trim();
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if !name.starts_with("--") && name != "color-scheme" {
+            continue;
+        }
+        let value = value.trim().trim_end_matches(';').trim();
+        out.insert(
+            name.to_owned(),
+            value.split_whitespace().collect::<Vec<_>>().join(" "),
+        );
+    }
+    out
+}
+
 /// The `color-scheme` a block declares — the one non-custom-property line
 /// the theme machinery cares about.
 fn scheme_of(block: &str) -> Option<String> {
@@ -310,7 +363,8 @@ fn data_theme_blocks(css: &str) -> Vec<(String, String)> {
 }
 
 fn themes() -> Vec<Theme> {
-    let (dark_block, light_block) = split_themes(CSS);
+    let css = strip_comments(CSS);
+    let (dark_block, light_block) = split_themes(&css);
     let base = tokens(&dark_block);
     let mut light = base.clone();
     light.extend(tokens(&light_block));
@@ -333,7 +387,7 @@ fn themes() -> Vec<Theme> {
     // emitted two truths for one token, the exact drift class this file
     // exists to kill. Any other id is a real theme: the base map overlaid,
     // and every floor test below runs over it automatically.
-    for (name, block) in data_theme_blocks(CSS) {
+    for (name, block) in data_theme_blocks(&css) {
         let declared = tokens(&block);
         if let Some(existing) = out.iter().find(|t| t.name == name) {
             for (tok_name, val) in &declared {
@@ -344,6 +398,21 @@ fn themes() -> Vec<Theme> {
                     val, want,
                     "[data-theme={name}]: --{tok_name} disagrees with the {name} map — \
                      the generator emitted two truths for one token"
+                );
+            }
+            // The light mirror also gets a TEXTUAL set-equality check
+            // against the media block: the parsed-color pass above has
+            // subset semantics and reads only colors, so an omitted token
+            // or a diverging non-color value (--ground, the shadows, an
+            // optional --font-sans override) would slip through it while
+            // the two "one source" copies quietly disagreed.
+            if name == "light" {
+                assert_eq!(
+                    declarations(&block),
+                    declarations(&light_block),
+                    "[data-theme=light] must declare exactly what the system-follow \
+                     media block declares — both are generated from themes/light.json, \
+                     so any difference is the generator emitting two truths"
                 );
             }
         } else {
@@ -578,7 +647,7 @@ fn separators_stay_perceptible() {
 /// somebody has to make on purpose.
 #[test]
 fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
-    let (dark_block, _) = split_themes(CSS);
+    let (dark_block, _) = split_themes(&strip_comments(CSS));
     let t = Theme {
         name: "hw".to_owned(),
         scheme: "dark".to_owned(),

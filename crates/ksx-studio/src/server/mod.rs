@@ -650,17 +650,30 @@ pub fn serve(
                 crate::guard::same_origin(bind, req, next)
             }))
             // Every mutating request drops the machine-read cache BEFORE the
-            // handler runs — one layer, not a call per handler (the guard's
-            // own rule), so nothing the studio changes is ever served stale.
+            // handler runs AND AFTER it returns — one layer, not a call per
+            // handler (the guard's own rule), so nothing the studio changes
+            // is ever served stale. The AFTER half is load-bearing
+            // (review-caught): a cache-populating GET can overlap the
+            // handler's write and store the PRE-write view with a fresh
+            // timestamp, which the before-only wipe could never touch — the
+            // redirect after POST /setup/theme would then stamp the old
+            // theme for a TTL. `MachineCache::fetch` holds the slot mutex
+            // across its read+store, so this second wipe strictly follows
+            // any store that overlapped the handler.
             .layer(axum::middleware::from_fn({
                 let state = Arc::clone(&state);
                 move |req: axum::extract::Request, next: axum::middleware::Next| {
                     let state = Arc::clone(&state);
                     async move {
-                        if req.method() != axum::http::Method::GET {
+                        let mutating = req.method() != axum::http::Method::GET;
+                        if mutating {
                             state.machine_cache.invalidate();
                         }
-                        next.run(req).await
+                        let response = next.run(req).await;
+                        if mutating {
+                            state.machine_cache.invalidate();
+                        }
+                        response
                     }
                 }
             }))

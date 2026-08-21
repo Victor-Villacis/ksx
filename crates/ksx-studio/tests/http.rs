@@ -4824,9 +4824,10 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
 
 /// TK2's stamp oracle: every page GET renders `<html lang="en">` with the
 /// stored theme stamped — and ONLY ids this build ships. The stamp is applied
-/// per handler (`page_theme` + `render::with_theme`), so this loop is what
-/// keeps an eleventh page from forgetting it; the render-layer tests cannot
-/// see it because the splice happens above them.
+/// per handler (`page_theme` + `render::with_theme`) and the render-layer
+/// tests cannot see it because the splice happens above them — so this loop
+/// is the coverage, and PAGES is a HAND-KEPT list: an eleventh page must be
+/// added both to its handler and to this array, or its stamp ships untested.
 #[test]
 fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
     const PAGES: [&str; 10] = [
@@ -4867,9 +4868,16 @@ fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
     let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
     for path in PAGES {
         let response = get(addr, path);
+        let body = body_of(&response);
+        // Positional, not just present: the payload block escapes `<`, so a
+        // body match cannot come from user data — but pinning the stamp
+        // BEFORE </head> says it is the document opener, not a fluke.
+        let at = body
+            .find("<html lang=\"en\" data-theme=\"light\">")
+            .unwrap_or_else(|| panic!("{path}: missing the light stamp"));
         assert!(
-            body_of(&response).contains("<html lang=\"en\" data-theme=\"light\">"),
-            "{path}: missing the light stamp"
+            at < body.find("</head>").unwrap_or(usize::MAX),
+            "{path}: the stamp must sit on the document opener"
         );
     }
 
@@ -4881,8 +4889,19 @@ fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
     *machine.theme.lock().unwrap() = "matrix2".to_owned();
     let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
     let response = get(addr, "/");
+    // Positive first (review-caught: a negative-only arm passes vacuously on
+    // a broken page), then the absence claim.
     assert!(
-        !body_of(&response).contains("<html lang=\"en\" data-theme="),
+        response.starts_with("HTTP/1.1 200"),
+        "the page must still render under an unknown stored id, got: {response}"
+    );
+    let body = body_of(&response);
+    assert!(
+        body.contains("<html lang=\"en\">"),
+        "the un-stamped opener must be present under an unknown stored id"
+    );
+    assert!(
+        !body.contains("<html lang=\"en\" data-theme="),
         "an id this build does not ship must render as System"
     );
 }

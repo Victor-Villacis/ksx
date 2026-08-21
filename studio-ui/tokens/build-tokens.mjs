@@ -77,6 +77,12 @@ export function buildTokens({ authoredCss }) {
       validComment(e.comment, `${where} comment`);
       return;
     }
+    if (!e.cssName) {
+      throw new Error(
+        `tokens: an entry in ${where} has neither 'comment' nor 'cssName' — a mis-keyed ` +
+          "override would otherwise vanish silently (emitted by nothing, checked by nothing)",
+      );
+    }
     if (typeof e.$value !== "string" || /[\r\n]/.test(e.$value) || /[;{}]/.test(e.$value)) {
       throw new Error(
         `tokens: ${e.cssName} (${where}) must be a single-line value with no ';'/'{'/'}' ` +
@@ -132,10 +138,18 @@ export function buildTokens({ authoredCss }) {
     if (t.id === DEFAULT_THEME.id) {
       throw new Error(`theme id '${t.id}' is the base theme — overlays must use their own id`);
     }
-    if (!/^[a-z][a-z0-9-]*$/.test(t.id)) {
+    if (!/^[a-z][a-z0-9-]*$/.test(t.id) || t.id.length > 64) {
       throw new Error(
-        `theme id '${t.id}' must be a lowercase css-ident ([a-z][a-z0-9-]*) — it is ` +
-          "stamped into a data-theme attribute selector",
+        `theme id '${t.id}' must be a lowercase css-ident ([a-z][a-z0-9-]*) of at most ` +
+          "64 chars — it is stamped into a data-theme attribute selector, and 64 is the " +
+          "backend store's ident ceiling (LocalMachine::set_theme); a longer roster id " +
+          "would render a picker row that can never be saved",
+      );
+    }
+    if (t.id === "system") {
+      throw new Error(
+        "theme id 'system' is reserved — it is the picker's clear-the-choice sentinel, " +
+          "and a theme wearing it would be unselectable",
       );
     }
     if (/["\\]/.test(t.label)) {

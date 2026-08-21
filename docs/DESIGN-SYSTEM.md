@@ -288,7 +288,7 @@ come out right from one rule.
 
 ### 3.5 Contrast — the measured floors
 
-Text is ≥ 4.5:1 against the surface it sits on, in both themes. Dark text is
+Text is ≥ 4.5:1 against the surface it sits on, in every shipped theme. Dark text is
 cream, never pure white — pure white blooms on a TV panel, which is what a
 cabinet screen is.
 
@@ -405,7 +405,10 @@ every `cargo test`:
   with the authored `studio.css`, the same order the build hashes them; it does
   *not* restate the palette; a test that hardcodes the values is a second copy
   that drifts the same way), composites every tint over every ground, and
-  checks 154 pairs across both themes. It also cross-pins the token consumers
+  checks every pair across every theme the sheet ships — since TK1 the gate
+  ENUMERATES themes (three today: dark, light, matrix; a user picks on `/setup`,
+  with System = follow-the-OS as the default) and a new theme passes the floors
+  or records per-theme pins. It also cross-pins the token consumers
   that had **already drifted** back when they were hand copies: the anti-flash
   `PERSONALITY_CSS` — since TK0 generated into `theme_tokens.rs` from the same
   token source, and pinned there (it once painted `#0b0e14` while the
@@ -640,7 +643,7 @@ lists already use.
 3. Any new interactive element declares all four states before it ships.
 4. Any new colour has to answer "what does it *mean*?" — if the answer is "it
    looks nice", it does not go in.
-5. Verify by looking, in both themes, at 1600 / 1100 / 420, in every state the
+5. Verify by looking, in every shipped theme, at 1600 / 1100 / 420, in every state the
    screen can be in.
 6. **If you are editing a component rule to fix a colour, the token was
    wrong.** Fix the token. A component that needs a colour the roles cannot

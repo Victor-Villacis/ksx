@@ -923,11 +923,20 @@ fn theme_line(view: &ksx_api::SetupView) -> String {
         Some(meta) => format!("Every page renders in {}.", meta.label),
         // Say it, never swallow it: the config names a choice this build
         // cannot render, and the stamp sanitizer is quietly falling back.
-        None => format!(
-            "The config names theme '{}', which this build does not ship — pages follow \
-             the operating system instead.",
-            view.theme
-        ),
+        // The shipped ids ride along so a case or whitespace typo in a
+        // hand-edited config explains itself.
+        None => {
+            let shipped = crate::theme_tokens::THEMES
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "The config names theme '{}', which this build does not ship (it has \
+                 {shipped}) — pages follow the operating system instead.",
+                view.theme
+            )
+        }
     }
 }
 
@@ -1329,14 +1338,23 @@ impl SetupRows {
                 })
                 .collect(),
             themes: {
-                // System is chosen when nothing is stored AND when the config
-                // names an id this build does not ship — the second case is
-                // what the stamp sanitizer renders, and the row must agree
-                // with the page around it (theme_line says the rest).
+                // Three states, three honest markings (review-caught: the
+                // first cut marked System "in use" even when the config could
+                // not be READ — a claim about a file nothing read, on the page
+                // whose signature rule is that a refusal renders as one):
+                //  - unreadable → NO row marked and every button stays an
+                //    action; theme_line carries the refusal sentence.
+                //  - unknown id → System IS what renders (the pill is true)
+                //    but not what is SET, so the button offers the useful act
+                //    — clearing the id — instead of claiming "this is how it
+                //    is set" about a config that says otherwise.
+                //  - known/empty → the blocking card's marking exactly.
                 let known = crate::theme_tokens::THEMES
                     .iter()
                     .any(|t| t.id == view.theme);
-                let system_chosen = view.theme.is_empty() || !known;
+                let readable = setup.available;
+                let system_set = readable && view.theme.is_empty();
+                let system_fallback = readable && !view.theme.is_empty() && !known;
                 let mark = |chosen: bool| {
                     if chosen {
                         "pill pill-ok".to_owned()
@@ -1350,15 +1368,17 @@ impl SetupRows {
                     detail: "Light or dark follows the system setting on the machine \
                              viewing the page."
                         .to_owned(),
-                    chosen_cls: mark(system_chosen),
-                    button: if system_chosen {
+                    chosen_cls: mark(system_set || system_fallback),
+                    button: if system_set {
                         "This is how it is set".to_owned()
+                    } else if system_fallback {
+                        "Follow the operating system instead".to_owned()
                     } else {
                         "Match the operating system".to_owned()
                     },
                 }];
                 rows.extend(crate::theme_tokens::THEMES.iter().map(|meta| {
-                    let chosen = view.theme == meta.id;
+                    let chosen = readable && view.theme == meta.id;
                     SetupThemeRowView {
                         value: meta.id.to_owned(),
                         title: meta.label.to_owned(),
@@ -6410,6 +6430,62 @@ mod tests {
     /// exact strings both seams (render_setup.rs's SSR injection and
     /// SetupIsland.ts's poll) now read verbatim — the formatters they used to
     /// each own are gone, so this is the only place a row wording can change.
+    /// The theme card's three states, pinned (TK2/TK3 review finding: the
+    /// first cut marked System "in use" on a config nothing had READ, and
+    /// claimed "this is how it is set" about a config that said otherwise).
+    #[test]
+    fn the_theme_rows_and_line_say_only_what_the_read_supports() {
+        let marked = |rows: &[SetupThemeRowView]| {
+            rows.iter()
+                .filter(|r| r.chosen_cls == "pill pill-ok")
+                .map(|r| r.value.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Nothing stored: System is genuinely how it is set.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView::default());
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["system"]);
+        assert_eq!(rows[0].button, "This is how it is set");
+        assert_eq!(
+            theme_line(&snap.view),
+            "Pages follow the operating system's light or dark choice."
+        );
+
+        // A shipped id: that row is marked; System offers its action.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView {
+            theme: "light".to_owned(),
+            ..Default::default()
+        });
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["light"]);
+        assert_eq!(rows[0].button, "Match the operating system");
+        assert!(rows
+            .iter()
+            .any(|r| r.value == "light" && r.button == "This is how it is set"));
+        assert_eq!(theme_line(&snap.view), "Every page renders in Light.");
+
+        // An id this build does not ship: System IS what renders (the pill is
+        // true) but NOT what is set — the button offers the useful act, and
+        // the line names the shipped ids so a typo explains itself.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView {
+            theme: "matrix2".to_owned(),
+            ..Default::default()
+        });
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["system"]);
+        assert_eq!(rows[0].button, "Follow the operating system instead");
+        let line = theme_line(&snap.view);
+        assert!(line.contains("does not ship"), "{line}");
+        assert!(line.contains("dark, light, matrix"), "{line}");
+
+        // A config nothing could read: no row claims anything about it.
+        let snap = SetupSnapshot::unavailable("the store refused");
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), Vec::<String>::new());
+        assert!(rows.iter().all(|r| r.button != "This is how it is set"));
+    }
+
     #[test]
     fn the_setup_rows_are_composed_once_from_the_view() {
         let view = ksx_api::SetupView {

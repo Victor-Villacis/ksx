@@ -180,8 +180,13 @@ pub(crate) fn with_theme(mut out: PageOutput, theme: Option<&str>) -> PageOutput
         return out;
     };
     if !crate::theme_tokens::THEMES.iter().any(|t| t.id == id) {
+        // Bounded and escaped: the id comes from a hand-editable file and
+        // the import path places no shape on it, and this warn fires at
+        // navigation rate — never echo an unbounded raw string into the log.
+        let shown: String = id.chars().take(32).collect();
         tracing::warn!(
-            "config names theme '{id}', which this build does not ship; rendering as System"
+            "config names theme '{}', which this build does not ship; rendering as System",
+            shown.escape_debug()
         );
         return out;
     }

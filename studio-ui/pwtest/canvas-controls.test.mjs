@@ -367,12 +367,128 @@ describe("the canvas navigation controls", () => {
           height: Number(item.dataset.canvasHeight),
         };
       });
-      // CANVAS_WORLD in NocturneIsland.ts.
+      // CANVAS_WORLD in NocturneIsland.ts. Widgets are bounded; the CAMERA
+      // deliberately is not — see "you can look anywhere" below.
       assert.ok(
-        landed.x + landed.width <= 2800 + 1 && landed.y + landed.height <= 2400 + 1,
+        landed.x + landed.width <= 4000 + 1 && landed.y + landed.height <= 3000 + 1,
         `a widget dragged 40 000px away stays in the world (landed at ${landed.x}, ${landed.y})`,
       );
       assert.ok(landed.x >= -1 && landed.y >= -1, "and not off the near edge either");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("you can look anywhere: the view is never caged", async () => {
+    const page = await openCanvas();
+    try {
+      const camera = () =>
+        page.evaluate(() => {
+          const parsed =
+            /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(
+              document.querySelector(".forma-canvas-stage").style.transform,
+            ) ?? [];
+          return { panX: Number(parsed[1] ?? 0), panY: Number(parsed[2] ?? 0) };
+        });
+
+      // Pan hard past the top-left of everything, the way you would to put
+      // the arrangement in the middle of the screen. Caging the camera made
+      // exactly this impossible, and it read as a broken app.
+      const before = await camera();
+      await page.keyboard.press("Tab");
+      await page.evaluate(() => document.querySelector(".forma-canvas-viewport").focus());
+      for (let press = 0; press < 25; press++) {
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("ArrowDown");
+      }
+      await settle(page);
+      const after = await camera();
+      assert.ok(
+        after.panX < before.panX - 500 && after.panY < before.panY - 500,
+        `panning keeps going past the content (${JSON.stringify(before)} -> ${
+          JSON.stringify(after)
+        })`,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("dragging the map moves the view with it, without fighting back", async () => {
+    const page = await openCanvas();
+    try {
+      const map = await page.locator(".forma-canvas-navigator").boundingBox();
+      const readRect = () =>
+        page.evaluate(() => {
+          const rect = document
+            .querySelector(".forma-canvas-navigator-viewport")
+            .getBoundingClientRect();
+          const parsed =
+            /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(
+              document.querySelector(".forma-canvas-stage").style.transform,
+            ) ?? [];
+          return { x: Math.round(rect.x), panX: Number(parsed[1] ?? 0) };
+        });
+
+      // Drag across the map toward its bottom-right corner, sampling as we
+      // go. What this catches: the camera and the rectangle disagreeing —
+      // the rectangle sliding on while the view has stopped, which is what
+      // a clamped camera under an unclamped map looked like, and it read as
+      // stuttering. Starts in empty map space: pressing a MARKER is a jump
+      // to that widget, which is a different gesture entirely.
+      // The map redraws on the next frame, so each sample waits for one —
+      // otherwise this measures rAF scheduling, not whether the two agree.
+      const frame = () =>
+        page.evaluate(
+          () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        );
+      const startX = map.x + 10;
+      const startY = map.y + 10;
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await frame();
+      const samples = [await readRect()];
+      for (let step = 1; step <= 10; step++) {
+        await page.mouse.move(
+          startX + (map.width - 20) * (step / 10),
+          startY + (map.height - 20) * (step / 10),
+        );
+        await frame();
+        samples.push(await readRect());
+      }
+      await page.mouse.up();
+
+      await settle(page);
+      const ended = await readRect();
+      const first = samples[0];
+
+      // Dragging right and down moves the view right and down (pan goes
+      // more negative as the world slides left under a view moving right).
+      assert.ok(
+        ended.panX < first.panX,
+        `the drag moved the view (${first.panX} -> ${ended.panX})`,
+      );
+      // And the rectangle went WITH it. The pathology this guards is the
+      // two disagreeing — a rectangle that slides on while the view has
+      // stopped, which is what a caged camera under an uncaged map did, and
+      // which read as stuttering.
+      assert.ok(
+        ended.x > first.x,
+        `the rectangle followed the view (${first.x} -> ${ended.x})`,
+      );
+      // Every sample was taken mid-drag with the mapping FROZEN, so the
+      // rectangle only ever advanced — a mapping that re-scaled under the
+      // gesture would have walked it backwards somewhere along the way.
+      for (let index = 1; index < samples.length; index++) {
+        assert.ok(
+          samples[index].x >= samples[index - 1].x - 1,
+          `the rectangle never doubles back mid-drag (step ${index}: ${
+            JSON.stringify(samples[index - 1])
+          } -> ${JSON.stringify(samples[index])})`,
+        );
+      }
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

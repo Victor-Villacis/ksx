@@ -7184,16 +7184,54 @@ a.wsrow-title:hover {
    The engine sheet gives it its box and its markers; this repaints both in
    the Nocturne palette. Everything inside is engine-written. */
 
-/* Sized to the WORLD's aspect (2800 × 2400, `CANVAS_WORLD`) so the
-   projection fills the box instead of letterboxing inside it — the map then
-   reads as the canvas rather than as a picture of part of it. Bigger than
-   the engine's default too: every pixel here is ~15 world px, so the
-   smaller the map, the twitchier dragging it feels. */
+/* Bigger than the engine's default: every pixel here stands for a dozen-odd
+   world px, so the smaller the map, the twitchier dragging it feels. */
 .n-navigator {
   width: 208px;
-  height: 178px;
+  height: 168px;
   border-color: var(--n-panel-2);
   background: color-mix(in srgb, var(--n-bg) 92%, transparent);
+}
+
+/* The map's own hide button: quiet until the map is under the pointer, so
+   the corner stays a map rather than a widget with chrome. It sits above
+   the markers, and it must not start a pan — the engine reads pointerdown
+   anywhere in the map as "navigate to here". */
+.n-mapclose {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--n-bg) 76%, transparent);
+  color: var(--n-text-2);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.n-navigator:hover .n-mapclose,
+.n-mapclose:focus-visible {
+  opacity: 1;
+}
+
+.n-mapclose:hover {
+  color: var(--n-text);
+}
+
+@media (pointer: coarse) {
+  /* No hover to reveal it, and §2's floor applies to a real control. */
+  .nocturne .n-mapclose {
+    width: 40px;
+    height: 40px;
+    opacity: 1;
+  }
 }
 
 /* The zoom readout in the meta bar is engine-written; keep its box steady

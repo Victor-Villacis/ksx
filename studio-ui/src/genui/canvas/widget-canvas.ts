@@ -159,26 +159,27 @@ interface WidgetNavigationCandidate {
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const DEFAULT_CAMERA: WidgetCanvasCamera = { panX: 48, panY: 64, zoom: 1 };
-// ksx: divergence from upstream c91d34c — A BOUNDED WORLD.
-// (Upstream's WORLD_PADDING lived here; it padded the navigator's rolling
-// union, which a fixed world replaces outright.)
+const WORLD_PADDING = 180;
+// ksx: divergence from upstream c91d34c — WIDGETS ARE BOUNDED, THE VIEW IS
+// NOT.
 //
-// Upstream's canvas is infinite: widgets can be dragged anywhere, the camera
-// can pan anywhere, and the navigator's projection is recomputed every frame
-// from the union of the items AND the current view, padded. Three problems
-// fall out of that, all reported from real use:
-//   * the map's mapping SHIFTS while you drag it (the view you are moving is
-//     an input to the bounds you are moving within), so navigating by the map
-//     feels wild rather than proportional;
-//   * `min()` letterboxes the projection, so the camera rectangle drawn on
-//     the map can be larger than the map box it lives in;
-//   * a widget nudged far enough is simply gone, with nothing to pan back to.
-// A fixed world rect fixes all three at once: the map's scale is constant, a
-// rectangle can be clamped to it honestly, and the camera and every widget
-// stay somewhere findable. The size is a HOST decision (`worldBounds`), since
-// only the host knows how many widgets it can have; the default is generous
-// enough not to feel like a cage.
-const DEFAULT_WORLD_BOUNDS: WorldSize = { width: 2800, height: 2400 };
+// The camera pans freely, the way every canvas tool in this shape works
+// (Figma, Miro, tldraw, the node editors): you can go wherever you like and
+// a Fit control brings you home. Caging the VIEW was tried here for exactly
+// one commit and it reads as a broken app — you cannot centre what you are
+// looking at, and the edges shove back.
+//
+// What IS bounded is where a widget can END UP, so nothing can be dragged
+// somewhere unreachable. That is a placement rule, not a camera rule: it
+// costs the user nothing and it means the map always has something to show.
+// The size is a HOST decision (`worldBounds`), since only the host knows
+// how many widgets it can have.
+//
+// The map's two real faults are fixed where they live, not by shrinking the
+// canvas: its projection FREEZES for the length of a drag (see
+// #navigatorBounds), and its camera rectangle is clamped to the box it is
+// drawn on (see #renderNavigator).
+const DEFAULT_WORLD_BOUNDS: WorldSize = { width: 4000, height: 3000 };
 const KEYBOARD_MOVE_STEP = 16;
 const KEYBOARD_CANVAS_PAN_STEP_PX = 64;
 const KEYBOARD_CANVAS_PAN_LARGE_STEP_PX = 256;
@@ -348,8 +349,11 @@ export class WidgetCanvas {
   readonly #navigatorMarkers = new Map<string, HTMLButtonElement>();
   readonly #runtimeHosts = new Map<string, CanvasRuntimeHost>();
   readonly #runtimeAdapter: CanvasRuntimeAdapter;
-  /** ksx: the bounded world every widget and the camera live inside. */
+  /** ksx: where a widget is allowed to end up. Not a camera limit. */
   readonly #worldBounds: WorldSize;
+  /** ksx: the map's projection, held still for the length of a drag on it.
+   *  Carries its SCALE too — the mapping is the point of freezing it. */
+  #navigatorGestureBounds: (WorldRect & { scale: number }) | null = null;
   readonly #virtualizedHosts = new Map<string, VirtualizedWidgetHost>();
   readonly #parkedAt = new Map<string, number>();
   readonly #scalingFrames = new Map<HTMLElement, number>();
@@ -2004,6 +2008,17 @@ export class WidgetCanvas {
       this.#viewport.classList.add("is-navigating");
       const navigatorRect = this.#navigator.getBoundingClientRect();
       const viewportRect = this.#viewport.getBoundingClientRect();
+      // ksx: freeze the mapping for this gesture (see #navigatorBounds).
+      const frozen = this.#navigatorBounds(viewportRect, navigatorRect);
+      this.#navigatorGestureBounds = frozen
+        ? {
+          x: frozen.x,
+          y: frozen.y,
+          width: frozen.width,
+          height: frozen.height,
+          scale: frozen.scale,
+        }
+        : null;
       const panTo = (clientX: number, clientY: number): void => {
         const bounds = this.#navigatorBounds(viewportRect, navigatorRect);
         if (!bounds) return;
@@ -2027,6 +2042,9 @@ export class WidgetCanvas {
         this.#window.removeEventListener("pointercancel", onEnd);
         this.#viewport.classList.remove("is-navigating");
         if (this.#cameraGesturePointerId === pointerId) this.#cameraGesturePointerId = null;
+        // ksx: the hand is off the map; let the bounds follow the canvas again.
+        this.#navigatorGestureBounds = null;
+        this.#requestNavigatorRender();
         this.#commitChange();
       };
       const onEnd = (endEvent: PointerEvent): void => finish(endEvent);
@@ -2103,9 +2121,6 @@ export class WidgetCanvas {
   }
 
   #renderCamera(): void {
-    // ksx: the single choke point every pan, zoom, animation and restore
-    // passes through — clamping here needs no discipline at the call sites.
-    this.#clampCameraToWorld();
     this.#stage.style.transform =
       `translate(${this.#camera.panX}px, ${this.#camera.panY}px) scale(${this.#camera.zoom})`;
     if (this.#camera.zoom !== this.#renderedZoom) {
@@ -2419,13 +2434,30 @@ export class WidgetCanvas {
       width: viewport.width / this.#camera.zoom,
       height: viewport.height / this.#camera.zoom,
     };
-    // ksx: the map projects the WORLD, which does not move. Upstream unioned
-    // the items with the live view and re-padded every frame, so the mapping
-    // shifted while you dragged it — dragging changed the very bounds the
-    // drag was measured against.
-    const world = this.#worldRect();
-    const scale = Math.min(map.width / world.width, map.height / world.height);
-    return { ...world, scale: Math.max(scale, 0.0001), visible };
+    // ksx: the projection is FROZEN for the length of a navigator drag.
+    // Upstream recomputes it every frame from the items unioned with the
+    // live view — so dragging the map moved the view, which moved the
+    // bounds, which moved the mapping the drag was being measured against.
+    // That feedback is what made navigating by the map feel wild. The
+    // bounds still follow the canvas everywhere else; they just hold still
+    // while a hand is on them.
+    if (this.#navigatorGestureBounds) {
+      return { ...this.#navigatorGestureBounds, visible };
+    }
+    const itemBounds = unionRects(Array.from(this.#items.values(), (item) => {
+      const state = this.getItemState(item);
+      return scaledRect(state, state.manualScale);
+    }));
+    const combined = unionRects(itemBounds ? [itemBounds, visible] : [visible]);
+    if (!combined) return null;
+    const padded = {
+      x: combined.x - WORLD_PADDING,
+      y: combined.y - WORLD_PADDING,
+      width: combined.width + WORLD_PADDING * 2,
+      height: combined.height + WORLD_PADDING * 2,
+    };
+    const scale = Math.min(map.width / padded.width, map.height / padded.height);
+    return { ...padded, scale: Math.max(scale, 0.0001), visible };
   }
 
   #createNavigatorMarker(item: HTMLElement): void {
@@ -2494,27 +2526,6 @@ export class WidgetCanvas {
   /** ksx: the bounded world, as a rect. */
   #worldRect(): WorldRect {
     return { x: 0, y: 0, width: this.#worldBounds.width, height: this.#worldBounds.height };
-  }
-
-  /** ksx: keep the view over the world. When the view is larger than the
-   *  world (zoomed out past it), centre the world instead of pinning a
-   *  corner — the alternative is a canvas that drifts into empty space with
-   *  nothing to steer back to. */
-  #clampCameraToWorld(): void {
-    const viewport = this.#viewport.getBoundingClientRect();
-    if (viewport.width <= 0 || viewport.height <= 0) return;
-    const { zoom } = this.#camera;
-    const world = this.#worldRect();
-    // A world point w sits at screen `pan + w * zoom`, so the view covers
-    // world x in [-pan/zoom, (-pan + viewport.width)/zoom]. Holding that
-    // inside [0, world.width] is one interval on pan.
-    const axis = (pan: number, viewportExtent: number, worldExtent: number): number => {
-      const view = viewportExtent / zoom;
-      if (view >= worldExtent) return ((view - worldExtent) / 2) * zoom;
-      return clamp(pan, -(worldExtent - view) * zoom, 0);
-    };
-    this.#camera.panX = axis(this.#camera.panX, viewport.width, world.width);
-    this.#camera.panY = axis(this.#camera.panY, viewport.height, world.height);
   }
 
   /** ksx: a widget stays inside the world, whatever moved it. Its manual

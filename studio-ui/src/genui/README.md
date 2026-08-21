@@ -60,21 +60,26 @@ integration; none is ksx-specific policy, all are engine correctness):
    pack, align or reflow anywhere — so this is an addition rather than a
    correction, and the most obviously upstreamable of the four.
 
-5. **A BOUNDED WORLD** (`worldBounds` option, default 2800 × 2400;
-   `#worldRect`, `#clampCameraToWorld`, `#clampToWorld`, and a navigator
-   that projects the world instead of a rolling union). Upstream's canvas
-   is infinite, which produced three reports from real use: the map's
-   mapping SHIFTED while you dragged it (the view being moved was an input
-   to the bounds it was measured against, so navigating by the map felt
-   wild); `min()` letterboxing let the camera rectangle be drawn LARGER
-   than the map box containing it; and a widget nudged far enough was
-   simply gone. A fixed world fixes all three — constant scale, a
-   rectangle that can be honestly clamped, and every widget reachable.
-   Camera clamping happens in `#renderCamera`, the one choke point every
-   pan, zoom, animation and restore passes through; widget clamping in
-   `#moveItem` and `#positionItem`, which covers drags, nudges, host
-   placement and restores from a store written before the bound existed.
-   Upstream's `WORLD_PADDING` went with the rolling union.
+5. **BOUNDED WIDGETS, FREE VIEW, AND A MAP THAT HOLDS STILL** — three
+   small changes answering three reports, none of which shrink the canvas:
+   - `worldBounds` (default 4000 × 3000) limits where a widget may END UP,
+     clamped in `#moveItem` and `#positionItem` so drags, nudges, host
+     placement and restores from an older store are all covered. Nothing
+     can be dragged somewhere unreachable.
+   - the navigator's projection FREEZES for the length of a drag on it
+     (`#navigatorGestureBounds`). Upstream recomputes it every frame from
+     the items unioned with the live view, so dragging the map moved the
+     view, which moved the bounds, which moved the mapping the drag was
+     measured against — that feedback is what made the map feel wild.
+   - the camera rectangle is clamped to the map box it is drawn on;
+     `min()` letterboxing could otherwise paint it larger than its own
+     container.
+
+   ⚠️The CAMERA is deliberately NOT clamped. Caging it was tried here for
+   one commit and it reads as a broken app: you cannot centre what you are
+   looking at, and the edges shove back. Every tool in this shape (Figma,
+   Miro, tldraw, the node editors) pans freely and offers a Fit control to
+   come home, which the engine already has.
 
 Re-syncing against a newer upstream commit means re-applying (or better,
 upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying. As of

@@ -953,12 +953,13 @@ const CANVAS_STORE = "ksx-nocturne-canvas";
  *  press should be a visible move, not a nudge. */
 const CANVAS_ZOOM_STEP = 1.2;
 
-/** How much canvas there IS. Sized from the arrangement it has to hold: the
- *  board (980 wide) with eight controllers tidied two to a row beneath it
- *  comes to roughly 1200 × 2100, so this is comfortably more than the
- *  fullest roster needs while staying somewhere you can find your way
- *  around. Widgets and the camera are held inside it by the engine. */
-const CANVAS_WORLD = { width: 2800, height: 2400 };
+/** How far a WIDGET may travel — not how far you may look. The camera pans
+ *  freely (that is what every canvas tool in this shape does, and caging it
+ *  reads as a broken app); this only stops a widget being dragged somewhere
+ *  nothing can reach. Roomy on purpose: the fullest arrangement this page
+ *  can hold — the board with eight controllers tidied two to a row — is
+ *  about 1200 × 2100, so this is several screens of elbow room around it. */
+const CANVAS_WORLD = { width: 4000, height: 3000 };
 
 interface CanvasItemGeometry {
   x: number;
@@ -1385,6 +1386,13 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
     .querySelector<HTMLElement>(".forma-canvas-navigator-viewport") ??
     document.createElement("div");
   if (!navigatorItems.isConnected) navigator.append(navigatorItems, navigatorViewport);
+  // The engine reads pointerdown ANYWHERE in the map as "navigate to here"
+  // (it only excuses its own markers), so the hide button has to stop the
+  // press from reaching it — otherwise putting the map away jumps the view
+  // on the way out. Click still bubbles to the delegated handler.
+  navigator
+    .querySelector<HTMLElement>(".n-mapclose")
+    ?.addEventListener("pointerdown", (event) => event.stopPropagation());
   loadCanvasPrefs();
   nCanvas = new WidgetCanvas(
     { viewport, stage, zoomStatus, navigator, navigatorItems, navigatorViewport },
@@ -5088,6 +5096,20 @@ export function NocturneIsland() {
                 "aria-label": "Canvas map",
                 "data-client-canvas": "",
               },
+              // The map's own hide button. The meta bar's "Map" toggle does
+              // the same thing, but nobody looks there to put away the thing
+              // in the corner — the corner is where you reach for it.
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-mapclose",
+                  "data-nx": "canvas-map",
+                  "aria-label": "Hide the canvas map",
+                  title: "Hide the canvas map",
+                },
+                "×",
+              ),
               h("div", {
                 class: "forma-canvas-navigator-items",
                 "data-client-subtree": "",

@@ -1090,6 +1090,7 @@ fn installer_and_portable_zip_carry_complete_license_material() {
             "THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt",
             "Copyright (c) 2024 the_al",
         ),
+        ("THIRD-PARTY-LICENSES/CC0-1.0.txt", "CC0 1.0 Universal"),
         (
             "THIRD-PARTY-LICENSES/Lucide-ISC.txt",
             "Lucide Contributors 2022",
@@ -1139,11 +1140,40 @@ fn installer_and_portable_zip_carry_complete_license_material() {
         );
     }
 
+    // The project-owner-supplied dedication is binary evidence, not a text
+    // licence. Pin its stable packaged name, PDF shape and exact byte length;
+    // NOTICE below pins the reviewed SHA-256 and source chain.
+    let dedication_path = repo_root()
+        .join("THIRD-PARTY-LICENSES")
+        .join("Funky-Designs-CC0-1.0-Dedication.pdf");
+    let dedication = std::fs::read(&dedication_path)
+        .unwrap_or_else(|err| panic!("{} could not be read: {err}", dedication_path.display()));
+    assert!(
+        dedication.starts_with(b"%PDF-1.7"),
+        "{} is not the reviewed PDF",
+        dedication_path.display()
+    );
+    assert_eq!(
+        dedication.len(),
+        15_763,
+        "{} differs from the reviewed dedication bytes",
+        dedication_path.display()
+    );
+
     let notice = read("NOTICE");
     assert!(notice.contains("forma-ir 0.2.0 and forma-server 0.2.0"));
     assert!(notice.contains("interception-sys` 0.1.3 as LGPL-3.0"));
     assert!(notice.contains("libwdi 1.5.1 prepare provider"));
     assert!(notice.contains("9b23b82a2dd1cbffc16d46c212f92c6bf8c0c602"));
+    assert!(notice.contains("28A22A03379A68451E339B30865C7BA7C7C29193723EC87E17FB52FACFA070C7"));
+    assert!(notice.contains("97BD7A3ADE8B38B06B9769C5E843C51E467BEABFA4581BAB3830ABF60014F144"));
+    assert!(notice.contains("0748B6C76FA2C0EC7C7E69590383F1F8BA391E0831DB1F3B45D14E4432F80B32"));
+    assert!(notice.contains("BF14390606252C2106B18D8869151BF1686D925B6E306A32D635C7FEF26D5549"));
+    assert!(notice.contains("F6D59BE0A20CC7EF9698D43A0B0703D1EA76387B707260A90A31BF1047C40F83"));
+    assert!(notice.contains("CFF42BF349FAB306DC57021F21912E35190FEC78A3EF193C8B372099C8406E48"));
+    assert!(notice.contains("B9FE4FA6528FCC9AFA52F7590E5D141F8FC68983B12E1090ADC19D057061D2A0"));
+    assert!(notice.contains("0B23A9FE39047F059ADB528F180C971EDFDB5A59F7835EC6E71B23722B0751FF"));
+    assert!(notice.contains("5E45318030E7A8F38580F76BD8DCF46C0C3E4E4D6380551C7FD1839F10C55B31"));
     assert!(
         !notice.contains("licenses travel with them in `Cargo.lock`"),
         "Cargo.lock carries versions and checksums, not distributable license text"

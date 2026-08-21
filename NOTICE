@@ -263,27 +263,74 @@ installed Interception DLL or drivers.
 
 
 --------------------------------------------------------------------------
-11. Semantic DualShock 4 controller drawing
+11. Hybrid DualShock 4 controller drawing (MIT + CC0 1.0 Universal)
 --------------------------------------------------------------------------
 
-    Upstream: https://github.com/dualshock-tools/dualshock-tools.github.io
-    Revision: 53e4ba84c7784ffb1aa6c4df79b01384dfd843ec
-    Source:   assets/dualshock-controller.svg
-    SHA-256:  4A3DF18DA942FB581A513546686CD1FEC136A6318F98DF66DB7CF2FB4BD576C0
-    License:  MIT; Copyright (c) 2024 the_al
-    Full text: THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt
-    Used in:  studio-ui/art/src-dualshock-tools-ds4.svg (verbatim source)
-              studio-ui/src/ds4FreeGeometry.ts (SVG elements expressed as
-                                                compiler-visible h() nodes)
-              studio-ui/src/NocturneIsland.ts (shared carbon paint,
-                                                transparent mapper hooks and
-                                                app-owned dressing/callouts)
-    Modifications: the root wrapper, comments, inactive trigger-percentage
-                   labels and source IDs are omitted. Semantic IDs became
-                   data-ds4-part attributes to remain valid when the hidden
-                   master is cloned. Geometry is recolored through Studio's
-                   shared gradients; face marks, touch texture, grip shade,
-                   lightbar, mapper hooks and callouts are app-owned layers.
+    Semantic base:
+      Upstream: https://github.com/dualshock-tools/dualshock-tools.github.io
+      Revision: 53e4ba84c7784ffb1aa6c4df79b01384dfd843ec
+      Source:   assets/dualshock-controller.svg
+      SHA-256:  4A3DF18DA942FB581A513546686CD1FEC136A6318F98DF66DB7CF2FB4BD576C0
+      License:  MIT; Copyright (c) 2024 the_al
+      Full text: THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt
 
-    Sony Interactive Entertainment owns the DualShock trade dress depicted;
-    ksx claims no affiliation.
+    Detailed-art sources:
+      Dedicator: Funky Designs UK
+      Canonical geometry:
+        C:\Users\Victor\Downloads\DualShock 4\DualShock4_Jet_Black.zip
+        Archive SHA-256:
+          28A22A03379A68451E339B30865C7BA7C7C29193723EC87E17FB52FACFA070C7
+        Entry: DualShock4_Jet_Black_small.svg
+        Entry SHA-256:
+          97BD7A3ADE8B38B06B9769C5E843C51E467BEABFA4581BAB3830ABF60014F144
+      Source-authored color references:
+        DualShock4_Glacier_White.zip
+          archive: 0748B6C76FA2C0EC7C7E69590383F1F8BA391E0831DB1F3B45D14E4432F80B32
+          DualShock4_Glacier_White_small.svg:
+            BF14390606252C2106B18D8869151BF1686D925B6E306A32D635C7FEF26D5549
+        DualShock4_Magma_Red.zip
+          archive: F6D59BE0A20CC7EF9698D43A0B0703D1EA76387B707260A90A31BF1047C40F83
+          DualShock4_Magma_Red_small.svg:
+            CFF42BF349FAB306DC57021F21912E35190FEC78A3EF193C8B372099C8406E48
+        DualShock4_Midnight_Blue.zip
+          archive: B9FE4FA6528FCC9AFA52F7590E5D141F8FC68983B12E1090ADC19D057061D2A0
+          DualShock4_Midnight_Blue_small.svg:
+            0B23A9FE39047F059ADB528F180C971EDFDB5A59F7835EC6E71B23722B0751FF
+      Dedication supplied at:
+        C:\Users\Victor\Downloads\CC0_Public_Domain_Dedication_Funky_Designs.pdf
+      Dedication PDF SHA-256:
+        5E45318030E7A8F38580F76BD8DCF46C0C3E4E4D6380551C7FD1839F10C55B31
+      Dedication date: 2026-08-21
+      Recorded licensee: Forma.js
+      Work named by the dedication: "Artwork depicting PS4 Controller
+        DualShock" (among the four controller works listed there)
+      Dedication: CC0 1.0 Universal. Funky Designs UK waives its copyright
+        and related rights to the extent allowed by law; the public-license
+        fallback permits copying, modification and distribution, including
+        commercial use. CC0 does not affect third-party trademark, patent,
+        trade-dress, publicity or privacy rights.
+      Evidence: THIRD-PARTY-LICENSES/Funky-Designs-CC0-1.0-Dedication.pdf
+      Legal code: THIRD-PARTY-LICENSES/CC0-1.0.txt
+
+    Used in:  studio-ui/art/src-dualshock-tools-ds4.svg (verbatim MIT source)
+              studio-ui/src/ds4FreeGeometry.ts (reference MIT transcription)
+              studio-ui/scripts/compile-funky-ds4.mjs (deterministic importer)
+              studio-ui/src/ds4PremiumGeometry.ts (generated inline geometry,
+                                                   exact hooks and ten tones)
+              studio-ui/src/NocturneIsland.ts (shared paint servers, L2/R2,
+                                               color controls and callouts)
+    Modifications: the canonical Jet Black geometry is expressed as
+                   compiler-visible inline h() nodes with source IDs and
+                   metadata removed. Nine export-only/invisible shapes are
+                   omitted; the large touch-dot path is replaced with one
+                   shared pattern. The other three drawings contribute ten
+                   source-authored color tones, while Studio supplies one
+                   shell gradient per finish. The paid body and its 23 exact
+                   whole-control hooks use the same 640/3800 matrix; the MIT
+                   semantic source supplies the two L2/R2 shapes and the
+                   established 640-unit mapping/callout vocabulary. No img,
+                   filter, mask, private defs or product-shot dimming ships.
+
+    Sony Interactive Entertainment owns the DualShock name and hardware trade
+    dress depicted. Neither copyright permission above grants those rights;
+    ksx claims no affiliation or endorsement.

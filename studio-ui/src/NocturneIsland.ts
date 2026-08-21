@@ -2,7 +2,13 @@ import { createList, createShow, createSignal, h } from "@getforma/core";
 import { fetchJSON } from "@getforma/core/http";
 
 import { WidgetCanvas, createCanvasItem } from "./genui/canvas/index";
-import { Ds4FreeGeometry } from "./ds4FreeGeometry";
+import {
+  DS4_PREMIUM_SHELL_TONE,
+  DS4_PREMIUM_VARIANTS,
+  Ds4PremiumButtonHooks,
+  Ds4PremiumGeometry,
+  type Ds4PremiumVariantSlug,
+} from "./ds4PremiumGeometry";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -952,6 +958,9 @@ let lastBindView: NocturneView | null = null;
 // renumber, identity travels), loaded before the engine mounts, saved on the
 // engine's own durable commits.
 const CANVAS_STORE = "ksx-nocturne-canvas";
+const DS4_VARIANT_STORE = "ksx-nocturne-ds4-variants1";
+const DS4_VARIANT_SLUGS = new Set<string>(DS4_PREMIUM_VARIANTS.map((variant) => variant.slug));
+let ds4Variants: Record<string, Ds4PremiumVariantSlug> = {};
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
  *  press should be a visible move, not a nudge. */
@@ -1047,6 +1056,53 @@ function saveCanvasPrefs(): void {
     window.localStorage.setItem(CANVAS_STORE, JSON.stringify(canvasPrefs));
   } catch {
     // The arrangement simply will not survive this session.
+  }
+}
+
+function loadDs4Variants(): void {
+  try {
+    const raw = window.localStorage.getItem(DS4_VARIANT_STORE);
+    const saved = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    const clean: Record<string, Ds4PremiumVariantSlug> = {};
+    for (const [key, value] of Object.entries(saved)) {
+      if (typeof value === "string" && DS4_VARIANT_SLUGS.has(value)) {
+        clean[key] = value as Ds4PremiumVariantSlug;
+      }
+    }
+    ds4Variants = clean;
+  } catch {
+    ds4Variants = {};
+  }
+}
+
+function saveDs4Variants(): void {
+  try {
+    window.localStorage.setItem(DS4_VARIANT_STORE, JSON.stringify(ds4Variants));
+  } catch {
+    // A controller finish is chrome; blocked storage only makes it temporary.
+  }
+}
+
+/** Repaint one clone through the four source-authored color palettes. The
+ *  geometry never changes: every finish writes the same ten CSS paint tones,
+ *  with only the main shell upgraded to the shared Studio gradient server. */
+function applyDs4Variant(
+  svg: SVGSVGElement,
+  controls: HTMLElement,
+  storeKey: string,
+  slug: Ds4PremiumVariantSlug,
+  persist: boolean,
+): void {
+  const variant = DS4_PREMIUM_VARIANTS.find((item) => item.slug === slug) ?? DS4_PREMIUM_VARIANTS[0];
+  for (const [name, value] of Object.entries(variant.tones)) svg.style.setProperty(name, value);
+  svg.style.setProperty(DS4_PREMIUM_SHELL_TONE, `url(#${variant.gradient})`);
+  svg.dataset.ds4Variant = variant.slug;
+  for (const button of Array.from(controls.querySelectorAll<HTMLButtonElement>("button[data-ds4-variant]"))) {
+    button.setAttribute("aria-pressed", String(button.dataset.ds4Variant === variant.slug));
+  }
+  if (persist) {
+    ds4Variants[storeKey] = variant.slug;
+    saveDs4Variants();
   }
 }
 
@@ -1314,7 +1370,7 @@ export function syncPadWidgets(): void {
   const canvas = nCanvas;
   if (!root || !v || !canvas) return;
   const pads = v.pads ?? [];
-  const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.title).join("|");
+  const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.preset + ":" + p.title).join("|");
   if (print !== padWidgetPrint) {
     padWidgetPrint = print;
     for (const [, item] of padItems) canvas.removeItem(item, { selectFallback: false });
@@ -1329,6 +1385,8 @@ export function syncPadWidgets(): void {
       );
       const art = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
       if (!art) return;
+      const artClone = art.cloneNode(true) as SVGSVGElement;
+      const storeKey = storeKeys.get(pv.slot) ?? "p:" + pv.preset;
       const content = document.createElement("div");
       content.className = "n-mini np" + pv.slot;
       content.setAttribute("data-pad-slot", String(pv.slot));
@@ -1344,7 +1402,41 @@ export function syncPadWidgets(): void {
       title.className = "n-mini-title";
       title.textContent = pv.title;
       head.append(badge, title);
-      content.append(head, art.cloneNode(true));
+      let variantControls: HTMLElement | null = null;
+      if (pv.family === "ps" && artClone.matches("svg.ds4premium")) {
+        const controls = document.createElement("div");
+        controls.className = "n-ds4-variants";
+        controls.setAttribute("role", "group");
+        controls.setAttribute("aria-label", "DualShock 4 color");
+        for (const variant of DS4_PREMIUM_VARIANTS) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "n-ds4-variant";
+          button.dataset.nx = "ds4-variant";
+          button.dataset.ds4Variant = variant.slug;
+          button.setAttribute("aria-label", variant.label + " controller finish");
+          button.setAttribute("aria-pressed", "false");
+          button.title = variant.label;
+          button.style.setProperty("--ds4-variant-swatch", variant.swatch);
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            applyDs4Variant(artClone, controls, storeKey, variant.slug, true);
+          });
+          controls.append(button);
+        }
+        // A swatch press must not begin a canvas drag before its click lands.
+        controls.addEventListener("pointerdown", (event) => event.stopPropagation());
+        applyDs4Variant(
+          artClone,
+          controls,
+          storeKey,
+          ds4Variants[storeKey] ?? DS4_PREMIUM_VARIANTS[0].slug,
+          false,
+        );
+        head.append(controls);
+        variantControls = controls;
+      }
+      content.append(head, artClone);
       const item = createCanvasItem({
         instanceId: "pad-" + pv.slot,
         displayName: "P" + pv.slot + " \u00b7 " + pv.title,
@@ -1354,7 +1446,20 @@ export function syncPadWidgets(): void {
       });
       item.classList.add("n-widget", "n-widget-pad", "np" + pv.slot);
       item.dataset.clientWidget = "";
-      const restored = canvasPrefs.widgets[storeKeys.get(pv.slot) ?? ""] ?? padHome(index);
+      if (variantControls) {
+        item.addEventListener("keydown", (event) => {
+          if ((event.key === "Enter" || event.key === "F2") && event.target === item) {
+            event.preventDefault();
+            event.stopPropagation();
+            variantControls?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus();
+          } else if (event.key === "Escape" && variantControls?.contains(document.activeElement)) {
+            event.preventDefault();
+            event.stopPropagation();
+            item.focus();
+          }
+        }, { capture: true });
+      }
+      const restored = canvasPrefs.widgets[storeKey] ?? padHome(index);
       canvas.mountItem(item, restored, { focus: false });
       padItems.set(pv.slot, item);
     });
@@ -2918,6 +3023,7 @@ export function nocturneWire(root: HTMLElement): void {
   loadUiPrefs();
   loadSlotColors();
   loadHiddenStrips();
+  loadDs4Variants();
   applyNocturneUi();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
@@ -4441,12 +4547,45 @@ export function NocturneIsland() {
                 h("stop", { offset: "0.45", "stop-color": "#968ae0" }),
                 h("stop", { offset: "1", "stop-color": "#5d5494" }),
               ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-jet-black", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#303139" }),
+                h("stop", { offset: "0.48", "stop-color": "#202024" }),
+                h("stop", { offset: "1", "stop-color": "#17171a" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-glacier-white", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ffffff" }),
+                h("stop", { offset: "0.5", "stop-color": "#e4e4e6" }),
+                h("stop", { offset: "1", "stop-color": "#c9cad0" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-magma-red", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ef4842" }),
+                h("stop", { offset: "0.5", "stop-color": "#d42323" }),
+                h("stop", { offset: "1", "stop-color": "#a81319" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-midnight-blue", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#3a5579" }),
+                h("stop", { offset: "0.5", "stop-color": "#223355" }),
+                h("stop", { offset: "1", "stop-color": "#14223a" }),
+              ),
               // A compact touch texture for the free DS4's 640-unit source.
               // Hoisting it keeps every clone on the same app-owned paint.
               h(
                 "pattern",
                 { id: "nxp-ds4-touch", width: "5.48", height: "5.48", patternUnits: "userSpaceOnUse" },
                 h("circle", { cx: "1.1", cy: "1.1", r: "0.72", fill: "#080910" }),
+              ),
+              h(
+                "pattern",
+                { id: "nxp-ds4-paid-touch", width: "32.531", height: "32.531", patternUnits: "userSpaceOnUse" },
+                h("circle", { cx: "4.597", cy: "4.597", r: "4.15", fill: "#090a10" }),
               ),
             ),
           ),
@@ -4656,39 +4795,49 @@ export function NocturneIsland() {
               ),
             ),
           ),
-          // ── Free DualShock 4 comparison (ViGEm PlayStation) ──────────
-          // MIT geometry from dualshock-tools, kept semantic as data-part
-          // attributes rather than IDs because this hidden master is cloned.
-          // The source is deliberately presented at its native proportions:
-          // the owner can compare it honestly with the richer paid drawing.
+          // ── Hybrid DualShock 4 (ViGEm PlayStation) ────────────────────
+          // Funky Designs' CC0 geometry supplies the real product detail;
+          // our MIT/app semantic layer supplies L2/R2, exact mapper hooks and
+          // key callouts. All layers share this one SVG and coordinate box.
           h(
             "div",
             { class: () => nPadPsCls(), "data-pad-family": "ps" },
             h(
               "svg",
               {
-                class: "wspad ds4a ds4free",
+                class: "wspad ds4a ds4premium",
                 viewBox: "-28 -18 696 550",
                 preserveAspectRatio: "xMidYMid meet",
+                "data-ds4-variant": "jet-black",
                 "aria-hidden": "true",
                 focusable: "false",
               },
               h(
                 "g",
-                { class: "ds4free-body" },
+                { class: "ds4premium-body" },
                 h(
                   "g",
-                  { class: "ds4free-trigger-bridges" },
-                  h("path", { class: "ds4free-trigger-bridge", d: "M96 77 C109 68 151 68 164 78 L166 123 C143 120 116 120 90 126 L90 96 C90 87 92 82 96 77 Z" }),
-                  h("path", { class: "ds4free-trigger-bridge", d: "M544 77 C531 68 489 68 476 78 L474 123 C497 120 524 120 550 126 L550 96 C550 87 548 82 544 77 Z" }),
+                  { class: "ds4premium-trigger-bridges" },
+                  h("path", { class: "ds4premium-trigger-bridge", d: "M96 77 C109 68 151 68 164 78 L166 123 C143 120 116 120 90 126 L90 96 C90 87 92 82 96 77 Z" }),
+                  h("path", { class: "ds4premium-trigger-bridge", d: "M544 77 C531 68 489 68 476 78 L474 123 C497 120 524 120 550 126 L550 96 C550 87 548 82 544 77 Z" }),
                 ),
-                h(Ds4FreeGeometry, null),
+                h(
+                  "g",
+                  { class: "ds4premium-paid", transform: "matrix(0.1684210526 0 0 0.1684210526 0 105)" },
+                  h(Ds4PremiumGeometry, null),
+                  // The 40 KB source dot-grid becomes one shared pattern.
+                  h("path", { class: "ds4premium-touch-overlay", d: "M1355.79,842.942c-49.66,0 -89.98,-40.32 -89.98,-89.98l0,-612.415c0,-10.354 8.39,-18.748 18.75,-18.748l1230.88,0c10.36,0 18.75,8.394 18.75,18.748l0,612.415c0,49.66 -40.32,89.98 -89.98,89.98l-1088.42,0Z" }),
+                ),
               ),
-              // The mapper's 25 controls live in the source's own 640-unit
-              // coordinate space. Nothing is fitted from the paid drawing.
+              // Two app-authored L2 zones plus 23 exact duplicates of the
+              // paid drawing's whole controls. The paid duplicates carry the
+              // same matrix as the art, so hover borders cannot drift.
               h(
                 "g",
-                { class: "ds4free-hooks" },
+                { class: "ds4premium-hooks" },
+                h("path", { "data-fn": "lt", class: "ds4premium-hook", d: "M167.27,80.69l-2.79-35.54c-1.25-15.98-14.77-28.21-30.8-27.85-13.24.3-24.75,9.19-28.38,21.93L93.72,79.86c-.77,2.71,1.26,5.4,4.08,5.4h65.24c2.47,0,4.42-2.11,4.23-4.57Z", fill: "transparent", "vector-effect": "non-scaling-stroke" }),
+                h("path", { "data-fn": "rt", class: "ds4premium-hook", d: "M472.73,80.69l2.79-35.54c1.25-15.98,14.77-28.21,30.8-27.85,13.24.3,24.75,9.19,28.38,21.93l11.58,40.63c.77,2.71-1.26,5.4-4.08,5.4h-65.24c-2.47,0-4.42-2.11-4.23-4.57Z", fill: "transparent", "vector-effect": "non-scaling-stroke" }),
+                h(Ds4PremiumButtonHooks, null),
                 h("path", { "data-fn": "lt", class: "ds4free-hook", d: "M167.27,80.69l-2.79-35.54c-1.25-15.98-14.77-28.21-30.8-27.85-13.24.3-24.75,9.19-28.38,21.93L93.72,79.86c-.77,2.71,1.26,5.4,4.08,5.4h65.24c2.47,0,4.42-2.11,4.23-4.57Z", fill: "transparent" }),
                 h("path", { "data-fn": "rt", class: "ds4free-hook", d: "M472.73,80.69l2.79-35.54c1.25-15.98,14.77-28.21,30.8-27.85,13.24.3,24.75,9.19,28.38,21.93l11.58,40.63c.77,2.71-1.26,5.4-4.08,5.4h-65.24c-2.47,0-4.42-2.11-4.23-4.57Z", fill: "transparent" }),
                 h("path", { "data-fn": "lb", class: "ds4free-hook", d: "M165.32,123.06v-3.76c0-3.2-2.11-6.02-5.17-6.96-31.09-9.5-55.53-1.1-65.02,3.2-2.6,1.18-4.28,3.76-4.28,6.62v3.34s38.5-2.96,74.48-2.44Z", fill: "transparent" }),
@@ -4746,7 +4895,7 @@ export function NocturneIsland() {
               ),
               h(
                 "g",
-                { class: "ds4free-callouts" },
+                { class: "ds4premium-callouts" },
                 h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "88", y: "48", "text-anchor": "end" }),
                 h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "82", y: "122", "text-anchor": "end" }),
                 h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "552", y: "48", "text-anchor": "start" }),

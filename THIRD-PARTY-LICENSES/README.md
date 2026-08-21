@@ -7,6 +7,13 @@ corresponding full license texts.
 - `Gamepad-Asset-Pack-MIT.txt` covers the controller drawings used by Studio.
 - `dualshock-tools-MIT.txt` covers the semantic DualShock 4 geometry used by
   the Nocturne canvas.
+- `CC0-1.0.txt` is the canonical Creative Commons CC0 1.0 Universal legal code
+  governing the Funky Designs UK controller artwork used in Nocturne's hybrid
+  DualShock 4 drawing.
+- `Funky-Designs-CC0-1.0-Dedication.pdf` is the exact 2026-08-21 dedication
+  supplied by the project owner. It names Funky Designs UK as dedicator and
+  expressly includes artwork depicting the PS4 DualShock; `NOTICE` records its
+  SHA-256 and the hashes of the selected source archive and SVG entry.
 - `Lucide-ISC.txt` covers the `gamepad-2` geometry used in the detailed KSX
   mark and its generated images/icons.
 - `vigem-client-MIT.txt` covers the vendored Rust ViGEm client.

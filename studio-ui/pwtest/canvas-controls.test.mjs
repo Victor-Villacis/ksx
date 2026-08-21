@@ -683,98 +683,89 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("a ViGEm PlayStation seat wears the free semantic DualShock 4 art", async () => {
+  test("a ViGEm PlayStation seat wears hybrid DualShock 4 art and remembers its color", async () => {
     const page = await openCanvas();
     try {
-      const art = await page.evaluate(() => {
-        const widget = Array.from(
-          document.querySelectorAll(".forma-canvas-stage .widget-instance"),
-        ).find((el) => el.querySelector("svg.ds4free"));
+      const readArt = () => page.evaluate(() => {
+        const stage = document.querySelector(".forma-canvas-stage");
+        const widgets = Array.from(stage?.querySelectorAll(".widget-instance") ?? []);
+        const widget = widgets.find((el) => el.querySelector("svg.ds4premium"));
         if (!widget) return { found: false };
-        const svg = widget.querySelector("svg.ds4free");
-        const body = svg?.querySelector(".ds4free-body");
-        const hooks = svg?.querySelector(".ds4free-hooks");
-        const dressing = svg?.querySelector(".ds4free-dressing");
-        const callouts = svg?.querySelector(".ds4free-callouts");
-        const shell = body?.querySelector(
-          '[data-ds4-part="Controller_infills"] > path:first-child',
+        const svg = widget.querySelector("svg.ds4premium");
+        const shell = svg?.querySelector(".ds4premium-shell");
+        const body = svg?.querySelector(".ds4premium-body");
+        const hooks = svg?.querySelector(".ds4premium-hooks");
+        const group = widget.querySelector(
+          '.n-ds4-variants[role="group"][aria-label="DualShock 4 color"]',
         );
-        const touch = body?.querySelector('[data-ds4-part="Trackpad_infill"] path');
-        const face = body?.querySelector('[data-ds4-part="Triangle_infill"] circle');
-        const texture = dressing?.querySelector(".ds4free-touch-texture");
-        const hookShapes = Array.from(svg?.querySelectorAll(".ds4free-hook") ?? []);
-        const hookFns = hookShapes.map((el) => el.getAttribute("data-fn"));
-        const orderedLayers = [body, hooks, dressing, callouts];
+        const buttons = Array.from(
+          group?.querySelectorAll('button.n-ds4-variant[data-nx="ds4-variant"]') ?? [],
+        );
+        const hookShapes = Array.from(hooks?.querySelectorAll(".ds4premium-hook[data-fn]") ?? []);
+        const geometryAttrs = [
+          "d", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
+          "width", "height", "points", "transform",
+        ];
+        const shapeGeometry = (el) => [
+          el.tagName,
+          ...geometryAttrs.map((name) => el.getAttribute(name) ?? ""),
+        ].join("|");
+        const allGroups = Array.from(
+          stage?.querySelectorAll(
+            '.n-ds4-variants[role="group"][aria-label="DualShock 4 color"]',
+          ) ?? [],
+        );
+        const ds4Widgets = widgets.filter((el) => el.querySelector("svg.ds4premium"));
+        const storeRaw = localStorage.getItem("ksx-nocturne-ds4-variants1");
         return {
           found: true,
           tag: svg?.tagName ?? null,
           hasImage: widget.querySelector("img") !== null,
-          privateEffects: svg?.querySelectorAll("defs, filter, mask, foreignObject").length ?? -1,
-          sourceIds: body?.querySelectorAll("[id]").length ?? -1,
-          semanticParts: body?.querySelectorAll("[data-ds4-part]").length ?? 0,
-          sourceShapes: body?.querySelectorAll(
-            ".ds4free-source path, .ds4free-source circle, .ds4free-source rect",
-          ).length ?? 0,
-          sourceSignature: shell?.getAttribute("d")?.slice(0, 16) ?? "",
+          sourceIds: svg?.querySelectorAll("[id]").length ?? -1,
+          privateEffects: svg?.querySelectorAll("defs, filter, mask, foreignObject, image").length ?? -1,
+          effectReferences: svg?.querySelectorAll("[filter], [mask]").length ?? -1,
+          variant: svg?.getAttribute("data-ds4-variant") ?? null,
+          shellFill: shell ? getComputedStyle(shell).fill : "",
           viewBox: svg?.getAttribute("viewBox") ?? null,
+          bodyPresent: !!body,
           hooksInsideArt: !!svg && !!hooks && svg.contains(hooks),
           hookLayerTag: hooks?.tagName ?? null,
-          hookCount: hookShapes.length,
-          transparentHookCount: hookShapes.filter(
-            (el) => el.getAttribute("fill") === "transparent",
-          ).length,
-          renderedTransparentHookCount: hookShapes.filter((el) => {
-            const style = getComputedStyle(el);
-            return style.fill === "rgba(0, 0, 0, 0)"
-              && style.stroke === "none"
-              && style.pointerEvents !== "none";
+          hooks: hookShapes.map((el) => el.getAttribute("data-fn")),
+          hookGeometry: hookShapes.map((el) => [
+            el.getAttribute("data-fn") ?? "",
+            shapeGeometry(el),
+          ].join("|")),
+          nonEmptyHookCount: hookShapes.filter((el) => {
+            const box = el.getBBox();
+            return box.width > 0 && box.height > 0 && getComputedStyle(el).pointerEvents !== "none";
           }).length,
-          uniqueHookCount: new Set(hookFns).size,
-          calloutCount: callouts?.querySelectorAll("text.n-fnkey").length ?? 0,
-          layerOrder: orderedLayers.every(Boolean) && orderedLayers.slice(1).every(
-            (layer, index) => !!(
-              orderedLayers[index].compareDocumentPosition(layer)
-              & Node.DOCUMENT_POSITION_FOLLOWING
-            ),
+          geometry: Array.from(
+            svg?.querySelectorAll("g, path, circle, rect, ellipse, line, polyline, polygon") ?? [],
+            shapeGeometry,
           ),
-          bodyOwnsNoHooks: (body?.querySelectorAll("[data-fn]").length ?? -1) === 0,
-          dressingShapes: dressing?.querySelectorAll("path, circle, rect").length ?? 0,
-          shellFill: shell ? getComputedStyle(shell).fill : "",
-          touchFill: touch ? getComputedStyle(touch).fill : "",
-          faceFill: face ? getComputedStyle(face).fill : "",
-          textureFill: texture ? getComputedStyle(texture).fill : "",
-          hooks: hookFns,
+          groupCount: allGroups.length,
+          ds4WidgetCount: ds4Widgets.length,
+          misplacedGroupCount: allGroups.filter(
+            (el) => !el.closest(".widget-instance")?.querySelector("svg.ds4premium"),
+          ).length,
+          buttonSlugs: buttons.map((el) => el.getAttribute("data-ds4-variant")),
+          buttonLabels: buttons.map((el) => el.getAttribute("aria-label")),
+          buttonTypes: buttons.map((el) => el.type),
+          buttonPressed: buttons.map((el) => el.getAttribute("aria-pressed")),
+          nativeButtonCount: buttons.filter((el) => el instanceof HTMLButtonElement).length,
+          pressed: buttons.filter((el) => el.getAttribute("aria-pressed") === "true")
+            .map((el) => el.getAttribute("data-ds4-variant")),
+          widgetPosition: {
+            x: widget.getAttribute("data-canvas-x"),
+            y: widget.getAttribute("data-canvas-y"),
+            transform: widget.style.transform,
+          },
+          storeRaw,
         };
       });
 
-      assert.ok(art.found, "the fixture's P2 PlayStation seat gets the free DS4 master");
-      assert.equal(art.tag, "svg", "the controller is inline vector geometry");
-      assert.equal(art.hasImage, false, "no flat controller image is pasted into the canvas");
-      assert.equal(art.privateEffects, 0, "clones carry no source-private effects or defs");
-      assert.equal(art.sourceIds, 0, "semantic source IDs cannot collide across clones");
-      assert.equal(art.semanticParts, 49, "the source's semantic part structure is retained");
-      assert.equal(art.sourceShapes, 59, "all active source geometry survives as real SVG elements");
-      assert.match(art.sourceSignature, /^M622\.95,326\.87/, "the MIT shell is the active silhouette");
-      assert.equal(art.viewBox, "-28 -18 696 550", "art and hooks share one native source space");
-      assert.ok(art.hooksInsideArt, "the hook layer is inside the art SVG");
-      assert.equal(art.hookLayerTag, "g", "hooks are an overlay group, not a second SVG");
-      assert.equal(art.hookCount, 25, "the DS4 exposes exactly the mapper's 25 controls");
-      assert.equal(art.transparentHookCount, 25, "every hook starts transparent");
-      assert.equal(
-        art.renderedTransparentHookCount,
-        25,
-        "resting hooks render transparent but remain interactive",
-      );
-      assert.equal(art.uniqueHookCount, 25, "no control hook is duplicated");
-      assert.equal(art.calloutCount, 25, "every live hook has one key callout");
-      assert.ok(art.layerOrder, "body, hooks, dressing and callouts retain their paint order");
-      assert.ok(art.bodyOwnsNoHooks, "visible MIT geometry is presentation-only");
-      assert.ok(art.dressingShapes >= 15, "app-owned depth and glyph detail sit above live hooks");
-      assert.match(art.shellFill, /nxg-shell/, "the source shell uses shared carbon paint");
-      assert.match(art.touchFill, /nxg-touch/, "the source touchpad uses shared carbon paint");
-      assert.match(art.faceFill, /nxg-btn/, "the source face buttons use shared carbon paint");
-      assert.match(art.textureFill, /nxp-ds4-touch/, "the app touch texture stays vector");
-      for (const fn of [
+      const expectedSlugs = ["jet-black", "glacier-white", "magma-red", "midnight-blue"];
+      const expectedHooks = [
         "a", "b", "x", "y",
         "dpad.up", "dpad.down", "dpad.left", "dpad.right",
         "lb", "rb", "lt", "rt",
@@ -782,9 +773,98 @@ describe("the canvas navigation controls", () => {
         "lthumb", "rthumb",
         "lx.min", "lx.max", "ly.min", "ly.max",
         "rx.min", "rx.max", "ry.min", "ry.max",
-      ]) {
-        assert.ok(art.hooks.includes(fn), `the DualShock 4 art hooks ${fn}`);
-      }
+      ];
+      const initial = await readArt();
+
+      assert.ok(initial.found, "the fixture's ViGEm PlayStation seat gets the hybrid DS4 master");
+      assert.equal(initial.tag, "svg", "the controller is inline vector geometry");
+      assert.equal(initial.hasImage, false, "no flat controller image is pasted into the canvas");
+      assert.equal(initial.sourceIds, 0, "cloned source IDs cannot collide between controller widgets");
+      assert.equal(initial.privateEffects, 0, "the clone carries no private defs, effects or images");
+      assert.equal(initial.effectReferences, 0, "the clone carries no dangling filter or mask references");
+      assert.ok(initial.bodyPresent, "the detailed source geometry remains a distinct body layer");
+      assert.ok(initial.hooksInsideArt, "art and the interactive overlay share one SVG coordinate space");
+      assert.equal(initial.hookLayerTag, "g", "hooks are an overlay group, not a second SVG");
+      assert.equal(initial.hooks.length, 25, "the DS4 exposes exactly the mapper's 25 controls");
+      assert.equal(new Set(initial.hooks).size, 25, "no mapping control is duplicated");
+      assert.deepEqual([...initial.hooks].sort(), [...expectedHooks].sort());
+      assert.equal(initial.nonEmptyHookCount, 25, "every hook has a real, interactive button-sized zone");
+
+      assert.equal(initial.groupCount, initial.ds4WidgetCount, "each DS4 widget gets one color picker");
+      assert.equal(initial.misplacedGroupCount, 0, "Xbox and DualSense widgets get no DS4 color picker");
+      assert.deepEqual(initial.buttonSlugs, expectedSlugs, "all four authored finishes are available");
+      assert.equal(initial.nativeButtonCount, 4, "the finish swatches are native keyboard-operable buttons");
+      assert.ok(initial.buttonTypes.every((type) => type === "button"));
+      assert.equal(initial.buttonPressed.filter((pressed) => pressed === "true").length, 1);
+      assert.equal(initial.buttonPressed.filter((pressed) => pressed === "false").length, 3);
+      assert.equal(new Set(initial.buttonLabels).size, 4, "every finish has its own accessible name");
+      assert.ok(initial.buttonLabels.every(Boolean), "no color button is unnamed");
+      assert.equal(initial.pressed.length, 1, "exactly one finish reports itself selected");
+      assert.equal(initial.pressed[0], initial.variant, "the selected button and painted SVG agree");
+      assert.ok(expectedSlugs.includes(initial.variant), "the initial finish is one of the four choices");
+      assert.ok(
+        initial.widgetPosition.x !== null && initial.widgetPosition.y !== null,
+        "the mounted widget exposes a real canvas position before color changes",
+      );
+
+      const [clickedSlug, keyboardSlug] = expectedSlugs.filter((slug) => slug !== initial.variant);
+      await page.click(
+        `.n-ds4-variants button[data-ds4-variant="${clickedSlug}"]`,
+      );
+      await page.waitForFunction(
+        (slug) => document.querySelector(
+          ".forma-canvas-stage .widget-instance svg.ds4premium",
+        )?.getAttribute("data-ds4-variant") === slug,
+        clickedSlug,
+      );
+      const clicked = await readArt();
+      assert.equal(clicked.variant, clickedSlug, "pointer selection repaints the controller");
+      assert.deepEqual(clicked.pressed, [clickedSlug], "pointer selection updates aria-pressed");
+      assert.notEqual(clicked.shellFill, initial.shellFill, "pointer selection changes computed shell paint");
+      assert.deepEqual(clicked.geometry, initial.geometry, "a finish change cannot rewrite source geometry");
+      assert.deepEqual(clicked.hookGeometry, initial.hookGeometry, "a finish change cannot move mapping zones");
+      assert.deepEqual(clicked.widgetPosition, initial.widgetPosition, "a finish change cannot move the widget");
+      assert.ok(clicked.storeRaw, "the selected finish is written to its own localStorage record");
+      assert.ok(
+        clicked.storeRaw.includes(JSON.stringify(clickedSlug)),
+        "the DS4 finish record stores the pointer-selected slug",
+      );
+
+      const keyboardButton = page.locator(
+        `.n-ds4-variants button[data-ds4-variant="${keyboardSlug}"]`,
+      );
+      await keyboardButton.focus();
+      await page.keyboard.press("Space");
+      await page.waitForFunction(
+        (slug) => document.querySelector(
+          ".forma-canvas-stage .widget-instance svg.ds4premium",
+        )?.getAttribute("data-ds4-variant") === slug,
+        keyboardSlug,
+      );
+      const keyboard = await readArt();
+      assert.equal(keyboard.variant, keyboardSlug, "Space activates a focused finish button");
+      assert.deepEqual(keyboard.pressed, [keyboardSlug], "keyboard selection updates aria-pressed");
+      assert.notEqual(keyboard.shellFill, clicked.shellFill, "keyboard selection changes computed shell paint");
+      assert.deepEqual(keyboard.geometry, initial.geometry, "keyboard selection leaves geometry untouched");
+      assert.deepEqual(keyboard.hookGeometry, initial.hookGeometry, "keyboard selection leaves hooks aligned");
+      assert.deepEqual(keyboard.widgetPosition, initial.widgetPosition, "keyboard selection leaves the widget put");
+      assert.ok(keyboard.storeRaw?.includes(JSON.stringify(keyboardSlug)));
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        (slug) => document.querySelector(
+          ".forma-canvas-stage .widget-instance svg.ds4premium",
+        )?.getAttribute("data-ds4-variant") === slug,
+        keyboardSlug,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      const restored = await readArt();
+      assert.equal(restored.variant, keyboardSlug, "the selected finish returns after reload");
+      assert.deepEqual(restored.pressed, [keyboardSlug], "the restored button exposes selected state");
+      assert.equal(restored.shellFill, keyboard.shellFill, "reload restores the same computed shell paint");
+      assert.deepEqual(restored.geometry, initial.geometry, "restoring paint does not replace the SVG");
+      assert.deepEqual(restored.hookGeometry, initial.hookGeometry, "restored mapping zones stay aligned");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

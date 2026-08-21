@@ -7184,9 +7184,23 @@ a.wsrow-title:hover {
    The engine sheet gives it its box and its markers; this repaints both in
    the Nocturne palette. Everything inside is engine-written. */
 
+/* Sized to the WORLD's aspect (2800 × 2400, `CANVAS_WORLD`) so the
+   projection fills the box instead of letterboxing inside it — the map then
+   reads as the canvas rather than as a picture of part of it. Bigger than
+   the engine's default too: every pixel here is ~15 world px, so the
+   smaller the map, the twitchier dragging it feels. */
 .n-navigator {
+  width: 208px;
+  height: 178px;
   border-color: var(--n-panel-2);
   background: color-mix(in srgb, var(--n-bg) 92%, transparent);
+}
+
+/* The zoom readout in the meta bar is engine-written; keep its box steady
+   so the row does not jitter between "83%" and "100%". */
+.n-zoomread {
+  min-width: 54px;
+  font-variant-numeric: tabular-nums;
 }
 
 .nocturne .navigator-item {
@@ -7265,7 +7279,6 @@ a.wsrow-title:hover {
 /* Without the engine there is no camera to move, no map to read and no
    widget to scale — every one of these controls would be a dead button. */
 .nocturne:not(.js) .forma-canvas-grid,
-.nocturne:not(.js) .forma-canvas-zoom-status,
 .nocturne:not(.js) .widget-chrome,
 .nocturne:not(.js) .n-selbar,
 .nocturne:not(.js) .forma-canvas-navigator,

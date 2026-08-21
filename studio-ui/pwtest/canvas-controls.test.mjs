@@ -212,7 +212,9 @@ describe("the canvas navigation controls", () => {
   test("the camera's own controls move it", async () => {
     const page = await openCanvas();
     try {
-      const readout = () => page.textContent(".forma-canvas-zoom-status");
+      // The readout IS the reset button: one control that says where the
+      // zoom is and puts it back.
+      const readout = () => page.textContent(".n-zoomval");
       const opening = await readout();
 
       await page.click('[data-nx="canvas-zoom-in"]');
@@ -299,6 +301,139 @@ describe("the canvas navigation controls", () => {
         "controllers read left to right in seat order",
       );
       assert.deepEqual(layout.offscreen, [], "tidying also brings everything into view");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Tidy up puts every widget back to 100%", async () => {
+    const page = await openCanvas();
+    try {
+      await page.click('[data-instance-id="pad-1"] .n-mini-head', { force: true });
+      await page.click('.n-selbar [data-nx="w-zoom-in"]');
+      await page.click('.n-selbar [data-nx="w-zoom-in"]');
+      assert.ok(
+        (await scaleOf(page, "pad-1")) > 1,
+        "the widget has to be off 100% for this test to mean anything",
+      );
+
+      await page.click('[data-nx="canvas-tidy"]');
+      await settle(page);
+      const scales = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".forma-canvas-stage .widget-instance")).map((el) =>
+          Number(el.dataset.canvasManualScale ?? 1),
+        ),
+      );
+      assert.deepEqual(
+        scales.filter((scale) => scale !== 1),
+        [],
+        "tidying is a reset: an odd size in an even row is the untidiness it ends",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the canvas is bounded: a widget cannot be pushed out of the world", async () => {
+    const page = await openCanvas();
+    try {
+      // Ask for a position far outside the world, the way a long drag or a
+      // store written before the bound existed would.
+      const landed = await page.evaluate(() => {
+        const item = document.querySelector('[data-instance-id="pad-1"]');
+        const handle = item.querySelector(".widget-drag-handle");
+        const rect = handle.getBoundingClientRect();
+        const down = (type, x, y) =>
+          handle.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 1,
+              isPrimary: true,
+              button: 0,
+              clientX: x,
+              clientY: y,
+            }),
+          );
+        down("pointerdown", rect.x + 8, rect.y + 8);
+        down("pointermove", rect.x + 40_000, rect.y + 40_000);
+        down("pointerup", rect.x + 40_000, rect.y + 40_000);
+        return {
+          x: Number(item.dataset.canvasX),
+          y: Number(item.dataset.canvasY),
+          width: Number(item.dataset.canvasWidth),
+          height: Number(item.dataset.canvasHeight),
+        };
+      });
+      // CANVAS_WORLD in NocturneIsland.ts.
+      assert.ok(
+        landed.x + landed.width <= 2800 + 1 && landed.y + landed.height <= 2400 + 1,
+        `a widget dragged 40 000px away stays in the world (landed at ${landed.x}, ${landed.y})`,
+      );
+      assert.ok(landed.x >= -1 && landed.y >= -1, "and not off the near edge either");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the map hides and comes back, and comes back drawn", async () => {
+    const page = await openCanvas();
+    try {
+      const markerCount = () =>
+        page.evaluate(
+          () => document.querySelectorAll(".forma-canvas-navigator .navigator-item").length,
+        );
+      assert.ok((await markerCount()) > 0, "the map starts shown");
+
+      await page.click('[data-nx="canvas-map"]');
+      assert.equal(await page.evaluate(() => document.querySelector(".forma-canvas-navigator").hidden), true);
+      assert.equal(await page.getAttribute('[data-nx="canvas-map"]', "aria-pressed"), "false");
+
+      await page.click('[data-nx="canvas-map"]');
+      await page.waitForTimeout(200);
+      assert.equal(await page.evaluate(() => document.querySelector(".forma-canvas-navigator").hidden), false);
+      // A hidden map has no box to project onto, so this is the assertion
+      // that catches it coming back blank.
+      const drawn = await page.evaluate(() => {
+        const rect = document.querySelector(".forma-canvas-navigator-viewport").getBoundingClientRect();
+        const map = document.querySelector(".forma-canvas-navigator").getBoundingClientRect();
+        return { rectW: rect.width, rectH: rect.height, mapW: map.width, mapH: map.height };
+      });
+      assert.ok(drawn.rectW > 0 && drawn.rectH > 0, "the camera rectangle is drawn again");
+      assert.ok(
+        drawn.rectW <= drawn.mapW + 1 && drawn.rectH <= drawn.mapH + 1,
+        `the camera rectangle fits its map (${drawn.rectW}x${drawn.rectH} in ${drawn.mapW}x${drawn.mapH})`,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the camera rectangle never outgrows the map, even zoomed all the way out", async () => {
+    const page = await openCanvas();
+    try {
+      for (let press = 0; press < 12; press++) {
+        await page.click('[data-nx="canvas-zoom-out"]');
+      }
+      await settle(page);
+      const fit = await page.evaluate(() => {
+        const rect = document.querySelector(".forma-canvas-navigator-viewport").getBoundingClientRect();
+        const map = document.querySelector(".forma-canvas-navigator").getBoundingClientRect();
+        return {
+          overflowX: Math.round(rect.right - map.right),
+          overflowY: Math.round(rect.bottom - map.bottom),
+          underflowX: Math.round(map.left - rect.left),
+          underflowY: Math.round(map.top - rect.top),
+        };
+      });
+      assert.ok(
+        fit.overflowX <= 1 && fit.overflowY <= 1 && fit.underflowX <= 1 && fit.underflowY <= 1,
+        `the rectangle stays inside the box it is drawn on (${JSON.stringify(fit)})`,
+      );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

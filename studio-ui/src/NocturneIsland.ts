@@ -953,6 +953,13 @@ const CANVAS_STORE = "ksx-nocturne-canvas";
  *  press should be a visible move, not a nudge. */
 const CANVAS_ZOOM_STEP = 1.2;
 
+/** How much canvas there IS. Sized from the arrangement it has to hold: the
+ *  board (980 wide) with eight controllers tidied two to a row beneath it
+ *  comes to roughly 1200 × 2100, so this is comfortably more than the
+ *  fullest roster needs while staying somewhere you can find your way
+ *  around. Widgets and the camera are held inside it by the engine. */
+const CANVAS_WORLD = { width: 2800, height: 2400 };
+
 interface CanvasItemGeometry {
   x: number;
   y: number;
@@ -965,6 +972,9 @@ interface CanvasItemGeometry {
 interface CanvasPrefs {
   camera?: { panX: number; panY: number; zoom: number };
   widgets: Record<string, CanvasItemGeometry>;
+  /** The map is chrome, so it remembers like every other chrome preference.
+   *  Absent means shown. */
+  mapHidden?: boolean;
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
@@ -1009,6 +1019,7 @@ function loadCanvasPrefs(): void {
     const cam = saved.camera;
     canvasPrefs = {
       widgets,
+      mapHidden: saved.mapHidden === true,
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -1064,8 +1075,26 @@ function persistCanvas(): void {
     const key = storeKeys.get(slot);
     if (key !== undefined) widgets[key] = canvas.getItemState(item);
   }
-  canvasPrefs = { camera: canvas.getCamera(), widgets };
+  canvasPrefs = { camera: canvas.getCamera(), widgets, mapHidden: canvasPrefs.mapHidden };
   saveCanvasPrefs();
+}
+
+/** Show or hide the map. ⚠️The engine projects onto the map's MEASURED box,
+ *  so a hidden one has no size to project onto — bringing it back has to
+ *  re-render it once it has been laid out again, or it comes back blank. */
+function setCanvasMap(hidden: boolean): void {
+  const root = learnRoot;
+  const map = root?.querySelector<HTMLElement>(".forma-canvas-navigator");
+  const button = root?.querySelector<HTMLElement>('[data-nx="canvas-map"]');
+  if (!map) return;
+  map.hidden = hidden;
+  if (button) {
+    button.setAttribute("aria-pressed", String(!hidden));
+    button.title = hidden ? "Show the canvas map" : "Hide the canvas map";
+  }
+  canvasPrefs = { ...canvasPrefs, mapHidden: hidden };
+  saveCanvasPrefs();
+  if (!hidden) window.requestAnimationFrame(() => nCanvas?.refreshNavigator());
 }
 
 let canvasPersistTimer = 0;
@@ -1161,20 +1190,33 @@ function arrangeCanvas(): void {
     .map(([, item]) => item);
   if (!kb && pads.length === 0) return;
   const GAP = 48;
-  const ORIGIN_X = 120;
-  const ORIGIN_Y = 120;
+  const ORIGIN_Y = 140;
+  // Tidying is a RESET, not a repack: a widget somebody had shrunk to 60%
+  // would otherwise keep its odd size in an otherwise even row, which is
+  // exactly the untidiness the button is meant to end.
+  if (kb) canvas.resetItemScale(kb);
+  for (const item of pads) canvas.resetItemScale(item);
   // A widget's world footprint includes its manual scale: a widget the user
   // made bigger must be given the room it actually occupies.
   const footprint = (item: HTMLElement): { w: number; h: number } => {
     const state = canvas.getItemState(item);
     return { w: state.width * state.manualScale, h: state.height * state.manualScale };
   };
+  // Centred in the world rather than parked in its top-left corner: the
+  // canvas is a bounded place now, and an arrangement pinned to one corner
+  // reads on the map as if everything had drifted off to one side.
+  const widest = Math.max(
+    kb ? footprint(kb).w : 0,
+    ...pads.map((item) => footprint(item).w),
+    1,
+  );
+  const ORIGIN_X = Math.max(120, Math.round((CANVAS_WORLD.width - widest) / 2));
   let y = ORIGIN_Y;
   let boardWidth = 0;
   if (kb) {
     const board = footprint(kb);
     boardWidth = board.w;
-    canvas.placeItem(kb, ORIGIN_X, y);
+    canvas.placeItem(kb, ORIGIN_X + Math.round((widest - board.w) / 2), y);
     y += board.h + GAP;
   }
   if (pads.length > 0) {
@@ -1318,7 +1360,12 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   const surface = scope.querySelector<HTMLElement>(".n-canvas");
   const viewport = surface?.querySelector<HTMLElement>(".forma-canvas-viewport");
   const stage = surface?.querySelector<HTMLElement>(".forma-canvas-stage");
-  const zoomStatus = surface?.querySelector<HTMLElement>(".forma-canvas-zoom-status");
+  // The zoom readout IS the 100% button in the meta bar: the engine writes
+  // the live percentage into whatever element it is handed, and a button
+  // that reads the zoom and resets it on click is one control instead of a
+  // static label beside a number somewhere else (which is what it was, and
+  // it never changed).
+  const zoomStatus = scope.querySelector<HTMLElement>(".n-zoomval");
   if (!surface || !viewport || !stage || !zoomStatus || !surface.isConnected) {
     if (attempt < CANVAS_ADOPT_FRAMES) {
       window.requestAnimationFrame(() => initNocturneCanvas(root, attempt + 1));
@@ -1357,16 +1404,20 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
         const sr = (learnRoot ?? scope).querySelector<HTMLElement>(".n-live-sr");
         if (sr) sr.textContent = message;
       },
+      worldBounds: CANVAS_WORLD,
     },
   );
+  setCanvasMap(canvasPrefs.mapHidden === true);
   const kb = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
   if (kb) nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
-  if (!canvasPrefs.camera) {
-    // First visit (no stored camera): open with everything framed instead of
-    // the home arrangement's own crop. One frame later, so the widgets have
-    // laid out and measure true.
+  if (Object.keys(canvasPrefs.widgets).length === 0) {
+    // Nothing arranged yet: open the way "Tidy up" would leave it, rather
+    // than at spawn positions the user never chose. One frame later, so the
+    // widgets have laid out and measure true.
+    window.requestAnimationFrame(() => arrangeCanvas());
+  } else if (!canvasPrefs.camera) {
     window.requestAnimationFrame(() => nCanvas?.fitAll());
   }
   window.addEventListener("pagehide", () => {
@@ -3342,6 +3393,8 @@ export function nocturneWire(root: HTMLElement): void {
       nCanvas?.zoomBy(1 / CANVAS_ZOOM_STEP);
     } else if (hit === "canvas-tidy") {
       arrangeCanvas();
+    } else if (hit === "canvas-map") {
+      setCanvasMap(!(canvasPrefs.mapHidden === true));
     } else if (
       hit === "w-zoom-in" || hit === "w-zoom-out" || hit === "w-scale-reset" ||
       hit === "w-center" || hit === "w-focus"
@@ -4136,15 +4189,24 @@ export function NocturneIsland() {
             },
             "−",
           ),
+          // The engine writes the LIVE zoom into the SPAN, not the button,
+          // and clicking the button resets to 100%.
+          // ⚠️The span on purpose: handed a BUTTON the engine also rewrites
+          // its aria-label with the live number, and `data-live-chatter`
+          // exempts an element's TEXT, never its attributes — which the
+          // parity gate caught the moment this was wired the obvious way.
+          // With no aria-label at all, the button's accessible name is its
+          // own content ("Canvas zoom 84%") and follows the number for free.
           h(
             "button",
             {
               type: "button",
               "data-nx": "canvas-zoom-reset",
-              title: "Zoom to 100%",
-              class: "n-autobtn",
+              title: "Canvas zoom — click for 100%",
+              class: "n-autobtn n-zoomread",
             },
-            "100%",
+            h("span", { class: "sr-head" }, "Canvas zoom "),
+            h("span", { class: "n-zoomval", "data-live-chatter": "" }, "100%"),
           ),
           h(
             "button",
@@ -4156,6 +4218,17 @@ export function NocturneIsland() {
               class: "n-autobtn n-zbtn",
             },
             "+",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "canvas-map",
+              "aria-pressed": "true",
+              title: "Hide the canvas map",
+              class: "n-autobtn",
+            },
+            "Map",
           ),
           // ── The selected widget's own controls ──────────────────────────
           // One group that retargets (the upstream app's shape), not four
@@ -5002,11 +5075,6 @@ export function NocturneIsland() {
                 ), // n-widget-body
               ), // article.widget-instance (the keyboard widget)
             ), // .forma-canvas-stage
-            h("output", {
-              class: "forma-canvas-zoom-status",
-              "data-live-chatter": "",
-              "aria-live": "polite",
-            }),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by

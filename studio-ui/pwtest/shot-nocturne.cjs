@@ -19,7 +19,26 @@ const { tmpdir } = require("os");
     if (m.type() === "error") errors.push(m.text());
   });
   await page.goto("http://127.0.0.1:4476/nocturne", { waitUntil: "networkidle" });
-  await page.waitForTimeout(600);
+  // The canvas adopts in the island's post-mount frame and then opens with a
+  // camera move; shooting before that settles photographs the animation.
+  await page
+    .waitForFunction(
+      () =>
+        !document.querySelector(".n-canvas") ||
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !==
+          undefined,
+      null,
+      { timeout: 20_000 },
+    )
+    .catch(() => {});
+  for (let pass = 0; pass < 2; pass++) {
+    await page
+      .waitForFunction(() => !document.querySelector(".is-camera-animating"), null, {
+        timeout: 20_000,
+      })
+      .catch(() => {});
+    await page.waitForTimeout(300);
+  }
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );

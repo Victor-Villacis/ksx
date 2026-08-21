@@ -67,6 +67,8 @@ export interface WidgetCanvasOptions {
   maxActiveRuntimes?: number;
   runtimeAdapter?: CanvasRuntimeAdapter;
   interactionBlocked?: () => boolean;
+  /** ksx: the world's fixed extent. Widgets and the camera stay inside it. */
+  worldBounds?: WorldSize;
 }
 
 export interface WidgetCanvasCapacitySnapshot {
@@ -107,6 +109,12 @@ interface WorldRect {
 interface NavigatorProjection extends WorldRect {
   scale: number;
   visible: WorldRect;
+}
+
+/** ksx: the extent of the bounded world (see DEFAULT_WORLD_BOUNDS). */
+export interface WorldSize {
+  width: number;
+  height: number;
 }
 
 interface VirtualizedWidgetHost {
@@ -151,7 +159,26 @@ interface WidgetNavigationCandidate {
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const DEFAULT_CAMERA: WidgetCanvasCamera = { panX: 48, panY: 64, zoom: 1 };
-const WORLD_PADDING = 180;
+// ksx: divergence from upstream c91d34c — A BOUNDED WORLD.
+// (Upstream's WORLD_PADDING lived here; it padded the navigator's rolling
+// union, which a fixed world replaces outright.)
+//
+// Upstream's canvas is infinite: widgets can be dragged anywhere, the camera
+// can pan anywhere, and the navigator's projection is recomputed every frame
+// from the union of the items AND the current view, padded. Three problems
+// fall out of that, all reported from real use:
+//   * the map's mapping SHIFTS while you drag it (the view you are moving is
+//     an input to the bounds you are moving within), so navigating by the map
+//     feels wild rather than proportional;
+//   * `min()` letterboxes the projection, so the camera rectangle drawn on
+//     the map can be larger than the map box it lives in;
+//   * a widget nudged far enough is simply gone, with nothing to pan back to.
+// A fixed world rect fixes all three at once: the map's scale is constant, a
+// rectangle can be clamped to it honestly, and the camera and every widget
+// stay somewhere findable. The size is a HOST decision (`worldBounds`), since
+// only the host knows how many widgets it can have; the default is generous
+// enough not to feel like a cage.
+const DEFAULT_WORLD_BOUNDS: WorldSize = { width: 2800, height: 2400 };
 const KEYBOARD_MOVE_STEP = 16;
 const KEYBOARD_CANVAS_PAN_STEP_PX = 64;
 const KEYBOARD_CANVAS_PAN_LARGE_STEP_PX = 256;
@@ -321,6 +348,8 @@ export class WidgetCanvas {
   readonly #navigatorMarkers = new Map<string, HTMLButtonElement>();
   readonly #runtimeHosts = new Map<string, CanvasRuntimeHost>();
   readonly #runtimeAdapter: CanvasRuntimeAdapter;
+  /** ksx: the bounded world every widget and the camera live inside. */
+  readonly #worldBounds: WorldSize;
   readonly #virtualizedHosts = new Map<string, VirtualizedWidgetHost>();
   readonly #parkedAt = new Map<string, number>();
   readonly #scalingFrames = new Map<HTMLElement, number>();
@@ -372,6 +401,7 @@ export class WidgetCanvas {
     this.#runtimeAdapter = options.runtimeAdapter ?? NO_RUNTIME_ADAPTER;
     this.#onChange = options.onChange ?? (() => undefined);
     this.#onCommit = options.onCommit ?? (() => undefined);
+    this.#worldBounds = options.worldBounds ?? DEFAULT_WORLD_BOUNDS;
     this.#onActiveChange = options.onActiveChange ?? (() => undefined);
     this.#onActiveItemStateChange = options.onActiveItemStateChange ?? (() => undefined);
     this.#onActiveDragStateChange = options.onActiveDragStateChange ?? (() => undefined);
@@ -1505,8 +1535,12 @@ export class WidgetCanvas {
   }
 
   #positionItem(item: HTMLElement, state: WidgetCanvasItemState): void {
-    const x = Math.round(state.x * 1000) / 1000;
-    const y = Math.round(state.y * 1000) / 1000;
+    // ksx: mounting is the other way a position arrives — a restored one
+    // from a store written before the world was bounded, or a spawn cascade
+    // that ran past its edge. Both land inside it.
+    const inside = this.#clampToWorld(state, state.x, state.y);
+    const x = Math.round(inside.x * 1000) / 1000;
+    const y = Math.round(inside.y * 1000) / 1000;
     item.dataset.canvasX = String(x);
     item.dataset.canvasY = String(y);
     item.dataset.canvasWidth = String(Math.round(state.width));
@@ -1521,10 +1555,13 @@ export class WidgetCanvas {
   }
 
   #moveItem(item: HTMLElement, x: number, y: number): void {
-    item.dataset.canvasX = String(Math.round(x));
-    item.dataset.canvasY = String(Math.round(y));
-    item.style.left = `${x}px`;
-    item.style.top = `${y}px`;
+    // ksx: every move — drag, keyboard nudge, host placement — lands inside
+    // the world. A widget that leaves it is unreachable by any control.
+    const inside = this.#clampToWorld(this.getItemState(item), x, y);
+    item.dataset.canvasX = String(Math.round(inside.x));
+    item.dataset.canvasY = String(Math.round(inside.y));
+    item.style.left = `${inside.x}px`;
+    item.style.top = `${inside.y}px`;
     this.#updateItemVisibility();
   }
 
@@ -2066,6 +2103,9 @@ export class WidgetCanvas {
   }
 
   #renderCamera(): void {
+    // ksx: the single choke point every pan, zoom, animation and restore
+    // passes through — clamping here needs no discipline at the call sites.
+    this.#clampCameraToWorld();
     this.#stage.style.transform =
       `translate(${this.#camera.panX}px, ${this.#camera.panY}px) scale(${this.#camera.zoom})`;
     if (this.#camera.zoom !== this.#renderedZoom) {
@@ -2373,26 +2413,19 @@ export class WidgetCanvas {
     viewport: DOMRectReadOnly = this.#viewport.getBoundingClientRect(),
     map: DOMRectReadOnly = this.#navigator.getBoundingClientRect(),
   ): NavigatorProjection | null {
-    const itemBounds = unionRects(Array.from(this.#items.values(), (item) => {
-      const state = this.getItemState(item);
-      return scaledRect(state, state.manualScale);
-    }));
     const visible: WorldRect = {
       x: -this.#camera.panX / this.#camera.zoom,
       y: -this.#camera.panY / this.#camera.zoom,
       width: viewport.width / this.#camera.zoom,
       height: viewport.height / this.#camera.zoom,
     };
-    const combined = unionRects(itemBounds ? [itemBounds, visible] : [visible]);
-    if (!combined) return null;
-    const padded = {
-      x: combined.x - WORLD_PADDING,
-      y: combined.y - WORLD_PADDING,
-      width: combined.width + WORLD_PADDING * 2,
-      height: combined.height + WORLD_PADDING * 2,
-    };
-    const scale = Math.min(map.width / padded.width, map.height / padded.height);
-    return { ...padded, scale: Math.max(scale, 0.0001), visible };
+    // ksx: the map projects the WORLD, which does not move. Upstream unioned
+    // the items with the live view and re-padded every frame, so the mapping
+    // shifted while you dragged it — dragging changed the very bounds the
+    // drag was measured against.
+    const world = this.#worldRect();
+    const scale = Math.min(map.width / world.width, map.height / world.height);
+    return { ...world, scale: Math.max(scale, 0.0001), visible };
   }
 
   #createNavigatorMarker(item: HTMLElement): void {
@@ -2441,11 +2474,68 @@ export class WidgetCanvas {
       marker.style.height = `${Math.max(4, visual.height * bounds.scale)}px`;
     }
 
+    // ksx: the camera rectangle is CLAMPED to the map it is drawn on. The
+    // projection letterboxes (one axis fits, the other has slack), and a view
+    // wider than the world would otherwise paint a rectangle larger than the
+    // box containing it — which reads as a rendering fault, not as "you are
+    // seeing everything".
+    const map = this.#navigator.getBoundingClientRect();
     const visible = bounds.visible;
-    this.#navigatorViewport.style.left = `${(visible.x - bounds.x) * bounds.scale}px`;
-    this.#navigatorViewport.style.top = `${(visible.y - bounds.y) * bounds.scale}px`;
-    this.#navigatorViewport.style.width = `${Math.max(8, visible.width * bounds.scale)}px`;
-    this.#navigatorViewport.style.height = `${Math.max(6, visible.height * bounds.scale)}px`;
+    const left = clamp((visible.x - bounds.x) * bounds.scale, 0, Math.max(0, map.width));
+    const top = clamp((visible.y - bounds.y) * bounds.scale, 0, Math.max(0, map.height));
+    const width = clamp(visible.width * bounds.scale, 8, Math.max(8, map.width - left));
+    const height = clamp(visible.height * bounds.scale, 6, Math.max(6, map.height - top));
+    this.#navigatorViewport.style.left = `${left}px`;
+    this.#navigatorViewport.style.top = `${top}px`;
+    this.#navigatorViewport.style.width = `${width}px`;
+    this.#navigatorViewport.style.height = `${height}px`;
+  }
+
+  /** ksx: the bounded world, as a rect. */
+  #worldRect(): WorldRect {
+    return { x: 0, y: 0, width: this.#worldBounds.width, height: this.#worldBounds.height };
+  }
+
+  /** ksx: keep the view over the world. When the view is larger than the
+   *  world (zoomed out past it), centre the world instead of pinning a
+   *  corner — the alternative is a canvas that drifts into empty space with
+   *  nothing to steer back to. */
+  #clampCameraToWorld(): void {
+    const viewport = this.#viewport.getBoundingClientRect();
+    if (viewport.width <= 0 || viewport.height <= 0) return;
+    const { zoom } = this.#camera;
+    const world = this.#worldRect();
+    // A world point w sits at screen `pan + w * zoom`, so the view covers
+    // world x in [-pan/zoom, (-pan + viewport.width)/zoom]. Holding that
+    // inside [0, world.width] is one interval on pan.
+    const axis = (pan: number, viewportExtent: number, worldExtent: number): number => {
+      const view = viewportExtent / zoom;
+      if (view >= worldExtent) return ((view - worldExtent) / 2) * zoom;
+      return clamp(pan, -(worldExtent - view) * zoom, 0);
+    };
+    this.#camera.panX = axis(this.#camera.panX, viewport.width, world.width);
+    this.#camera.panY = axis(this.#camera.panY, viewport.height, world.height);
+  }
+
+  /** ksx: a widget stays inside the world, whatever moved it. Its manual
+   *  scale grows it around its own centre, so the room it needs is the
+   *  SCALED box, not the declared one. The size comes in as an argument
+   *  rather than off the element: at mount time the element carries no
+   *  geometry yet, and reading it back would clamp against a default. */
+  #clampToWorld(
+    state: { width: number; height: number; manualScale: number },
+    x: number,
+    y: number,
+  ): { x: number; y: number } {
+    const world = this.#worldRect();
+    const overhangX = (state.width * state.manualScale - state.width) / 2;
+    const overhangY = (state.height * state.manualScale - state.height) / 2;
+    const maxX = world.width - state.width - overhangX;
+    const maxY = world.height - state.height - overhangY;
+    return {
+      x: clamp(x, overhangX, Math.max(overhangX, maxX)),
+      y: clamp(y, overhangY, Math.max(overhangY, maxY)),
+    };
   }
 
   #scheduleChange(): void {

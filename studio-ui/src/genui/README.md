@@ -8,7 +8,7 @@ from KSX" section ("Vendor the reviewed `src/canvas`, optional `src/forma`,
 and `styles/canvas.css` files into KSX and record the source commit" —
 `docs/KSX_HANDOFF.md` endorses the same route).
 
-What was taken (byte-identical to upstream except the four marked
+What was taken (byte-identical to upstream except the five marked
 divergences in `widget-canvas.ts` — see below):
 
 - `canvas/` — the whole engine: `widget-canvas.ts` (camera, world
@@ -60,10 +60,26 @@ integration; none is ksx-specific policy, all are engine correctness):
    pack, align or reflow anywhere — so this is an addition rather than a
    correction, and the most obviously upstreamable of the four.
 
+5. **A BOUNDED WORLD** (`worldBounds` option, default 2800 × 2400;
+   `#worldRect`, `#clampCameraToWorld`, `#clampToWorld`, and a navigator
+   that projects the world instead of a rolling union). Upstream's canvas
+   is infinite, which produced three reports from real use: the map's
+   mapping SHIFTED while you dragged it (the view being moved was an input
+   to the bounds it was measured against, so navigating by the map felt
+   wild); `min()` letterboxing let the camera rectangle be drawn LARGER
+   than the map box containing it; and a widget nudged far enough was
+   simply gone. A fixed world fixes all three — constant scale, a
+   rectangle that can be honestly clamped, and every widget reachable.
+   Camera clamping happens in `#renderCamera`, the one choke point every
+   pan, zoom, animation and restore passes through; widget clamping in
+   `#moveItem` and `#positionItem`, which covers drags, nudges, host
+   placement and restores from a store written before the bound existed.
+   Upstream's `WORLD_PADDING` went with the rolling union.
+
 Re-syncing against a newer upstream commit means re-applying (or better,
 upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying. As of
 `93c3871` (2026-08-21) upstream's `src/canvas` and `styles/` are unchanged
-since `c91d34c`, so the vendored copy is current apart from these four.
+since `c91d34c`, so the vendored copy is current apart from these five.
 Everything else ksx needs differently is done outside these files: skin and
 no-JS rules in `studio.css`, wiring in `NocturneIsland.ts`
 (`initNocturneCanvas` adopts a server-rendered skeleton instead of calling

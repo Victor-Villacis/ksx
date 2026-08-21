@@ -44,6 +44,11 @@ const readJson = (p) => JSON.parse(readFileSync(join(HERE, p), "utf8"));
  *  authored studio.css, or the gate silently measures the wrong block. */
 const LIGHT_MARKER = "@media (prefers-color-scheme: light) {";
 
+/** The base theme — the bare `:root` values themselves. Not a themes/*.json
+ *  file: every theme is an overlay on it. Its id/label sit here so the theme
+ *  roster has exactly one authoring point. */
+const DEFAULT_THEME = { id: "dark", label: "Dark", scheme: "dark" };
+
 export function buildTokens({ authoredCss }) {
   const core = readJson("core.json");
   const semantic = readJson("semantic.json");
@@ -123,6 +128,15 @@ export function buildTokens({ authoredCss }) {
   for (const t of themes) {
     if (!t.id || !t.label || !["dark", "light"].includes(t.scheme)) {
       throw new Error(`theme '${t.id ?? "?"}': id, label and scheme (dark|light) are required`);
+    }
+    if (t.id === DEFAULT_THEME.id) {
+      throw new Error(`theme id '${t.id}' is the base theme — overlays must use their own id`);
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(t.id)) {
+      throw new Error(
+        `theme id '${t.id}' must be a lowercase css-ident ([a-z][a-z0-9-]*) — it is ` +
+          "stamped into a data-theme attribute selector",
+      );
     }
     if (t.note) validComment(t.note, `theme '${t.id}' note`);
     const names = t.tokens.filter((e) => e.cssName).map((e) => e.cssName);
@@ -297,5 +311,24 @@ export function buildTokens({ authoredCss }) {
     "pub(crate) const PERSONALITY_CSS: &str =\n" +
     `    "${personality}";\n`;
 
-  return { css, rustModule, resolve, resolveHex: hex };
+  // ── the theme roster, for the browser suite (and later the picker) ───────
+  // Written into assets/ by build.mjs (unhashed — hashAssets touches only
+  // .js/.css/.wasm/.ir — and auto-covered by the CI byte-diff). Each entry
+  // carries the resolved ground/text anchors so a test can assert the PAINTED
+  // theme instead of trusting a media-query emulation.
+  const roster = [DEFAULT_THEME, ...themes.map((t) => ({ id: t.id, label: t.label, scheme: t.scheme }))];
+  const themesJson =
+    JSON.stringify(
+      {
+        themes: roster.map((t) => ({
+          ...t,
+          bg: hex(t.id, "--bg"),
+          text: hex(t.id, "--text"),
+        })),
+      },
+      null,
+      2,
+    ) + "\n";
+
+  return { css, rustModule, themesJson, resolve, resolveHex: hex };
 }

@@ -1,0 +1,18 @@
+{
+  "themes": [
+    {
+      "id": "dark",
+      "label": "Dark",
+      "scheme": "dark",
+      "bg": "#120c1c",
+      "text": "#f0ebe0"
+    },
+    {
+      "id": "light",
+      "label": "Light",
+      "scheme": "light",
+      "bg": "#f6f3ee",
+      "text": "#1c1428"
+    }
+  ]
+}

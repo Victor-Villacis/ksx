@@ -355,6 +355,11 @@ for (const [source, out, extra] of ART) {
   writeFileSync(join(outputDir, out), cleanSvg(source, extra));
 }
 
+// The theme roster (id/label/scheme + resolved --bg/--text anchors), for the
+// browser suite's painted-theme assertions. Unhashed like the pad SVGs;
+// CI-pinned by the same assets byte-diff.
+writeFileSync(join(outputDir, "themes.json"), tokens.themesJson);
+
 // ---------------------------------------------------------------------------
 // FMIR version guard (docs/research/forma-spike-1-fmir-compat.md "cheap
 // insurance"): forma-server 0.2.0 renders FMIR v2 only. Refuse to emit

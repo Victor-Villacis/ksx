@@ -228,7 +228,7 @@ fn tokens(block: &str) -> BTreeMap<String, Rgba> {
 }
 
 struct Theme {
-    name: &'static str,
+    name: String,
     tok: BTreeMap<String, Rgba>,
 }
 
@@ -254,21 +254,90 @@ impl Theme {
     }
 }
 
+/// Every `:root[data-theme="X"] { … }` block in the sheet, in document order.
+/// TK1 taught the gate to ENUMERATE themes instead of hardcoding two; the
+/// stamped blocks arrive with TK2 (the dark/light pins) and TK3+ (new
+/// themes), and land after the light media block, outside `split_themes`'s
+/// scan regions — this is the parser that sees them.
+fn data_theme_blocks(css: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let marker = ":root[data-theme=\"";
+    let mut at = 0usize;
+    while let Some(rel) = css[at..].find(marker) {
+        let name_start = at + rel + marker.len();
+        let name_end = name_start
+            + css[name_start..]
+                .find('"')
+                .expect("data-theme selector must close its quote");
+        let name = css[name_start..name_end].to_owned();
+        let open = name_end
+            + css[name_end..]
+                .find('{')
+                .expect("data-theme block must open");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("data-theme block must close");
+        out.push((name, css[open..=end].to_owned()));
+        at = end;
+    }
+    out
+}
+
 fn themes() -> Vec<Theme> {
     let (dark_block, light_block) = split_themes(CSS);
-    let dark = tokens(&dark_block);
-    let mut light = dark.clone();
+    let base = tokens(&dark_block);
+    let mut light = base.clone();
     light.extend(tokens(&light_block));
-    vec![
+    let mut out = vec![
         Theme {
-            name: "dark",
-            tok: dark,
+            name: "dark".to_owned(),
+            tok: base.clone(),
         },
         Theme {
-            name: "light",
+            name: "light".to_owned(),
             tok: light,
         },
-    ]
+    ];
+
+    // The stamped blocks. An id that names an existing map ("dark" pins the
+    // base values, "light" the media block's — both generated from ONE
+    // source) must MATCH it token-for-token: a divergence means the generator
+    // emitted two truths for one token, the exact drift class this file
+    // exists to kill. Any other id is a real theme: the base map overlaid,
+    // and every floor test below runs over it automatically.
+    for (name, block) in data_theme_blocks(CSS) {
+        let declared = tokens(&block);
+        if let Some(existing) = out.iter().find(|t| t.name == name) {
+            for (tok_name, val) in &declared {
+                let want = existing.tok.get(tok_name).unwrap_or_else(|| {
+                    panic!("[data-theme={name}]: pins --{tok_name}, which the {name} map lacks")
+                });
+                assert_eq!(
+                    val, want,
+                    "[data-theme={name}]: --{tok_name} disagrees with the {name} map — \
+                     the generator emitted two truths for one token"
+                );
+            }
+        } else {
+            let mut tok = base.clone();
+            tok.extend(declared);
+            out.push(Theme { name, tok });
+        }
+    }
+    out
 }
 
 // ── the report ───────────────────────────────────────────────────────────
@@ -321,7 +390,7 @@ fn text_tiers_clear_the_floor_on_every_ground() {
             for tier in ["text", "text-2", "text-3"] {
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{tier} on {gn}"),
                     t.get(tier),
                     g,
@@ -345,7 +414,7 @@ fn text_tiers_clear_the_floor_on_every_ground() {
         for tier in ["text", "text-2", "text-3"] {
             r.check(
                 TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--{tier} on --panel-3 (hover)"),
                 t.get(tier),
                 hover,
@@ -364,7 +433,7 @@ fn colored_roles_clear_the_floor_as_text() {
             for role in ["accent", "accent-strong", "cool", "ok", "warn", "danger"] {
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{role} on {gn}"),
                     t.get(role),
                     g,
@@ -393,7 +462,7 @@ fn role_text_clears_the_floor_on_its_own_tint() {
                 let composed = t.get(tint).over(g);
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{role} on --{tint} over {gn}"),
                     t.get(role),
                     composed,
@@ -411,21 +480,21 @@ fn text_on_solid_role_plates_clears_the_floor() {
     for t in themes() {
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--accent-on over --accent-fill (.btn-primary)",
             t.get("accent-on"),
             t.get("accent-fill"),
         );
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--danger-on over --danger-fill (Stop)",
             t.get("danger-on"),
             t.get("danger-fill"),
         );
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--accent-on over --accent-strong (:hover)",
             t.get("accent-on"),
             t.get("accent-strong"),
@@ -446,7 +515,7 @@ fn focus_ring_clears_the_non_text_floor() {
         for (gn, g) in grounds {
             r.check(
                 NON_TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--focus on {gn}"),
                 t.get("focus"),
                 g,
@@ -470,7 +539,7 @@ fn separators_stay_perceptible() {
             for g in grounds {
                 r.check(
                     SEPARATOR_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{line} on --{g}"),
                     t.get(line),
                     t.get(g),
@@ -493,7 +562,7 @@ fn separators_stay_perceptible() {
 fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
     let (dark_block, _) = split_themes(CSS);
     let t = Theme {
-        name: "hw",
+        name: "hw".to_owned(),
         tok: tokens(&dark_block),
     };
     let mut r = Report::default();
@@ -554,7 +623,7 @@ fn placeholder_text_clears_the_text_floor() {
         for ground in ["panel-2", "panel", "bg"] {
             r.check(
                 TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--text-3 placeholder on --{ground}"),
                 t.get("text-3"),
                 t.get(ground),
@@ -624,50 +693,75 @@ fn disabled_controls_are_a_pinned_exemption() {
         }
     }
 
-    // Measured 2026-08-06. Dark reads noticeably better than light because
-    // fading toward a bright parent collapses the pair faster.
-    for (theme_name, expected) in [("dark", 3.45_f64), ("light", 2.36_f64)] {
-        let t = themes()
-            .into_iter()
-            .find(|t| t.name == theme_name)
-            .expect("theme present");
+    // Measured 2026-08-06 (dark/light). PER-THEME PIN TABLE (TK1): every
+    // theme ships its exemption numbers (DESIGN-SYSTEM §13.7) — a theme with
+    // no row here fails loudly rather than inheriting anything. Dark reads
+    // noticeably better than light because fading toward a bright parent
+    // collapses the pair faster.
+    const DISABLED_PINS: &[(&str, f64)] = &[("dark", 3.45), ("light", 2.36)];
+    for t in themes() {
+        let expected = DISABLED_PINS
+            .iter()
+            .find(|(n, _)| *n == t.name)
+            .map(|(_, v)| *v)
+            .unwrap_or_else(|| {
+                panic!(
+                    "theme '{}' has no recorded disabled-control pin — measure the \
+                     composite (this test prints it), decide it per DESIGN-SYSTEM \
+                     §3.5/§13.7, and add the row to DISABLED_PINS",
+                    t.name
+                )
+            });
         let card = t.get("panel");
         let label = faded(t.get("text"), DISABLED_OPACITY, card);
         let field = faded(t.get("panel-2"), DISABLED_OPACITY, card);
         let got = ratio(label, field);
         assert!(
             (got - expected).abs() < 0.02,
-            "{theme_name}: the disabled control label measures {got:.2}:1, pinned at \
+            "{}: the disabled control label measures {got:.2}:1, pinned at \
              {expected:.2}:1. This pair is a WCAG 1.4.3 exemption (inactive \
              component), NOT a free pass — if it moved, decide again and update \
-             both this pin and DESIGN-SYSTEM §3.5."
+             both this pin and DESIGN-SYSTEM §3.5.",
+            t.name
         );
     }
 
     // Case 2: the read-only mapper. `.zone.z-dead, .lrow.l-dead { opacity: .4 }`
     // over the legend's own ground. `--bg-2` is the ground the legend card
     // actually draws on (`.legendcard`), which is why it is the one measured.
+    // Same per-theme pin discipline as above.
     const DEAD_OPACITY: f64 = 0.40;
-    for (theme_name, role, expected) in [
-        ("dark", "accent", 2.55_f64), // a bound key in the legend
-        ("dark", "text-3", 1.81_f64), // a control's own label
-        ("light", "accent", 1.85_f64),
-        ("light", "text-3", 1.70_f64),
-    ] {
-        let t = themes()
-            .into_iter()
-            .find(|t| t.name == theme_name)
-            .expect("theme present");
-        let ground = t.get("bg-2");
-        let got = ratio(faded(t.get(role), DEAD_OPACITY, ground), ground);
-        assert!(
-            (got - expected).abs() < 0.05,
-            "{theme_name}: --{role} in the READ-ONLY MAPPER measures {got:.2}:1 against \
-             its own ground, pinned at {expected:.2}:1. This is the whole mapper — every \
-             pad zone and every legend row carries z-dead/l-dead while a session runs. \
-             It is pinned, not blessed: see this test's docs before changing the opacity \
-             or the token, and update DESIGN-SYSTEM §3.5 with whatever is decided."
-        );
+    const DEAD_PINS: &[(&str, &str, f64)] = &[
+        ("dark", "accent", 2.55), // a bound key in the legend
+        ("dark", "text-3", 1.81), // a control's own label
+        ("light", "accent", 1.85),
+        ("light", "text-3", 1.70),
+    ];
+    for t in themes() {
+        for role in ["accent", "text-3"] {
+            let expected = DEAD_PINS
+                .iter()
+                .find(|(n, r, _)| *n == t.name && *r == role)
+                .map(|(_, _, v)| *v)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "theme '{}' has no recorded read-only-mapper pin for --{role} — \
+                         measure it, decide it, and add the row to DEAD_PINS",
+                        t.name
+                    )
+                });
+            let ground = t.get("bg-2");
+            let got = ratio(faded(t.get(role), DEAD_OPACITY, ground), ground);
+            assert!(
+                (got - expected).abs() < 0.05,
+                "{}: --{role} in the READ-ONLY MAPPER measures {got:.2}:1 against \
+                 its own ground, pinned at {expected:.2}:1. This is the whole mapper — every \
+                 pad zone and every legend row carries z-dead/l-dead while a session runs. \
+                 It is pinned, not blessed: see this test's docs before changing the opacity \
+                 or the token, and update DESIGN-SYSTEM §3.5 with whatever is decided.",
+                t.name
+            );
+        }
     }
 }
 
@@ -681,8 +775,14 @@ fn disabled_controls_are_a_pinned_exemption() {
 #[test]
 fn anti_flash_css_matches_the_tokens_it_mirrors() {
     let themes = themes();
-    let dark = &themes[0];
-    let light = &themes[1];
+    let dark = themes
+        .iter()
+        .find(|t| t.name == "dark")
+        .expect("dark theme present");
+    let light = themes
+        .iter()
+        .find(|t| t.name == "light")
+        .expect("light theme present");
 
     let expect_dark = format!(
         "body{{background:{};color:{};margin:0}}",
@@ -811,8 +911,14 @@ fn pad_art_palette_stays_separable() {
     // against the silhouette, not copies of anything, so asserting them
     // would be inventing a contract that was never there.
     let themes = themes();
-    let dark = &themes[0];
-    let light = &themes[1];
+    let dark = themes
+        .iter()
+        .find(|t| t.name == "dark")
+        .expect("dark theme present");
+    let light = themes
+        .iter()
+        .find(|t| t.name == "light")
+        .expect("light theme present");
     for (nth, theme, class, prop, token, expect) in [
         (
             0usize,

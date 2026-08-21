@@ -683,6 +683,77 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("a DualSense wears its own body, with its hooks on its buttons", async () => {
+    // The fixture's roster is Xbox + PlayStation; stage a PS5 pad to see the
+    // third art. (A DualSense drew a DualShock 4 until the family rule
+    // stopped keying on `is_xinput`.)
+    const staged = await fetch(`${BASE}/nocturne/controller`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "persona=dualsense&preset=Player%203",
+      redirect: "manual",
+    });
+    assert.ok(staged.status >= 200 && staged.status < 400, `staging answered ${staged.status}`);
+
+    const page = await openCanvas();
+    try {
+      const art = await page.evaluate(() => {
+        const widget = Array.from(
+          document.querySelectorAll(".forma-canvas-stage .widget-instance"),
+        ).find((el) => el.querySelector(".ps5a"));
+        if (!widget) return { found: false };
+        const image = widget.querySelector(".ps5a-art");
+        const hooks = widget.querySelector(".ps5a-hooks");
+        const imageBox = image.getBoundingClientRect();
+        const hookBox = hooks.getBoundingClientRect();
+        return {
+          found: true,
+          src: image.getAttribute("src"),
+          // The picture and the overlay must occupy the SAME box: they share
+          // one coordinate system, so a hook is only over its button while
+          // these agree. (They did not when the overlay carried `.wspad`,
+          // whose height:auto shrank it inside the picture.)
+          boxesAgree:
+            Math.abs(imageBox.x - hookBox.x) <= 1 &&
+            Math.abs(imageBox.y - hookBox.y) <= 1 &&
+            Math.abs(imageBox.width - hookBox.width) <= 1 &&
+            Math.abs(imageBox.height - hookBox.height) <= 1,
+          viewBox: hooks.getAttribute("viewBox"),
+          hooks: Array.from(widget.querySelectorAll(".ps5a-hooks [data-fn]")).map(
+            (el) => el.getAttribute("data-fn"),
+          ),
+        };
+      });
+
+      assert.ok(art.found, "a DualSense seat gets the PS5 art, not the DualShock");
+      assert.equal(art.src, "/_assets/pad-ps5.svg");
+      assert.ok(art.boxesAgree, "the hook overlay covers exactly the picture it annotates");
+      assert.equal(
+        art.viewBox,
+        "70 216 940 640",
+        "the overlay's box is build.mjs's DUALSENSE_VIEWBOX — one number in two files",
+      );
+      // Every control the mapper can actually drive has a hook. The
+      // touchpad, the mic button and adaptive-trigger force are NOT here on
+      // purpose: the binding vocabulary has no way to express them, and a
+      // hook that binds to nothing is a promise the page cannot keep.
+      for (const fn of [
+        "a", "b", "x", "y",
+        "dpad.up", "dpad.down", "dpad.left", "dpad.right",
+        "lb", "rb", "lt", "rt",
+        "back", "start", "guide",
+        "lthumb", "rthumb",
+        "lx.min", "lx.max", "ly.min", "ly.max",
+        "rx.min", "rx.max", "ry.min", "ry.max",
+      ]) {
+        assert.ok(art.hooks.includes(fn), `the DualSense art hooks ${fn}`);
+      }
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("an arrangement survives a reload", async () => {
     const page = await openCanvas();
     try {

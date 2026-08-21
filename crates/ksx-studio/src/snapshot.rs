@@ -4232,12 +4232,13 @@ pub struct NocturneDerived {
     pub pad_badge_cls: String,
     pub pad_name: String,
     pub pad_sub: String,
-    /// The hidden master pair's family classes (`"n-padwrap"` /
-    /// `"n-padwrap none"`): with JS the masters are clone templates and the
-    /// class is moot, but WITHOUT JS the canvas relaxes into a document and
-    /// the served class is what picks which silhouette shows.
+    /// The hidden masters' family classes (`"n-padwrap"` / `"n-padwrap
+    /// none"`): with JS the masters are clone templates and the class is
+    /// moot, but WITHOUT JS the canvas relaxes into a document and the
+    /// served class is what picks which body shows. Exactly one is visible.
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
+    pub pad_ps5_cls: String,
     pub bind_title: String,
     /// The binding list, grouped the way the physical controller is
     /// organised: face cluster, D-pad, shoulders & triggers, each stick,
@@ -4366,6 +4367,34 @@ const NOCTURNE_BIND_GROUP_LABELS: [&str; 6] = [
     "Right stick",
     "System",
 ];
+
+/// Which drawn body a seat wears — the ONE rule, read by both the per-slot
+/// pad views (what each canvas widget clones) and the no-JS master classes.
+///
+/// Keyed on the persona rather than on `is_xinput`, because a DualSense is
+/// not a DualShock: it has its own shell, its own Create/Options pair and its
+/// own touchpad, and drawing it as a PS4 pad is a picture that lies about the
+/// device Windows just gained.
+///
+/// ⚠️Switch Pro, SNES and Genesis land on `"ps"` today. That is a KNOWN gap,
+/// not a claim: those three have no art yet, and the DualShock outline is the
+/// least-wrong of the three bodies that exist. Give each its own here the
+/// moment its art lands.
+fn pad_art_family(persona: Option<&str>, slot: Option<&ksx_api::StagedSlotView>) -> &'static str {
+    match persona {
+        Some("dualsense") => "ps5",
+        _ => {
+            if slot.is_some_and(|slot| slot.is_xinput) {
+                "xbox"
+            } else if slot.is_some() {
+                "ps"
+            } else {
+                // An empty roster keeps the neutral Xbox outline as ground.
+                "xbox"
+            }
+        }
+    }
+}
 
 fn nocturne_bind_group(function: &str) -> usize {
     match function {
@@ -4800,17 +4829,22 @@ impl NocturneDerived {
         // relabelled pills. An empty roster keeps the neutral Xbox outline
         // as its ground. (With JS the masters are display:none clone
         // templates and every staged pad is its own canvas widget.)
-        let pad_is_ps = selected.is_some_and(|slot| !slot.is_xinput);
-        let pad_xbox_cls = if pad_is_ps {
-            "n-padwrap none".to_owned()
-        } else {
-            "n-padwrap".to_owned()
+        // ⚠️Keyed on the PERSONA, not on `is_xinput`: a DualSense has its
+        // own body, and drawing every non-XInput seat as a DualShock is how
+        // a PS5 pad ended up wearing PS4 art. (Switch Pro, SNES and Genesis
+        // still fall back to the DualShock outline — they have no art yet,
+        // and that is the next gap, not a claim that they are right.)
+        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()), selected);
+        let wrap_cls = |family: &str| {
+            if pad_family == family {
+                "n-padwrap".to_owned()
+            } else {
+                "n-padwrap none".to_owned()
+            }
         };
-        let pad_ps_cls = if pad_is_ps {
-            "n-padwrap".to_owned()
-        } else {
-            "n-padwrap none".to_owned()
-        };
+        let pad_xbox_cls = wrap_cls("xbox");
+        let pad_ps_cls = wrap_cls("ps");
+        let pad_ps5_cls = wrap_cls("ps5");
         // The keyboard grid: the SAME mapper table the binding pane reads,
         // inverted key→functions, painted onto the standard-board layout.
         let keyboard_name = staged
@@ -4969,7 +5003,7 @@ impl NocturneDerived {
                     .collect();
                 NocturnePadView {
                     slot: slot.number,
-                    family: if slot.is_xinput { "xbox" } else { "ps" }.to_owned(),
+                    family: pad_art_family(Some(slot.persona.as_str()), Some(slot)).to_owned(),
                     preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
@@ -5680,6 +5714,7 @@ impl NocturneDerived {
             pad_sub,
             pad_xbox_cls,
             pad_ps_cls,
+            pad_ps5_cls,
             bind_title: binds.title,
             bind_face,
             bind_dpad,

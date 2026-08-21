@@ -232,3 +232,27 @@ installed Interception DLL or drivers.
              (upstream; five marked engine divergences — see
              studio-ui/src/genui/README.md for what was taken, what was
              left, the divergence ledger and the re-sync rule).
+
+
+--------------------------------------------------------------------------
+10. DualSense (PS5) controller drawing — ⚠️ PROVENANCE UNRESOLVED
+--------------------------------------------------------------------------
+
+    Upstream: UNKNOWN. Supplied by the project owner 2026-08-21 from
+              Downloads\Icons\PS5 Controller\PS5.svg, beside a sibling file
+              named "PS5 Controller (Community).svg" — a name that suggests
+              a Figma Community file, whose licences are per-file (CC BY 4.0
+              is common but not universal). Neither file carries metadata
+              naming an author or a licence.
+    License:  UNRESOLVED. This is NOT a claim of permission. The art is
+              committed because it is what the owner chose to use; the line
+              above must be filled in before ksx ships this asset publicly.
+    Used in:  studio-ui/art/src-dualsense.svg      (as supplied)
+              crates/ksx-studio/assets/pad-ps5.svg (backdrop removed, viewBox
+                                                    cropped — geometry and
+                                                    colours untouched)
+
+    Sony Interactive Entertainment owns the DualSense trade dress the drawing
+    depicts; ksx claims no affiliation. The same is already true of the two
+    Gamepad-Asset-Pack drawings above, whose MIT licence covers the DRAWINGS,
+    not the hardware they depict.

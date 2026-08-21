@@ -14,6 +14,29 @@ both Studio pages carry the visible footer line:
 |---|---|---|
 | `src-xboxseries.svg` | `VSCView Xbox Wireless Controller.svg` (Xbox One/Series shape) | `/_assets/pad-xbox.svg` |
 | `src-ds4.svg` | `VSCView DualShock 4 Controller.svg` | `/_assets/pad-ds4.svg` |
+| `src-dualsense.svg` | **NOT Gamepad-Asset-Pack** — see below | `/_assets/pad-ps5.svg` |
+
+## ⚠️ `src-dualsense.svg` — provenance to confirm before any public release
+
+Supplied by the project owner on 2026-08-21 from
+`Downloads\Icons\PS5 Controller\PS5.svg`, alongside a sibling file named
+"PS5 Controller (Community).svg" — a name that reads like a Figma Community
+file, whose licences vary (CC BY 4.0 is common, but it is per-file). **This
+repository has no record of its author or licence**, and neither file carries
+metadata naming one. It is committed because it is the art the owner chose;
+it must not ship publicly until that line is filled in here and in `NOTICE`.
+
+Unlike the two above it does NOT go through `cleanSvg`: those are flat
+schematics whose solid shapes get reclassed onto a palette sheet, while this
+is a rendered photoreal pad (gradients, masks, blur filters) that reclassing
+would destroy. `build.mjs` makes exactly two deterministic edits — removes the
+full-canvas backdrop rect and rewrites the header to the pad's own cropped
+`viewBox` — so the emitted bytes stay a pure function of this source, which is
+what the assets byte-diff gate depends on.
+
+⚠️`/nocturne`'s hook overlay declares that same crop (`PS5_VIEWBOX` in
+`NocturneIsland.ts`, `DUALSENSE_VIEWBOX` in `build.mjs`). They are one number
+in two files: change one and every hook slides off its button.
 
 `build.mjs` copies each source into `crates/ksx-studio/assets/` at build
 time, stripped of Inkscape/Sodipodi editor metadata (geometry untouched) and

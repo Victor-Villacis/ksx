@@ -262,6 +262,7 @@ export interface NocturneView {
   pad_sub: string;
   pad_xbox_cls: string;
   pad_ps_cls: string;
+  pad_ps5_cls: string;
   bind_title: string;
   bind_face: NocturneBindRowView[];
   bind_dpad: NocturneBindRowView[];
@@ -436,6 +437,7 @@ const [nPadName, setNPadName] = createSignal("");
 const [nPadSub, setNPadSub] = createSignal("");
 const [nPadXboxCls, setNPadXboxCls] = createSignal("n-padwrap");
 const [nPadPsCls, setNPadPsCls] = createSignal("n-padwrap none");
+const [nPadPs5Cls, setNPadPs5Cls] = createSignal("n-padwrap none");
 const [nBindTitle, setNBindTitle] = createSignal("");
 // The binding list, grouped the way the physical controller is organised.
 // Six lists (a list body is one flat template); the headers carry served
@@ -819,6 +821,7 @@ export function applyNocturne(p: NocturnePayload): void {
   setNPadSub(v.pad_sub);
   setNPadXboxCls(v.pad_xbox_cls);
   setNPadPsCls(v.pad_ps_cls);
+  setNPadPs5Cls(v.pad_ps5_cls);
   setNBindTitle(v.bind_title);
   setNBindFace(v.bind_face);
   setNBindDpad(v.bind_dpad);
@@ -1315,13 +1318,16 @@ export function syncPadWidgets(): void {
     padWidgetPrint = print;
     for (const [, item] of padItems) canvas.removeItem(item, { selectFallback: false });
     padItems.clear();
-    // The two hidden masters, in template order: [0] Xbox, [1] DualShock.
-    const masters = root.querySelectorAll<HTMLElement>(".n-padwrap");
+    // The hidden masters, keyed by the family they draw — NOT by template
+    // order: a third art (the DualSense) is exactly the change that makes an
+    // index silently hand every PlayStation seat the wrong body.
     const storeKeys = padStoreKeys(pads);
     pads.forEach((pv, index) => {
-      const master = pv.family === "ps" ? masters[1] : masters[0];
-      const svg = master?.querySelector("svg");
-      if (!svg) return;
+      const master = root.querySelector<HTMLElement>(
+        `.n-padwrap[data-pad-family="${pv.family === "ps5" ? "ps5" : pv.family === "ps" ? "ps" : "xbox"}"]`,
+      );
+      const art = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
+      if (!art) return;
       const content = document.createElement("div");
       content.className = "n-mini np" + pv.slot;
       content.setAttribute("data-pad-slot", String(pv.slot));
@@ -1337,7 +1343,7 @@ export function syncPadWidgets(): void {
       title.className = "n-mini-title";
       title.textContent = pv.title;
       head.append(badge, title);
-      content.append(head, svg.cloneNode(true));
+      content.append(head, art.cloneNode(true));
       const item = createCanvasItem({
         instanceId: "pad-" + pv.slot,
         displayName: "P" + pv.slot + " \u00b7 " + pv.title,
@@ -4441,7 +4447,7 @@ export function NocturneIsland() {
           { class: "n-padmasters", "aria-hidden": "true" },
           h(
             "div",
-            { class: () => nPadXboxCls() },
+            { class: () => nPadXboxCls(), "data-pad-family": "xbox" },
             h(
               "svg",
               { class: "wspad x360a", viewBox: "0 0 751 660", "aria-hidden": "true", focusable: "false" },
@@ -4644,7 +4650,7 @@ export function NocturneIsland() {
           ),
           h(
             "div",
-            { class: () => nPadPsCls() },
+            { class: () => nPadPsCls(), "data-pad-family": "ps" },
             h(
               "svg",
               { class: "wspad", viewBox: "0 0 112.69 92", "aria-hidden": "true", focusable: "false" },
@@ -4739,6 +4745,123 @@ export function NocturneIsland() {
                 h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "103.5", y: "40.8", "text-anchor": "start" }),
                 h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "76.4", y: "40.8", "text-anchor": "end" }),
                 h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "89.3", y: "53.8", "text-anchor": "middle" }),
+              ),
+            ),
+          ),
+          // ── The DualSense (PS5) ───────────────────────────────────────
+          // A photoreal pad, so it ships as ART rather than as shapes: the
+          // body is `/_assets/pad-ps5.svg` (build.mjs vendors it from
+          // `art/src-dualsense.svg`, backdrop removed and the viewBox
+          // cropped to the pad), and every hook rides a transparent overlay
+          // above it — the same split the 360 art uses, which is what lets
+          // the live echo light a control without repainting the picture.
+          //
+          // ⚠️The overlay's viewBox MUST equal build.mjs's DUALSENSE_VIEWBOX.
+          // Hooks are placed in the art's own coordinates, measured from
+          // every control's bbox in the export; a different box slides every
+          // one of them off its button.
+          h(
+            "div",
+            { class: () => nPadPs5Cls(), "data-pad-family": "ps5" },
+            h(
+              "div",
+              { class: "ps5a" },
+              h("img", {
+                class: "ps5a-art",
+                src: "/_assets/pad-ps5.svg",
+                alt: "",
+                "aria-hidden": "true",
+                draggable: "false",
+              }),
+              h(
+                "svg",
+                {
+                  // ⚠️NOT `.wspad`: that class sizes an art SVG with
+                  // `height: auto` and a max-height, which made this overlay
+                  // 326×222 inside a 347×236 picture — every hook then sat
+                  // slightly up and out from the control it names. The
+                  // overlay must fill exactly the art's box; the zone and
+                  // label classes below are independent of `.wspad`.
+                  class: "ps5a-hooks",
+                  viewBox: "70 216 940 640",
+                  "aria-hidden": "true",
+                  focusable: "false",
+                },
+                // Shoulders and triggers: OUR pills, over the art's own
+                // shoulder line — the export draws them as one shell, so
+                // there is nothing underneath to hook individually.
+                h("g", { class: "ps5a-rail" },
+                  h("rect", { "data-fn": "lt", class: "wspad-zone", x: "190", y: "231", width: "126", height: "48", rx: "22" }),
+                  h("rect", { "data-fn": "rt", class: "wspad-zone", x: "766", y: "231", width: "126", height: "48", rx: "22" }),
+                  h("text", { class: "wspad-sys ps5a-sys", x: "253", y: "262", "text-anchor": "middle" }, "L2"),
+                  h("text", { class: "wspad-sys ps5a-sys", x: "829", y: "262", "text-anchor": "middle" }, "R2"),
+                  h("rect", { "data-fn": "lb", class: "wspad-zone", x: "152", y: "288", width: "132", height: "36", rx: "17" }),
+                  h("rect", { "data-fn": "rb", class: "wspad-zone", x: "798", y: "288", width: "132", height: "36", rx: "17" }),
+                  h("text", { class: "wspad-sys ps5a-sys", x: "218", y: "313", "text-anchor": "middle" }, "L1"),
+                  h("text", { class: "wspad-sys ps5a-sys", x: "864", y: "313", "text-anchor": "middle" }, "R1"),
+                ),
+                // The D-pad's four petals, each its own direction.
+                h("g", { class: "ps5a-hit" },
+                  h("rect", { "data-fn": "dpad.up", class: "wspad-zone", x: "229", y: "332", width: "52", height: "65", rx: "14" }),
+                  h("rect", { "data-fn": "dpad.left", class: "wspad-zone", x: "179", y: "383", width: "65", height: "52", rx: "14" }),
+                  h("rect", { "data-fn": "dpad.down", class: "wspad-zone", x: "229", y: "421", width: "52", height: "65", rx: "14" }),
+                  h("rect", { "data-fn": "dpad.right", class: "wspad-zone", x: "267", y: "382", width: "65", height: "52", rx: "14" }),
+                  // Faces, in the PlayStation arrangement. The mapper's
+                  // names stay Xbox-shaped (a persona is a re-skin, not a
+                  // second vocabulary): y=△ b=○ a=✕ x=□.
+                  h("circle", { "data-fn": "y", class: "wspad-zone", cx: "830", cy: "342", r: "31" }),
+                  h("circle", { "data-fn": "b", class: "wspad-zone", cx: "898", cy: "410", r: "31" }),
+                  h("circle", { "data-fn": "a", class: "wspad-zone", cx: "830", cy: "478", r: "31" }),
+                  h("circle", { "data-fn": "x", class: "wspad-zone", cx: "762", cy: "410", r: "31" }),
+                  // Create and Options, the slim pair either side of the
+                  // touchpad — Back and Start to the mapper.
+                  h("rect", { "data-fn": "back", class: "wspad-zone", x: "310", y: "285", width: "31", height: "49", rx: "15" }),
+                  h("rect", { "data-fn": "start", class: "wspad-zone", x: "741", y: "285", width: "31", height: "49", rx: "15" }),
+                  // The PS button.
+                  h("circle", { "data-fn": "guide", class: "wspad-zone", cx: "542", cy: "527", r: "26" }),
+                ),
+                // Sticks: the click, then the four directions around it.
+                h("g", { class: "ps5a-hit" },
+                  h("circle", { "data-fn": "lthumb", cx: "396", cy: "547", r: "34", fill: "transparent" }),
+                  h("circle", { "data-fn": "ly.max", cx: "396", cy: "492", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "ly.min", cx: "396", cy: "602", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "lx.min", cx: "341", cy: "547", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "lx.max", cx: "451", cy: "547", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rthumb", cx: "685", cy: "549", r: "34", fill: "transparent" }),
+                  h("circle", { "data-fn": "ry.max", cx: "685", cy: "494", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "ry.min", cx: "685", cy: "604", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rx.min", cx: "630", cy: "549", r: "24", fill: "transparent" }),
+                  h("circle", { "data-fn": "rx.max", cx: "740", cy: "549", r: "24", fill: "transparent" }),
+                ),
+                // The glance callouts, in the same places the eye already
+                // looks for each control.
+                h("g", { class: "ps5a-callouts" },
+                  h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "182", y: "262", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "144", y: "313", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "900", y: "262", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "938", y: "313", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "326", y: "272", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "757", y: "272", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "255", y: "322", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "255", y: "504", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "170", y: "414", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "341", y: "414", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "396", y: "654", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "396", y: "466", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "336", y: "628", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "306", y: "551", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "486", y: "551", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "685", y: "656", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "685", y: "468", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "745", y: "630", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "595", y: "553", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "775", y: "553", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "542", y: "580", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "830", y: "300", "text-anchor": "middle" }),
+                  h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "940", y: "414", "text-anchor": "start" }),
+                  h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "720", y: "414", "text-anchor": "end" }),
+                  h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "830", y: "534", "text-anchor": "middle" }),
+                ),
               ),
             ),
           ),

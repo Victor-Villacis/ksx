@@ -363,6 +363,54 @@ for (const [source, out, extra] of ART) {
   writeFileSync(join(outputDir, out), cleanSvg(source, extra));
 }
 
+// ── The DualSense, and why it does NOT go through cleanSvg ─────────────────
+// The two above are flat schematics: solid shapes reclassed onto a palette
+// sheet, so one asset serves both themes. This one is a rendered photoreal
+// pad — gradients, masks and blur filters describing a white PS5 controller —
+// and reclassing it would flatten exactly what makes it recognisable. It
+// ships as drawn.
+//
+// Two deterministic edits only, so the emitted bytes stay a pure function of
+// the source (the assets byte-diff gate depends on that):
+//   1. the full-canvas background rect goes — the art has to sit on the
+//      Studio's own ground, not on its export's blue gradient;
+//   2. the fixed width/height go and the viewBox is cropped to the pad's own
+//      extents (measured from every top-level element's bbox: x 80…1000,
+//      y 226…846 in the export's 1080² canvas). Two things depend on that
+//      crop: the <img> scales to whatever box the canvas widget gives it with
+//      no dead margin, and the island's transparent hook overlay can share
+//      these exact coordinates — the hooks are placed in ART space, so a
+//      1:1 box is what keeps a D-pad hook over the D-pad.
+const DUALSENSE_BACKDROP = '<rect width="1080" height="1080" rx="3" fill="url(#paint0_linear_5_4069)"/>';
+/** The pad's own extents in the export's canvas, plus a hair of air. The
+ *  island's hook overlay declares the SAME box (`PS5_VIEWBOX`) — if this
+ *  changes, that changes with it or every hook slides off its control. */
+export const DUALSENSE_VIEWBOX = "70 216 940 640";
+const dualsenseSource = readFileSync(join("art", "src-dualsense.svg"), "utf8");
+if (!dualsenseSource.includes(DUALSENSE_BACKDROP)) {
+  throw new Error(
+    "src-dualsense.svg no longer carries the backdrop rect this step removes — " +
+      "re-check the source before trusting the emitted art",
+  );
+}
+writeFileSync(
+  join(outputDir, "pad-ps5.svg"),
+  dualsenseSource
+    .replace(DUALSENSE_BACKDROP, "")
+    .replace(
+      '<svg width="1080" height="1080" viewBox="0 0 1080 1080"',
+      // The width/height are the crop's own, not the export's: dropped
+      // entirely, the browser invents an intrinsic size (220×150 here) whose
+      // ratio is NOT quite the viewBox's, and `object-fit: contain` then
+      // paints the art a fraction narrower than the overlay stacked on it.
+      // Sub-pixel at card size, but it is a systematic error that grows with
+      // the widget, and hooks are supposed to sit ON their controls.
+      `<svg width="${DUALSENSE_VIEWBOX.split(" ")[2]}" height="${
+        DUALSENSE_VIEWBOX.split(" ")[3]
+      }" viewBox="${DUALSENSE_VIEWBOX}"`,
+    ),
+);
+
 // The theme roster (id/label/scheme + resolved --bg/--text anchors), for the
 // browser suite's painted-theme assertions. Unhashed like the pad SVGs;
 // CI-pinned by the same assets byte-diff.
@@ -397,4 +445,4 @@ for (const route of Object.keys(manifest.routes)) {
   }
   console.log(`OK: ${route} → ${irName} is FMIR v2; island client bundle kept`);
 }
-console.log("OK: controller art vendored (pad-xbox.svg, pad-ds4.svg)");
+console.log("OK: controller art vendored (pad-xbox.svg, pad-ds4.svg, pad-ps5.svg)");

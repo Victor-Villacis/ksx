@@ -7752,6 +7752,7 @@ fn nocturne_resolves_the_selected_slot_server_side() {
     // The second slot is the PlayStation draft: the stage follows its family,
     // and every ramp surface wears P2's shade.
     assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_ps5_cls"], "n-padwrap none", "{api}");
     assert_eq!(api["view"]["pad_badge_cls"], "n-pbadge np2", "{api}");
     assert_eq!(api["view"]["kb_cls"], "n-kb np2", "{api}");
 
@@ -7769,6 +7770,32 @@ fn nocturne_resolves_the_selected_slot_server_side() {
     // The page itself resolves the same way (SSR paints the selection).
     let page = rendered_body(&get(addr, "/nocturne?slot=2"));
     assert!(page.contains("P2"), "{page}");
+
+    // A DualSense gets its OWN body. Before this, family was `is_xinput`
+    // decided, so every non-Xbox seat drew a DualShock 4 — a PS5 pad wearing
+    // PS4 art, which is a picture that lies about the device Windows gained.
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "dualsense".into(),
+                preset: "Player 3".into(),
+                layout: None,
+            })
+            .ok
+    );
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    let families: Vec<&str> = pads
+        .iter()
+        .map(|pad| pad["family"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(families, vec!["xbox", "ps", "ps5"], "{api}");
+    // …and the no-JS masters follow the selected seat: exactly one shows.
+    assert_eq!(api["view"]["pad_ps5_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap none", "{api}");
+    assert_eq!(api["view"]["pad_xbox_cls"], "n-padwrap none", "{api}");
 }
 
 /// **The MIGRATED rack ordering + opposite-directions verbs, over HTTP.**

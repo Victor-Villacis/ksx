@@ -235,6 +235,122 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("mapping paths project direct bindings, follow geometry, and remember their scope", async () => {
+    const page = await openCanvas();
+    try {
+      const select = '[data-nx="mapping-paths"]';
+      const lines = "#n-mapping-paths";
+      const ports = "#n-mapping-ports";
+      assert.equal(await page.inputValue(select), "off", "a fresh canvas stays quiet");
+      assert.equal(await page.isHidden(lines), true, "the off lens draws no canvas layer");
+      assert.equal(await page.getAttribute(lines, "aria-hidden"), "true");
+      assert.equal(await page.getAttribute(lines, "focusable"), "false");
+
+      const selectedSlot = await page.inputValue('input[name="slot"]');
+      await page.selectOption(select, "selected");
+      await page.waitForFunction(
+        ({ lines, selectedSlot }) => {
+          const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
+          return edges.length === 14 &&
+            edges.every((edge) => edge.dataset.flowSlot === selectedSlot) &&
+            document.querySelector(lines)?.dataset.flowCount === "14";
+        },
+        { lines, selectedSlot },
+      );
+
+      const truth = await page.evaluate(({ lines, ports, selectedSlot }) => {
+        const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
+        const gFanout = edges
+          .filter((edge) => edge.dataset.flowKey === "G")
+          .map((edge) => edge.dataset.flowFn)
+          .sort();
+        const badPaths = Array.from(document.querySelectorAll(`${lines} path`))
+          .filter((path) => /NaN|Infinity/.test(path.getAttribute("d") ?? ""));
+        const layer = document.querySelector(lines);
+        const stage = document.querySelector(".forma-canvas-stage");
+        return {
+          gFanout,
+          badPaths: badPaths.length,
+          unresolved: document.querySelectorAll(`${lines} .is-unresolved`).length,
+          pointerEvents: getComputedStyle(document.querySelector(ports)).pointerEvents,
+          transformsMatch: layer.style.transform === stage.style.transform,
+          selectedOnly: edges.every((edge) => edge.dataset.flowSlot === selectedSlot),
+        };
+      }, { lines, ports, selectedSlot });
+      assert.deepEqual(truth.gFanout, ["a", "b"], "one physical G key truthfully fans out");
+      assert.equal(truth.badPaths, 0);
+      assert.equal(truth.unresolved, 0, "every fixture binding finds one visible endpoint");
+      assert.equal(truth.pointerEvents, "none", "the lens never steals mapping gestures");
+      assert.equal(truth.transformsMatch, true, "paths share the exact canvas camera");
+      assert.equal(truth.selectedOnly, true);
+
+      const source = `.n-widget-kb [data-key="G"]`;
+      await page.hover(source);
+      await page.waitForFunction(
+        (lines) => document.querySelectorAll(`${lines} .n-flow-edge.is-related`).length === 2,
+        lines,
+      );
+      assert.deepEqual(
+        await page.evaluate((lines) =>
+          Array.from(document.querySelectorAll(`${lines} .n-flow-edge.is-related`))
+            .map((edge) => edge.dataset.flowFn)
+            .sort(), lines),
+        ["a", "b"],
+        "endpoint inspection isolates every branch of the physical key",
+      );
+
+      const beforeMove = await page.getAttribute(
+        `${lines} [data-flow-key="G"][data-flow-fn="a"] .n-flow-core`,
+        "d",
+      );
+      await page.focus(`[data-instance-id="pad-${selectedSlot}"] .widget-drag-handle`);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ selector, beforeMove }) => document.querySelector(selector)?.getAttribute("d") !== beforeMove,
+        {
+          selector: `${lines} [data-flow-key="G"][data-flow-fn="a"] .n-flow-core`,
+          beforeMove,
+        },
+      );
+      assert.equal(
+        await page.evaluate((lines) =>
+          Array.from(document.querySelectorAll(`${lines} path`))
+            .some((path) => /NaN|Infinity/.test(path.getAttribute("d") ?? "")), lines),
+        false,
+        "moving a controller leaves every curve finite",
+      );
+
+      await page.selectOption(select, "all");
+      await page.waitForFunction(
+        (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 28,
+        lines,
+      );
+      assert.equal(
+        await page.evaluate((lines) =>
+          new Set(Array.from(document.querySelectorAll(`${lines} .n-flow-edge`))
+            .map((edge) => edge.dataset.flowSlot)).size, lines),
+        2,
+        "the explicit all-player scope carries both staged players",
+      );
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        (select) => document.querySelector(select)?.value === "all",
+        select,
+      );
+      assert.equal(await page.inputValue(select), "all", "scope persists with canvas chrome");
+      assert.equal(
+        await page.evaluate((selector) => document.querySelector(selector)?.tabIndex, lines),
+        -1,
+        "the visual-only layer never enters tab order",
+      );
+      await page.selectOption(select, "off");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("Tidy up puts the board on top, the controllers in seat order, all in view", async () => {
     const page = await openCanvas();
     try {

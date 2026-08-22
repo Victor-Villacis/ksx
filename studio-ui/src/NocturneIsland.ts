@@ -54,6 +54,12 @@ import {
   type KeyboardWorkbenchState,
   type KeyboardWorkbenchStore,
 } from "./keyboardWorkbench";
+import {
+  MappingFlowLayer,
+  mappingPathModeIsValid,
+  type MappingFlowLayoutSummary,
+  type MappingPathMode,
+} from "./mappingFlow";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -993,6 +999,7 @@ export function applyNocturne(p: NocturnePayload): void {
   if (learnRoot) {
     reconcileKeyboardWorkbenchIdentity();
     syncPadWidgets();
+    syncMappingFlow();
     // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
     pruneHiddenStrips();
@@ -1104,10 +1111,13 @@ interface CanvasPrefs {
   /** The map is chrome, so it remembers like every other chrome preference.
    *  Absent means shown. */
   mapHidden?: boolean;
+  /** A supplementary graph lens over the canonical mapping tables. */
+  mappingPaths?: MappingPathMode;
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
+let mappingFlowLayer: MappingFlowLayer | null = null;
 let padWidgetPrint = "";
 let padRosterInitialized = false;
 const padItems = new Map<number, HTMLElement>();
@@ -1174,6 +1184,7 @@ function loadCanvasPrefs(): void {
     canvasPrefs = {
       widgets,
       mapHidden: saved.mapHidden === true,
+      mappingPaths: mappingPathModeIsValid(saved.mappingPaths) ? saved.mappingPaths : "off",
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -1496,6 +1507,7 @@ function syncKeyboardSourceVisibility(reveal: boolean): void {
     canvas.restoreItemState(item, restored);
   }
   labelCanvasMarkers();
+  mappingFlowLayer?.scheduleLayout();
   if (reveal && canvas && !hidden) canvas.focusItem(item);
 }
 
@@ -1543,7 +1555,12 @@ function persistCanvas(): void {
     const key = storeKeys.get(slot);
     if (key !== undefined) widgets[key] = canvas.getItemState(item);
   }
-  canvasPrefs = { camera: canvas.getCamera(), widgets, mapHidden: canvasPrefs.mapHidden };
+  canvasPrefs = {
+    camera: canvas.getCamera(),
+    widgets,
+    mapHidden: canvasPrefs.mapHidden,
+    mappingPaths: canvasPrefs.mappingPaths,
+  };
   saveCanvasPrefs();
 }
 
@@ -1563,6 +1580,52 @@ function setCanvasMap(hidden: boolean): void {
   canvasPrefs = { ...canvasPrefs, mapHidden: hidden };
   saveCanvasPrefs();
   if (!hidden) window.requestAnimationFrame(() => nCanvas?.refreshNavigator());
+}
+
+function paintMappingFlowCount(summary: MappingFlowLayoutSummary): void {
+  const count = learnRoot?.querySelector<HTMLOutputElement>(".n-pathcount");
+  if (!count) return;
+  if ((canvasPrefs.mappingPaths ?? "off") === "off") {
+    count.textContent = "";
+    count.title = "Mapping paths are off";
+    return;
+  }
+  count.textContent = `${summary.resolved} ${summary.resolved === 1 ? "cord" : "cords"}`;
+  count.title = summary.unresolved === 0
+    ? `${summary.resolved} direct mapping paths shown`
+    : `${summary.resolved} direct mapping paths shown; ${summary.unresolved} endpoints are not visible`;
+}
+
+/** Reconcile graph truth separately from its measured anchors. That seam is
+ * what lets a later macro node split key -> control into
+ * key -> transformation -> control without changing canvas plumbing. */
+function syncMappingFlow(announce = false): void {
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  const selectedSlot = Number(nSlotVal() || "0");
+  const count = mappingFlowLayer?.setGraph(lastBindView?.pads ?? [], mode, selectedSlot) ?? 0;
+  const select = learnRoot?.querySelector<HTMLSelectElement>('[data-nx="mapping-paths"]');
+  if (select && select.value !== mode) select.value = mode;
+  if (!announce) return;
+  if (mode === "off") {
+    keyboardWorkbenchAnnounce("Mapping paths hidden.");
+  } else if (mode === "selected") {
+    keyboardWorkbenchAnnounce(
+      count === 0
+        ? `No direct mapping paths are available for Player ${selectedSlot}.`
+        : `${count} direct mapping ${count === 1 ? "path" : "paths"} shown for Player ${selectedSlot}.`,
+    );
+  } else {
+    keyboardWorkbenchAnnounce(
+      `${count} direct mapping ${count === 1 ? "path" : "paths"} shown for all players.`,
+    );
+  }
+}
+
+function setMappingPathMode(mode: MappingPathMode): void {
+  if (!mappingPathModeIsValid(mode)) return;
+  canvasPrefs = { ...canvasPrefs, mappingPaths: mode };
+  saveCanvasPrefs();
+  syncMappingFlow(true);
 }
 
 /** Name the markers on the map. The engine draws one box per widget and
@@ -2121,6 +2184,7 @@ function renderKeyboardWorkbenchKeys(): void {
   for (const button of existing.values()) button.remove();
   syncKeyboardWorkbenchToolbar();
   liveKeyNodes = null;
+  mappingFlowLayer?.scheduleLayout();
 }
 
 function makeKeyboardWorkbenchButton(
@@ -2868,6 +2932,7 @@ export function syncPadWidgets(): void {
   labelCanvasMarkers();
   const revealItem = arrivingSlot === undefined ? undefined : padItems.get(arrivingSlot);
   if (revealItem?.isConnected) canvas.focusItem(revealItem);
+  mappingFlowLayer?.scheduleLayout();
 }
 
 /** Adopt the served canvas skeleton and keyboard widget, then mount the
@@ -2892,6 +2957,8 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   const surface = scope.querySelector<HTMLElement>(".n-canvas");
   const viewport = surface?.querySelector<HTMLElement>(".forma-canvas-viewport");
   const stage = surface?.querySelector<HTMLElement>(".forma-canvas-stage");
+  const flowLines = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="lines"]');
+  const flowPorts = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="ports"]');
   // The zoom readout IS the 100% button in the meta bar: the engine writes
   // the live percentage into whatever element it is handed, and a button
   // that reads the zoom and resets it on click is one control instead of a
@@ -2931,7 +2998,10 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
       onCommit: persistCanvas,
       // The trail behind onCommit: pans and in-flight drags reach the store
       // within a second even if the tab dies before a durable boundary.
-      onChange: scheduleCanvasPersist,
+      onChange: () => {
+        scheduleCanvasPersist();
+        mappingFlowLayer?.scheduleLayout();
+      },
       // The selection group follows the canvas, never the other way round:
       // selecting, scaling and focusing all report here.
       onActiveChange: syncWidgetSelection,
@@ -2959,6 +3029,18 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
   syncKeyboardWorkbenchWidget(false);
+  if (flowLines && flowPorts) {
+    mappingFlowLayer?.dispose();
+    mappingFlowLayer = new MappingFlowLayer(
+      scope,
+      viewport,
+      stage,
+      flowLines,
+      flowPorts,
+      paintMappingFlowCount,
+    );
+    syncMappingFlow();
+  }
   if (Object.keys(canvasPrefs.widgets).length === 0) {
     // Nothing arranged yet: open the way "Tidy up" would leave it, rather
     // than at spawn positions the user never chose. One frame later, so the
@@ -3941,6 +4023,7 @@ function clearLivePaint(): void {
   if (stats) stats.textContent = "";
   const ticker = learnRoot.querySelector<HTMLElement>(".n-ticker");
   if (ticker) ticker.textContent = "";
+  mappingFlowLayer?.setLive(EMPTY_FNS, new Map());
 }
 
 function resetLiveLedger(): void {
@@ -4067,6 +4150,10 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
       fns.some((fnName) => down.has(fnName)),
     );
   }
+  // Runtime paint is separate from configuration truth: a cord moves only
+  // when this exact physical key and its mapped control are both present in
+  // the same frame. Fan-in therefore never lights the wrong source strand.
+  mappingFlowLayer?.setLive(liveKeysDown, liveSlotFns);
   const stats = root.querySelector<HTMLElement>(".n-livestats");
   if (stats) {
     const parts = ["Live"];
@@ -4484,6 +4571,13 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
+    const paths = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="mapping-paths"]',
+    );
+    if (paths && mappingPathModeIsValid(paths.value)) {
+      setMappingPathMode(paths.value);
+      return;
+    }
     const box = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>("[data-macdur]");
     if (box) {
       macShortRow = Number(box.dataset.macdur);
@@ -5874,6 +5968,32 @@ export function NocturneIsland() {
             "Fit",
           ),
           h(
+            "label",
+            {
+              class: "n-pathctl",
+              title:
+                "Show the direct paths from physical keyboard keys to virtual controller controls",
+            },
+            h("span", { class: "n-pathctl-label" }, "Paths"),
+            h(
+              "select",
+              {
+                class: "n-pathsel",
+                "data-nx": "mapping-paths",
+                "aria-label": "Mapping path scope",
+                "aria-controls": "n-mapping-paths n-mapping-ports",
+              },
+              h("option", { value: "off" }, "Off"),
+              h("option", { value: "selected" }, "Selected player"),
+              h("option", { value: "all" }, "All players"),
+            ),
+            h("output", {
+              class: "n-pathcount",
+              "aria-hidden": "true",
+              "data-live-chatter": "",
+            }),
+          ),
+          h(
             "button",
             {
               type: "button",
@@ -7101,6 +7221,30 @@ export function NocturneIsland() {
                 ), // n-widget-body
               ), // article.widget-instance (the keyboard widget)
             ), // .forma-canvas-stage
+            // Direct mapping cords use world coordinates like widgets, but
+            // remain siblings of the role=list stage: edges are canvas
+            // chrome, not list items. Lines pass below the art; small ports
+            // sit above it. Both are pointer-transparent and client-filled.
+            h("svg", {
+              id: "n-mapping-paths",
+              class: "n-flow-layer n-flow-lines",
+              "data-flow-layer": "lines",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
+            h("svg", {
+              id: "n-mapping-ports",
+              class: "n-flow-layer n-flow-ports",
+              "data-flow-layer": "ports",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by

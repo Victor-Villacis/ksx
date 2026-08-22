@@ -7796,6 +7796,41 @@ fn nocturne_resolves_the_selected_slot_server_side() {
     assert_eq!(api["view"]["pad_ps5_cls"], "n-padwrap", "{api}");
     assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap none", "{api}");
     assert_eq!(api["view"]["pad_xbox_cls"], "n-padwrap none", "{api}");
+
+    // Switch Pro and Xbox Series are not aliases for the nearest old art:
+    // each modern persona keeps the physical layout it actually exposes.
+    for persona in ["switchpro", "xboxseries"] {
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: persona.into(),
+                    preset: format!("{persona} art"),
+                    layout: None,
+                })
+                .ok
+        );
+    }
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=4"))).expect("payload");
+    let families: Vec<&str> = api["view"]["pads"]
+        .as_array()
+        .expect("pads")
+        .iter()
+        .map(|pad| pad["family"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(
+        families,
+        vec!["xbox", "ps", "ps5", "switchpro", "xboxseries"],
+        "{api}"
+    );
+    assert_eq!(api["view"]["pad_switchpro_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_xboxseries_cls"], "n-padwrap none", "{api}");
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=5"))).expect("payload");
+    assert_eq!(api["view"]["pad_xboxseries_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_switchpro_cls"], "n-padwrap none", "{api}");
 }
 
 /// **The MIGRATED rack ordering + opposite-directions verbs, over HTTP.**

@@ -940,12 +940,16 @@ describe("the canvas navigation controls", () => {
       const art = await page.evaluate(() => {
         const widget = Array.from(
           document.querySelectorAll(".forma-canvas-stage .widget-instance"),
-        ).find((el) => el.querySelector(".ps5a"));
+        ).find((el) => el.querySelector("svg.dualsensepremium"));
         if (!widget) return { found: false };
-        const svg = widget.querySelector("svg.ps5a");
-        const hooks = svg?.querySelector(".ps5a-hooks");
-        const shell = svg?.querySelector(".ps5a-shell");
-        const hookShapes = Array.from(svg?.querySelectorAll(".ps5a-hook") ?? []);
+        const svg = widget.querySelector("svg.dualsensepremium");
+        const hooks = svg?.querySelector(".dualsensepremium-hooks");
+        const shell = svg?.querySelector(".dualsensepremium-shell");
+        const hookShapes = Array.from(svg?.querySelectorAll(".dualsensepremium-hook") ?? []);
+        const sourceIndexes = new Set(Array.from(
+          svg?.querySelectorAll("[data-dualsense-source-index]") ?? [],
+          (el) => el.getAttribute("data-dualsense-source-index"),
+        ));
         return {
           found: true,
           tag: svg?.tagName ?? null,
@@ -956,9 +960,15 @@ describe("the canvas navigation controls", () => {
           transparentHookCount: hookShapes.filter(
             (el) => el.getAttribute("fill") === "transparent",
           ).length,
-          bodyPaths: svg?.querySelectorAll(".ps5a-body path").length ?? 0,
+          sourceShapeCount: sourceIndexes.size,
+          depthShapeCount: svg?.querySelectorAll(".dualsensepremium-depth-shadow").length ?? 0,
+          privateEffects: svg?.querySelectorAll("defs, filter, mask, foreignObject, image, use, [id]").length ?? -1,
+          calloutCount: svg?.querySelectorAll(".dualsensepremium-callouts text.n-fnkey[data-fn]").length ?? 0,
+          variantCount: widget.querySelectorAll(
+            '.n-controller-variants[aria-label="DualSense color"] button.n-controller-variant',
+          ).length,
           shellFill: shell ? getComputedStyle(shell).fill : "",
-          hooks: Array.from(widget.querySelectorAll(".ps5a-hooks [data-fn]")).map(
+          hooks: Array.from(widget.querySelectorAll(".dualsensepremium-hooks [data-fn]")).map(
             (el) => el.getAttribute("data-fn"),
           ),
         };
@@ -975,8 +985,12 @@ describe("the canvas navigation controls", () => {
       assert.ok(art.hooksInsideArt, "the transparent hooks live inside the art SVG");
       assert.equal(art.hookLayerTag, "g", "hooks are an overlay group, not a second SVG box");
       assert.equal(art.transparentHookCount, 25, "every interactive hook starts transparent");
-      assert.ok(art.bodyPaths >= 15, "the inline body carries source geometry, not a flat stand-in");
-      assert.match(art.shellFill, /nxg-shell/, "the shell draws through the shared carbon paint");
+      assert.equal(art.sourceShapeCount, 89, "the complete paid CC0 geometry survives inline");
+      assert.equal(art.depthShapeCount, 20, "physical contact shadows sit beneath the controls");
+      assert.equal(art.privateEffects, 0, "the clone contains no raster or private paint server");
+      assert.equal(art.calloutCount, 25, "every mapper hook has one matching callout");
+      assert.equal(art.variantCount, 6, "all six DualSense finishes are available in the widget header");
+      assert.match(art.shellFill, /nxg-dualsense-white/, "the shell draws through the shared satin finish");
       // Every control the mapper can actually drive has a hook. The
       // touchpad, the mic button and adaptive-trigger force are NOT here on
       // purpose: the binding vocabulary has no way to express them, and a
@@ -992,6 +1006,138 @@ describe("the canvas navigation controls", () => {
       ]) {
         assert.ok(art.hooks.includes(fn), `the DualSense art hooks ${fn}`);
       }
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Switch Pro and Xbox Series keep native geometry, exact zones, and selectable finishes", async () => {
+    for (const [persona, preset] of [
+      ["switchpro", "Player 4"],
+      ["xboxseries", "Player 5"],
+    ]) {
+      const staged = await fetch(`${BASE}/nocturne/controller`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `persona=${persona}&preset=${encodeURIComponent(preset)}`,
+        redirect: "manual",
+      });
+      assert.ok(staged.status >= 200 && staged.status < 400, `staging ${persona} answered ${staged.status}`);
+    }
+
+    const page = await openCanvas();
+    try {
+      const specs = [
+        {
+          family: "switchpro",
+          svg: "svg.switchpropremium",
+          source: "[data-switchpro-source-index]",
+          sourceCount: 76,
+          depth: ".switchpro-premium-depth-shadow",
+          depthCount: 16,
+          hook: ".switchpro-premium-hook[data-fn]",
+          callout: ".switchpro-premium-callouts text.n-fnkey[data-fn]",
+          shell: ".switchpro-premium-shell",
+          viewBox: "10 145 940 670",
+          variants: ["carbon-black", "ink-pair", "crimson-red", "frost-white"],
+        },
+        {
+          family: "xboxseries",
+          svg: "svg.xboxseriespremium",
+          source: "[data-xbox-series-source-index]",
+          sourceCount: 80,
+          depth: ".xboxseriespremium-depth-shadow",
+          depthCount: 23,
+          hook: ".xboxseriespremium-hook[data-fn]",
+          callout: ".xboxseriespremium-callouts text.n-fnkey[data-fn]",
+          shell: ".xboxseriespremium-shell",
+          viewBox: "0 0 3800 2647",
+          variants: ["black", "white", "blue", "red", "green"],
+        },
+      ];
+
+      const inspect = (spec) => page.evaluate((entry) => {
+        const stage = document.querySelector(".forma-canvas-stage");
+        const widget = Array.from(stage?.querySelectorAll(".widget-instance") ?? [])
+          .find((el) => el.querySelector(entry.svg));
+        if (!widget) return { found: false };
+        const svg = widget.querySelector(entry.svg);
+        const hooks = Array.from(svg.querySelectorAll(entry.hook));
+        const callouts = Array.from(svg.querySelectorAll(entry.callout));
+        const geometryAttrs = [
+          "d", "x", "y", "cx", "cy", "r", "rx", "ry", "width", "height", "points", "transform",
+        ];
+        const geometry = Array.from(
+          svg.querySelectorAll("g, path, circle, rect, ellipse, line, polyline, polygon"),
+          (el) => [el.tagName, ...geometryAttrs.map((name) => el.getAttribute(name) ?? "")].join("|"),
+        );
+        const sourceIndexes = new Set(Array.from(
+          svg.querySelectorAll(entry.source),
+          (el) => el.getAttribute(entry.family === "switchpro"
+            ? "data-switchpro-source-index"
+            : "data-xbox-series-source-index"),
+        ));
+        const buttons = Array.from(widget.querySelectorAll(
+          '.n-controller-variants button.n-controller-variant[data-controller-variant]',
+        ));
+        return {
+          found: true,
+          viewBox: svg.getAttribute("viewBox"),
+          variant: svg.getAttribute("data-controller-variant"),
+          sourceCount: sourceIndexes.size,
+          depthCount: svg.querySelectorAll(entry.depth).length,
+          hookCount: hooks.length,
+          uniqueHookCount: new Set(hooks.map((el) => el.getAttribute("data-fn"))).size,
+          calloutCount: callouts.length,
+          uniqueCalloutCount: new Set(callouts.map((el) => el.getAttribute("data-fn"))).size,
+          transparentHookCount: hooks.filter((el) => el.getAttribute("fill") === "transparent").length,
+          forbiddenCount: svg.querySelectorAll("defs, filter, mask, foreignObject, image, use, [id]").length,
+          buttonSlugs: buttons.map((el) => el.getAttribute("data-controller-variant")),
+          pressed: buttons.filter((el) => el.getAttribute("aria-pressed") === "true")
+            .map((el) => el.getAttribute("data-controller-variant")),
+          shellFill: getComputedStyle(svg.querySelector(entry.shell)).fill,
+          geometry,
+        };
+      }, spec);
+
+      for (const spec of specs) {
+        const initial = await inspect(spec);
+        assert.ok(initial.found, `${spec.family} gets its own inline master`);
+        assert.equal(initial.viewBox, spec.viewBox, `${spec.family} keeps its native crop`);
+        assert.equal(initial.sourceCount, spec.sourceCount, `${spec.family} keeps every authored source shape`);
+        assert.equal(initial.depthCount, spec.depthCount, `${spec.family} has explicit physical depth vectors`);
+        assert.equal(initial.hookCount, 25, `${spec.family} exposes exactly 25 mapper hooks`);
+        assert.equal(initial.uniqueHookCount, 25, `${spec.family} hooks are unique whole controls`);
+        assert.equal(initial.calloutCount, 25, `${spec.family} has a callout for every hook`);
+        assert.equal(initial.uniqueCalloutCount, 25, `${spec.family} callouts match the hook vocabulary`);
+        assert.equal(initial.transparentHookCount, 25, `${spec.family} hooks are invisible at rest`);
+        assert.equal(initial.forbiddenCount, 0, `${spec.family} contains no raster or private paint server`);
+        assert.deepEqual(initial.buttonSlugs, spec.variants, `${spec.family} exposes every finish`);
+        assert.deepEqual(initial.pressed, [spec.variants[0]], `${spec.family} starts on its canonical finish`);
+
+        const next = spec.variants[1];
+        await page.locator(
+          `.forma-canvas-stage .widget-instance:has(${spec.svg}) ` +
+          `button[data-controller-variant="${next}"]`,
+        ).click();
+        await page.waitForFunction(
+          ({ svgSelector, slug }) => document.querySelector(
+            `.forma-canvas-stage .widget-instance ${svgSelector}`,
+          )?.getAttribute("data-controller-variant") === slug,
+          { svgSelector: spec.svg, slug: next },
+        );
+        const changed = await inspect(spec);
+        assert.equal(changed.variant, next, `${spec.family} finish button repaints the clone`);
+        assert.deepEqual(changed.pressed, [next], `${spec.family} exposes selected state`);
+        assert.notEqual(changed.shellFill, initial.shellFill, `${spec.family} changes material paint`);
+        assert.deepEqual(changed.geometry, initial.geometry, `${spec.family} finish cannot move geometry or hooks`);
+      }
+      const storedFinishes = await page.evaluate(() =>
+        localStorage.getItem("ksx-nocturne-controller-finishes1") ?? ""
+      );
+      assert.match(storedFinishes, /switchpro:/, "Switch Pro finish persists by family and preset");
+      assert.match(storedFinishes, /xboxseries:/, "Xbox Series finish persists by family and preset");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

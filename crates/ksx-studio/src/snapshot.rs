@@ -4239,6 +4239,8 @@ pub struct NocturneDerived {
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
     pub pad_ps5_cls: String,
+    pub pad_switchpro_cls: String,
+    pub pad_xboxseries_cls: String,
     pub bind_title: String,
     /// The binding list, grouped the way the physical controller is
     /// organised: face cluster, D-pad, shoulders & triggers, each stick,
@@ -4376,13 +4378,11 @@ const NOCTURNE_BIND_GROUP_LABELS: [&str; 6] = [
 /// own touchpad, and drawing it as a PS4 pad is a picture that lies about the
 /// device Windows just gained.
 ///
-/// ⚠️Switch Pro, SNES and Genesis land on `"ps"` today. That is a KNOWN gap,
-/// not a claim: those three have no art yet, and the DualShock outline is the
-/// least-wrong of the three bodies that exist. Give each its own here the
-/// moment its art lands.
 fn pad_art_family(persona: Option<&str>, slot: Option<&ksx_api::StagedSlotView>) -> &'static str {
     match persona {
         Some("dualsense") => "ps5",
+        Some("switchpro") => "switchpro",
+        Some("xboxseries") => "xboxseries",
         _ => {
             if slot.is_some_and(|slot| slot.is_xinput) {
                 "xbox"
@@ -4831,9 +4831,7 @@ impl NocturneDerived {
         // templates and every staged pad is its own canvas widget.)
         // ⚠️Keyed on the PERSONA, not on `is_xinput`: a DualSense has its
         // own body, and drawing every non-XInput seat as a DualShock is how
-        // a PS5 pad ended up wearing PS4 art. (Switch Pro, SNES and Genesis
-        // still fall back to the DualShock outline — they have no art yet,
-        // and that is the next gap, not a claim that they are right.)
+        // modern controllers ended up wearing another generation's art.
         let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()), selected);
         let wrap_cls = |family: &str| {
             if pad_family == family {
@@ -4845,6 +4843,8 @@ impl NocturneDerived {
         let pad_xbox_cls = wrap_cls("xbox");
         let pad_ps_cls = wrap_cls("ps");
         let pad_ps5_cls = wrap_cls("ps5");
+        let pad_switchpro_cls = wrap_cls("switchpro");
+        let pad_xboxseries_cls = wrap_cls("xboxseries");
         // The keyboard grid: the SAME mapper table the binding pane reads,
         // inverted key→functions, painted onto the standard-board layout.
         let keyboard_name = staged
@@ -5715,6 +5715,8 @@ impl NocturneDerived {
             pad_xbox_cls,
             pad_ps_cls,
             pad_ps5_cls,
+            pad_switchpro_cls,
+            pad_xboxseries_cls,
             bind_title: binds.title,
             bind_face,
             bind_dpad,

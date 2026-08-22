@@ -8911,6 +8911,338 @@ a.wsrow-title:hover {
   fill: #171923;
 }
 
+/* ── Premium controller trio ─────────────────────────────────────────────
+   CC0 source geometry supplies the real silhouettes and control stacks.
+   These app-owned material rules add the small physical cues visible in the
+   product references: button contact shadows, rim light, seams and texture.
+   Paint, interaction hooks and callouts remain separate sibling layers. */
+
+.n-center .dualsensepremium,
+.n-center .switchpropremium,
+.n-center .xboxseriespremium {
+  overflow: visible;
+  shape-rendering: geometricPrecision;
+}
+
+.n-center .dualsensepremium-body,
+.n-center .dualsensepremium-source,
+.n-center .dualsensepremium-depth,
+.n-center .switchpro-premium-body,
+.n-center .switchpro-premium-source,
+.n-center .switchpro-premium-depth,
+.n-center .xboxseriespremium-body,
+.n-center .xboxseriespremium-source,
+.n-center .xboxseriespremium-depth {
+  pointer-events: none;
+}
+
+/* DualSense: satin wings around the black inner chassis. */
+.n-center .dualsensepremium .dualsensepremium-depth-shadow,
+.n-center .switchpropremium .switchpro-premium-depth-shadow,
+.n-center .xboxseriespremium .xboxseriespremium-depth-shadow {
+  fill: #020307;
+  stroke: none;
+}
+
+.n-center .dualsensepremium .dualsensepremium-depth-ambient,
+.n-center .switchpropremium .switchpro-premium-depth-ambient,
+.n-center .xboxseriespremium .xboxseriespremium-depth-ambient {
+  opacity: 0.2;
+}
+
+.n-center .dualsensepremium .dualsensepremium-depth-contact,
+.n-center .switchpropremium .switchpro-premium-depth-contact,
+.n-center .xboxseriespremium .xboxseriespremium-depth-contact {
+  opacity: 0.52;
+}
+
+.n-center .dualsensepremium .dualsensepremium-shell,
+.n-center .dualsensepremium .dualsensepremium-under-panel,
+.n-center .dualsensepremium .dualsensepremium-touchpad {
+  stroke: rgba(20, 24, 34, 0.58);
+  stroke-width: 1.2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-shell {
+  fill: var(--dualsensep-shell, url(#nxg-dualsense-white));
+}
+
+.n-center .dualsensepremium .dualsensepremium-under-panel,
+.n-center .dualsensepremium .dualsensepremium-corner-plane {
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 0.8px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-core {
+  stroke: rgba(6, 7, 11, 0.92);
+  stroke-width: 1.45px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-touch-bed {
+  stroke: rgba(1, 4, 12, 0.8);
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-touchpad {
+  stroke: rgba(255, 255, 255, 0.24);
+}
+
+.n-center .dualsensepremium .dualsensepremium-lightbar {
+  stroke: rgba(185, 221, 255, 0.82);
+  stroke-width: 0.85px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-status-glow {
+  opacity: 0.58;
+}
+
+.n-center .dualsensepremium .dualsensepremium-trigger,
+.n-center .dualsensepremium .dualsensepremium-dpad-rim,
+.n-center .dualsensepremium .dualsensepremium-face-rim,
+.n-center .dualsensepremium .dualsensepremium-stick-rim,
+.n-center .dualsensepremium .dualsensepremium-utility-outline,
+.n-center .dualsensepremium .dualsensepremium-guide-rim {
+  stroke: rgba(3, 4, 8, 0.8);
+  stroke-width: 1.1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-dpad-cap,
+.n-center .dualsensepremium .dualsensepremium-face-cap,
+.n-center .dualsensepremium .dualsensepremium-stick-cap,
+.n-center .dualsensepremium .dualsensepremium-utility-cap,
+.n-center .dualsensepremium .dualsensepremium-guide-cap {
+  stroke: rgba(255, 255, 255, 0.17);
+  stroke-width: 0.7px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-dpad-glyph,
+.n-center .dualsensepremium .dualsensepremium-face-glyph,
+.n-center .dualsensepremium .dualsensepremium-utility-glyph,
+.n-center .dualsensepremium .dualsensepremium-mic-glyph {
+  opacity: 0.94;
+}
+
+.n-center .dualsensepremium .dualsensepremium-stick-face {
+  stroke: rgba(135, 143, 160, 0.25);
+  stroke-width: 0.8px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-speaker {
+  stroke: rgba(116, 126, 145, 0.24);
+  stroke-width: 0.45px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .dualsensepremium .dualsensepremium-bumper-shadow {
+  fill: #020307;
+  opacity: 0.6;
+}
+
+.n-center .dualsensepremium .dualsensepremium-bumper {
+  fill: var(--dualsensep-shoulder, #181820);
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1.1px;
+}
+
+.n-center .dualsensepremium .dualsensepremium-bumper-sheen {
+  fill: var(--dualsensep-shoulder-highlight, #2b2b3a);
+  opacity: 0.8;
+}
+
+/* Switch Pro: smoked upper shell, restrained circuit layer and grippy wings. */
+.n-center .switchpropremium .switchpro-premium-shell {
+  fill: var(--switchp-tone-shell, url(#nxg-switchpro-carbon-black));
+  stroke: rgba(5, 7, 9, 0.78);
+  stroke-width: 1.35px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-shell-top,
+.n-center .switchpropremium .switchpro-premium-top-piece {
+  stroke: rgba(220, 230, 238, 0.16);
+  stroke-width: 0.9px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-shell-top {
+  opacity: 0.9;
+}
+
+.n-center .switchpropremium .switchpro-premium-circuit {
+  opacity: 0.32;
+}
+
+.n-center .switchpropremium .switchpro-premium-grip {
+  stroke: rgba(3, 4, 6, 0.62);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-grip-texture {
+  opacity: 0.67;
+}
+
+.n-center .switchpropremium .switchpro-premium-seam {
+  opacity: 0.72;
+}
+
+.n-center .switchpropremium .switchpro-premium-trigger,
+.n-center .switchpropremium .switchpro-premium-bumper {
+  stroke: rgba(0, 0, 0, 0.78);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-dpad-edge,
+.n-center .switchpropremium .switchpro-premium-face-rim,
+.n-center .switchpropremium .switchpro-premium-stick-well-outer,
+.n-center .switchpropremium .switchpro-premium-utility-rim,
+.n-center .switchpropremium .switchpro-premium-home-rim {
+  stroke: rgba(1, 2, 4, 0.82);
+  stroke-width: 1.05px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-dpad-cap,
+.n-center .switchpropremium .switchpro-premium-face-cap,
+.n-center .switchpropremium .switchpro-premium-stick-cap,
+.n-center .switchpropremium .switchpro-premium-utility-cap,
+.n-center .switchpropremium .switchpro-premium-home-cap {
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 0.7px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .switchpropremium .switchpro-premium-stick-groove-0,
+.n-center .switchpropremium .switchpro-premium-stick-groove-1,
+.n-center .switchpropremium .switchpro-premium-stick-groove-2,
+.n-center .switchpropremium .switchpro-premium-stick-groove-3,
+.n-center .switchpropremium .switchpro-premium-stick-groove-4,
+.n-center .switchpropremium .switchpro-premium-stick-groove-5,
+.n-center .switchpropremium .switchpro-premium-stick-groove-6 {
+  opacity: 0.88;
+}
+
+.n-center .switchpropremium .switchpro-premium-home-ring-soft {
+  opacity: 0.58;
+}
+
+/* Xbox Series: matte sculpt, faceted hybrid D-pad and stepped ABXY caps. */
+.n-center .xboxseriespremium .xboxseriespremium-shell {
+  fill: var(--xboxsp-tone-1, url(#nxg-xboxseries-black));
+  stroke: rgba(0, 0, 0, 0.82);
+  stroke-width: 1.35px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-shell-lower {
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1.05px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-top-seam {
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 0.9px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-lower-seam,
+.n-center .xboxseriespremium .xboxseriespremium-lower-seam-shadow {
+  opacity: 0.78;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-trigger,
+.n-center .xboxseriespremium .xboxseriespremium-bumper {
+  stroke: rgba(0, 0, 0, 0.78);
+  stroke-width: 1.1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-dpad-deck,
+.n-center .xboxseriespremium .xboxseriespremium-dpad-segment,
+.n-center .xboxseriespremium .xboxseriespremium-dpad-cross-cap,
+.n-center .xboxseriespremium .xboxseriespremium-stick-rim-outer,
+.n-center .xboxseriespremium .xboxseriespremium-face-rim,
+.n-center .xboxseriespremium .xboxseriespremium-utility-rim,
+.n-center .xboxseriespremium .xboxseriespremium-guide-rim {
+  stroke: rgba(0, 0, 0, 0.82);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-dpad-segment,
+.n-center .xboxseriespremium .xboxseriespremium-face-cap,
+.n-center .xboxseriespremium .xboxseriespremium-stick-cap,
+.n-center .xboxseriespremium .xboxseriespremium-utility-cap,
+.n-center .xboxseriespremium .xboxseriespremium-guide-cap {
+  stroke: rgba(255, 255, 255, 0.15);
+  stroke-width: 0.72px;
+  vector-effect: non-scaling-stroke;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-stick-texture {
+  opacity: 0.62;
+}
+
+.n-center .xboxseriespremium .xboxseriespremium-face-sheen,
+.n-center .xboxseriespremium .xboxseriespremium-face-glyph-sheen,
+.n-center .xboxseriespremium .xboxseriespremium-stick-sheen,
+.n-center .xboxseriespremium .xboxseriespremium-utility-sheen,
+.n-center .xboxseriespremium .xboxseriespremium-guide-sheen {
+  opacity: 0.82;
+}
+
+/* Whole-control hit geometry: invisible at rest, exact source silhouette on
+   hover/live/learn. The body never owns data-fn, so border dead zones vanish. */
+.n-center .dualsensepremium .dualsensepremium-hook,
+.n-center .switchpropremium .switchpro-premium-hook,
+.n-center .xboxseriespremium .xboxseriespremium-hook {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+  transform: none;
+}
+
+.n-center .dualsensepremium .dualsensepremium-hook:hover,
+.n-center .dualsensepremium .dualsensepremium-hook.arm,
+.n-center .dualsensepremium .dualsensepremium-hook.live,
+.n-center .switchpropremium .switchpro-premium-hook:hover,
+.n-center .switchpropremium .switchpro-premium-hook.arm,
+.n-center .switchpropremium .switchpro-premium-hook.live,
+.n-center .xboxseriespremium .xboxseriespremium-hook:hover,
+.n-center .xboxseriespremium .xboxseriespremium-hook.arm,
+.n-center .xboxseriespremium .xboxseriespremium-hook.live {
+  fill: rgba(150, 138, 224, 0.16);
+  stroke: var(--n-accent-line);
+  stroke-width: 2.4px;
+  vector-effect: non-scaling-stroke;
+  transform: none;
+}
+
+.n-center .dualsensepremium text.n-fnkey {
+  font-size: 19px;
+  stroke-width: 3.2px;
+}
+
+.n-center .switchpropremium text.n-fnkey {
+  font-size: 11px;
+  stroke-width: 1.8px;
+}
+
+.n-center .xboxseriespremium text.n-fnkey {
+  font-size: 48px;
+  stroke-width: 9px;
+}
+
 .n-center .nx-defs {
   position: absolute;
 }
@@ -11452,7 +11784,8 @@ button.n-keychip:hover {
   text-overflow: ellipsis;
 }
 
-.n-ds4-variants {
+.n-ds4-variants,
+.n-controller-variants {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -11460,7 +11793,8 @@ button.n-keychip:hover {
   margin-inline-start: auto;
 }
 
-.n-ds4-variant {
+.n-ds4-variant,
+.n-controller-variant {
   position: relative;
   width: 24px;
   height: 24px;
@@ -11473,7 +11807,8 @@ button.n-keychip:hover {
   touch-action: manipulation;
 }
 
-.n-ds4-variant::before {
+.n-ds4-variant::before,
+.n-controller-variant::before {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -11481,18 +11816,20 @@ button.n-keychip:hover {
   height: 3px;
   border: 1px solid rgba(255, 255, 255, 0.38);
   border-radius: 999px;
-  background: var(--ds4-variant-swatch);
+  background: var(--controller-variant-swatch, var(--ds4-variant-swatch));
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
   content: "";
   transform: translate(-50%, -50%);
   transition: width 120ms ease, height 120ms ease, box-shadow 120ms ease;
 }
 
-.n-ds4-variant:hover::before {
+.n-ds4-variant:hover::before,
+.n-controller-variant:hover::before {
   width: 16px;
 }
 
-.n-ds4-variant[aria-pressed="true"]::before {
+.n-ds4-variant[aria-pressed="true"]::before,
+.n-controller-variant[aria-pressed="true"]::before {
   width: 18px;
   height: 4px;
   border-color: var(--n-text-1);
@@ -11501,13 +11838,15 @@ button.n-keychip:hover {
     0 0 7px rgba(150, 138, 224, 0.5);
 }
 
-.n-ds4-variant:focus-visible {
+.n-ds4-variant:focus-visible,
+.n-controller-variant:focus-visible {
   outline: 2px solid var(--n-accent);
   outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .n-ds4-variant::before {
+  .n-ds4-variant::before,
+  .n-controller-variant::before {
     transition: none;
   }
 }

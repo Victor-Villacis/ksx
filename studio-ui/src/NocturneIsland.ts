@@ -10,6 +10,24 @@ import {
   Ds4PremiumGeometry,
   type Ds4PremiumVariantSlug,
 } from "./ds4PremiumGeometry";
+import { DualSensePremiumArt } from "./dualSensePremiumArt";
+import {
+  DUALSENSE_PREMIUM_SHELL_TONE,
+  DUALSENSE_PREMIUM_VARIANTS,
+  type DualSensePremiumVariantSlug,
+} from "./dualSensePremiumGeometry";
+import { SwitchProPremiumArt } from "./switchProPremiumArt";
+import {
+  SWITCH_PRO_PREMIUM_SHELL_TONE,
+  SWITCH_PRO_PREMIUM_VARIANTS,
+  type SwitchProPremiumVariantSlug,
+} from "./switchProPremiumGeometry";
+import { XboxSeriesPremiumArt } from "./xboxSeriesPremiumArt";
+import {
+  XBOX_SERIES_PREMIUM_SHELL_TONE,
+  XBOX_SERIES_PREMIUM_VARIANTS,
+  type XboxSeriesPremiumVariantSlug,
+} from "./xboxSeriesPremiumGeometry";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -271,6 +289,8 @@ export interface NocturneView {
   pad_xbox_cls: string;
   pad_ps_cls: string;
   pad_ps5_cls: string;
+  pad_switchpro_cls: string;
+  pad_xboxseries_cls: string;
   bind_title: string;
   bind_face: NocturneBindRowView[];
   bind_dpad: NocturneBindRowView[];
@@ -446,6 +466,8 @@ const [nPadSub, setNPadSub] = createSignal("");
 const [nPadXboxCls, setNPadXboxCls] = createSignal("n-padwrap");
 const [nPadPsCls, setNPadPsCls] = createSignal("n-padwrap none");
 const [nPadPs5Cls, setNPadPs5Cls] = createSignal("n-padwrap none");
+const [nPadSwitchProCls, setNPadSwitchProCls] = createSignal("n-padwrap none");
+const [nPadXboxSeriesCls, setNPadXboxSeriesCls] = createSignal("n-padwrap none");
 const [nBindTitle, setNBindTitle] = createSignal("");
 // The binding list, grouped the way the physical controller is organised.
 // Six lists (a list body is one flat template); the headers carry served
@@ -830,6 +852,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNPadXboxCls(v.pad_xbox_cls);
   setNPadPsCls(v.pad_ps_cls);
   setNPadPs5Cls(v.pad_ps5_cls);
+  setNPadSwitchProCls(v.pad_switchpro_cls);
+  setNPadXboxSeriesCls(v.pad_xboxseries_cls);
   setNBindTitle(v.bind_title);
   setNBindFace(v.bind_face);
   setNBindDpad(v.bind_dpad);
@@ -962,6 +986,53 @@ const CANVAS_STORE = "ksx-nocturne-canvas";
 const DS4_VARIANT_STORE = "ksx-nocturne-ds4-variants1";
 const DS4_VARIANT_SLUGS = new Set<string>(DS4_PREMIUM_VARIANTS.map((variant) => variant.slug));
 let ds4Variants: Record<string, Ds4PremiumVariantSlug> = {};
+const CONTROLLER_FINISH_STORE = "ksx-nocturne-controller-finishes1";
+
+type PremiumControllerFamily = "ps5" | "switchpro" | "xboxseries";
+type PremiumControllerVariantSlug =
+  | DualSensePremiumVariantSlug
+  | SwitchProPremiumVariantSlug
+  | XboxSeriesPremiumVariantSlug;
+type PremiumControllerVariant = {
+  readonly slug: PremiumControllerVariantSlug;
+  readonly label: string;
+  readonly swatch: string;
+  readonly gradient: string;
+  readonly tones: Readonly<Record<string, string>>;
+};
+type PremiumControllerConfig = {
+  readonly label: string;
+  readonly selector: string;
+  readonly variantAttribute: string;
+  readonly shellTone: string;
+  readonly variants: readonly PremiumControllerVariant[];
+};
+
+const PREMIUM_CONTROLLER_CONFIGS: Record<PremiumControllerFamily, PremiumControllerConfig> = {
+  ps5: {
+    label: "DualSense",
+    selector: "svg.dualsensepremium",
+    variantAttribute: "data-dualsense-variant",
+    shellTone: DUALSENSE_PREMIUM_SHELL_TONE,
+    variants: DUALSENSE_PREMIUM_VARIANTS,
+  },
+  switchpro: {
+    label: "Switch Pro",
+    selector: "svg.switchpropremium",
+    variantAttribute: "data-switchpro-variant",
+    shellTone: SWITCH_PRO_PREMIUM_SHELL_TONE,
+    variants: SWITCH_PRO_PREMIUM_VARIANTS,
+  },
+  xboxseries: {
+    label: "Xbox Series",
+    selector: "svg.xboxseriespremium",
+    variantAttribute: "data-xboxseries-variant",
+    shellTone: XBOX_SERIES_PREMIUM_SHELL_TONE,
+    variants: XBOX_SERIES_PREMIUM_VARIANTS,
+  },
+};
+
+let controllerFinishes: Record<string, PremiumControllerVariantSlug> = {};
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
  *  press should be a visible move, not a nudge. */
@@ -1104,6 +1175,69 @@ function applyDs4Variant(
   if (persist) {
     ds4Variants[storeKey] = variant.slug;
     saveDs4Variants();
+  }
+}
+
+function premiumControllerConfig(family: string): PremiumControllerConfig | null {
+  return Object.prototype.hasOwnProperty.call(PREMIUM_CONTROLLER_CONFIGS, family)
+    ? PREMIUM_CONTROLLER_CONFIGS[family as PremiumControllerFamily]
+    : null;
+}
+
+function controllerFinishKey(family: PremiumControllerFamily, storeKey: string): string {
+  return family + ":" + storeKey;
+}
+
+function loadControllerFinishes(): void {
+  try {
+    const raw = window.localStorage.getItem(CONTROLLER_FINISH_STORE);
+    const saved = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    const clean: Record<string, PremiumControllerVariantSlug> = {};
+    for (const [key, value] of Object.entries(saved)) {
+      const separator = key.indexOf(":");
+      const family = separator > 0 ? key.slice(0, separator) : "";
+      const config = premiumControllerConfig(family);
+      if (config && typeof value === "string" && config.variants.some((variant) => variant.slug === value)) {
+        clean[key] = value as PremiumControllerVariantSlug;
+      }
+    }
+    controllerFinishes = clean;
+  } catch {
+    controllerFinishes = {};
+  }
+}
+
+function saveControllerFinishes(): void {
+  try {
+    window.localStorage.setItem(CONTROLLER_FINISH_STORE, JSON.stringify(controllerFinishes));
+  } catch {
+    // A finish is visual chrome; blocked storage only makes it temporary.
+  }
+}
+
+/** Repaint a premium controller without moving a single source-authored path
+ * or transparent mapper hook. The body keeps its native geometry; only the
+ * source's semantic paint variables and the shared shell gradient change. */
+function applyPremiumControllerVariant(
+  svg: SVGSVGElement,
+  controls: HTMLElement,
+  family: PremiumControllerFamily,
+  storeKey: string,
+  slug: PremiumControllerVariantSlug,
+  persist: boolean,
+): void {
+  const config = PREMIUM_CONTROLLER_CONFIGS[family];
+  const variant = config.variants.find((item) => item.slug === slug) ?? config.variants[0];
+  for (const [name, value] of Object.entries(variant.tones)) svg.style.setProperty(name, value);
+  svg.style.setProperty(config.shellTone, `url(#${variant.gradient})`);
+  svg.setAttribute("data-controller-variant", variant.slug);
+  svg.setAttribute(config.variantAttribute, variant.slug);
+  for (const button of Array.from(controls.querySelectorAll<HTMLButtonElement>("button[data-controller-variant]"))) {
+    button.setAttribute("aria-pressed", String(button.dataset.controllerVariant === variant.slug));
+  }
+  if (persist) {
+    controllerFinishes[controllerFinishKey(family, storeKey)] = variant.slug;
+    saveControllerFinishes();
   }
 }
 
@@ -1381,8 +1515,11 @@ export function syncPadWidgets(): void {
     // index silently hand every PlayStation seat the wrong body.
     const storeKeys = padStoreKeys(pads);
     pads.forEach((pv, index) => {
+      const family = new Set(["xbox", "ps", "ps5", "switchpro", "xboxseries"]).has(pv.family)
+        ? pv.family
+        : "xbox";
       const master = root.querySelector<HTMLElement>(
-        `.n-padwrap[data-pad-family="${pv.family === "ps5" ? "ps5" : pv.family === "ps" ? "ps" : "xbox"}"]`,
+        `.n-padwrap[data-pad-family="${family}"]`,
       );
       const art = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
       if (!art) return;
@@ -1436,6 +1573,50 @@ export function syncPadWidgets(): void {
         );
         head.append(controls);
         variantControls = controls;
+      } else {
+        const config = premiumControllerConfig(family);
+        if (config && artClone.matches(config.selector)) {
+          const premiumFamily = family as PremiumControllerFamily;
+          const controls = document.createElement("div");
+          controls.className = "n-controller-variants";
+          controls.setAttribute("role", "group");
+          controls.setAttribute("aria-label", config.label + " color");
+          for (const variant of config.variants) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "n-controller-variant";
+            button.dataset.nx = "controller-variant";
+            button.dataset.controllerVariant = variant.slug;
+            button.setAttribute("aria-label", variant.label + " controller finish");
+            button.setAttribute("aria-pressed", "false");
+            button.title = variant.label;
+            button.style.setProperty("--controller-variant-swatch", variant.swatch);
+            button.addEventListener("click", (event) => {
+              event.stopPropagation();
+              applyPremiumControllerVariant(
+                artClone,
+                controls,
+                premiumFamily,
+                storeKey,
+                variant.slug,
+                true,
+              );
+            });
+            controls.append(button);
+          }
+          controls.addEventListener("pointerdown", (event) => event.stopPropagation());
+          const saved = controllerFinishes[controllerFinishKey(premiumFamily, storeKey)];
+          applyPremiumControllerVariant(
+            artClone,
+            controls,
+            premiumFamily,
+            storeKey,
+            saved ?? config.variants[0].slug,
+            false,
+          );
+          head.append(controls);
+          variantControls = controls;
+        }
       }
       content.append(head, artClone);
       const item = createCanvasItem({
@@ -3025,6 +3206,7 @@ export function nocturneWire(root: HTMLElement): void {
   loadSlotColors();
   loadHiddenStrips();
   loadDs4Variants();
+  loadControllerFinishes();
   applyNocturneUi();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
@@ -4627,6 +4809,114 @@ export function NocturneIsland() {
                 h("stop", { offset: "0.5", "stop-color": "#223355" }),
                 h("stop", { offset: "1", "stop-color": "#14223a" }),
               ),
+              // Product-photo-informed shell ramps for the three premium
+              // controller families. They stay document-wide so cloned SVGs
+              // never need private defs (the browser resolves every url()).
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-white", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ffffff" }),
+                h("stop", { offset: "0.48", "stop-color": "#d9dde6" }),
+                h("stop", { offset: "1", "stop-color": "#aeb5c2" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-midnight-black", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#4a4d5d" }),
+                h("stop", { offset: "0.5", "stop-color": "#252733" }),
+                h("stop", { offset: "1", "stop-color": "#10121a" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-cosmic-red", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#e64c6b" }),
+                h("stop", { offset: "0.5", "stop-color": "#b72446" }),
+                h("stop", { offset: "1", "stop-color": "#74152c" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-nova-pink", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ffa0bd" }),
+                h("stop", { offset: "0.5", "stop-color": "#e86f99" }),
+                h("stop", { offset: "1", "stop-color": "#a83d66" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-starlight-blue", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#81c5e8" }),
+                h("stop", { offset: "0.5", "stop-color": "#4b9fd0" }),
+                h("stop", { offset: "1", "stop-color": "#24668f" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-dualsense-galactic-purple", x1: "0.16", y1: "0", x2: "0.84", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#a47bd5" }),
+                h("stop", { offset: "0.5", "stop-color": "#7049a7" }),
+                h("stop", { offset: "1", "stop-color": "#45296d" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-switchpro-carbon-black", x1: "0.08", y1: "0", x2: "0.92", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#737a80" }),
+                h("stop", { offset: "0.52", "stop-color": "#52585c" }),
+                h("stop", { offset: "1", "stop-color": "#292d31" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-switchpro-ink-pair", x1: "0.08", y1: "0", x2: "0.92", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#71808a" }),
+                h("stop", { offset: "0.52", "stop-color": "#46515a" }),
+                h("stop", { offset: "1", "stop-color": "#252b30" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-switchpro-crimson-red", x1: "0.08", y1: "0", x2: "0.92", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#d0525f" }),
+                h("stop", { offset: "0.52", "stop-color": "#a82736" }),
+                h("stop", { offset: "1", "stop-color": "#681720" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-switchpro-frost-white", x1: "0.08", y1: "0", x2: "0.92", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ffffff" }),
+                h("stop", { offset: "0.52", "stop-color": "#eceef0" }),
+                h("stop", { offset: "1", "stop-color": "#b9c0c7" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-xboxseries-black", x1: "0.12", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#515155" }),
+                h("stop", { offset: "0.5", "stop-color": "#28282a" }),
+                h("stop", { offset: "1", "stop-color": "#141416" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-xboxseries-white", x1: "0.12", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ffffff" }),
+                h("stop", { offset: "0.5", "stop-color": "#d7d7d7" }),
+                h("stop", { offset: "1", "stop-color": "#a9abad" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-xboxseries-blue", x1: "0.12", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#3677db" }),
+                h("stop", { offset: "0.5", "stop-color": "#1c448a" }),
+                h("stop", { offset: "1", "stop-color": "#102750" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-xboxseries-red", x1: "0.12", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#ff4b44" }),
+                h("stop", { offset: "0.5", "stop-color": "#e71717" }),
+                h("stop", { offset: "1", "stop-color": "#8b0b0b" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-xboxseries-green", x1: "0.12", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#e1f668" }),
+                h("stop", { offset: "0.5", "stop-color": "#c1db31" }),
+                h("stop", { offset: "1", "stop-color": "#728b12" }),
+              ),
               // A compact touch texture for the free DS4's 640-unit source.
               // Hoisting it keeps every clone on the same app-owned paint.
               h(
@@ -4977,196 +5267,23 @@ export function NocturneIsland() {
               ),
             ),
           ),
-          // ── The DualSense (PS5) ───────────────────────────────────────
-          // Real geometry from art/src-dualsense.svg, pared back from the
-          // Figma product render to the pieces that define the controller.
-          // The source's 47 filters, masks and private paint IDs stay OUT:
-          // this drawing uses the page-wide nxg-* carbon paints, just like
-          // the other inline pads, and remains safe when the master clones.
-          //
-          // Art, transparent hooks and dressing share ONE SVG/viewBox. That
-          // makes hook drift structurally impossible: there is no second box
-          // to size differently. Only the transparent layer carries data-fn;
-          // live input can light it without repainting the authored geometry.
+          // ── Premium CC0 DualSense ─────────────────────────────────────
           h(
             "div",
             { class: () => nPadPs5Cls(), "data-pad-family": "ps5" },
-            h(
-              "svg",
-              {
-                class: "wspad ps5a",
-                viewBox: "70 216 940 640",
-                preserveAspectRatio: "xMidYMid meet",
-                "aria-hidden": "true",
-                focusable: "false",
-              },
-              // ── Body: authentic source paths, Studio paint servers ────
-              h(
-                "g",
-                { class: "ps5a-body" },
-                // Shoulder silhouettes from the supplied export, with four
-                // restrained control pills dressed in the shared btn paint.
-                h("path", { class: "ps5a-trigger-bed", d: "M192.655 261.747L190.039 281.444L314.978 261.747L311.707 238.853C301.895 236.672 276.123 233.096 251.527 236.236C226.932 239.376 202.031 254.552 192.655 261.747Z" }),
-                h("path", { class: "ps5a-trigger-bed", d: "M888.496 261.747L891.113 281.444L766.173 261.747L769.444 238.853C779.256 236.672 805.029 233.096 829.624 236.236C854.219 239.376 879.12 254.552 888.496 261.747Z" }),
-                h("rect", { class: "ps5a-shoulder", x: "190", y: "231", width: "126", height: "48", rx: "22" }),
-                h("rect", { class: "ps5a-shoulder", x: "766", y: "231", width: "126", height: "48", rx: "22" }),
-                h("rect", { class: "ps5a-shoulder", x: "152", y: "288", width: "132", height: "36", rx: "17" }),
-                h("rect", { class: "ps5a-shoulder", x: "798", y: "288", width: "132", height: "36", rx: "17" }),
-                // The black inner chassis is still the DualSense's defining
-                // two-tone split; here it is a deep carbon well, not a photo.
-                h("path", { class: "ps5a-core", d: "M199.851 843.999L152.753 834.187L362.076 348.165C362.948 351.436 366.655 367.135 374.504 403.767C382.354 440.398 413.098 452.172 427.489 453.481H540V542.443V586.924V635.33H396.745C388.895 634.676 369.01 629.704 344.414 628.134C313.67 626.172 289.467 661.495 271.805 688.315C254.144 715.134 217.686 820.284 212.279 834.187C207.7 845.961 202.685 845.525 199.851 843.999Z" }),
-                h("path", { class: "ps5a-core", d: "M880.149 843.999L927.247 834.187L717.924 348.165C717.052 351.436 713.345 367.135 705.496 403.767C697.646 440.398 666.902 452.172 652.511 453.481H540V542.443V586.924L539.987 635.33H681.28C689.129 634.676 710.99 629.704 735.586 628.134C766.33 626.172 790.533 661.495 808.195 688.315C825.856 715.134 862.314 820.284 867.721 834.187C872.3 845.961 877.315 845.525 880.149 843.999Z" }),
-                // The large white source shells become carbon wings through
-                // nxg-shell; their exact source curves preserve the stance.
-                h("path", { class: "wspad-shell ps5a-shell", d: "M80.144 643.18C76.4809 525.435 143.595 354.27 177.61 283.406C268.142 257.24 337.873 253.97 366.001 253.97C344.414 262.474 348.121 276.646 349.647 283.406C352.264 299.541 361.278 342.278 370.435 384.143C381.929 436.686 336.98 465.927 292.083 534.593C247.602 602.623 192.459 759.405 177.61 800.826C165.181 835.495 150.791 843.999 129.204 832.878C107.618 821.758 84.723 790.36 80.144 643.18Z" }),
-                h("path", { class: "wspad-shell ps5a-shell", d: "M999.856 643.18C1003.52 525.435 936.405 354.27 902.39 283.406C811.858 257.24 742.127 253.97 713.999 253.97C735.586 262.474 731.879 276.646 730.353 283.406C727.736 299.541 718.435 342.278 709.277 384.143C697.783 436.686 743.02 465.927 787.917 534.593C832.398 602.623 887.541 759.405 902.39 800.826C914.819 835.495 929.209 843.999 950.796 832.878C972.382 821.758 995.277 790.36 999.856 643.18Z" }),
-                // Upper planes and grip-edge slivers keep the source's layered
-                // construction while giving the dark palette readable seams.
-                h("path", { class: "ps5a-upper", d: "M349.648 285.994C346.503 270.31 363.404 261.16 377.816 260.507L540.273 255.932L540 454.789C516.451 454.789 473.98 455.443 440.572 455.443C419.61 455.443 404.401 448.418 396.815 442.186C377.121 426.007 374.822 410.618 370.612 393.172C362.096 357.882 350.303 289.262 349.648 285.994Z" }),
-                h("path", { class: "ps5a-upper", d: "M731.504 285.994C734.648 270.31 717.747 261.16 703.336 260.507L539.987 257.241V454.789H640.724C661.686 454.789 675.442 448.418 683.028 442.186C702.722 426.007 705.021 410.618 709.231 393.172C717.747 357.882 730.849 289.262 731.504 285.994Z" }),
-                h("path", { class: "ps5a-edge", d: "M218.821 832.224C210.448 850.017 201.813 846.179 198.542 842.69L244.332 736.721L293.392 645.142C272.024 700.089 227.194 814.432 218.821 832.224Z" }),
-                h("path", { class: "ps5a-edge", d: "M861.18 832.224C869.553 850.017 878.187 846.179 881.458 842.69L835.668 736.721L786.608 645.142C807.977 700.089 852.807 814.432 861.18 832.224Z" }),
-                h("path", { class: "ps5a-grip-line", d: "M111 577C104 665 119 758 158 807" }),
-                h("path", { class: "ps5a-grip-line", d: "M969 577C976 665 961 758 922 807" }),
-                // Touch surface and its lavender light-bar hairline.
-                h("rect", { class: "ps5a-lightbar", x: "485", y: "438", width: "112", height: "16", rx: "8" }),
-                h("path", { class: "wspad-touch ps5a-touch", d: "M435.357 440.398C415.884 440.398 392.517 433.226 382.131 390.195C372.195 349.026 363.956 310.652 357.466 280.009C356.6 271.316 360.322 252.886 382.131 248.713C409.393 243.497 503.512 241.541 540.51 241.541C577.508 241.541 671.627 243.497 698.889 248.713C720.698 252.886 724.42 271.316 723.555 280.009C717.064 310.652 708.825 349.026 698.889 390.195C688.503 433.226 665.136 440.398 645.663 440.398H435.357Z" }),
-                h("path", { class: "ps5a-touch-sheen", d: "M388 277C430 259 650 259 693 277" }),
-                // Source-derived D-pad petals, now real carbon buttons.
-                h("g", { class: "ps5a-dpad" },
-                  h("path", { d: "M250.86 395.249C252.822 395.917 254.785 395.917 254.785 395.917C254.785 395.917 256.747 395.917 258.709 395.249C260.672 394.581 274.409 381.22 276.371 376.543C278.333 371.867 279.642 351.826 279.642 346.481C279.642 341.137 276.402 335.798 269.176 334.456C261.949 333.114 254.785 333.12 254.785 333.12C254.785 333.12 247.62 333.114 240.394 334.456C233.167 335.798 229.927 341.137 229.927 346.481C229.927 351.826 231.236 371.867 233.198 376.543C235.161 381.22 248.897 394.581 250.86 395.249Z" }),
-                  h("path", { d: "M242.342 412.924C243.01 410.962 243.01 409 243.01 409C243.01 409 243.01 407.037 242.342 405.075C241.674 403.112 228.313 389.376 223.637 387.413C218.96 385.451 198.919 384.143 193.574 384.143C188.23 384.143 182.891 387.382 181.549 394.609C180.208 401.835 180.213 409 180.213 409C180.213 409 180.208 416.164 181.549 423.391C182.891 430.617 188.23 433.857 193.574 433.857C198.919 433.857 218.96 432.548 223.637 430.586C228.313 428.624 241.674 414.887 242.342 412.924Z" }),
-                  h("path", { d: "M258.71 422.75C256.747 422.082 254.785 422.082 254.785 422.082C254.785 422.082 252.822 422.082 250.86 422.75C248.898 423.418 235.161 436.779 233.198 441.456C231.236 446.132 229.928 466.174 229.928 471.518C229.928 476.863 233.167 482.201 240.394 483.543C247.62 484.885 254.785 484.879 254.785 484.879C254.785 484.879 261.949 484.885 269.176 483.543C276.402 482.201 279.642 476.863 279.642 471.518C279.642 466.174 278.334 446.132 276.371 441.456C274.409 436.779 260.672 423.418 258.71 422.75Z" }),
-                  h("path", { d: "M268.535 403.767C267.867 405.729 267.867 407.691 267.867 407.691C267.867 407.691 267.867 409.654 268.535 411.616C269.203 413.579 282.564 427.315 287.241 429.278C291.917 431.24 311.959 432.548 317.303 432.548C322.647 432.548 327.986 429.309 329.328 422.082C330.67 414.856 330.664 407.691 330.664 407.691C330.664 407.691 330.67 400.527 329.328 393.3C327.986 386.074 322.647 382.834 317.303 382.834C311.959 382.834 291.917 384.143 287.241 386.105C282.564 388.067 269.203 401.804 268.535 403.767Z" }),
-                ),
-                // Symmetric PlayStation sticks rebuilt without the source's
-                // foreignObject/conic-gradient filter stack.
-                h("g", { class: "ps5a-sticks" },
-                  h("circle", { class: "ps5a-stick-well", cx: "396", cy: "548", r: "84" }),
-                  h("circle", { class: "ps5a-stick-rim", cx: "396", cy: "536", r: "65" }),
-                  h("circle", { class: "wspad-stick ps5a-stick", cx: "396", cy: "536", r: "52" }),
-                  h("circle", { class: "ps5a-stick-cap", cx: "396", cy: "536", r: "31" }),
-                  h("circle", { class: "ps5a-stick-well", cx: "685", cy: "548", r: "84" }),
-                  h("circle", { class: "ps5a-stick-rim", cx: "685", cy: "536", r: "65" }),
-                  h("circle", { class: "wspad-stick ps5a-stick", cx: "685", cy: "536", r: "52" }),
-                  h("circle", { class: "ps5a-stick-cap", cx: "685", cy: "536", r: "31" }),
-                ),
-                // Face-button wells, Create/Options, speaker and system key.
-                h("g", { class: "ps5a-mechanics" },
-                  h("circle", { class: "ps5a-face-key", cx: "830", cy: "342", r: "30" }),
-                  h("circle", { class: "ps5a-face-key", cx: "898", cy: "410", r: "30" }),
-                  h("circle", { class: "ps5a-face-key", cx: "830", cy: "478", r: "30" }),
-                  h("circle", { class: "ps5a-face-key", cx: "762", cy: "410", r: "30" }),
-                  h("rect", { class: "ps5a-sidekey", x: "312.349", y: "291.498", width: "20.9323", height: "41.8646", rx: "10.4661", transform: "rotate(-11.4824 312.349 291.498)" }),
-                  h("rect", { class: "ps5a-sidekey", width: "20.9323", height: "41.8646", rx: "10.4661", transform: "matrix(-0.979986 -0.199066 -0.199066 0.979986 771.616 291.498)" }),
-                  h("rect", { class: "ps5a-mic", x: "517", y: "580", width: "49", height: "12", rx: "6" }),
-                  h("circle", { class: "ps5a-guide-well", cx: "542", cy: "527", r: "30" }),
-                  h("circle", { class: "wspad-guide ps5a-guide", cx: "542", cy: "527", r: "23" }),
-                  h("circle", { class: "ps5a-speaker", cx: "509", cy: "468", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "524", cy: "468", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "540", cy: "468", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "556", cy: "468", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "571", cy: "468", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "516", cy: "482", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "532", cy: "482", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "548", cy: "482", r: "5" }),
-                  h("circle", { class: "ps5a-speaker", cx: "564", cy: "482", r: "5" }),
-                ),
-              ),
-              // ── Transparent hooks: interaction only, never body paint ──
-              h(
-                "g",
-                { class: "ps5a-hooks" },
-                h("g", { class: "ps5a-rail" },
-                  h("rect", { "data-fn": "lt", class: "ps5a-hook", x: "190", y: "231", width: "126", height: "48", rx: "22", fill: "transparent" }),
-                  h("rect", { "data-fn": "rt", class: "ps5a-hook", x: "766", y: "231", width: "126", height: "48", rx: "22", fill: "transparent" }),
-                  h("rect", { "data-fn": "lb", class: "ps5a-hook", x: "152", y: "288", width: "132", height: "36", rx: "17", fill: "transparent" }),
-                  h("rect", { "data-fn": "rb", class: "ps5a-hook", x: "798", y: "288", width: "132", height: "36", rx: "17", fill: "transparent" }),
-                ),
-                // The D-pad's four petals, each its own direction.
-                h("g", { class: "ps5a-hit" },
-                  h("rect", { "data-fn": "dpad.up", class: "ps5a-hook", x: "229", y: "332", width: "52", height: "65", rx: "14", fill: "transparent" }),
-                  h("rect", { "data-fn": "dpad.left", class: "ps5a-hook", x: "179", y: "383", width: "65", height: "52", rx: "14", fill: "transparent" }),
-                  h("rect", { "data-fn": "dpad.down", class: "ps5a-hook", x: "229", y: "421", width: "52", height: "65", rx: "14", fill: "transparent" }),
-                  h("rect", { "data-fn": "dpad.right", class: "ps5a-hook", x: "267", y: "382", width: "65", height: "52", rx: "14", fill: "transparent" }),
-                  // Faces, in the PlayStation arrangement. The mapper's
-                  // names stay Xbox-shaped (a persona is a re-skin, not a
-                  // second vocabulary): y=△ b=○ a=✕ x=□.
-                  h("circle", { "data-fn": "y", class: "ps5a-hook", cx: "830", cy: "342", r: "31", fill: "transparent" }),
-                  h("circle", { "data-fn": "b", class: "ps5a-hook", cx: "898", cy: "410", r: "31", fill: "transparent" }),
-                  h("circle", { "data-fn": "a", class: "ps5a-hook", cx: "830", cy: "478", r: "31", fill: "transparent" }),
-                  h("circle", { "data-fn": "x", class: "ps5a-hook", cx: "762", cy: "410", r: "31", fill: "transparent" }),
-                  // Create and Options, the slim pair either side of the
-                  // touchpad — Back and Start to the mapper.
-                  h("rect", { "data-fn": "back", class: "ps5a-hook", x: "310", y: "285", width: "31", height: "49", rx: "15", fill: "transparent" }),
-                  h("rect", { "data-fn": "start", class: "ps5a-hook", x: "741", y: "285", width: "31", height: "49", rx: "15", fill: "transparent" }),
-                  // The PS button.
-                  h("circle", { "data-fn": "guide", class: "ps5a-hook", cx: "542", cy: "527", r: "26", fill: "transparent" }),
-                ),
-                // Sticks: the click, then the four directions around it.
-                h("g", { class: "ps5a-hit" },
-                  h("circle", { "data-fn": "lthumb", class: "ps5a-hook", cx: "396", cy: "547", r: "34", fill: "transparent" }),
-                  h("circle", { "data-fn": "ly.max", class: "ps5a-hook", cx: "396", cy: "492", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "ly.min", class: "ps5a-hook", cx: "396", cy: "602", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "lx.min", class: "ps5a-hook", cx: "341", cy: "547", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "lx.max", class: "ps5a-hook", cx: "451", cy: "547", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rthumb", class: "ps5a-hook", cx: "685", cy: "549", r: "34", fill: "transparent" }),
-                  h("circle", { "data-fn": "ry.max", class: "ps5a-hook", cx: "685", cy: "494", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "ry.min", class: "ps5a-hook", cx: "685", cy: "604", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rx.min", class: "ps5a-hook", cx: "630", cy: "549", r: "24", fill: "transparent" }),
-                  h("circle", { "data-fn": "rx.max", class: "ps5a-hook", cx: "740", cy: "549", r: "24", fill: "transparent" }),
-                ),
-                // ── Dressing: always above a lit hook ────────────────────
-                h("g", { class: "ps5a-dressing" },
-                  h("text", { class: "ps5a-sys", x: "253", y: "262", "text-anchor": "middle" }, "L2"),
-                  h("text", { class: "ps5a-sys", x: "829", y: "262", "text-anchor": "middle" }, "R2"),
-                  h("text", { class: "ps5a-sys", x: "218", y: "313", "text-anchor": "middle" }, "L1"),
-                  h("text", { class: "ps5a-sys", x: "864", y: "313", "text-anchor": "middle" }, "R1"),
-                  // Source chevrons and the four PlayStation face marks.
-                  h("path", { class: "ps5a-dpad-mark", d: "M249.61 352.412L254.016 347.125C254.416 346.645 255.153 346.645 255.553 347.125L259.959 352.412C260.502 353.064 260.039 354.052 259.191 354.052H250.378C249.53 354.052 249.067 353.064 249.61 352.412Z" }),
-                  h("path", { class: "ps5a-dpad-mark", d: "M199.506 414.174L194.218 409.768C193.738 409.368 193.738 408.631 194.218 408.231L199.506 403.825C200.157 403.282 201.146 403.745 201.146 404.593L201.146 413.406C201.146 414.254 200.157 414.717 199.506 414.174Z" }),
-                  h("path", { class: "ps5a-dpad-mark", d: "M259.959 465.587L255.553 470.875C255.153 471.354 254.416 471.354 254.017 470.875L249.61 465.587C249.068 464.936 249.531 463.947 250.379 463.947L259.191 463.947C260.039 463.947 260.502 464.936 259.959 465.587Z" }),
-                  h("path", { class: "ps5a-dpad-mark", d: "M311.372 402.517L316.659 406.923C317.139 407.323 317.139 408.06 316.659 408.46L311.372 412.866C310.721 413.409 309.732 412.945 309.732 412.098L309.732 403.285C309.732 402.437 310.721 401.974 311.372 402.517Z" }),
-                  h("path", { class: "ps5a-face-mark", d: "M847.03 352.397L830.001 352.399L813.153 352.397L830.005 322.087L847.03 352.397Z" }),
-                  h("circle", { class: "ps5a-face-mark", cx: "898", cy: "410", r: "18" }),
-                  h("path", { class: "ps5a-face-mark", d: "M814.723 462.639L844.813 492.729M844.813 462.639L814.723 492.729" }),
-                  h("rect", { class: "ps5a-face-mark", x: "748", y: "396", width: "28", height: "28" }),
-                  h("path", { class: "ps5a-side-mark", d: "M316 300H326M316 306H323M316 312H326M755 300H767M755 306H767M755 312H767" }),
-                  h("path", { class: "ps5a-stick-mark", d: "M374 526C381 512 411 507 422 524M663 526C670 512 700 507 711 524" }),
-                  h("path", { class: "ps5a-logo", transform: "translate(542 527) scale(.68) translate(-542 -527)", "fill-rule": "evenodd", "clip-rule": "evenodd", d: "M565.686 542.054C565.686 542.054 568.441 541.011 569.565 539.549C570.688 538.087 570.19 535.963 565.767 534.522C561.842 532.989 556.842 532.462 552.759 532.925C552.418 532.964 552.085 533.007 551.761 533.054V531.114C555.237 530.882 557.587 527.829 557.587 522.339C557.587 514.46 554.895 510.963 546.955 508.154C543.833 507.069 538.025 505.266 534.038 504.503V535.902H532.217V530.327L518.773 535.254C518.773 535.254 515.52 536.354 513.607 537.814C511.538 539.396 512.293 542.143 516.834 543.461C521.706 545.115 526.65 545.441 531.291 544.66C531.392 544.642 531.496 544.625 531.6 544.607C531.809 544.571 532.021 544.535 532.217 544.499V542.443H534.038V547.226L543.414 550.293V545.059H545.22L545.874 550.293L565.686 542.054Z" }),
-                  h("path", { class: "ps5a-mic-mark", d: "M538 584V587C538 591 546 591 546 587V584M536 587C536 594 548 594 548 587M542 592V596" }),
-                ),
-                // The glance callouts, in the same places the eye already
-                // looks for each control.
-                h("g", { class: "ps5a-callouts" },
-                  h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "182", y: "262", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "144", y: "313", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "900", y: "262", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "938", y: "313", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "326", y: "272", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "757", y: "272", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "255", y: "322", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "255", y: "504", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "170", y: "414", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "341", y: "414", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "396", y: "654", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "396", y: "466", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "336", y: "628", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "306", y: "551", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "486", y: "551", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "685", y: "656", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "685", y: "468", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "745", y: "630", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "595", y: "553", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "775", y: "553", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "542", y: "580", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "830", y: "300", "text-anchor": "middle" }),
-                  h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "940", y: "414", "text-anchor": "start" }),
-                  h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "720", y: "414", "text-anchor": "end" }),
-                  h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "830", y: "534", "text-anchor": "middle" }),
-                ),
-              ),
-            ),
+            h(DualSensePremiumArt, null),
+          ),
+          // ── Premium CC0 Nintendo Switch Pro ───────────────────────────
+          h(
+            "div",
+            { class: () => nPadSwitchProCls(), "data-pad-family": "switchpro" },
+            h(SwitchProPremiumArt, null),
+          ),
+          // ── Premium CC0 Xbox Series X|S ────────────────────────────────
+          h(
+            "div",
+            { class: () => nPadXboxSeriesCls(), "data-pad-family": "xboxseries" },
+            h(XboxSeriesPremiumArt, null),
           ),
         ),
         // ── THE CANVAS ────────────────────────────────────────────────────

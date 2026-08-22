@@ -235,31 +235,136 @@ installed Interception DLL or drivers.
 
 
 --------------------------------------------------------------------------
-10. DualSense (PS5) controller drawing — ⚠️ PROVENANCE UNRESOLVED
+10. Nocturne premium controller trio (CC0 1.0 Universal)
 --------------------------------------------------------------------------
 
-    Upstream: UNKNOWN. Supplied by the project owner 2026-08-21 from
-              Downloads\Icons\PS5 Controller\PS5.svg, beside a sibling file
-              named "PS5 Controller (Community).svg" — a name that suggests
-              a Figma Community file, whose licences are per-file (CC BY 4.0
-              is common but not universal). Neither file carries metadata
-              naming an author or a licence.
-    License:  UNRESOLVED. This is NOT a claim of permission. The art is
-              committed because it is what the owner chose to use; the line
-              above must be filled in before ksx ships this asset publicly.
-    Used in:  studio-ui/art/src-dualsense.svg       (as supplied)
-              studio-ui/src/NocturneIsland.ts       (selected silhouette and
-                                                     control geometry redrawn
-                                                     inline in Studio colours;
-                                                     filters/masks omitted)
-              crates/ksx-studio/assets/pad-ps5.svg  (backdrop removed, viewBox
-                                                     cropped — geometry and
-                                                     colours untouched)
+    Dedicator: Funky Designs UK
+    Dedication date: 2026-08-21
+    Recorded licensee: Forma.js
+    Works named by the dedication:
+      "Artwork depicting PS4 Controller DualShock, PS5 DualSense, Xbox
+       Series X Controller, and Switch Pro Controller" (section 11 records
+       the PS4 derivative)
+    Dedication PDF SHA-256:
+      5E45318030E7A8F38580F76BD8DCF46C0C3E4E4D6380551C7FD1839F10C55B31
+    Evidence: THIRD-PARTY-LICENSES/Funky-Designs-CC0-1.0-Dedication.pdf
+    Legal code: THIRD-PARTY-LICENSES/CC0-1.0.txt
 
-    Sony Interactive Entertainment owns the DualSense trade dress the drawing
-    depicts; ksx claims no affiliation. The same is already true of the two
-    Gamepad-Asset-Pack drawings above, whose MIT licence covers the DRAWINGS,
-    not the hardware they depict.
+    Canonical DualSense geometry:
+      C:\Users\Victor\Downloads\KSX Paid and Free Assets\DualSence PS5\
+        PS5_controller.zip
+      Archive SHA-256:
+        2EE5D51F310E73B2464C1D1A6B3856F4DEBD9E1495358962ACADBFDFA57C5160
+      Entry: PS5_controller_small.svg (viewBox 0 0 3801 2521)
+      Entry SHA-256:
+        1A295010C4318D1EE64A735E2F285F75E47A4D64F8727AA1C0708A06BADF10BA
+
+    Canonical Switch Pro geometry:
+      C:\Users\Victor\Downloads\KSX Paid and Free Assets\Switch Pro\
+        Switch_Pro_Controller_detail.zip
+      Archive SHA-256:
+        9B11A0B150911E8BD62506436DC4DFC90D5AA66A9FBF10BB50821AF3F333607F
+      Entry: Switch_Pro_Controller_detail_small.svg (viewBox 0 0 960 960)
+      Entry SHA-256:
+        FFF8851462BBDD746BE392437F8A14167AAA20D62A65ACFAAEDC411EDB153B52
+
+    Xbox Series source bundle:
+      C:\Users\Victor\Downloads\KSX Paid and Free Assets\Xbox Series X\
+        SeriesX_Controllers.zip
+      Outer archive SHA-256:
+        E64FB9D1C70855B1ACBD86F5B6887C9E852CF4404402D219E9F72F8360BE3611
+      Nested source archives and selected 0 0 3800 2647 SVG entries:
+        SeriesX_Controller_Black.zip
+          archive: 98145FBE73FA989CD132CFB08D3BE891AF3352130C057B98E87A2AB203352231
+          SeriesX_Controller_Black_small.svg:
+            15229EA57B7059D3EDDABA5C223E080799E322172688F928759D133D3F36F0A1
+        SeriesX_Controller_White.zip
+          archive: 044E3C020D5A4EB54B233FB12623EF18AE153219D368C475EAB599F04EDCF468
+          SeriesX_Controller_White_small.svg:
+            20CF3E05F273CA70D2B081FE49BD7A0EB5B44EBAAFFC3D73D7AFCD41258DC487
+        SeriesX_Controller_Blue.zip
+          archive: 92AE0525D9BA9B951DC881DD9DE18D2B6E0B1D889083351FB742FAB0B3F029E0
+          SeriesX_Controller_Blue_small.svg:
+            0241274A159DE2B8B10E0E816AF95FAB366C077A7A749D113F910BA5428EDC0E
+        SeriesX_Controller_Red.zip
+          archive: 0A441F2AB0015FEAD153A93C25572EF1057A506F72499E7F62E00B63ADF82AC9
+          SeriesX_Controller_Red_small.svg:
+            226B5CDE638C72AE4FC3745E530D84A55AEEF0FAA836D97D4BCAD72618CD247A
+        SeriesX_Controller_Green.zip
+          archive: 7AF60C843100E01EF3045E5EBA198FC95D108C9DFE4B22A56C4DA76B97B75F58
+          SeriesX_Controller_Green_small.svg:
+            39A9BD501B696E886CEAFEDFC968F94ED7DE69E42813C7D6C5F70B318AA4C82A
+
+    License: CC0 1.0 Universal. Funky Designs UK waives its copyright and
+             related rights to the extent allowed by law; the public-license
+             fallback permits copying, modification and distribution,
+             including commercial use. CC0 does not affect third-party
+             trademark, patent, trade-dress, publicity or privacy rights.
+
+    Used in: studio-ui/scripts/compile-funky-dualsense.mjs
+             studio-ui/src/dualSensePremiumGeometry.ts
+             studio-ui/src/dualSensePremiumArt.ts
+             studio-ui/scripts/compile-funky-switch-pro.mjs
+             studio-ui/src/switchProPremiumGeometry.ts
+             studio-ui/src/switchProPremiumArt.ts
+             studio-ui/scripts/compile-funky-xbox-series.mjs
+             studio-ui/src/xboxSeriesPremiumGeometry.ts
+             studio-ui/src/xboxSeriesPremiumArt.ts
+             studio-ui/src/NocturneIsland.ts (document-wide paint servers,
+                                              finish controls and inline masters)
+
+    Final deterministic importer/generated-file SHA-256 pins:
+      studio-ui/scripts/compile-funky-dualsense.mjs
+        8565AEFBDFE3B42777476EDF7600D2B8C84EF31AF7A8B0211BC7737686795107
+      studio-ui/src/dualSensePremiumGeometry.ts
+        B869750BD153681A8A27BF6CD2879CAC0742780789A3E08F189058B836D47846
+      studio-ui/src/dualSensePremiumArt.ts
+        2EF59983923F6D8D24E49110C198F7DE573486377CE0D26960C0C148A25B02D2
+      studio-ui/scripts/compile-funky-switch-pro.mjs
+        90B83DB08F9D70F763A5F92A20D852AF95737D558B752546C6E7DE41F39D4EAC
+      studio-ui/src/switchProPremiumGeometry.ts
+        4020678345B91E7BDCC5F767E12FDEB8DAE8F88EA5804B9E065B1026B0B09FE8
+      studio-ui/src/switchProPremiumArt.ts
+        815BCB2BF3F42F9870BF3FA4A9D2EF5641F566B815E50C3FC61D230ED37E8CA0
+      studio-ui/scripts/compile-funky-xbox-series.mjs
+        9C361446B936FFF074457ED43350E67B6FD6D5CCD1D888783D592E8252D59E5D
+      studio-ui/src/xboxSeriesPremiumGeometry.ts
+        A066EDB3B724F578644F563F7F577509766D5237A7983123306375AAA1E6CAA7
+      studio-ui/src/xboxSeriesPremiumArt.ts
+        C0DB070027091C2FBF1D7BCF43FB51ECD17FE77F180C087A3F6D894314C1C765
+
+    Modifications: deterministic importers pin source hashes and structure,
+                   remove source IDs/editor metadata, assign semantic paint
+                   roles, and emit inline geometry. App-authored vector layers
+                   add material depth, distinct bumper geometry where needed,
+                   25 transparent whole-control mapper hooks and callouts.
+                   DualSense uses one licensed geometry plus six app-authored
+                   finishes; Switch Pro uses the detailed geometry plus four
+                   app-authored finishes; Xbox uses Carbon Black geometry and
+                   five source-authored finish palettes. No product-photo
+                   pixels, img, filter, mask, private clone defs or
+                   foreignObject is incorporated.
+                   For FMIR's u16 string-table limit only, the Switch importer
+                   losslessly splits its two closed grip-texture compound paths
+                   at closed subpath boundaries. Their pixels and winding are
+                   unchanged, and the output retains all 76 unique source
+                   indices despite those two indices containing path chunks.
+
+    The free-vector research pack in the owner's Downloads folder was used
+    only to audit proportions, identities and mapper semantics. No Zacksly,
+    alternate PlayStation, public-domain controller-part or Xelu geometry is
+    copied into these derivatives, so those reference files are not an
+    additional source or licence for the shipped trio.
+
+    Retired legacy exclusion: the former studio-ui/art/src-dualsense.svg and
+    generated crates/ksx-studio/assets/pad-ps5.svg traced to an unrelated
+    owner-supplied file with no recorded author or licence. They were not
+    covered by this CC0 dedication. Both files and their build.mjs generator
+    were removed; those legacy bytes are no longer built, embedded or shipped.
+
+    Sony Interactive Entertainment, Nintendo and Microsoft own the names and
+    hardware trade dress depicted. The copyright permission above does not
+    grant those rights; ksx claims no affiliation or endorsement.
 
 
 --------------------------------------------------------------------------
@@ -297,7 +402,8 @@ installed Interception DLL or drivers.
           DualShock4_Midnight_Blue_small.svg:
             0B23A9FE39047F059ADB528F180C971EDFDB5A59F7835EC6E71B23722B0751FF
       Dedication supplied at:
-        C:\Users\Victor\Downloads\CC0_Public_Domain_Dedication_Funky_Designs.pdf
+        C:\Users\Victor\Downloads\KSX Paid and Free Assets\
+          CC0_Public_Domain_Dedication_Funky_Designs.pdf
       Dedication PDF SHA-256:
         5E45318030E7A8F38580F76BD8DCF46C0C3E4E4D6380551C7FD1839F10C55B31
       Dedication date: 2026-08-21

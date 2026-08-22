@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "9773f5708f21641058122040f22d6bdf65be91407402e74bcfb3e36d59e94b9c",
+  "build_hash": "bf5924d7d4cb9ef791c391303cdc57029d408b0ac4bb042f8886fad22b8c8ba6",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -8,8 +8,8 @@
     "devices.js": "devices.263a38f8.js",
     "map.ir": "map.eb1d7603.ir",
     "map.js": "map.c744fd4d.js",
-    "nocturne.ir": "nocturne.ba985939.ir",
-    "nocturne.js": "nocturne.8084d66f.js",
+    "nocturne.ir": "nocturne.eee8679f.ir",
+    "nocturne.js": "nocturne.47c8cb0b.js",
     "pads.ir": "pads.69bd275e.ir",
     "pads.js": "pads.be7a85f6.js",
     "profiles.ir": "profiles.d349949d.ir",
@@ -20,7 +20,7 @@
     "start.js": "start.a5f93f92.js",
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
-    "studio.css": "studio.14bf8db5.css",
+    "studio.css": "studio.cfd319d6.css",
     "workspace.ir": "workspace.a7e0bee7.ir",
     "workspace.js": "workspace.c5857a02.js"
   },
@@ -30,10 +30,10 @@
         "start.a5f93f92.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 73455,
+      "total_size_br": 73924,
       "budget_warn_threshold": 200000,
       "ir": "start.b0a4715d.ir"
     },
@@ -42,34 +42,34 @@
         "workspace.c5857a02.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 72085,
+      "total_size_br": 72554,
       "budget_warn_threshold": 200000,
       "ir": "workspace.a7e0bee7.ir"
     },
     "/nocturne": {
       "js": [
-        "nocturne.8084d66f.js"
+        "nocturne.47c8cb0b.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 121895,
+      "total_size_br": 123125,
       "budget_warn_threshold": 200000,
-      "ir": "nocturne.ba985939.ir"
+      "ir": "nocturne.eee8679f.ir"
     },
     "/": {
       "js": [
         "status.fa50ec52.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 70954,
+      "total_size_br": 71423,
       "budget_warn_threshold": 200000,
       "ir": "status.cee9d0b7.ir"
     },
@@ -78,10 +78,10 @@
         "map.c744fd4d.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 98484,
+      "total_size_br": 98953,
       "budget_warn_threshold": 200000,
       "ir": "map.eb1d7603.ir"
     },
@@ -90,10 +90,10 @@
         "check.462901ec.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 70534,
+      "total_size_br": 71003,
       "budget_warn_threshold": 200000,
       "ir": "check.33266fab.ir"
     },
@@ -102,10 +102,10 @@
         "pads.be7a85f6.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 70648,
+      "total_size_br": 71117,
       "budget_warn_threshold": 200000,
       "ir": "pads.69bd275e.ir"
     },
@@ -114,10 +114,10 @@
         "devices.263a38f8.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 72127,
+      "total_size_br": 72596,
       "budget_warn_threshold": 200000,
       "ir": "devices.ba76544a.ir"
     },
@@ -126,10 +126,10 @@
         "profiles.fcb79b2f.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 71617,
+      "total_size_br": 72086,
       "budget_warn_threshold": 200000,
       "ir": "profiles.d349949d.ir"
     },
@@ -138,10 +138,10 @@
         "setup.4aa4c8d3.js"
       ],
       "css": [
-        "studio.14bf8db5.css"
+        "studio.cfd319d6.css"
       ],
       "fonts": [],
-      "total_size_br": 71609,
+      "total_size_br": 72078,
       "budget_warn_threshold": 200000,
       "ir": "setup.f6d65c98.ir"
     }

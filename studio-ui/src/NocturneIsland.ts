@@ -6,6 +6,7 @@ import {
   DS4_PREMIUM_SHELL_TONE,
   DS4_PREMIUM_VARIANTS,
   Ds4PremiumButtonHooks,
+  Ds4PremiumDepth,
   Ds4PremiumGeometry,
   type Ds4PremiumVariantSlug,
 } from "./ds4PremiumGeometry";
@@ -4549,6 +4550,57 @@ export function NocturneIsland() {
               ),
               h(
                 "linearGradient",
+                { id: "nxg-ds4-dpad-cap", x1: "0", y1: "0", x2: "0.82", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#686e7a" }),
+                h("stop", { offset: "0.34", "stop-color": "#4b4f59" }),
+                h("stop", { offset: "0.72", "stop-color": "#343740" }),
+                h("stop", { offset: "1", "stop-color": "#25272e" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-dpad-bevel", x1: "0.1", y1: "0", x2: "0.88", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#5f646f" }),
+                h("stop", { offset: "0.48", "stop-color": "#3f434c" }),
+                h("stop", { offset: "1", "stop-color": "#202229" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-ds4-button-rim", cx: "0.3", cy: "0.2", r: "0.86" },
+                h("stop", { offset: "0", "stop-color": "#6d7380" }),
+                h("stop", { offset: "0.42", "stop-color": "#4c515c" }),
+                h("stop", { offset: "1", "stop-color": "#262930" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-ds4-button-cap", cx: "0.32", cy: "0.22", r: "0.9" },
+                h("stop", { offset: "0", "stop-color": "#555a65" }),
+                h("stop", { offset: "0.55", "stop-color": "#41454f" }),
+                h("stop", { offset: "1", "stop-color": "#272a31" }),
+              ),
+              h(
+                "radialGradient",
+                { id: "nxg-ds4-stick-rim", cx: "0.36", cy: "0.26", r: "0.82" },
+                h("stop", { offset: "0", "stop-color": "#69707c" }),
+                h("stop", { offset: "0.36", "stop-color": "#484d57" }),
+                h("stop", { offset: "0.72", "stop-color": "#2b2e35" }),
+                h("stop", { offset: "1", "stop-color": "#17191e" }),
+              ),
+              h(
+                "linearGradient",
+                { id: "nxg-ds4-utility-cap", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0", "stop-color": "#686e79" }),
+                h("stop", { offset: "0.45", "stop-color": "#4b4f59" }),
+                h("stop", { offset: "1", "stop-color": "#292c33" }),
+              ),
+              h(
+                "pattern",
+                { id: "nxp-ds4-stick-rubber", width: "18", height: "18", patternUnits: "userSpaceOnUse" },
+                h("rect", { width: "18", height: "18", fill: "#353942" }),
+                h("circle", { cx: "4", cy: "4", r: "1.35", fill: "#565b66", opacity: "0.72" }),
+                h("circle", { cx: "13", cy: "11", r: "1.05", fill: "#202229", opacity: "0.78" }),
+              ),
+              h(
+                "linearGradient",
                 { id: "nxg-ds4-jet-black", x1: "0", y1: "0", x2: "0", y2: "1" },
                 h("stop", { offset: "0", "stop-color": "#303139" }),
                 h("stop", { offset: "0.48", "stop-color": "#202024" }),
@@ -4824,6 +4876,7 @@ export function NocturneIsland() {
                 h(
                   "g",
                   { class: "ds4premium-paid", transform: "matrix(0.1684210526 0 0 0.1684210526 0 105)" },
+                  h(Ds4PremiumDepth, null),
                   h(Ds4PremiumGeometry, null),
                   // The 40 KB source dot-grid becomes one shared pattern.
                   h("path", { class: "ds4premium-touch-overlay", d: "M1355.79,842.942c-49.66,0 -89.98,-40.32 -89.98,-89.98l0,-612.415c0,-10.354 8.39,-18.748 18.75,-18.748l1230.88,0c10.36,0 18.75,8.394 18.75,18.748l0,612.415c0,49.66 -40.32,89.98 -89.98,89.98l-1088.42,0Z" }),

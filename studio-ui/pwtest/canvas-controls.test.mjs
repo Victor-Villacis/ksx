@@ -694,6 +694,7 @@ describe("the canvas navigation controls", () => {
         const svg = widget.querySelector("svg.ds4premium");
         const shell = svg?.querySelector(".ds4premium-shell");
         const body = svg?.querySelector(".ds4premium-body");
+        const depth = svg?.querySelector(".ds4premium-depth");
         const hooks = svg?.querySelector(".ds4premium-hooks");
         const group = widget.querySelector(
           '.n-ds4-variants[role="group"][aria-label="DualShock 4 color"]',
@@ -702,6 +703,9 @@ describe("the canvas navigation controls", () => {
           group?.querySelectorAll('button.n-ds4-variant[data-nx="ds4-variant"]') ?? [],
         );
         const hookShapes = Array.from(hooks?.querySelectorAll(".ds4premium-hook[data-fn]") ?? []);
+        const depthShapes = Array.from(
+          depth?.querySelectorAll(".ds4premium-depth-shadow[data-ds4-depth]") ?? [],
+        );
         const geometryAttrs = [
           "d", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
           "width", "height", "points", "transform",
@@ -728,6 +732,10 @@ describe("the canvas navigation controls", () => {
           shellFill: shell ? getComputedStyle(shell).fill : "",
           viewBox: svg?.getAttribute("viewBox") ?? null,
           bodyPresent: !!body,
+          depthInsideBody: !!body && !!depth && body.contains(depth),
+          bodyBeforeHooks: !!body && !!hooks && Boolean(
+            body.compareDocumentPosition(hooks) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ),
           hooksInsideArt: !!svg && !!hooks && svg.contains(hooks),
           hookLayerTag: hooks?.tagName ?? null,
           hooks: hookShapes.map((el) => el.getAttribute("data-fn")),
@@ -739,6 +747,27 @@ describe("the canvas navigation controls", () => {
             const box = el.getBBox();
             return box.width > 0 && box.height > 0 && getComputedStyle(el).pointerEvents !== "none";
           }).length,
+          depthShapeCount: depthShapes.length,
+          depthNames: depthShapes.map((el) => el.getAttribute("data-ds4-depth")),
+          depthGeometry: depthShapes.map(shapeGeometry),
+          nonEmptyDepthCount: depthShapes.filter((el) => {
+            const box = el.getBBox();
+            return box.width > 0 && box.height > 0;
+          }).length,
+          interactiveDepthCount: depthShapes.filter(
+            (el) => getComputedStyle(el).pointerEvents !== "none",
+          ).length,
+          depthFnCount: depth?.querySelectorAll("[data-fn]").length ?? -1,
+          depthPrivateCount: depth?.querySelectorAll(
+            "svg, defs, filter, mask, image, foreignObject, use, [id]",
+          ).length ?? -1,
+          filteredDescendantCount: Array.from(svg?.querySelectorAll("*") ?? []).filter(
+            (el) => getComputedStyle(el).filter !== "none",
+          ).length,
+          dpadCapCount: svg?.querySelectorAll(".ds4premium-dpad-cap").length ?? -1,
+          dpadSheenCount: svg?.querySelectorAll(".ds4premium-dpad-sheen").length ?? -1,
+          faceRimCount: svg?.querySelectorAll(".ds4premium-face-rim").length ?? -1,
+          stickRimCount: svg?.querySelectorAll(".ds4premium-stick-rim").length ?? -1,
           geometry: Array.from(
             svg?.querySelectorAll("g, path, circle, rect, ellipse, line, polyline, polygon") ?? [],
             shapeGeometry,
@@ -783,6 +812,26 @@ describe("the canvas navigation controls", () => {
       assert.equal(initial.privateEffects, 0, "the clone carries no private defs, effects or images");
       assert.equal(initial.effectReferences, 0, "the clone carries no dangling filter or mask references");
       assert.ok(initial.bodyPresent, "the detailed source geometry remains a distinct body layer");
+      assert.ok(initial.depthInsideBody, "the authored depth layer lives inside the pointerless body");
+      assert.ok(initial.bodyBeforeHooks, "visual depth paints before the mapper hook overlay");
+      assert.equal(initial.depthShapeCount, 18, "the depth pass keeps its exact authored shadow set");
+      assert.equal(initial.nonEmptyDepthCount, 18, "every depth shape has visible geometry");
+      assert.equal(initial.interactiveDepthCount, 0, "visual depth can never intercept mapping input");
+      assert.equal(initial.depthFnCount, 0, "depth shapes never impersonate mapper controls");
+      assert.equal(initial.depthPrivateCount, 0, "depth stays clone-safe inline vector geometry");
+      assert.equal(initial.filteredDescendantCount, 0, "depth is explicit geometry, not a clipped filter");
+      assert.equal(
+        initial.depthNames.filter((name) => name?.startsWith("dpad-")).length,
+        8,
+        "all four D-pad petals receive contact and ambient shadows",
+      );
+      assert.equal(new Set(
+        initial.depthNames.filter((name) => name?.startsWith("dpad-")),
+      ).size, 8, "no D-pad shadow layer is duplicated");
+      assert.equal(initial.dpadCapCount, 4, "every D-pad petal keeps its cap layer");
+      assert.equal(initial.dpadSheenCount, 4, "every D-pad petal keeps its local sheen");
+      assert.equal(initial.faceRimCount, 4, "every face button keeps its raised rim");
+      assert.equal(initial.stickRimCount, 2, "both sticks keep their sculpted rim");
       assert.ok(initial.hooksInsideArt, "art and the interactive overlay share one SVG coordinate space");
       assert.equal(initial.hookLayerTag, "g", "hooks are an overlay group, not a second SVG");
       assert.equal(initial.hooks.length, 25, "the DS4 exposes exactly the mapper's 25 controls");
@@ -822,6 +871,7 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(clicked.pressed, [clickedSlug], "pointer selection updates aria-pressed");
       assert.notEqual(clicked.shellFill, initial.shellFill, "pointer selection changes computed shell paint");
       assert.deepEqual(clicked.geometry, initial.geometry, "a finish change cannot rewrite source geometry");
+      assert.deepEqual(clicked.depthGeometry, initial.depthGeometry, "a finish change cannot move depth layers");
       assert.deepEqual(clicked.hookGeometry, initial.hookGeometry, "a finish change cannot move mapping zones");
       assert.deepEqual(clicked.widgetPosition, initial.widgetPosition, "a finish change cannot move the widget");
       assert.ok(clicked.storeRaw, "the selected finish is written to its own localStorage record");
@@ -846,6 +896,7 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(keyboard.pressed, [keyboardSlug], "keyboard selection updates aria-pressed");
       assert.notEqual(keyboard.shellFill, clicked.shellFill, "keyboard selection changes computed shell paint");
       assert.deepEqual(keyboard.geometry, initial.geometry, "keyboard selection leaves geometry untouched");
+      assert.deepEqual(keyboard.depthGeometry, initial.depthGeometry, "keyboard selection leaves depth aligned");
       assert.deepEqual(keyboard.hookGeometry, initial.hookGeometry, "keyboard selection leaves hooks aligned");
       assert.deepEqual(keyboard.widgetPosition, initial.widgetPosition, "keyboard selection leaves the widget put");
       assert.ok(keyboard.storeRaw?.includes(JSON.stringify(keyboardSlug)));
@@ -864,6 +915,7 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(restored.pressed, [keyboardSlug], "the restored button exposes selected state");
       assert.equal(restored.shellFill, keyboard.shellFill, "reload restores the same computed shell paint");
       assert.deepEqual(restored.geometry, initial.geometry, "restoring paint does not replace the SVG");
+      assert.deepEqual(restored.depthGeometry, initial.depthGeometry, "restoring paint preserves vector depth");
       assert.deepEqual(restored.hookGeometry, initial.hookGeometry, "restored mapping zones stay aligned");
       assert.deepEqual(page.ksxNoise, []);
     } finally {

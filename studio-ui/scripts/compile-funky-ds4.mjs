@@ -68,15 +68,117 @@ function semanticClasses(index) {
     14: "ds4premium-touch-texture",
     15: "ds4premium-stick-deck ds4premium-stick-deck-left",
     16: "ds4premium-stick-well ds4premium-stick-well-left",
+    17: "ds4premium-stick-underskirt ds4premium-stick-underskirt-left",
+    18: "ds4premium-stick-rim ds4premium-stick-rim-left",
+    19: "ds4premium-stick-cap ds4premium-stick-cap-left",
+    20: "ds4premium-stick-face ds4premium-stick-face-left",
+    21: "ds4premium-stick-sheen ds4premium-stick-sheen-left",
+    23: "ds4premium-stick-sheen ds4premium-stick-sheen-left",
     25: "ds4premium-stick-deck ds4premium-stick-deck-right",
     26: "ds4premium-stick-well ds4premium-stick-well-right",
+    27: "ds4premium-stick-underskirt ds4premium-stick-underskirt-right",
+    28: "ds4premium-stick-rim ds4premium-stick-rim-right",
+    29: "ds4premium-stick-cap ds4premium-stick-cap-right",
+    30: "ds4premium-stick-face ds4premium-stick-face-right",
+    31: "ds4premium-stick-sheen ds4premium-stick-sheen-right",
+    33: "ds4premium-stick-sheen ds4premium-stick-sheen-right",
     35: "ds4premium-control-well ds4premium-dpad-well",
     36: "ds4premium-control-well ds4premium-face-well",
+    37: "ds4premium-dpad-base ds4premium-dpad-base-right",
+    38: "ds4premium-dpad-lip ds4premium-dpad-lip-right",
+    39: "ds4premium-dpad-cap ds4premium-dpad-cap-right",
+    40: "ds4premium-dpad-bevel ds4premium-dpad-bevel-right",
+    41: "ds4premium-dpad-sheen ds4premium-dpad-sheen-right",
+    43: "ds4premium-dpad-mark ds4premium-dpad-mark-right",
+    44: "ds4premium-dpad-base ds4premium-dpad-base-left",
+    45: "ds4premium-dpad-lip ds4premium-dpad-lip-left",
+    46: "ds4premium-dpad-cap ds4premium-dpad-cap-left",
+    47: "ds4premium-dpad-bevel ds4premium-dpad-bevel-left",
+    48: "ds4premium-dpad-sheen ds4premium-dpad-sheen-left",
+    50: "ds4premium-dpad-mark ds4premium-dpad-mark-left",
+    51: "ds4premium-dpad-base ds4premium-dpad-base-down",
+    52: "ds4premium-dpad-lip ds4premium-dpad-lip-down",
+    53: "ds4premium-dpad-cap ds4premium-dpad-cap-down",
+    54: "ds4premium-dpad-bevel ds4premium-dpad-bevel-down",
+    55: "ds4premium-dpad-sheen ds4premium-dpad-sheen-down",
+    57: "ds4premium-dpad-mark ds4premium-dpad-mark-down",
+    58: "ds4premium-dpad-base ds4premium-dpad-base-up",
+    59: "ds4premium-dpad-lip ds4premium-dpad-lip-up",
+    60: "ds4premium-dpad-cap ds4premium-dpad-cap-up",
+    61: "ds4premium-dpad-bevel ds4premium-dpad-bevel-up",
+    62: "ds4premium-dpad-sheen ds4premium-dpad-sheen-up",
+    64: "ds4premium-dpad-mark ds4premium-dpad-mark-up",
+    65: "ds4premium-face-shadow ds4premium-face-shadow-square",
+    66: "ds4premium-face-rim ds4premium-face-rim-square",
+    67: "ds4premium-face-cap ds4premium-face-cap-square",
+    68: "ds4premium-face-glyph ds4premium-face-glyph-square",
+    69: "ds4premium-face-shadow ds4premium-face-shadow-circle",
+    70: "ds4premium-face-rim ds4premium-face-rim-circle",
+    71: "ds4premium-face-cap ds4premium-face-cap-circle",
+    72: "ds4premium-face-glyph ds4premium-face-glyph-circle",
+    73: "ds4premium-face-shadow ds4premium-face-shadow-triangle",
+    74: "ds4premium-face-rim ds4premium-face-rim-triangle",
+    75: "ds4premium-face-cap ds4premium-face-cap-triangle",
+    76: "ds4premium-face-glyph ds4premium-face-glyph-triangle",
+    77: "ds4premium-face-shadow ds4premium-face-shadow-cross",
+    78: "ds4premium-face-rim ds4premium-face-rim-cross",
+    79: "ds4premium-face-cap ds4premium-face-cap-cross",
+    80: "ds4premium-face-glyph ds4premium-face-glyph-cross",
     81: "ds4premium-guide",
+    83: "ds4premium-guide-cap",
+    86: "ds4premium-guide-sheen",
+    87: "ds4premium-speaker-hole",
+    88: "ds4premium-speaker-hole",
+    89: "ds4premium-speaker-hole",
+    90: "ds4premium-speaker-hole",
+    91: "ds4premium-speaker-hole",
+    92: "ds4premium-speaker-hole",
+    93: "ds4premium-speaker-hole",
+    94: "ds4premium-speaker-hole",
+    95: "ds4premium-speaker-hole",
+    96: "ds4premium-speaker-hole",
+    97: "ds4premium-speaker-hole",
+    98: "ds4premium-speaker-hole",
+    99: "ds4premium-utility-shadow ds4premium-share-shadow",
+    100: "ds4premium-utility-cap ds4premium-share-cap",
+    101: "ds4premium-utility-sheen ds4premium-share-sheen",
+    107: "ds4premium-utility-shadow ds4premium-options-shadow",
+    108: "ds4premium-utility-cap ds4premium-options-cap",
+    109: "ds4premium-utility-sheen ds4premium-options-sheen",
     117: "ds4premium-input-shell",
+    118: "ds4premium-input-aperture",
+    119: "ds4premium-input-aperture",
+    120: "ds4premium-input-aperture ds4premium-input-jack",
+    121: "ds4premium-input-mark",
+    122: "ds4premium-input-mark",
+    123: "ds4premium-input-mark",
+    124: "ds4premium-mic-mark",
+    125: "ds4premium-mic-mark",
+    126: "ds4premium-mic-mark",
+    127: "ds4premium-mic-mark",
+    128: "ds4premium-mic-mark",
     129: "ds4premium-lightbar",
   }[index] ?? "";
 }
+
+const DEPTH_SHAPES = [
+  { name: "touchpad-contact", index: 12, transform: "translate(0 15)", kind: "contact" },
+  { name: "left-stick-contact", index: 17, transform: "translate(0 13)", kind: "contact" },
+  { name: "right-stick-contact", index: 27, transform: "translate(0 13)", kind: "contact" },
+  ...[
+    ["right", 37], ["left", 44], ["down", 51], ["up", 58],
+  ].flatMap(([direction, index]) => [
+    { name: `dpad-${direction}-ambient`, index, transform: "translate(0 22)", kind: "ambient dpad" },
+    { name: `dpad-${direction}-contact`, index, transform: "translate(0 9)", kind: "contact dpad" },
+  ]),
+  { name: "square-contact", index: 65, transform: "translate(0 13)", kind: "contact face" },
+  { name: "circle-contact", index: 69, transform: "translate(0 13)", kind: "contact face" },
+  { name: "triangle-contact", index: 73, transform: "translate(0 13)", kind: "contact face" },
+  { name: "cross-contact", index: 77, transform: "translate(0 13)", kind: "contact face" },
+  { name: "guide-contact", index: 81, transform: "translate(0 11)", kind: "contact guide" },
+  { name: "share-contact", index: 99, transform: "translate(0 9)", kind: "contact utility" },
+  { name: "options-contact", index: 107, transform: "translate(0 9)", kind: "contact utility" },
+];
 
 const sourcePaths = process.argv.slice(2).map((path) => resolve(path));
 const sourceTexts = await Promise.all(sourcePaths.map((path) => readFile(path, "utf8")));
@@ -145,7 +247,7 @@ lines.push("");
 lines.push("export function Ds4PremiumGeometry() {");
 lines.push("  return h(");
 lines.push("    \"g\",");
-lines.push("    { class: \"ds4premium-source\" },");
+lines.push("    { class: \"ds4premium-source\", \"fill-rule\": \"evenodd\", \"clip-rule\": \"evenodd\", \"stroke-linejoin\": \"round\", \"stroke-miterlimit\": \"2\" },");
 
 for (let index = 0; index < lists[0].length; index += 1) {
   if (OMITTED.has(index)) continue;
@@ -169,6 +271,29 @@ for (let index = 0; index < lists[0].length; index += 1) {
   lines.push(`    h(${q(shape.tag)}, { ${rendered} }),`);
 }
 
+lines.push("  );");
+lines.push("}");
+lines.push("");
+lines.push("export function Ds4PremiumDepth() {");
+lines.push("  return h(");
+lines.push("    \"g\",");
+lines.push("    { class: \"ds4premium-depth\", \"aria-hidden\": \"true\", \"fill-rule\": \"evenodd\", \"clip-rule\": \"evenodd\", \"stroke-linejoin\": \"round\" },");
+for (const item of DEPTH_SHAPES) {
+  const shape = lists[0][item.index];
+  const attrs = Object.fromEntries(
+    Object.entries(shape.attrs).filter(([name]) =>
+      name !== "id" && name !== "serif:id" && name !== "style" && name !== "transform"
+    ),
+  );
+  const props = {
+    class: `ds4premium-depth-shadow ${item.kind.split(" ").map((kind) => `ds4premium-depth-${kind}`).join(" ")}`,
+    "data-ds4-depth": item.name,
+    ...attrs,
+    transform: item.transform,
+  };
+  const rendered = Object.entries(props).map(([name, value]) => `${q(name)}: ${q(value)}`).join(", ");
+  lines.push(`    h(${q(shape.tag)}, { ${rendered} }),`);
+}
 lines.push("  );");
 lines.push("}");
 lines.push("");

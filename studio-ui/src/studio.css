@@ -7697,6 +7697,33 @@ a.wsrow-title:hover {
   pointer-events: none;
 }
 
+.n-center .ds4premium .ds4premium-depth {
+  pointer-events: none;
+}
+
+.n-center .ds4premium .ds4premium-depth-shadow {
+  fill: #020307;
+  stroke: #020307;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.n-center .ds4premium .ds4premium-depth-contact {
+  opacity: 0.72;
+  stroke-width: 7px;
+}
+
+.n-center .ds4premium .ds4premium-depth-ambient {
+  opacity: 0.25;
+  stroke-width: 28px;
+}
+
+.n-center .ds4premium .ds4premium-depth-face,
+.n-center .ds4premium .ds4premium-depth-guide,
+.n-center .ds4premium .ds4premium-depth-utility {
+  opacity: 0.64;
+}
+
 .n-center .ds4premium .ds4premium-trigger-bridge {
   fill: url(#nxg-btn);
   stroke: #42475d;
@@ -7707,11 +7734,137 @@ a.wsrow-title:hover {
 .n-center .ds4premium .ds4premium-shell {
   stroke: color-mix(in srgb, var(--border-strong) 72%, transparent);
   stroke-width: 1.1px;
+  stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+
+.n-center .ds4premium .ds4premium-grip {
+  stroke: color-mix(in srgb, var(--ds4p-tone-2) 74%, #030409);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+.n-center .ds4premium .ds4premium-stick-deck {
+  stroke: color-mix(in srgb, var(--ds4p-tone-3) 72%, #030409);
+  stroke-width: 7px;
+  stroke-linejoin: round;
+}
+
+.n-center .ds4premium .ds4premium-stick-well {
+  stroke: color-mix(in srgb, var(--ds4p-tone-4) 72%, #020307);
+  stroke-width: 8px;
+}
+
+.n-center .ds4premium .ds4premium-control-well {
+  stroke: color-mix(in srgb, var(--ds4p-tone-5) 76%, #020307);
+  stroke-width: 13px;
+  paint-order: stroke fill;
+}
+
+.n-center .ds4premium .ds4premium-dpad-base {
+  fill: #252831;
+  stroke: #05060a;
+  stroke-width: 7px;
+  paint-order: stroke fill;
+}
+
+.n-center .ds4premium .ds4premium-dpad-lip {
+  fill: #040509;
+}
+
+.n-center .ds4premium .ds4premium-dpad-cap {
+  fill: url(#nxg-ds4-dpad-cap);
+}
+
+.n-center .ds4premium .ds4premium-dpad-bevel {
+  fill: url(#nxg-ds4-dpad-bevel);
+}
+
+.n-center .ds4premium .ds4premium-dpad-sheen {
+  fill: rgba(190, 198, 216, 0.38);
+}
+
+.n-center .ds4premium .ds4premium-dpad-mark {
+  opacity: 0.82;
+}
+
+.n-center .ds4premium .ds4premium-face-shadow {
+  fill: #06070b;
+}
+
+.n-center .ds4premium .ds4premium-face-rim {
+  fill: url(#nxg-ds4-button-rim);
+}
+
+.n-center .ds4premium .ds4premium-face-cap {
+  fill: url(#nxg-ds4-button-cap);
+  stroke: rgba(222, 226, 239, 0.14);
+  stroke-width: 3px;
+}
+
+.n-center .ds4premium .ds4premium-stick-underskirt {
+  fill: #040509;
+  stroke: #010205;
+  stroke-width: 8px;
+}
+
+.n-center .ds4premium .ds4premium-stick-rim {
+  fill: url(#nxg-ds4-stick-rim);
+}
+
+.n-center .ds4premium .ds4premium-stick-cap {
+  fill: #24272e;
+}
+
+.n-center .ds4premium .ds4premium-stick-face {
+  fill: url(#nxp-ds4-stick-rubber);
+}
+
+.n-center .ds4premium .ds4premium-stick-sheen {
+  fill: rgba(188, 196, 214, 0.34);
+}
+
+.n-center .ds4premium .ds4premium-guide {
+  fill: #08090d;
+  stroke: #020307;
+  stroke-width: 7px;
+}
+
+.n-center .ds4premium .ds4premium-guide-cap,
+.n-center .ds4premium .ds4premium-utility-cap {
+  fill: url(#nxg-ds4-utility-cap);
+}
+
+.n-center .ds4premium .ds4premium-guide-sheen,
+.n-center .ds4premium .ds4premium-utility-sheen {
+  fill: rgba(190, 198, 216, 0.28);
+}
+
+.n-center .ds4premium .ds4premium-utility-shadow {
+  fill: #06070b;
+}
+
+.n-center .ds4premium .ds4premium-speaker-hole {
+  fill: #05060a;
+  stroke: rgba(113, 119, 139, 0.2);
+  stroke-width: 2px;
+}
+
+.n-center .ds4premium .ds4premium-trackpad-shadow {
+  fill: #030409;
+  opacity: 0.86;
 }
 
 .n-center .ds4premium .ds4premium-touchpad {
   fill: url(#nxg-touch);
+  stroke: rgba(2, 3, 7, 0.86);
+  stroke-width: 7px;
+}
+
+.n-center .ds4premium .ds4premium-touchpad-edge {
+  fill: #08090e;
+  stroke: rgba(170, 176, 199, 0.18);
+  stroke-width: 4px;
 }
 
 .n-center .ds4premium .ds4premium-touch-overlay {
@@ -7722,12 +7875,23 @@ a.wsrow-title:hover {
 
 .n-center .ds4premium .ds4premium-lightbar {
   fill: url(#nxg-lamp);
+  stroke: rgba(205, 198, 247, 0.3);
+  stroke-width: 3px;
 }
 
 .n-center .ds4premium .ds4premium-input-shell {
   stroke: rgba(151, 158, 187, 0.22);
   stroke-width: 0.8px;
   vector-effect: non-scaling-stroke;
+}
+
+.n-center .ds4premium .ds4premium-input-aperture {
+  fill: #05060a;
+}
+
+.n-center .ds4premium .ds4premium-input-jack {
+  stroke: rgba(151, 158, 187, 0.18);
+  stroke-width: 3px;
 }
 
 /* Superseded free comparison elements remain source-readable in the master

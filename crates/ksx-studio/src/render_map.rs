@@ -51,10 +51,11 @@
 //! geometry (`studio-ui/art/extents.mjs` — the PadForge lesson: derive layout
 //! from art with a script, never trace by eye) plus hand placement for the
 //! shoulders and the small center buttons — which `build.mjs` now also draws
-//! into the recolored art at the same coordinates. The tables
-//! are mirrored in `studio-ui/src/MapIsland.ts` (client re-derivation per
-//! poll — the established applyStatus pattern); `zone_tables_cover_every_
-//! mappable_function` pins this side.
+//! into the recolored art at the same coordinates. A Rust-owned generated
+//! handoff carries the tables through `studio-ui/tokens/zones.json` into
+//! `studio-ui/src/zones.gen.ts` for the client re-derivation per poll (the
+//! established applyStatus pattern); `zone_tables_cover_every_mappable_
+//! function` pins the art against the domain vocabulary.
 
 use forma_ir::parser::IrModule;
 use forma_ir::slot::{SlotData, SlotValue};
@@ -3340,7 +3341,9 @@ mod tests {
     use super::*;
     use crate::control::{LearnView, SessionView};
     use crate::snapshot::{MacroSnapshot, MapperSnapshot};
+    use serde::Serialize;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     fn step(
         hold: &[&str],
@@ -3505,93 +3508,153 @@ mod tests {
         Some(rest[open..end].to_owned())
     }
 
-    /// Both tables cover exactly the 25 mappable functions, once each — a
-    /// zone the preset vocabulary cannot store, or a function without a
-    /// zone, is a build error here, not a dead click in the browser.
-    /// The TypeScript twins. `include_str!` and not a path check: move or rename
-    /// either file and this crate stops compiling, which is the point.
-    const MAP_ISLAND_TS: &str = include_str!("../../../studio-ui/src/MapIsland.ts");
-    const MAP_PAGE_TS: &str = include_str!("../../../studio-ui/src/MapPage.ts");
-
-    /// Pull the first quoted string out of every element of a TS array literal
-    /// named `name`, stopping at the closing `];`.
-    fn ts_array_heads(source: &str, name: &str) -> Vec<String> {
-        let start = source
-            .find(name)
-            .unwrap_or_else(|| panic!("{name} is gone from the TypeScript"));
-        let body = &source[start..];
-        let end = body
-            .find("\n];")
-            .unwrap_or_else(|| panic!("{name} has no end"));
-        body[..end]
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let t = line.trim_start();
-                if !(t.starts_with('[') || t.starts_with('{')) {
-                    return None;
-                }
-                let open = line.find('"')?;
-                let rest = &line[open + 1..];
-                let close = rest.find('"')?;
-                Some(rest[..close].to_owned())
-            })
-            .collect()
+    /// The committed Rust-to-TypeScript handoff. Struct field order is output
+    /// order under serde, so the pretty JSON is deterministic without relying
+    /// on map-key ordering.
+    #[derive(Serialize)]
+    struct ZoneTokens<'a> {
+        version: u8,
+        functions: Vec<String>,
+        xbox: Vec<ZoneToken<'a>>,
+        ds4: Vec<ZoneToken<'a>>,
     }
 
-    /// The vocabulary is mirrored BY HAND into TypeScript in three places, and
-    /// nothing generated it — `studio-ui/src/zones.gen.ts` does not exist, which
-    /// is a stale premise in `docs/UNIVERSAL-IO.md` M11 piece 1. Until a
-    /// generator lands, this is the only thing standing between a new control
-    /// and a dead click in the hydrated page: the Rust page would offer it and
-    /// the TypeScript would not know it existed.
-    ///
-    /// Deliberately a Rust test rather than a build step: generation has to
-    /// cross a language boundary in the direction the build does not currently
-    /// run, and would force an asset rebuild on every vocabulary change.
-    #[test]
-    fn the_typescript_mirrors_carry_the_same_vocabulary() {
-        let want: Vec<String> = {
-            let mut v: Vec<String> = ksx_core::preset::mappable_functions()
+    #[derive(Serialize)]
+    struct ZoneToken<'a> {
+        function: &'a str,
+        label: &'a str,
+        palette: &'a str,
+        rect: [f32; 4],
+        kind: &'a str,
+    }
+
+    fn zone_token(zone: &Zone) -> ZoneToken<'_> {
+        ZoneToken {
+            function: zone.fn_name,
+            label: zone.label,
+            palette: zone.idk,
+            rect: [zone.cx, zone.cy, zone.w, zone.h],
+            kind: zone.kind,
+        }
+    }
+
+    /// The no-JS picker had a deliberate human order before generation. Known
+    /// controls keep it by TYPE, not by their serialized spelling; anything a
+    /// future roster adds falls through and is appended canonically without an
+    /// array edit here.
+    fn function_picker_rank(binding: ksx_core::Binding) -> u8 {
+        use ksx_core::{Axis, Binding, DpadDirection, Trigger, XButton, AXIS_MAX, AXIS_MIN};
+
+        match binding {
+            Binding::Button(XButton::A) => 0,
+            Binding::Button(XButton::B) => 1,
+            Binding::Button(XButton::X) => 2,
+            Binding::Button(XButton::Y) => 3,
+            Binding::Button(XButton::LeftBumper) => 4,
+            Binding::Button(XButton::RightBumper) => 5,
+            Binding::Trigger(Trigger::Left) => 6,
+            Binding::Trigger(Trigger::Right) => 7,
+            Binding::Button(XButton::Back) => 8,
+            Binding::Button(XButton::Start) => 9,
+            Binding::Button(XButton::Guide) => 10,
+            Binding::Button(XButton::LeftThumb) => 11,
+            Binding::Button(XButton::RightThumb) => 12,
+            Binding::Dpad(DpadDirection::Up) => 13,
+            Binding::Dpad(DpadDirection::Down) => 14,
+            Binding::Dpad(DpadDirection::Left) => 15,
+            Binding::Dpad(DpadDirection::Right) => 16,
+            Binding::Axis {
+                axis: Axis::X,
+                value: AXIS_MIN,
+            } => 17,
+            Binding::Axis {
+                axis: Axis::X,
+                value: AXIS_MAX,
+            } => 18,
+            Binding::Axis {
+                axis: Axis::Y,
+                value: AXIS_MIN,
+            } => 19,
+            Binding::Axis {
+                axis: Axis::Y,
+                value: AXIS_MAX,
+            } => 20,
+            Binding::Axis {
+                axis: Axis::Rx,
+                value: AXIS_MIN,
+            } => 21,
+            Binding::Axis {
+                axis: Axis::Rx,
+                value: AXIS_MAX,
+            } => 22,
+            Binding::Axis {
+                axis: Axis::Ry,
+                value: AXIS_MIN,
+            } => 23,
+            Binding::Axis {
+                axis: Axis::Ry,
+                value: AXIS_MAX,
+            } => 24,
+            _ => u8::MAX,
+        }
+    }
+
+    fn generated_zone_tokens_json() -> String {
+        let mut functions: Vec<(ksx_core::Binding, String)> =
+            ksx_core::preset::mappable_functions()
                 .iter()
-                .map(ksx_config::function_name)
+                .copied()
+                .map(|binding| (binding, ksx_config::function_name(&binding)))
                 .collect();
-            v.sort_unstable();
-            v
+        functions.sort_by(|(left, left_name), (right, right_name)| {
+            function_picker_rank(*left)
+                .cmp(&function_picker_rank(*right))
+                .then_with(|| left_name.cmp(right_name))
+        });
+
+        let tokens = ZoneTokens {
+            version: 1,
+            functions: functions.into_iter().map(|(_, name)| name).collect(),
+            xbox: ZONE_XBOX.iter().map(zone_token).collect(),
+            ds4: ZONE_DS4.iter().map(zone_token).collect(),
         };
+        let mut json = serde_json::to_string_pretty(&tokens).expect("zone tokens serialize");
+        json.push('\n');
+        json
+    }
 
-        for (label, name) in [
-            ("MapIsland ZONE_XBOX", "const ZONE_XBOX: ZoneDef[] = ["),
-            ("MapIsland ZONE_DS4", "const ZONE_DS4: ZoneDef[] = ["),
-        ] {
-            let mut got = ts_array_heads(MAP_ISLAND_TS, name);
-            assert_eq!(
-                got.len(),
-                ksx_core::preset::MAPPABLE_COUNT,
-                "{label}: one entry per function"
-            );
-            got.sort_unstable();
-            assert_eq!(got, want, "{label} has drifted from the Rust vocabulary");
-        }
+    fn zone_tokens_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../studio-ui/tokens/zones.json")
+    }
 
-        let mut options = ts_array_heads(MAP_PAGE_TS, "const FUNCTIONS: KeyOpt[] = [");
+    /// The broken version hand-copied three TypeScript arrays. This gate makes
+    /// any vocabulary, spelling or art-table change fail until the one
+    /// committed handoff is explicitly regenerated.
+    #[test]
+    fn generated_zone_tokens_json_is_current() {
+        let path = zone_tokens_path();
+        let actual = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "could not read generated zone tokens at {}: {error}; run the ignored writer test",
+                path.display()
+            )
+        });
         assert_eq!(
-            options.len(),
-            ksx_core::preset::MAPPABLE_COUNT,
-            "MapPage FUNCTIONS: the no-JS <select> must offer every function"
+            actual,
+            generated_zone_tokens_json(),
+            "generated zone tokens are stale; run `cargo test -p ksx-studio write_generated_zone_tokens_json -- --ignored`"
         );
-        options.sort_unstable();
-        assert_eq!(
-            options, want,
-            "MapPage FUNCTIONS has drifted from the Rust vocabulary"
-        );
+    }
 
-        // ...and the Rust tables the TypeScript claims to mirror.
-        for table in [ZONE_XBOX, ZONE_DS4] {
-            let mut names: Vec<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
-            names.sort_unstable();
-            assert_eq!(names, want);
-        }
+    /// Explicit source-tree writer for the committed language-boundary file.
+    /// Ignored so an ordinary test run can only VERIFY generated source, never
+    /// modify the checkout underneath a concurrent Studio build.
+    #[test]
+    #[ignore = "writes studio-ui/tokens/zones.json"]
+    fn write_generated_zone_tokens_json() {
+        let path = zone_tokens_path();
+        std::fs::write(&path, generated_zone_tokens_json())
+            .unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
     }
 
     #[test]

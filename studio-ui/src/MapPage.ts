@@ -1,4 +1,5 @@
 import { MapIsland } from "./MapIsland";
+import { FUNCTIONS } from "./zones.gen";
 
 // The mapper's SSR root — the same compile-time-only anchor as StatusPage.ts.
 // `parseEntryPoint` picks the imported `*Page` that is NOT in map.ts's
@@ -21,15 +22,12 @@ import { MapIsland } from "./MapIsland";
 // mapper IR is 221 slots / 191 island slot_ids; the extra five over 216 are
 // #21's anonymous concatenation slots, not signals.)
 //
-// The KEYS_*/FUNCTIONS tables below stay here by CHOICE, not by constraint.
-// Compiler 0.3.1 fixed ledger #17 edge 1 — file constants declared in an
-// ISLAND file expand too now (verified by probe, 2026-08-06) — so these 250
-// lines could move to MapIsland.ts beside the markup that spreads them.
-// Moving them buys nothing today and would rehash both bundles, so they stay;
-// but nobody should preserve this arrangement believing the compiler still
-// requires it. What they DO still prove is that the expansion works: the
-// mapper SSRs 3 364 `<option>` elements across 34 selects as STATIC markup —
-// no slots, no islands, no per-option literals in source.
+// The KEYS_* tables below stay here by choice. The controller FUNCTIONS table
+// is generated from Rust's vocabulary and imported from zones.gen.ts instead,
+// so adding an endpoint cannot leave the no-JS picker behind. Forma 0.3.1
+// follows imported and re-exported constant tables, which keeps every
+// `<option>` expanded as static markup — no slots, islands or per-option
+// literals in the authored page.
 //
 // This function never executes in a browser (map.ts registers MapIsland via
 // activateIslands; esbuild tree-shakes this).
@@ -42,19 +40,15 @@ import { MapIsland } from "./MapIsland";
 // picker beside it. Both POST form-encoded bodies and take the 303 back to
 // /map?slot=N&flash=… , exactly like the status page's session forms.
 //
-// Dogfood ledger #17 — and the reason these tables live HERE, in the
-// compile-time twin, rather than beside the markup that uses them:
+// Dogfood ledger #17 — the reason the key tables remain literal arrays:
 // `...CONST.map((x) => h(…x.field…))` is expanded by the compiler AT BUILD
 // TIME into static markup, which is what makes a 122-option <select>
-// affordable on all 25 legend rows (the item-body seam offers no nested
-// list, and 122 hand-written literals per select is not a thing anyone
-// maintains). But `extractFileConstants` reads the ROOT *Page file only —
-// the same blind spot as #9's signal defaults — and it reads plain top-level
-// `const` declarations, so `export const` would be invisible to it. Hence:
-// declare bare here, `export { … }` at the bottom, and let MapIsland.ts
-// import them back. Unlike the signals this is SINGLE-SOURCED; the import
-// cycle it creates (MapPage → MapIsland → MapPage) is inert, because nothing
-// touches these arrays until MapIsland() is called.
+// affordable on every legend row (the item-body seam offers no nested list,
+// and 122 hand-written literals per select is not a thing anyone maintains).
+// The compiler now resolves the same literal shape across relative imports
+// and re-exports, so FUNCTIONS can follow the generated path while KEYS_* stay
+// declared here and exported at the bottom. The MapPage ↔ MapIsland cycle is
+// inert because nothing reads the tables until MapIsland() runs.
 //
 // `k` is the CONTRACT spelling — `Key::name()` in crates/ksx-core/src/key.rs,
 // which is what a preset file stores and what `ksx map --key` parses, and it
@@ -229,39 +223,6 @@ const KEYS_OEM: KeyOpt[] = [
   { k: "Oem7" },
   { k: "Oem13" },
   { k: "Oem16" },
-];
-
-/** The 25 mappable functions, as the preset vocabulary spells them (the same
- *  strings `ksx map --function` takes). Persona-neutral on purpose: this is
- *  the no-JS panel's picker, and the canonical name is what the CLI, the
- *  file and the daemon all agree on — the legend rows beside it show what the
- *  same control is CALLED on this pad. */
-const FUNCTIONS: KeyOpt[] = [
-  { k: "A" },
-  { k: "B" },
-  { k: "X" },
-  { k: "Y" },
-  { k: "lb" },
-  { k: "rb" },
-  { k: "lt" },
-  { k: "rt" },
-  { k: "back" },
-  { k: "start" },
-  { k: "guide" },
-  { k: "lthumb" },
-  { k: "rthumb" },
-  { k: "dpad.up" },
-  { k: "dpad.down" },
-  { k: "dpad.left" },
-  { k: "dpad.right" },
-  { k: "lx.min" },
-  { k: "lx.max" },
-  { k: "ly.min" },
-  { k: "ly.max" },
-  { k: "rx.min" },
-  { k: "rx.max" },
-  { k: "ry.min" },
-  { k: "ry.max" },
 ];
 
 export {

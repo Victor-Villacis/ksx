@@ -1,9 +1,9 @@
 import { h, createSignal, createList, createShow } from "@getforma/core";
-// v9's no-JS vocabulary tables. They are DECLARED in MapPage.ts because the
-// compiler expands `...CONST.map(…)` spreads at build time from the root
-// *Page file's constants only (ledger #17, explained there); this import is
-// the runtime half of that single source. The cycle is inert — nothing here
-// reads them before MapIsland() runs.
+import { ZONE_DS4, ZONE_XBOX, type ZoneDef } from "./zones.gen";
+// v9's no-JS key tables stay declared in MapPage.ts; FUNCTIONS is re-exported
+// there from zones.gen.ts. Forma 0.3.1 follows that re-export when it expands
+// the literal option table, and the runtime cycle remains inert — nothing here
+// reads these arrays before MapIsland() runs.
 import {
   KEYS_LETTER,
   KEYS_DIGIT,
@@ -37,8 +37,9 @@ import {
 // the bottom of a fixed-aspect stage; the top band holds the LB/RB/LT/RT
 // chips, stacked trigger-over-bumper and anchored to the body silhouette.
 // Every mappable control is a positioned hit-zone <button data-fn=…> from
-// the ZONES tables below (authored from ../art/extents.mjs output — the
-// PadForge rule: derive layout from art with a script).
+// the generated ZONES tables. Rust owns the canonical geometry and emits the
+// JSON that build.mjs turns into zones.gen.ts, so the server and island cannot
+// drift through a hand-maintained TypeScript copy.
 //
 // Each zone wears its own identity. The vendored art draws no letters, so
 // the zone renders the control's name itself in the canonical colors (A
@@ -246,7 +247,7 @@ interface MacroRow {
 
 /** One cell of the flat `steps × controls` matrix. Flat because a
  *  `createList` inside a list item has no seam (ledger #17's neighbour), so
- *  the matrix is one list laid out by a 25-column CSS grid. */
+ *  the matrix is one list laid out by the controller-column grid. */
 interface MacroCell {
   cls: string;
   /** `stepIndex|function` — what the click delegation toggles. */
@@ -433,72 +434,10 @@ interface ToastRow {
   dismisstitle: string;
 }
 
-// ── Zone tables — MIRROR of render_map.rs ZONE_XBOX / ZONE_DS4 ────────────
-// [fn, label, cx, cy, w, h, kind]; stage-percent boxes, art bottom-aligned
-// at 86% stage height (ART_SHARE). Rects are pairwise DISJOINT (pinned by
-// render_map.rs `zone_tables_cover_every_mappable_function`): face buttons
-// sized to the drawn circles, dpad arrows to the drawn cross, and the four
-// stick-direction wedges RING the stick with the L3/R3 click zone as the
-// center hub — adjacent, never covering it.
-
-// [fn, identity label, identity palette, cx, cy, w, h, kind]
-type ZoneDef = [string, string, string, number, number, number, number, string];
-
-const ZONE_XBOX: ZoneDef[] = [
-  ["lt", "LT", "sh", 31.0, 4.6, 10.0, 5.2, "trigger"],
-  ["lb", "LB", "sh", 34.0, 10.9, 11.0, 5.2, "bumper"],
-  ["rb", "RB", "sh", 66.0, 10.9, 11.0, 5.2, "bumper"],
-  ["rt", "RT", "sh", 69.0, 4.6, 10.0, 5.2, "trigger"],
-  ["Y", "Y", "xy", 75.2, 31.1, 7.2, 8.4, "round"],
-  ["B", "B", "xb", 82.0, 39.6, 7.2, 8.4, "round"],
-  ["A", "A", "xa", 75.3, 48.3, 7.2, 8.4, "round"],
-  ["X", "X", "xx", 68.7, 39.7, 7.2, 8.4, "round"],
-  ["guide", "guide", "txt", 50.0, 27.0, 9.0, 11.0, "round"],
-  ["back", "view", "txt", 44.0, 39.0, 6.5, 8.0, "chip"],
-  ["start", "menu", "txt", 56.0, 39.0, 6.5, 8.0, "chip"],
-  ["lthumb", "L3", "hub", 24.0, 39.7, 8.0, 10.0, "round"],
-  ["ly.max", "↑", "dir", 24.0, 31.7, 7.0, 6.0, "chip"],
-  ["ly.min", "↓", "dir", 24.0, 47.7, 7.0, 6.0, "chip"],
-  ["lx.min", "←", "dir", 17.25, 39.7, 5.5, 7.0, "chip"],
-  ["lx.max", "→", "dir", 30.75, 39.7, 5.5, 7.0, "chip"],
-  ["dpad.up", "↑", "dir", 36.4, 50.6, 7.0, 9.0, "chip"],
-  ["dpad.down", "↓", "dir", 36.4, 69.2, 7.0, 9.0, "chip"],
-  ["dpad.left", "←", "dir", 29.2, 59.9, 7.0, 9.0, "chip"],
-  ["dpad.right", "→", "dir", 43.6, 59.9, 7.0, 9.0, "chip"],
-  ["rthumb", "R3", "hub", 62.5, 58.4, 8.0, 10.0, "round"],
-  ["ry.max", "↑", "dir", 62.5, 50.4, 7.0, 6.0, "chip"],
-  ["ry.min", "↓", "dir", 62.5, 66.4, 7.0, 6.0, "chip"],
-  ["rx.min", "←", "dir", 55.75, 58.4, 5.5, 7.0, "chip"],
-  ["rx.max", "→", "dir", 69.25, 58.4, 5.5, 7.0, "chip"],
-];
-
-const ZONE_DS4: ZoneDef[] = [
-  ["lt", "L2", "sh", 17.0, 4.6, 9.5, 5.2, "trigger"],
-  ["lb", "L1", "sh", 19.5, 10.9, 10.5, 5.2, "bumper"],
-  ["rb", "R1", "sh", 80.5, 10.9, 10.5, 5.2, "bumper"],
-  ["rt", "R2", "sh", 83.0, 4.6, 9.5, 5.2, "trigger"],
-  ["Y", "△", "pt", 81.2, 29.2, 7.0, 9.0, "round"],
-  ["B", "○", "po", 88.4, 38.8, 7.0, 9.0, "round"],
-  ["A", "✕", "pc", 81.3, 48.1, 7.0, 9.0, "round"],
-  ["X", "□", "psq", 74.0, 38.7, 7.0, 9.0, "round"],
-  ["back", "share", "txt", 30.0, 25.5, 7.0, 9.0, "chip"],
-  ["start", "options", "txt", 70.0, 25.5, 7.0, 9.0, "chip"],
-  ["guide", "PS", "txt", 50.0, 63.0, 8.0, 10.0, "round"],
-  ["lthumb", "L3", "hub", 33.8, 56.8, 8.0, 10.0, "round"],
-  ["ly.max", "↑", "dir", 33.8, 48.8, 7.0, 6.0, "chip"],
-  ["ly.min", "↓", "dir", 33.8, 64.8, 7.0, 6.0, "chip"],
-  ["lx.min", "←", "dir", 27.05, 56.8, 5.5, 7.0, "chip"],
-  ["lx.max", "→", "dir", 40.55, 56.8, 5.5, 7.0, "chip"],
-  ["dpad.up", "↑", "dir", 18.5, 31.5, 5.4, 7.2, "chip"],
-  ["dpad.down", "↓", "dir", 18.5, 46.6, 5.4, 7.2, "chip"],
-  ["dpad.left", "←", "dir", 12.9, 39.2, 5.4, 7.2, "chip"],
-  ["dpad.right", "→", "dir", 23.9, 39.2, 5.4, 7.2, "chip"],
-  ["rthumb", "R3", "hub", 66.1, 56.8, 8.0, 10.0, "round"],
-  ["ry.max", "↑", "dir", 66.1, 48.8, 7.0, 6.0, "chip"],
-  ["ry.min", "↓", "dir", 66.1, 64.8, 7.0, 6.0, "chip"],
-  ["rx.min", "←", "dir", 59.35, 56.8, 5.5, 7.0, "chip"],
-  ["rx.max", "→", "dir", 72.85, 56.8, 5.5, 7.0, "chip"],
-];
+// Generated from render_map.rs ZONE_XBOX / ZONE_DS4 via tokens/zones.json.
+// Tuple shape: [fn, identity label, identity palette, cx, cy, w, h, kind].
+// The stage-percent boxes remain pairwise disjoint; Rust owns and tests that
+// geometry, while this island only consumes the generated projection.
 
 export function isPlaystation(persona: string): boolean {
   // DualSense is the live HIDMaestro PlayStation persona. Keep this in exact
@@ -903,7 +842,7 @@ function eitherNote(count: number): string {
 }
 
 /** The zone table of the slot on screen. */
-function zoneTable(): ZoneDef[] {
+function zoneTable(): readonly ZoneDef[] {
   const slot = currentSlot();
   return slot && isPlaystation(slot.persona) ? ZONE_DS4 : ZONE_XBOX;
 }
@@ -2020,9 +1959,9 @@ const MACRO_RULE_LINE =
  *  render_map.rs `MACRO_RING_LINE`.
  *
  *  The numpad digits live HERE and in the tooltips, never in the glyph row: a
- *  second line of digits under only 24 of 37 columns makes the header ragged,
- *  and the digit is a lookup key (for somebody who read "3" on Dustloop or typed
- *  digits into MAME's `joystick_map`), not a label. */
+ *  second line of digits under only the three direction rings makes the header
+ *  ragged, and the digit is a lookup key (for somebody who read "3" on Dustloop
+ *  or typed digits into MAME's `joystick_map`), not a label. */
 const MACRO_RING_LINE =
   "Each direction group runs ↑ ↖ ← ↙ ↓ ↘ → ↗ (numpad 8 7 4 1 2 3 6 9), so a motion is a " +
   "SHAPE: a quarter-circle forward is a staircase, a half-circle a straight line, a dragon " +
@@ -2864,8 +2803,8 @@ function bandOf(fn: string): string {
 }
 
 /** The grid's columns for one persona: every non-direction control as itself,
- *  and every direction MECHANISM as its eight-position ring. 25 zones → 37
- *  columns. Mirror of render_map.rs `macro_columns`. */
+ *  and every direction MECHANISM as its eight-position ring. Its width follows
+ *  the generated zone vocabulary. Mirror of render_map.rs `macro_columns`. */
 function macroColumns(slot: MapperSlot | null): MacroColumn[] {
   const table = slot && isPlaystation(slot.persona) ? ZONE_DS4 : ZONE_XBOX;
   const out: MacroColumn[] = [];
@@ -3504,7 +3443,7 @@ function macroRowsFor(mac: MacroView, slot: MapperSlot | null): MacroRow[] {
   });
 }
 
-/** The matrix, FLAT: `steps × 37` cells in row-major order.
+/** The matrix, FLAT: `steps × controller columns` cells in row-major order.
  *
  *  A step holding `ly.min` + `lx.max` lights the LS `↘` cell — not two stray
  *  ticks eight columns apart. That is the whole point, and it works on a
@@ -4489,7 +4428,7 @@ export function MapIsland() {
                   // that one off it. (Removing one of several without
                   // JavaScript needs to name WHICH key — the picker beside
                   // these buttons is that name, so no second control is
-                  // needed and no per-key form has to be rendered 25 times.)
+                  // needed and no per-key form is repeated for every legend row.)
                   h(
                     "button",
                     {
@@ -4913,8 +4852,8 @@ export function MapIsland() {
                   { class: r.cls, title: r.durtitle },
                   h("span", { class: "macnum" }, r.n),
                   // WHAT THIS ROW HOLDS, before its timing — reading the grid
-                  // must never mean decoding which of 37 columns are lit. A
-                  // diagonal reads as ONE control here, because that is what
+                  // must never mean decoding which controller columns are lit.
+                  // A diagonal reads as ONE control here, because that is what
                   // was picked and what it means; `machold both` is the accent
                   // for a row that really does hold several things at once.
                   h("span", { class: r.holdcls }, r.hold),
@@ -5391,7 +5330,7 @@ export function MapIsland() {
       ),
       // ── v9: bind by name (no-JavaScript panel) ────────────────────────
       // The row forms above are the precise path; this is the one that does
-      // not make you hunt through 25 of them. Same two verbs, same 303 →
+      // not make you hunt through every one. Same two verbs, same 303 →
       // ?flash= report. Hidden the moment the island is marked `.js`.
       // Not a createShow — a plain section whose visibility is CSS, so it
       // costs zero MAP_SHOW_ORDER entries (ledger #4/#14).

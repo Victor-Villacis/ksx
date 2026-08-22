@@ -108,11 +108,10 @@ per-axis deadzone/saturation/curves, 4-way restriction, tap/hold/double-tap.
   opposite-sign holders on release. Pressure ladders hit this on the first
   press. Now pinned by
   `same_sign_ladder_release_falls_back_instead_of_centering`.
-- **The control vocabulary is pinned at 25 in fixed-size arrays** —
-  `zones_for() -> &'static [Zone; 25]` (`crates/ksx-studio/src/render_map.rs:280`,
-  17 call sites), `FUNCTIONS: [&str; 25]` (`:3507`), `MACRO_COLUMN_COUNT = 37`
-  (`:2621`), two insta golden snapshots, and hand-written TypeScript mirrors
-  (`studio-ui/src/MapIsland.ts:447-501`, `MapPage.ts:234-265`).
+- **The control vocabulary was pinned at 25 in fixed-size arrays** — ✅ **FIXED
+  in M11 pieces 1/1b.** Rust now owns the vocabulary and persona art tables;
+  the committed `zones.json` handoff and generated `zones.gen.ts` project both
+  into Studio without a hand-written TypeScript mirror.
 - **No per-persona capability model exists.** `Persona` knows only
   backend/xinput/hat/feedback/plug/limit; presets are not bound to a persona.
 - **ksx sets 11 of HIDMaestro's 18 button bits and 6 of its 41 axis usages.**
@@ -243,8 +242,8 @@ physical** result, never a code state.
 
 Four independent pieces, each shippable alone:
 
-1. **Kill the fixed arrays** — ✅ **DONE**, see §7. The generated
-   `zones.gen.ts` is **deferred**; a drift pin ships in its place.
+1. **Kill the fixed arrays** — ✅ **DONE**, including the generated Studio
+   handoff (piece 1b); see §7.
 
    > ⚠️ **Four premises in this bullet's original wording were wrong**, found
    > while implementing it on 2026-08-21. They are corrected in §7 rather than
@@ -569,34 +568,33 @@ changed the design:*
   that table). Not a regression — the old test could not see it either — but it
   is not load-bearing and should not be trusted as such.
 
-**Deferred, deliberately: the generated `zones.gen.ts` (M11 piece 1b).**
-The vocabulary is hand-mirrored in `MapIsland.ts` (`ZONE_XBOX`, `ZONE_DS4`) and
-`MapPage.ts` (`FUNCTIONS`, the no-JS `<select>`). Generating it would force a
-`node build.mjs` and a commit of `crates/ksx-studio/assets/**`, which CI
-byte-diffs — and a concurrent branch was rewriting exactly those assets, so the
-conflict was guaranteed on files that must not be hand-merged. The generator
-also runs the wrong way today: the `tokens.gen.css` precedent is TS → Rust,
-while this needs Rust → TS plus new `ci.yml` path registrations.
+**M11 piece 1b — the Studio mirrors are generated.**
+A Rust test serializes and freshness-checks the committed
+`studio-ui/tokens/zones.json` handoff. Its function names come from
+`mappable_functions()` plus `ksx_config::function_name`; its labels, palettes,
+geometry and CSS kinds come directly from this renderer's `ZONE_XBOX` and
+`ZONE_DS4` art tables. The boundary therefore stays intact: ksx-core does not
+learn persona art and ksx-studio gains no runtime dependency.
 
-Shipped instead at zero collision cost:
-`the_typescript_mirrors_carry_the_same_vocabulary` `include_str!`s both files
-and pins them against `mappable_functions()`. That captures the *whole* value of
-generation — drift is caught — without touching a shared file. Verified by
-mutation: dropping one entry fails with `24` vs `25`. When the art branch lands,
-1b replaces the pin with real generation.
+`build.mjs` validates that handoff and emits deterministic
+`studio-ui/src/zones.gen.ts`. `MapIsland.ts` imports both complete zone tables;
+`MapPage.ts` imports the literal function-option array used by Forma's static
+no-JS `<select>` expansion. Both committed paths ride the same CI byte-diff as
+the assets and token outputs. The mutation-proven temporary
+`the_typescript_mirrors_carry_the_same_vocabulary` pin was deleted in the same
+commit because the generated handoff supersedes it.
 
-**Not yet started:** M11 piece 4, piece 1b, and everything from M12 on.
+The existing picker order is preserved as presentation policy, derived by a
+typed rank with a stable fallback. Adding a future binding to the canonical
+roster therefore cannot require another hand-edited list.
+
+**Still outside this branch:** M11 piece 4 and everything from M12 on.
 
 ### Recommended pickup order for a fresh agent
 
-1. **M11 piece 1b** — the generated `zones.gen.ts`, once the studio-ui art
-   branch has merged. Shape: a Rust test emits/verifies
-   `studio-ui/tokens/zones.json`, `build.mjs` reads it beside the existing token
-   writes and emits `src/zones.gen.ts`, and both paths are registered in
-   `ci.yml`. Delete the drift pin in the same commit that replaces it.
-2. **M11 piece 4** (`SdkStateMapper.Axis()`) — C#, needs new golden vectors and
+1. **M11 piece 4** (`SdkStateMapper.Axis()`) — C#, needs new golden vectors and
    a hardware leg to confirm intermediate stick travel.
-3. Then M12. Its **axis** ladders and curve tables are the first thing to
+2. Then M12. Its **axis** ladders and curve tables are the first thing to
    exercise the resolver's magnitude clause with values other than ±32767 —
    note that `Binding::Pressure` is **not**, because it drives a trigger and
    `PadControl::is_analog` reports triggers as digital (ksx drives `lt`/`rt` to

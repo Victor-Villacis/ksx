@@ -147,10 +147,13 @@ features to `ksx-backend`: `-p ksx-app --all-targets` compiles the backend's
 gated code but not the backend's tests, which is where most of it is tested.
 
 Touched `studio-ui/`? Also `cd studio-ui && node build.mjs`, commit the
-regenerated assets **plus the two committed token outputs it also writes —
-`studio-ui/src/tokens.gen.css` and `crates/ksx-studio/src/theme_tokens.rs`** —
-and confirm a fresh rebuild is byte-identical. (That one is cheap and local —
-it is Node, not rustc.)
+regenerated assets **plus the committed outputs it writes —
+`studio-ui/src/zones.gen.ts`, `studio-ui/src/tokens.gen.css` and
+`crates/ksx-studio/src/theme_tokens.rs`** — and confirm a fresh rebuild is
+byte-identical. If the Rust vocabulary or mapper art tables changed, first run
+`cargo test -p ksx-studio write_generated_zone_tokens_json -- --ignored` and
+commit its `studio-ui/tokens/zones.json` handoff too. (The Node rebuild is cheap
+and local; it is not rustc.)
 
 ## Landmines — each one has already cost a day
 
@@ -162,11 +165,14 @@ it is Node, not rustc.)
   `rustup override`. Local 1.96 vs CI 1.97 once made "clippy clean" mean two
   different things and shipped 24 diagnostics to CI.
 - **Never hand-merge generated assets** (`ksx-studio/assets/*`, `manifest.json`,
-  `sw.js`, hashed bundles, `studio-ui/src/tokens.gen.css`,
-  `crates/ksx-studio/src/theme_tokens.rs`). Regenerate from `studio-ui/`. A
-  hand-resolved manifest yields a page whose HTML and JS disagree — it fails in
-  a browser and in no Rust test; a hand-resolved token file ships a palette no
-  one chose.
+  `sw.js`, hashed bundles, `studio-ui/tokens/zones.json`,
+  `studio-ui/src/zones.gen.ts`, `studio-ui/src/tokens.gen.css`, and
+  `crates/ksx-studio/src/theme_tokens.rs`). Regenerate `zones.json` with its
+  ignored Rust writer test, then regenerate its TypeScript projection and the
+  other Studio outputs with `studio-ui/build.mjs`. A hand-resolved manifest
+  yields a page whose HTML and JS disagree — it fails in a browser and in no
+  Rust test; a hand-resolved generated handoff can silently ship a vocabulary
+  or palette no one chose.
 - **Never assert what the code cannot know.** A refusal once said "this id names
   one specific USB SOCKET"; a live port move disproved it, because Windows keys
   a devnode off the serial when the board reports one. State what *decides* the

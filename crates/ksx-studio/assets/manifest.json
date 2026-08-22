@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "build_hash": "c8950c33ae259bcc65989fc0a8efee3e2fc71a81672db7505172351d389b4636",
+  "build_hash": "f53a44b63fbfd7204ae56b3c179f074d374f50b41661eeb006cc2f8e8d6e653d",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
     "devices.ir": "devices.ba76544a.ir",
     "devices.js": "devices.263a38f8.js",
     "map.ir": "map.eb1d7603.ir",
-    "map.js": "map.c744fd4d.js",
+    "map.js": "map.57dc7b7e.js",
     "nocturne.ir": "nocturne.fa5dc864.ir",
     "nocturne.js": "nocturne.bdea577f.js",
     "pads.ir": "pads.69bd275e.ir",
@@ -75,13 +75,13 @@
     },
     "/map": {
       "js": [
-        "map.c744fd4d.js"
+        "map.57dc7b7e.js"
       ],
       "css": [
         "studio.1ac9dd0b.css"
       ],
       "fonts": [],
-      "total_size_br": 104234,
+      "total_size_br": 104288,
       "budget_warn_threshold": 200000,
       "ir": "map.eb1d7603.ir"
     },

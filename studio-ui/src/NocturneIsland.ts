@@ -1028,6 +1028,7 @@ export function applyNocturne(p: NocturnePayload): void {
     if (assignKey) markAssignTargets(assignKey);
   }
   lastBindView = v;
+  refreshInspectorCopy();
   if (learnRoot) {
     reconcileKeyboardWorkbenchIdentity();
     syncPadWidgets();
@@ -1038,6 +1039,7 @@ export function applyNocturne(p: NocturnePayload): void {
     applySlotColors();
     applyNocturneUi();
     syncBoardFilter();
+    applyInspectorContextRows(learnRoot);
   }
   const pendingMacroFocus = focusMacroOnNextPayload;
   if (
@@ -1212,6 +1214,7 @@ let keyboardWorkbenchDrag: {
   startY: number;
   scaleX: number;
   scaleY: number;
+  moved: boolean;
 } | null = null;
 
 /** Where the board and the first pads land with an empty store: keyboard
@@ -2813,6 +2816,7 @@ function keyboardWorkbenchPointerDown(event: PointerEvent): void {
   event.preventDefault();
   event.stopPropagation();
   keyboardWorkbenchSetSelected(key, token);
+  setInspectorContext({ kind: "key", key });
   button.focus({ preventScroll: true });
   button.classList.add("dragging");
   button.setPointerCapture(event.pointerId);
@@ -2826,6 +2830,7 @@ function keyboardWorkbenchPointerDown(event: PointerEvent): void {
     startY: placed.y,
     scaleX: KEYBOARD_WORKBENCH_BOUNDS.width / rect.width,
     scaleY: KEYBOARD_WORKBENCH_BOUNDS.height / rect.height,
+    moved: false,
   };
 }
 
@@ -2834,6 +2839,13 @@ function keyboardWorkbenchPointerMove(event: PointerEvent): void {
   if (!drag || event.pointerId !== drag.pointerId) return;
   event.preventDefault();
   event.stopPropagation();
+  if (!drag.moved) {
+    drag.moved = Math.hypot(
+      event.clientX - drag.startClientX,
+      event.clientY - drag.startClientY,
+    ) >= 4;
+    if (!drag.moved) return;
+  }
   const current = keyboardWorkbenchPlacedKeys().find((record) => record.instanceId === drag.token);
   if (!current) return;
   const nextX = drag.startX + (event.clientX - drag.startClientX) * drag.scaleX;
@@ -2859,6 +2871,15 @@ function keyboardWorkbenchPointerEnd(event: PointerEvent): void {
   keyboardWorkbenchItem
     ?.querySelector<HTMLElement>(`.n-deck-key[data-keylab-token="${CSS.escape(drag.token)}"]`)
     ?.classList.remove("dragging");
+  if (!drag.moved) {
+    // A canceled pointer sequence is not an activation. Only a completed tap
+    // may satisfy a waiting control or replace the currently selected key.
+    if (event.type === "pointerup") {
+      if (resolveLearnWithKey(drag.key, event.shiftKey || chainWanted())) return;
+      if (assignKey) cancelAssign();
+    }
+    return;
+  }
   saveKeyboardWorkbenchPrefs();
   renderKeyboardWorkbenchKeys();
   keyboardWorkbenchAnnounce(
@@ -3213,6 +3234,8 @@ const [nDlgOpen, setNDlgOpen] = createSignal(false);
 const [nCenterCls, setNCenterCls] = createSignal("n-center");
 const [nLeftCls, setNLeftCls] = createSignal("n-left");
 const [nRightCls, setNRightCls] = createSignal("n-right");
+const [nViewCtlPressed, setNViewCtlPressed] = createSignal("true");
+const [nViewKeysPressed, setNViewKeysPressed] = createSignal("false");
 const [nIdLinkCls, setNIdLinkCls] = createSignal("n-link");
 const [nIdBoxCls, setNIdBoxCls] = createSignal("n-idbox none");
 const [nIdText, setNIdText] = createSignal("Press a key on the keyboard you want to use");
@@ -3233,12 +3256,24 @@ const ui: {
   kbSolo: false,
 };
 
+type InspectorContext =
+  | { kind: "overview" }
+  | { kind: "key"; key: string }
+  | { kind: "control"; slot: string; preset: string; functionName: string };
+
+let inspectorContext: InspectorContext = { kind: "overview" };
+
 function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
   setNLeftCls(ui.leftRail ? "n-left rail" : "n-left");
   setNRightCls(
-    "n-right" + (ui.rightRail ? " rail" : "") + (ui.rightView === "keys" ? " keys-mode" : ""),
+    "n-right" +
+      (ui.rightRail ? " rail" : "") +
+      (ui.rightView === "keys" ? " keys-mode" : "") +
+      (inspectorContext.kind === "overview" ? "" : " context-mode"),
   );
+  setNViewCtlPressed(String(ui.rightView === "controls"));
+  setNViewKeysPressed(String(ui.rightView === "keys"));
   const pads = lastBindView?.pads ?? [];
   setNCenterCls(
     "n-center" +
@@ -4043,6 +4078,119 @@ function controlForPad(
   );
 }
 
+function refreshInspectorCopy(): void {
+  if (inspectorContext.kind === "control") {
+    const currentPad = lastBindView?.pads.find(
+      (pad) => String(pad.slot) === inspectorContext.slot,
+    );
+    if (!currentPad || currentPad.preset !== inspectorContext.preset) {
+      inspectorContext = { kind: "overview" };
+      applyNocturneUi();
+    }
+  }
+  let kicker = "MAPPING INSPECTOR";
+  let title = nBindTitle() || "Browse mappings";
+  let meta = nBindFoot() || "Select a key or controller control to inspect its connections.";
+  let action = "Find mappings";
+  if (inspectorContext.kind === "key") {
+    let count = 0;
+    let players = 0;
+    for (const pad of lastBindView?.pads ?? []) {
+      const before = count;
+      for (const control of pad.controls ?? []) {
+        if (control.keys.includes(inspectorContext.key)) count += 1;
+      }
+      for (const macro of pad.macros ?? []) {
+        if (macro.triggers.includes(inspectorContext.key)) count += 1;
+      }
+      if (count > before) players += 1;
+    }
+    kicker = "PHYSICAL KEY";
+    title = inspectorContext.key;
+    meta = count === 0
+      ? "Unbound · ready to connect"
+      : `${count} destination${count === 1 ? "" : "s"} · ${players} player${players === 1 ? "" : "s"} · P${nSlotVal()} details below`;
+    action = count === 0 ? "Connect to control…" : "Connect another…";
+  } else if (inspectorContext.kind === "control") {
+    const control = controlForPad(
+      lastBindView,
+      inspectorContext.slot,
+      inspectorContext.functionName,
+    );
+    const keys = control?.keys ?? [];
+    const behavior = [
+      control?.toggle ? "Toggle" : "Hold",
+      control?.turbo_hz ? `${control.turbo_hz}/s turbo` : "",
+    ].filter(Boolean).join(" · ");
+    kicker = "CONTROLLER CONTROL";
+    title = `P${inspectorContext.slot} · ${control?.label ?? inspectorContext.functionName}`;
+    meta = `${keys.length === 0 ? "No source key assigned" : `Driven by ${keys.join(" · ")}`} · ${behavior}`;
+    action = keys.length === 0 ? "Assign source key…" : "Add source…";
+  }
+  const card = learnRoot?.querySelector<HTMLElement>(".n-inspector-card");
+  if (!card) return;
+  card.querySelector<HTMLElement>(".n-inspector-kicker")!.textContent = kicker;
+  card.querySelector<HTMLElement>(".n-inspector-title")!.textContent = title;
+  card.querySelector<HTMLElement>(".n-inspector-meta")!.textContent = meta;
+  card.querySelector<HTMLElement>(".n-inspector-action")!.textContent = action;
+}
+
+function applyInspectorContextRows(root: HTMLElement): void {
+  for (const element of root.querySelectorAll<HTMLElement>(".n-context-hide")) {
+    element.classList.remove("n-context-hide");
+  }
+  if (inspectorContext.kind === "overview") return;
+
+  if (inspectorContext.kind === "key") {
+    for (const candidate of root.querySelectorAll<HTMLElement>(
+      ".n-krows .n-krow[data-key], .n-krows .n-akey[data-key]",
+    )) {
+      const matches = candidate.dataset.key === inspectorContext.key;
+      candidate.classList.toggle("n-context-hide", !matches);
+    }
+    return;
+  }
+
+  const wanted = normalizedControlFunction(inspectorContext.functionName);
+  for (const candidate of root.querySelectorAll<HTMLElement>(
+    ".n-bindgroups details.n-bind[data-fn], .n-bindgroups .n-ctlchip[data-fn], .n-macrosec details[data-fn]",
+  )) {
+    const candidateSlot = candidate.dataset.slot ?? nSlotVal();
+    const matches =
+      candidateSlot === inspectorContext.slot &&
+      normalizedControlFunction(candidate.dataset.fn ?? "") === wanted;
+    candidate.classList.toggle("n-context-hide", !matches);
+    if (matches && candidate instanceof HTMLDetailsElement) candidate.open = true;
+  }
+}
+
+function setInspectorContext(next: InspectorContext): void {
+  inspectorContext = next;
+  if (next.kind === "key") ui.rightView = "keys";
+  else if (next.kind === "control") ui.rightView = "controls";
+  const root = learnRoot;
+  const input = root?.querySelector<HTMLInputElement>(".n-filter-in");
+  if (input?.value) {
+    input.value = "";
+    applyNocturneFilter(root, "");
+    mergeQuery({ q: null });
+  }
+  applyNocturneUi();
+  refreshInspectorCopy();
+  if (root) applyInspectorContextRows(root);
+}
+
+function clearInspectorContext(preserveFilter = false): void {
+  if (!preserveFilter) {
+    setInspectorContext({ kind: "overview" });
+    return;
+  }
+  inspectorContext = { kind: "overview" };
+  applyNocturneUi();
+  refreshInspectorCopy();
+  if (learnRoot) applyInspectorContextRows(learnRoot);
+}
+
 function startAutoMap(): void {
   const steps = controlsForPad(lastBindView, nSlotVal())
     .filter((control) => !control.function.startsWith("macro."))
@@ -4409,9 +4557,10 @@ export function nocturneLiveConnect(): void {
 /** The filter (client chrome over served rows): IMPERATIVE hide/show — the
  *  live-echo idiom, legitimate for state no slot carries. */
 function applyNocturneFilter(root: HTMLElement, q: string): void {
-  const pane = root.querySelector(".n-right");
+  const pane = root.querySelector<HTMLElement>(".n-right");
   if (!pane) return;
   const query = q.trim().toLowerCase();
+  pane.classList.toggle("filtering", query !== "");
   // A row matches on its own label OR its group's ("stick" finds both
   // stick clusters even though the rows are spelled L3/←/→); a group whose
   // rows are ALL hidden hides its header too. Only under an active filter,
@@ -4420,17 +4569,31 @@ function applyNocturneFilter(root: HTMLElement, q: string): void {
     const glabel = (group.querySelector(".n-bindg-lab")?.textContent ?? "").toLowerCase();
     const gmatch = query !== "" && glabel.includes(query);
     for (const el of Array.from(group.querySelectorAll<HTMLElement>(".n-bind"))) {
-      const label = (el.querySelector(".n-bind-label")?.textContent ?? "").toLowerCase();
-      el.classList.toggle("hide", query !== "" && !gmatch && !label.includes(query));
+      const searchable = `${el.dataset.fn ?? ""} ${el.textContent ?? ""}`.toLowerCase();
+      el.classList.toggle("hide", query !== "" && !gmatch && !searchable.includes(query));
     }
     for (const chip of Array.from(group.querySelectorAll<HTMLElement>(".n-ctlchip"))) {
-      const label = (chip.textContent ?? "").toLowerCase();
-      chip.classList.toggle("hide", query !== "" && !gmatch && !label.includes(query));
+      const searchable = `${chip.dataset.fn ?? ""} ${chip.textContent ?? ""}`.toLowerCase();
+      chip.classList.toggle("hide", query !== "" && !gmatch && !searchable.includes(query));
     }
     const visible =
       group.querySelector(".n-bind:not(.hide)") !== null ||
       group.querySelector(".n-ctlchip:not(.hide)") !== null;
     group.classList.toggle("empty", query !== "" && !visible);
+  }
+  for (const key of pane.querySelectorAll<HTMLElement>(".n-krows [data-key]")) {
+    const searchable = `${key.dataset.key ?? ""} ${key.textContent ?? ""}`.toLowerCase();
+    key.classList.toggle("hide", query !== "" && !searchable.includes(query));
+  }
+  for (const section of pane.querySelectorAll<HTMLElement>(".n-krows .n-akeysec")) {
+    section.classList.toggle(
+      "filter-empty",
+      query !== "" && section.querySelector(".n-akey:not(.hide)") === null,
+    );
+  }
+  for (const macro of pane.querySelectorAll<HTMLElement>(".n-macrosec details[data-fn]")) {
+    const searchable = `${macro.dataset.fn ?? ""} ${macro.textContent ?? ""}`.toLowerCase();
+    macro.classList.toggle("hide", query !== "" && !searchable.includes(query));
   }
 }
 
@@ -4565,7 +4728,7 @@ function markAssignTargets(key: string | null): void {
   if (key) {
     for (const el of Array.from(
       root.querySelectorAll<HTMLElement>(
-        `.n-kb [data-key="${CSS.escape(key)}"], .n-akey-grid [data-key="${CSS.escape(key)}"]`,
+        `.n-kb [data-key="${CSS.escape(key)}"], .n-akey-grid [data-key="${CSS.escape(key)}"], .n-deck-key[data-keylab-key="${CSS.escape(key)}"]`,
       ),
     )) {
       el.classList.add("assign");
@@ -4617,6 +4780,20 @@ function cancelAssign(): void {
   setNLearnCls("n-learnbar none");
   markAssignTargets(null);
   setRailGlow(false);
+}
+
+function resolveLearnWithKey(key: string, chain: boolean): boolean {
+  const row = learnRow;
+  if (!row) return false;
+  lastWrite = { origin: "learn", chain, assignMode: "replace" };
+  void cancelLearn();
+  void writeLearnedKey(row, key, false).then((ok) => {
+    if (ok && chain && !autoMap) {
+      void startLearn({ ...row, mode: "add" });
+      setChainBox(true);
+    }
+  });
+  return true;
 }
 
 /** The dialog keyboard contract: Escape closes the open dialog, Tab stays
@@ -4761,6 +4938,7 @@ export function nocturneWire(root: HTMLElement): void {
   loadControllerFinishes();
   loadKeyboardWorkbenchPrefs();
   applyNocturneUi();
+  refreshInspectorCopy();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
@@ -5062,12 +5240,35 @@ export function nocturneWire(root: HTMLElement): void {
     true,
   );
   window.addEventListener("keydown", (ev) => {
+    if (
+      (ev.ctrlKey || ev.metaKey) &&
+      ev.key.toLowerCase() === "k" &&
+      !anyDialogOpen() &&
+      !learnRow &&
+      !assignKey
+    ) {
+      ev.preventDefault();
+      ui.rightRail = false;
+      saveUiPrefs();
+      clearInspectorContext(true);
+      window.requestAnimationFrame(() => {
+        const input = root.querySelector<HTMLInputElement>(".n-filter-in");
+        input?.focus();
+        input?.select();
+      });
+      return;
+    }
     if (assignKey && ev.key === "Escape") {
       ev.preventDefault();
       cancelAssign();
       return;
     }
     if (!anyDialogOpen()) {
+      if (ev.key === "Escape" && inspectorContext.kind !== "overview") {
+        ev.preventDefault();
+        clearInspectorContext();
+        return;
+      }
       // LAST in the Escape order, after an armed assignment and any open
       // dialog have had their say: focus mode is a whole-canvas state, so
       // leaving it must not depend on which control the user last touched.
@@ -5120,6 +5321,7 @@ export function nocturneWire(root: HTMLElement): void {
   root.addEventListener("input", (ev) => {
     const t = ev.target as HTMLElement | null;
     if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
+      if (inspectorContext.kind !== "overview") clearInspectorContext(true);
       applyNocturneFilter(root, t.value);
       // The filter is page state: it rides ?q= (debounced), so a refresh
       // keeps it and the poller's URL echo cannot lose it.
@@ -5199,6 +5401,7 @@ export function nocturneWire(root: HTMLElement): void {
         macCloseArmed = false;
         macDirtyMark();
       }
+      clearInspectorContext(true);
       mergeQuery({ slot: chosen, macro: null });
       nocturnePollFn();
       return;
@@ -5226,6 +5429,16 @@ export function nocturneWire(root: HTMLElement): void {
         );
         return;
       }
+      if (learnRow) {
+        autoMap = null;
+        void cancelLearn();
+      }
+      setInspectorContext({
+        kind: "control",
+        slot: padSlot,
+        preset: padView?.preset ?? "",
+        functionName: padCanonical ?? fnName,
+      });
       if (assignKey && fnName) {
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
@@ -5252,9 +5465,8 @@ export function nocturneWire(root: HTMLElement): void {
         );
         return;
       }
-      // The mirror of the key-first flow: clicking a control ARMS its
-      // learn — press a key, or click one on the board. The controls view
-      // opens on the armed row (no fold, no fade: the arm wash waits).
+      // The controls view follows the selected endpoint. The Inspector's
+      // action starts capture when the pane is open.
       const rowEl =
         padSlot === nSlotVal()
           ? Array.from(
@@ -5272,17 +5484,18 @@ export function nocturneWire(root: HTMLElement): void {
         saveUiPrefs();
         applyNocturneUi();
       }
-      // A rolled-away pane STAYS away: the toast carries the wait, the rail
-      // glows, and mapping needs no panel at all. Open panes still follow.
-      if (!ui.rightRail) {
+      // An open Inspector selects without editing and reveals the full row.
+      if (!ui.rightRail && root.querySelector(".n-right")) {
         rowEl?.scrollIntoView({
           block: "nearest",
           behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
             ? "auto"
             : "smooth",
         });
+        return;
       }
-      // A hand-armed control replaces any running auto-map walk.
+      // With the Inspector collapsed, keep the original fast canvas flow:
+      // selecting a control immediately waits for its source key.
       autoMap = null;
       void startLearn({ fn: rowFn, label: rowLabel, slot: padSlot, mode: "replace" });
       return;
@@ -5292,10 +5505,14 @@ export function nocturneWire(root: HTMLElement): void {
     const workbenchKey = target?.closest<HTMLElement>(".n-deck-key[data-keylab-key]");
     if (workbenchKey) {
       ev.preventDefault();
+      const key = workbenchKey.dataset.keylabKey ?? "";
       keyboardWorkbenchSetSelected(
-        workbenchKey.dataset.keylabKey ?? "",
+        key,
         workbenchKey.dataset.keylabToken ?? "",
       );
+      if (key) setInspectorContext({ kind: "key", key });
+      if (key && resolveLearnWithKey(key, ev.shiftKey || chainWanted())) return;
+      if (assignKey) cancelAssign();
       return;
     }
     // A board cap flips the pane to the BY-KEY view and finds its row —
@@ -5304,6 +5521,9 @@ export function nocturneWire(root: HTMLElement): void {
     if (cap) {
       closeMenu();
       const key = cap.getAttribute("data-key") ?? "";
+      if (key) setInspectorContext({ kind: "key", key });
+      if (key && resolveLearnWithKey(key, ev.shiftKey || chainWanted())) return;
+      if (assignKey) cancelAssign();
       if (keyboardWorkbenchState.open && key && !cap.classList.contains("ghost")) {
         ev.preventDefault();
         toggleKeyboardWorkbenchKey(key);
@@ -5311,25 +5531,10 @@ export function nocturneWire(root: HTMLElement): void {
         cap.focus({ preventScroll: true });
         return;
       }
-      if (learnRow && key) {
-        // A control is waiting: clicking a cap IS pressing the key.
-        const row = learnRow;
-        const chain = ev.shiftKey || chainWanted();
-        lastWrite = { origin: "learn", chain, assignMode: "replace" };
-        void cancelLearn();
-        void writeLearnedKey(row, key, false).then((ok) => {
-          // "Bind several": the control keeps listening; further keys ADD.
-          if (ok && chain && !autoMap) {
-            void startLearn({ ...row, mode: "add" });
-            setChainBox(true);
-          }
-        });
-        return;
-      }
       // With the pane rolled away, a cap click goes straight to mapping:
       // the pad picks the control (plain click replaces its binding) —
       // the pane stays closed and its rail glows instead.
-      if (ui.rightRail) {
+      if (ui.rightRail || !root.querySelector(".n-right")) {
         if (key && !autoMap) armAssign(key);
         return;
       }
@@ -5337,10 +5542,9 @@ export function nocturneWire(root: HTMLElement): void {
       saveUiPrefs();
       applyNocturneUi();
       locateKeyRow(root, key);
-      // EVERY cap click puts the key in your hand: the next pad click
-      // gives that control this key (its old key is replaced — the row's
-      // + is the add gesture).
-      if (key && !autoMap) armAssign(key);
+      // Selection is non-destructive while the Inspector is open. Its
+      // primary action starts mapping; a collapsed pane keeps the quick
+      // key-then-control canvas gesture above.
       return;
     }
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -5379,6 +5583,42 @@ export function nocturneWire(root: HTMLElement): void {
       if (inp) inp.value = "";
       applyNocturneFilter(root, "");
       mergeQuery({ q: null });
+    } else if (hit === "inspector-browse") {
+      clearInspectorContext();
+      window.requestAnimationFrame(() => {
+        root.querySelector<HTMLButtonElement>(
+          `[data-nx="${ui.rightView === "keys" ? "view-keys" : "view-ctl"}"]`,
+        )?.focus({ preventScroll: true });
+      });
+    } else if (hit === "inspector-action") {
+      if (inspectorContext.kind === "overview") {
+        const input = learnRoot?.querySelector<HTMLInputElement>(".n-filter-in");
+        input?.focus();
+        input?.select();
+      } else if (inspectorContext.kind === "key") {
+        armAssign(inspectorContext.key, "add");
+      } else {
+        const pad = lastBindView?.pads.find(
+          (candidate) => String(candidate.slot) === inspectorContext.slot,
+        );
+        if (pad?.mapping_available === false) {
+          applyFlash(
+            `error: ${pad.mapping_reason || `Player ${inspectorContext.slot}'s controls are not available yet.`}`,
+          );
+          return;
+        }
+        const control = controlForPad(
+          lastBindView,
+          inspectorContext.slot,
+          inspectorContext.functionName,
+        );
+        void startLearn({
+          fn: control?.function ?? inspectorContext.functionName,
+          label: control?.label ?? inspectorContext.functionName,
+          slot: inspectorContext.slot,
+          mode: (control?.keys.length ?? 0) > 0 ? "add" : "replace",
+        });
+      }
     } else if (hit === "chip-learn" || hit === "chip-add" || hit === "chip-remove") {
       // The row's own facts travel on its element, never re-derived here.
       // The chip click must not also toggle the fold it sits in.
@@ -5388,6 +5628,14 @@ export function nocturneWire(root: HTMLElement): void {
       const slot = holder?.dataset.slot ?? "";
       const label = holder?.querySelector(".n-bind-label")?.textContent?.trim() || fnName;
       if (fnName && slot) {
+        if (!fnName.startsWith("macro.")) {
+          setInspectorContext({
+            kind: "control",
+            slot,
+            preset: lastBindView?.pads.find((pad) => String(pad.slot) === slot)?.preset ?? "",
+            functionName: fnName,
+          });
+        }
         // A hand-armed chip replaces any running auto-map walk.
         autoMap = null;
         void startLearn({
@@ -5562,6 +5810,7 @@ export function nocturneWire(root: HTMLElement): void {
         .split(/\s+/)
         .filter(Boolean);
       if (fns.length > 0) {
+        clearInspectorContext();
         ui.rightView = "controls";
         saveUiPrefs();
         applyNocturneUi();
@@ -5577,9 +5826,18 @@ export function nocturneWire(root: HTMLElement): void {
       const fnName = chip?.getAttribute("data-fn") ?? "";
       const label = chip?.textContent?.trim() || fnName;
       if (fnName) {
+        setInspectorContext({
+          kind: "control",
+          slot: nSlotVal(),
+          preset: lastBindView?.pads.find(
+            (pad) => String(pad.slot) === nSlotVal(),
+          )?.preset ?? "",
+          functionName: fnName,
+        });
         void startLearn({ fn: fnName, label, slot: nSlotVal(), mode: "replace" });
       }
     } else if (hit === "view-ctl" || hit === "view-keys") {
+      clearInspectorContext();
       ui.rightView = hit === "view-keys" ? "keys" : "controls";
       saveUiPrefs();
       applyNocturneUi();
@@ -5606,12 +5864,14 @@ export function nocturneWire(root: HTMLElement): void {
       }
     } else if (hit === "key-remove") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) setInspectorContext({ kind: "key", key });
       if (key) armAssign(key, "remove");
     } else if (hit === "key-assign") {
       const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
       // The row's + means ADD (the key keeps its other controls); a free
       // chip is a plain bind.
       const mode: "replace" | "add" = target?.closest(".n-krow") ? "add" : "replace";
+      if (key) setInspectorContext({ kind: "key", key });
       if (key) armAssign(key, mode);
     } else if (hit === "bind-expand") {
       const rows = Array.from(
@@ -7519,8 +7779,9 @@ export function NocturneIsland() {
             ), // .forma-canvas-stage
             // Direct mapping cords use world coordinates like widgets, but
             // remain siblings of the role=list stage: edges are canvas
-            // chrome, not list items. Lines pass below the art; small ports
-            // sit above it. Both are pointer-transparent and client-filled.
+            // chrome, not list items. Cords and small ports sit above the art
+            // so every path visibly leaves its real keycap/control. Both are
+            // pointer-transparent and client-filled.
             h("svg", {
               id: "n-mapping-paths",
               class: "n-flow-layer n-flow-lines",
@@ -7639,12 +7900,37 @@ export function NocturneIsland() {
       // ── Right pane: the binding list, off the mapper's own machinery ─────
       h(
         "aside",
-        { class: () => nRightCls() },
+        { class: () => nRightCls(), "aria-label": "Mapping inspector" },
         h(
           "div",
           { class: "n-rail" },
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-right" }, "‹"),
-          h("span", { class: "n-rail-vlab" }, "Bindings"),
+          h("span", { class: "n-rail-vlab" }, "Inspector"),
+        ),
+        h(
+          "section",
+          { class: "n-inspector-card" },
+          h(
+            "div",
+            { class: "n-inspector-top" },
+            h("span", { class: "n-inspector-kicker" }, "MAPPING INSPECTOR"),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "n-inspector-browse",
+                "data-nx": "inspector-browse",
+              },
+              "Browse all",
+            ),
+          ),
+          h("h2", { class: "n-inspector-title" }, () => nBindTitle()),
+          h("p", { class: "n-inspector-meta" }, () => nBindFoot()),
+          h(
+            "button",
+            { type: "button", class: "n-inspector-action", "data-nx": "inspector-action" },
+            "Find mappings",
+          ),
         ),
         h(
           "div",
@@ -7655,7 +7941,14 @@ export function NocturneIsland() {
             { class: "n-filter", method: "get", action: "/nocturne" },
             h("span", { class: "n-filter-ico" }, "⌕"),
             h("input", { type: "hidden", name: "slot", value: () => nSlotVal() }),
-            h("input", { class: "n-filter-in", type: "text", name: "q", placeholder: "Filter inputs" }),
+            h("input", {
+              class: "n-filter-in",
+              type: "text",
+              name: "q",
+              placeholder: "Find keys, controls, macros",
+              "aria-label": "Find mappings",
+            }),
+            h("kbd", { class: "n-filter-key", "aria-hidden": "true" }, "Ctrl K"),
           ),
           h("button", { class: "n-reset", type: "button", "data-nx": "filter-reset" }, "Reset"),
         ),
@@ -7663,9 +7956,27 @@ export function NocturneIsland() {
         // and by key (hand side). Same facts, opposite subject.
         h(
           "div",
-          { class: "n-vseg" },
-          h("button", { type: "button", class: "n-vseg-btn vc", "data-nx": "view-ctl" }, "By control"),
-          h("button", { type: "button", class: "n-vseg-btn vk", "data-nx": "view-keys" }, "By key"),
+          { class: "n-vseg", role: "group", "aria-label": "Mapping view" },
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-vseg-btn vc",
+              "data-nx": "view-ctl",
+              "aria-pressed": () => nViewCtlPressed(),
+            },
+            "Controls",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-vseg-btn vk",
+              "data-nx": "view-keys",
+              "aria-pressed": () => nViewKeysPressed(),
+            },
+            "Keys",
+          ),
         ),
         h(
           "div",

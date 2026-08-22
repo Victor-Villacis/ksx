@@ -169,6 +169,11 @@ describe("the canvas navigation controls", () => {
     try {
       await page.locator(".n-right").evaluate((pane) => pane.remove());
       assert.equal(await page.locator(".n-right").count(), 0, "the test removes the ledger entirely");
+      assert.equal(
+        (await page.textContent('[data-nx="auto-map"]')).trim(),
+        "Map all…",
+        "the bulk-edit action is named for the capture walk it starts",
+      );
 
       await page.click('[data-nx="auto-map"]');
       await page.waitForFunction(() =>
@@ -190,6 +195,195 @@ describe("the canvas navigation controls", () => {
       assert.equal(request.key, "Q");
       assert.equal(request.function, "A", "pad art resolves the mapper's canonical spelling");
       assert.equal(request.mode, "replace");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the mapping inspector follows canvas selection and Find returns to the whole graph", async () => {
+    const page = await openCanvas();
+    try {
+      const pane = page.locator(".n-right");
+      assert.match(await pane.locator(".n-inspector-kicker").innerText(), /mapping inspector/i);
+      assert.match(await pane.locator(".n-filter-key").innerText(), /Ctrl K/i);
+      assert.equal(await pane.locator('[data-nx="view-ctl"]').getAttribute("aria-pressed"), "true");
+      assert.equal(await pane.locator('[data-nx="view-keys"]').getAttribute("aria-pressed"), "false");
+      await pane.locator('[data-nx="inspector-action"]').click();
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.classList.contains("n-filter-in")),
+        true,
+        "the overview's one primary action enters Find",
+      );
+
+      await page.locator('.n-widget-kb [data-key="G"]').click({ force: true });
+      await page.waitForFunction(() =>
+        document.querySelector(".n-right")?.classList.contains("context-mode") &&
+        document.querySelector(".n-right")?.classList.contains("keys-mode")
+      );
+      assert.equal(await pane.locator(".n-inspector-title").innerText(), "G");
+      assert.match(await pane.locator(".n-inspector-meta").innerText(), /destinations?.*players?/i);
+      assert.equal(
+        await pane.locator('.n-krows .n-krow:not(.n-context-hide)[data-key="G"]').count(),
+        1,
+        "key context leaves its one editable relationship row",
+      );
+      assert.equal(await pane.locator('[data-nx="view-keys"]').getAttribute("aria-pressed"), "true");
+      assert.equal(await page.isHidden(".n-learnbar"), true, "selection does not start an edit");
+      await pane.locator('[data-nx="inspector-action"]').click();
+      await page.waitForFunction(() => !document.querySelector(".n-learnbar")?.classList.contains("none"));
+      await page.click('[data-nx="learn-cancel"]');
+      await page.click('[data-nx="inspector-browse"]');
+      await page.waitForFunction(() => document.activeElement?.matches('[data-nx="view-keys"]'));
+      assert.equal(await pane.evaluate((element) => element.classList.contains("context-mode")), false);
+      assert.equal(await pane.locator(".n-filter-row").isVisible(), true);
+
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().click({ force: true });
+      await page.waitForFunction(() =>
+        document.querySelector(".n-right")?.classList.contains("context-mode") &&
+        !document.querySelector(".n-right")?.classList.contains("keys-mode")
+      );
+      assert.match(await pane.locator(".n-inspector-title").innerText(), /P1 · A/i);
+      assert.equal(await pane.locator('[data-nx="view-ctl"]').getAttribute("aria-pressed"), "true");
+      assert.equal(
+        await pane.locator('.n-bindgroups details.n-bind:not(.n-context-hide)[data-fn="A"]').count(),
+        1,
+        "control context leaves the full behavior editor for that control",
+      );
+      assert.equal(await page.isHidden(".n-learnbar"), true, "selection remains non-destructive");
+      await pane.locator('[data-nx="inspector-action"]').click();
+      await page.waitForFunction(() => !document.querySelector(".n-learnbar")?.classList.contains("none"));
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-2"] [data-fn~="a"]',
+      ).first().click({ force: true });
+      assert.match(await pane.locator(".n-inspector-title").innerText(), /^P2 ·/);
+      assert.equal(
+        await page.isHidden(".n-learnbar"),
+        true,
+        "selecting another endpoint retires the previous edit",
+      );
+      assert.equal(
+        await pane.locator('.n-bindgroups details.n-bind:not(.n-context-hide)').count(),
+        0,
+        "a non-current controller gets an honest card-only Inspector",
+      );
+
+      await page.keyboard.press("Control+k");
+      await page.waitForFunction(() =>
+        document.activeElement?.matches(".n-right .n-filter-in")
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.classList.contains("n-filter-in")),
+        true,
+        "Ctrl K opens the inspector and focuses Find",
+      );
+      assert.equal(await pane.evaluate((element) => element.classList.contains("context-mode")), false);
+      await page.keyboard.type("   ");
+      assert.equal(
+        await pane.evaluate((element) => element.classList.contains("filtering")),
+        false,
+        "whitespace does not turn the whole-graph Find lens on",
+      );
+      await page.keyboard.press("Control+a");
+      await page.keyboard.type("hadouken");
+      assert.equal(
+        await pane.locator('.n-macrosec details[data-fn^="macro."]:not(.hide)').isVisible(),
+        true,
+        "Find covers macros as well as controls and keys",
+      );
+      const selected = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/nocturne" &&
+          url.searchParams.get("slot") === "2" && response.status() === 200;
+      });
+      await page.locator('a.n-slot-sel[href*="slot=2"]').click();
+      await selected;
+      await page.waitForFunction(() => {
+        const url = new URL(window.location.href);
+        return url.searchParams.get("slot") === "2" &&
+          url.searchParams.get("q") === "hadouken" &&
+          document.querySelector(".n-filter-in")?.value === "hadouken";
+      });
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a workbench keycap is a first-class mapping source", async () => {
+    const page = await openCanvas();
+    let resolveBound;
+    const bound = new Promise((resolve) => {
+      resolveBound = resolve;
+    });
+    await page.route("**/nocturne/api/bind", async (route) => {
+      resolveBound(route.request());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          message: null,
+          error: null,
+          code: null,
+          conflicts: [],
+          also_drives: [],
+        }),
+      });
+    });
+    try {
+      await page.click('[data-nx="kb-workbench"]');
+      await page.click('[data-nx="keylab-build-players"]');
+      const keycap = page.locator(
+        '.n-deck-key[data-keylab-key="G"][data-player-slot="1"]',
+      );
+      await keycap.click();
+      assert.equal((await page.textContent(".n-inspector-title")).trim(), "G");
+      assert.match((await page.textContent('[data-nx="inspector-action"]')).trim(), /^Connect/);
+      await page.click('[data-nx="inspector-action"]');
+      assert.equal(await keycap.evaluate((element) => element.classList.contains("assign")), true);
+      await page.locator(
+        '.forma-canvas-navigator .navigator-item[data-instance-id="pad-1"]',
+      ).evaluate((button) => button.click());
+      await settle(page);
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().click();
+      const boundRequest = await Promise.race([
+        bound,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error("workbench mapping did not POST /nocturne/api/bind")),
+          5_000,
+        )),
+      ]);
+      const boundBody = JSON.parse(boundRequest.postData() ?? "{}");
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      assert.equal(await keycap.evaluate((element) => element.classList.contains("assign")), false);
+      assert.equal(boundBody?.slot, 1);
+      assert.equal(boundBody?.key, "G");
+      assert.equal(boundBody?.function, "A");
+      assert.equal(boundBody?.mode, "add");
+
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.click('.n-widget-keylab [data-nx="keylab-render-arcade"]');
+      await page.waitForFunction(() => {
+        const key = document.querySelector(
+          '.n-deck-key[data-keylab-key="G"][data-player-slot="1"]',
+        );
+        const port = document.querySelector(
+          '#n-mapping-ports [data-flow-key="G"] .n-flow-port-source',
+        );
+        if (!key || !port) return false;
+        const keyRect = key.getBoundingClientRect();
+        const portRect = port.getBoundingClientRect();
+        const dx = portRect.left + portRect.width / 2 - (keyRect.left + keyRect.width / 2);
+        const dy = portRect.top + portRect.height / 2 - (keyRect.top + keyRect.height / 2);
+        const ellipse = (dx * dx) / ((keyRect.width / 2) ** 2) +
+          (dy * dy) / ((keyRect.height / 2) ** 2);
+        return Math.abs(ellipse - 1) < 0.04;
+      });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -415,6 +609,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(reducedMotion.nodeTransition, "0s");
       assert.equal(reducedMotion.routeAnimation, "none");
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.waitForTimeout(180);
 
       const truth = await page.evaluate(({ lines, ports, selectedSlot }) => {
         const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
@@ -426,12 +621,51 @@ describe("the canvas navigation controls", () => {
           .filter((path) => /NaN|Infinity/.test(path.getAttribute("d") ?? ""));
         const layer = document.querySelector(lines);
         const stage = document.querySelector(".forma-canvas-stage");
+        const sourceEdge = edges.find(
+          (edge) => edge.dataset.flowKind === "binding" && edge.dataset.flowKey === "G",
+        );
+        const sourcePort = sourceEdge?.dataset.flowId
+          ? document.querySelector(
+            `${ports} [data-flow-id="${CSS.escape(sourceEdge.dataset.flowId)}"] .n-flow-port-source`,
+          )
+          : null;
+        const start = sourceEdge?.querySelector(".n-flow-core")?.getAttribute("d")
+          ?.match(/^M\s+(-?[\d.]+)\s+(-?[\d.]+)/);
+        const pathStartsAtPort = Boolean(start && sourcePort) &&
+          Math.abs(Number(start[1]) - Number(sourcePort.getAttribute("cx"))) < 0.01 &&
+          Math.abs(Number(start[2]) - Number(sourcePort.getAttribute("cy"))) < 0.01;
+        const sourceKey = document.querySelector(
+          `.n-deck-key[data-keylab-key="G"][data-player-slot="${selectedSlot}"]`,
+        ) ?? document.querySelector(
+          '.n-widget-kb:not([data-source-hidden="true"]) [data-key="G"]:not(.ghost):not(.extracted)',
+        );
+        const portRect = sourcePort?.getBoundingClientRect();
+        const keyRect = sourceKey?.getBoundingClientRect();
+        const portCenter = portRect
+          ? { x: portRect.left + portRect.width / 2, y: portRect.top + portRect.height / 2 }
+          : null;
+        const sourceOnKeycap = Boolean(portCenter && keyRect) &&
+          portCenter.x >= keyRect.left - 1 &&
+          portCenter.x <= keyRect.right + 1 &&
+          portCenter.y >= keyRect.top - 1 &&
+          portCenter.y <= keyRect.bottom + 1 &&
+          Math.min(
+            Math.abs(portCenter.x - keyRect.left),
+            Math.abs(portCenter.x - keyRect.right),
+            Math.abs(portCenter.y - keyRect.top),
+            Math.abs(portCenter.y - keyRect.bottom),
+          ) <= 1.5;
         return {
           gFanout,
           badPaths: badPaths.length,
           unresolved: document.querySelectorAll(`${lines} .is-unresolved`).length,
           pointerEvents: getComputedStyle(document.querySelector(ports)).pointerEvents,
           transformsMatch: layer.style.transform === stage.style.transform,
+          lineZ: Number(getComputedStyle(layer).zIndex),
+          stageZ: Number(getComputedStyle(stage).zIndex),
+          portZ: Number(getComputedStyle(document.querySelector(ports)).zIndex),
+          pathStartsAtPort,
+          sourceOnKeycap,
           selectedOnly: edges.every((edge) => edge.dataset.flowSlot === selectedSlot),
         };
       }, { lines, ports, selectedSlot });
@@ -440,6 +674,10 @@ describe("the canvas navigation controls", () => {
       assert.equal(truth.unresolved, 0, "every fixture binding finds one visible endpoint");
       assert.equal(truth.pointerEvents, "none", "the lens never steals mapping gestures");
       assert.equal(truth.transformsMatch, true, "paths share the exact canvas camera");
+      assert.ok(truth.lineZ > truth.stageZ, "cords paint above opaque widget art");
+      assert.ok(truth.portZ > truth.lineZ, "endpoint handles remain above their cords");
+      assert.equal(truth.pathStartsAtPort, true, "the painted path begins at its source handle");
+      assert.equal(truth.sourceOnKeycap, true, "the visible cord starts on the physical keycap rim");
       assert.equal(truth.selectedOnly, true);
 
       const minRestingContrast = await page.evaluate(() => {

@@ -447,6 +447,36 @@ function elementCenter(element: Element): { x: number; y: number } {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
+/** The visible handle on a keycap's perimeter, facing its peer. Starting at
+ * the center paints across the legend and makes the cord look attached to
+ * the keyboard shell once opaque art covers that first half of the route. */
+function elementPerimeterPoint(
+  element: Element,
+  toward: { x: number; y: number },
+): { x: number; y: number } {
+  const rect = element.getBoundingClientRect();
+  const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  const halfWidth = rect.width / 2;
+  const halfHeight = rect.height / 2;
+  if (
+    Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01 ||
+    halfWidth < 1 ||
+    halfHeight < 1
+  ) {
+    return center;
+  }
+  // Arcade presentation turns the rectangular workbench hit target into a
+  // round button. Intersect its ellipse rather than its bounding box so a
+  // diagonal cord never appears to float outside the visible cap.
+  const distance = element.matches(".n-deck-key") &&
+      element.closest<HTMLElement>('.n-keylab-deck[data-render-mode="arcade"]')
+    ? 1 / Math.sqrt((dx * dx) / (halfWidth * halfWidth) + (dy * dy) / (halfHeight * halfHeight))
+    : 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
+  return { x: center.x + dx * distance, y: center.y + dy * distance };
+}
+
 function inspectionEqual(left: MappingInspection | null, right: MappingInspection | null): boolean {
   return left?.key === right?.key &&
     left?.slot === right?.slot &&
@@ -455,8 +485,8 @@ function inspectionEqual(left: MappingInspection | null, right: MappingInspectio
 }
 
 /** Owns two non-interactive SVG projections plus an interactive HTML processor
- * layer. Lines sit below widgets; ports and processor cards sit above them.
- * All three mirror the stage camera. */
+ * layer. Cords and ports sit above widget art so their per-key handles remain
+ * visible; processor cards sit above both. All mirror the stage camera. */
 export class MappingFlowLayer {
   readonly #root: HTMLElement;
   readonly #viewport: HTMLElement;
@@ -534,6 +564,18 @@ export class MappingFlowLayer {
     root.addEventListener("focusout", (event) => this.#leaveEvent("focus", event), {
       signal: this.#abort.signal,
     });
+    // CSS hover/focus lifts keycaps without mutating inline geometry. Re-anchor
+    // after that short transition so a visible cord continues to touch the cap.
+    root.addEventListener("transitionend", (event) => {
+      if (
+        event.propertyName === "transform" &&
+        event.pseudoElement === "" &&
+        event.target instanceof Element &&
+        event.target.matches(".n-widget-kb .n-key:not(.ghost), .n-deck-key")
+      ) {
+        this.scheduleLayout();
+      }
+    }, { signal: this.#abort.signal });
     root.addEventListener("keydown", (event) => {
       if (event.key === "Escape") this.#clearInspections();
     }, { signal: this.#abort.signal });
@@ -1068,8 +1110,15 @@ export class MappingFlowLayer {
     lane: number,
   ): void {
     if (!entry.sourceElement || !entry.targetElement) return;
-    const source = this.#worldCenter(entry.sourceElement, inverse);
-    const target = this.#worldCenter(entry.targetElement, inverse);
+    const sourceCenter = elementCenter(entry.sourceElement);
+    const targetCenter = elementCenter(entry.targetElement);
+    const source = this.#worldPoint(
+      entry.route.source.kind === "key"
+        ? elementPerimeterPoint(entry.sourceElement, targetCenter)
+        : sourceCenter,
+      inverse,
+    );
+    const target = this.#worldPoint(targetCenter, inverse);
     const pathValue = mappingCurve(source, target, lane);
     entry.path.setAttribute("d", pathValue);
     entry.lineGroup.querySelector<SVGPathElement>(".n-flow-halo")?.setAttribute("d", pathValue);
@@ -1143,12 +1192,15 @@ export class MappingFlowLayer {
     this.#onLayout(summary);
   }
 
-  #worldCenter(element: Element, inverse: DOMMatrix): DOMPoint {
-    const screen = elementCenter(element);
+  #worldPoint(screen: { x: number; y: number }, inverse: DOMMatrix): DOMPoint {
     const point = this.#lines.createSVGPoint();
     point.x = screen.x;
     point.y = screen.y;
     return point.matrixTransform(inverse);
+  }
+
+  #worldCenter(element: Element, inverse: DOMMatrix): DOMPoint {
+    return this.#worldPoint(elementCenter(element), inverse);
   }
 
   #layoutProcessors(

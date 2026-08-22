@@ -115,12 +115,12 @@ internal sealed class SdkStateMapper
     private HMGamepadState MapModern(in KsxPadState input)
     {
         _axes.Clear();
-        WriteAxis(_leftStickX, Axis(input.LeftX, invert: false));
-        WriteAxis(_leftStickY, Axis(input.LeftY, invert: true));
-        WriteAxis(_rightStickX, Axis(input.RightX, invert: false));
-        WriteAxis(_rightStickY, Axis(input.RightY, invert: true));
-        WriteAxis(_leftTrigger, ByteValue(input.LeftTrigger));
-        WriteAxis(_rightTrigger, ByteValue(input.RightTrigger));
+        WriteAxis(_leftStickX, SdkAxisMath.Axis(input.LeftX, invert: false));
+        WriteAxis(_leftStickY, SdkAxisMath.Axis(input.LeftY, invert: true));
+        WriteAxis(_rightStickX, SdkAxisMath.Axis(input.RightX, invert: false));
+        WriteAxis(_rightStickY, SdkAxisMath.Axis(input.RightY, invert: true));
+        WriteAxis(_leftTrigger, SdkAxisMath.ByteValue(input.LeftTrigger));
+        WriteAxis(_rightTrigger, SdkAxisMath.ByteValue(input.RightTrigger));
 
         return new HMGamepadState
         {
@@ -264,7 +264,7 @@ internal sealed class SdkStateMapper
                     : input.LeftX >= DigitalStickThreshold
                         ? 1f
                         : 0.5f
-                : Axis(input.LeftX, invert: false);
+                : SdkAxisMath.Axis(input.LeftX, invert: false);
         }
 
         if (!up && !down && input.LeftY != 0)
@@ -276,7 +276,7 @@ internal sealed class SdkStateMapper
                     : input.LeftY <= -DigitalStickThreshold
                         ? 1f
                         : 0.5f
-                : Axis(input.LeftY, invert: true);
+                : SdkAxisMath.Axis(input.LeftY, invert: true);
         }
 
         _axes[HMAxis.X] = x;
@@ -359,17 +359,6 @@ internal sealed class SdkStateMapper
             output |= target;
         }
     }
-
-    // Identical conversions to the candidate host's StateMapper, kept
-    // byte-for-byte so a slot moved between lanes feels the same.
-    private static float Axis(short value, bool invert)
-    {
-        int sample = invert ? -Math.Clamp((int)value, -32767, 32767) : value;
-        byte wire = (byte)(((long)sample + 32768L) * 255L / 65535L);
-        return ByteValue(wire);
-    }
-
-    private static float ByteValue(byte value) => value == 255 ? 1f : (value + 0.25f) / 255f;
 
     private static HMHat Hat(KsxButtons buttons)
     {

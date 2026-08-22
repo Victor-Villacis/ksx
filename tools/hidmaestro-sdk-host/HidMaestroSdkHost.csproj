@@ -33,6 +33,9 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <!-- SDK-free arithmetic, listed before the SDK-referencing sources because a
+         golden-vector harness compiles THIS FILE ALONE without HIDMaestro.Core.dll. -->
+    <Compile Include="SdkAxisMath.cs" />
     <Compile Include="SdkHostSession.cs" />
     <Compile Include="SdkStateMapper.cs" />
     <!-- Shared, byte-identical with the candidate host: the wire protocol,

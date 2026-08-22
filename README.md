@@ -80,7 +80,7 @@ The driver analysis and dated prior-art survey live in [`docs/research/`](docs/r
   injected or held. Interception keyboards return to Windows on process death;
   a WinUSB-prepared keyboard remains structurally off the keyboard stack until
   the installed app releases it, so keep the separately tested spare keyboard.
-- All-keys-up release rule, opposite-axis snap, state-diffed pad updates.
+- All-keys-up release rule, the analog resolver, state-diffed pad updates.
 
 ## Developer CLI and operator reference
 

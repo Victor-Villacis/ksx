@@ -1,17 +1,20 @@
 //! The translation engine: `KeyEvent`s in, `PadDelta`s out.
 //!
-//! KSX compiles every native preset into a dense dispatch table. All output
-//! categories use `Binding` equality for many-key aggregation, so a control
-//! releases only when every key driving that exact endpoint is up.
+//! KSX compiles every native preset into a dense dispatch table. Digital
+//! categories aggregate by [`PadControl`] equality, so a control releases only
+//! when every holder driving that endpoint is up. The four stick axes carry a
+//! magnitude as well, so they resolve through [`SlotRuntime::resolve`] instead
+//! of aggregating — one rule, stated in `docs/UNIVERSAL-IO.md` §2.
 
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
+use crate::control::PadControl;
 use crate::device::{DeviceId, KeyEvent};
 use crate::key::Key;
 use crate::macros::{Interrupt, OnRelease, Repeat, Retrigger};
-use crate::pad::{Axis, PadState, Trigger, AXIS_CENTER};
+use crate::pad::{Axis, PadState, Trigger, XButtons, AXIS_CENTER};
 use crate::preset::{Binding, Chord, Preset};
 use crate::slot::{SlotSpec, MAX_SLOTS};
 
@@ -88,9 +91,9 @@ struct ChordRt {
 ///
 /// A macro STEP is an ordinary holder: `holder_bindings[first_holder + i]` is
 /// step `i`'s `hold` set, and the step is "held" exactly while the macro is on
-/// it. That is the whole integration — the all-keys-up rule, the opposite-axis
-/// snap, the releases-before-presses order and the one-batch discipline are the
-/// chord machinery, unchanged, so a macro can never strand a button that a
+/// it. That is the whole integration — the all-keys-up rule, the analog
+/// resolver, the releases-before-presses order and the one-batch discipline are
+/// the chord machinery, unchanged, so a macro can never strand a button that a
 /// chord could not.
 struct MacroRt {
     /// **Absolute** end-of-step offsets from the macro's start, in ms, with the
@@ -239,7 +242,7 @@ impl Timers {
 /// One auto-firing endpoint (docs/INPUT-TRANSFORMS.md §3).
 ///
 /// A turbo endpoint is a HOLDER like any other — it presses and releases
-/// through `apply_scan`, joins the all-keys-up and opposite-axis tables, and
+/// through `apply_scan`, joins the all-keys-up and analog holder tables, and
 /// batches its deltas with everything else. What makes it turbo is only that
 /// its held bit is `running && on` instead of "a key is down": the sources say
 /// whether the player is asking for the button at all, and the phase says what
@@ -272,7 +275,7 @@ struct TurboRt {
 /// toggle-hold / sticky hold).
 ///
 /// A latch is a HOLDER like any other — it presses and releases through
-/// `apply_scan`, joins the all-keys-up and opposite-axis tables, and batches
+/// `apply_scan`, joins the all-keys-up and analog holder tables, and batches
 /// its deltas with everything else. What makes it a latch is only that its
 /// held bit is `latched` instead of "a key is down": the sources FLIP it on
 /// their rising edge and are otherwise out of the picture, which is what lets
@@ -331,11 +334,33 @@ struct SlotRuntime {
     /// (`keyboard`, else `mouse`). Events from the slot's *other* device only
     /// update that key's own heldness — a chord never spans two devices.
     chord_device: Option<u8>,
-    /// Endpoint -> ids of every HOLDER driving it (all-keys-up rule). Ids
-    /// below `chord_base` are dense keys; ids at or above it are chords.
-    endpoint_keys: HashMap<Binding, SmallVec<[u32; 4]>>,
-    /// Flat axis entries for the opposite-axis scan on release (same id space).
+    /// DIGITAL endpoint -> ids of every HOLDER driving it (all-keys-up rule).
+    /// Ids below `chord_base` are dense keys; ids at or above it are chords.
+    ///
+    /// Axes are deliberately ABSENT. Their holder table is `axis_entries`,
+    /// which keys on `(axis, value)` rather than on the endpoint alone, and the
+    /// two cannot be merged: the toggle and turbo rewiring below drops a holder
+    /// from an endpoint with `keys.retain(|k| !sources.contains(k))`, which is
+    /// right for a button but would strip a key's OTHER axis demand — the
+    /// self-opposing key described on [`SocdRt::neg`].
+    endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>>,
+    /// Flat ANALOG holder table: every `(axis, value, holder)` this slot can
+    /// drive, in the same id space. `resolve` scans it on every axis edge.
     axis_entries: Vec<(Axis, i16, u32)>,
+    /// Per-axis memory of which SIGN rose most recently (`-1`, `0`, `+1`),
+    /// indexed by [`axis_slot`]. This is the entire recency input the resolver
+    /// needs: magnitude arbitrates WITHIN a sign, so ordering only ever has to
+    /// break sign against sign. Four bytes, no allocation, and — unlike a
+    /// holder-indexed array — it exists on non-stateful slots too, which is
+    /// where the axis suites run.
+    ///
+    /// Zero is a sign of its own and NOT a weak positive. `lx.0` is an
+    /// authorable binding (`ksx_config::parse_function`) whose entire meaning
+    /// is "centre this axis"; bucketing it with the positives would make it
+    /// lose `max()` to any held positive holder while still beating every
+    /// negative one, so the same binding would centre a left lean and do
+    /// nothing to a right one.
+    axis_sign_last: [i8; 4],
     current: PadState,
     last_emitted: PadState,
 
@@ -414,6 +439,17 @@ struct SlotRuntime {
     stateful: bool,
 }
 
+/// Dense `0..4` index for an [`Axis`]. The discriminants are wire bit flags
+/// (1/2/4/8), so they cannot index an array directly.
+const fn axis_slot(axis: Axis) -> usize {
+    match axis {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Rx => 2,
+        Axis::Ry => 3,
+    }
+}
+
 impl SlotRuntime {
     fn axis_field(&mut self, axis: Axis) -> &mut i16 {
         match axis {
@@ -424,19 +460,26 @@ impl SlotRuntime {
         }
     }
 
-    fn press(&mut self, binding: Binding) {
-        match binding {
-            Binding::Button(b) => self.current.buttons |= b.flag(),
-            Binding::Trigger(Trigger::Left) => self.current.lt = u8::MAX,
-            Binding::Trigger(Trigger::Right) => self.current.rt = u8::MAX,
-            Binding::Axis { axis, value } => *self.axis_field(axis) = value,
-            Binding::Dpad(d) => self.current.buttons |= d.flag(),
-            // A consume-only chord drives no endpoint — its entire effect is
-            // the suppression of its constituents (docs/INPUT-TRANSFORMS.md
-            // §2.6). Unreachable in practice: `build` never registers it as a
-            // holder binding.
-            Binding::Consume => {}
-        }
+    /// A holder's demand ROSE. Stamps the axis sign the resolver arbitrates
+    /// with, then resolves the endpoint over the post-event holder set — the
+    /// very same call [`Self::release`] makes, which is the whole point.
+    fn press(&mut self, binding: Binding, down: &[u64]) {
+        // A consume-only chord drives no endpoint — its entire effect is the
+        // suppression of its constituents (docs/INPUT-TRANSFORMS.md §2.6).
+        // Unreachable in practice: `build` never registers it as a holder
+        // binding.
+        let Some(control) = PadControl::of(binding) else {
+            return;
+        };
+        let demand = match binding {
+            Binding::Axis { axis, value } => {
+                self.axis_sign_last[axis_slot(axis)] = value.signum() as i8;
+                value
+            }
+            // Digital: presence is the entire signal and the number is unread.
+            _ => 0,
+        };
+        self.resolve(control, Some(demand), down);
     }
 
     /// Is this holder currently driving its bindings?
@@ -452,48 +495,110 @@ impl SlotRuntime {
         bit(&self.held, id)
     }
 
-    /// `down` is the event device's key bitset, already updated for the
-    /// triggering release.
+    /// A holder's demand FELL. `down` is the event device's key bitset,
+    /// already updated for the triggering release.
     fn release(&mut self, binding: Binding, down: &[u64]) {
-        // All-keys-up rule: the endpoint stays active while ANY holder mapped
-        // to it (on this device) is still held.
-        if let Some(keys) = self.endpoint_keys.get(&binding) {
-            if keys.iter().any(|&k| self.holds(k, down)) {
-                return;
+        let Some(control) = PadControl::of(binding) else {
+            return;
+        };
+        self.resolve(control, None, down);
+    }
+
+    /// The one rule (`docs/UNIVERSAL-IO.md` §2).
+    ///
+    /// > A digital control is the OR of its holders. An analog control takes
+    /// > the sign of the most recent rising demand on that axis and, among
+    /// > currently held holders of that sign, the largest magnitude; a control
+    /// > with no holder is neutral. Press and release run the same function
+    /// > over the post-event holder set.
+    ///
+    /// This subsumes the old `opposite_snap`, which only ever consulted holders
+    /// of the OPPOSITE sign and so centred an axis whose surviving holders were
+    /// all same-sign — the ladder bug. Running the identical function on both
+    /// edges is what makes that unrepresentable rather than merely fixed.
+    ///
+    /// `rising` is the demand of the holder whose edge caused this call, and
+    /// `None` on release. It is SEEDED rather than looked up because on the
+    /// non-stateful path `down` is the event *device's* bitset only (see
+    /// [`Engine::handle_at`]) while holder ids are global, so a slot bound to
+    /// both a keyboard and a mouse cannot always see its own press through
+    /// [`Self::holds`]. That asymmetry predates this function — `holds` has
+    /// always had it on the release path — and is deliberately not widened
+    /// here.
+    fn resolve(&mut self, control: PadControl, rising: Option<i16>, down: &[u64]) {
+        if let PadControl::Axis(axis) = control {
+            // The largest magnitude per SIGN, carried as the extreme VALUE so a
+            // custom-valued binding keeps its own number rather than snapping to
+            // a hardcoded extreme. Zero is its own sign: a demand for centre,
+            // not a weak positive.
+            let (mut neg, mut pos): (Option<i16>, Option<i16>) = (None, None);
+            let mut zero = false;
+            let mut bucket = |v: i16| match v.signum() {
+                -1 => neg = Some(neg.map_or(v, |b: i16| b.min(v))),
+                1 => pos = Some(pos.map_or(v, |b: i16| b.max(v))),
+                _ => zero = true,
+            };
+            if let Some(v) = rising {
+                bucket(v);
             }
+            for &(a, v, k) in &self.axis_entries {
+                if a == axis && self.holds(k, down) {
+                    bucket(v);
+                }
+            }
+            // The most recent sign wins outright while it still has a holder.
+            // That is what makes SOCD's "last press wins" fall out for free, and
+            // it is load-bearing: AXIS_MIN and AXIS_MAX are ±32767, an EXACT
+            // magnitude tie that no comparison of deflections could break.
+            let value = match self.axis_sign_last[axis_slot(axis)] {
+                -1 if neg.is_some() => neg.unwrap_or(AXIS_CENTER),
+                1 if pos.is_some() => pos.unwrap_or(AXIS_CENTER),
+                0 if zero => AXIS_CENTER,
+                // Its last holder is gone. Fall back to the largest deflection
+                // still held; a centre demand has magnitude 0 and so yields to
+                // any real one, which is why `zero` is not consulted here.
+                _ => match (neg, pos) {
+                    (None, None) => AXIS_CENTER,
+                    (Some(n), None) => n,
+                    (None, Some(p)) => p,
+                    (Some(n), Some(p)) => {
+                        if p.unsigned_abs() >= n.unsigned_abs() {
+                            p
+                        } else {
+                            n
+                        }
+                    }
+                },
+            };
+            *self.axis_field(axis) = value;
+            return;
         }
 
-        match binding {
-            Binding::Button(b) => self.current.buttons &= !b.flag(),
-            Binding::Trigger(Trigger::Left) => self.current.lt = 0,
-            Binding::Trigger(Trigger::Right) => self.current.rt = 0,
-            Binding::Axis { axis, value } => {
-                let snap = self.opposite_snap(axis, value, down);
-                *self.axis_field(axis) = snap.unwrap_or(AXIS_CENTER);
-            }
-            Binding::Dpad(d) => self.current.buttons &= !d.flag(),
-            Binding::Consume => {}
+        // Digital: ON while the causing holder is rising, or while ANY holder
+        // mapped to this endpoint is still held (the all-keys-up rule,
+        // unchanged). Writing a bit that is already set is a no-op that
+        // `collect_deltas` diffs away, so this is observationally identical to
+        // the early-return shape it replaces.
+        let on = rising.is_some()
+            || self
+                .endpoint_keys
+                .get(&control)
+                .is_some_and(|ks| ks.iter().any(|&k| self.holds(k, down)));
+        match control {
+            PadControl::Button(b) => self.set_buttons(b.flag(), on),
+            PadControl::Dpad(d) => self.set_buttons(d.flag(), on),
+            PadControl::Trigger(Trigger::Left) => self.current.lt = if on { u8::MAX } else { 0 },
+            PadControl::Trigger(Trigger::Right) => self.current.rt = if on { u8::MAX } else { 0 },
+            PadControl::Axis(_) => unreachable!("the analog arm returns above"),
         }
     }
 
-    /// Opposite-axis snap: releasing an axis binding while an opposite-sign
-    /// binding on the same axis is held snaps to the held binding's OWN bound
-    /// value instead of hardcoding Min/Max, so custom-valued opposites work.
-    /// Several held opposite bindings resolve deterministically to the largest deflection
-    /// (max `|value|`; build order breaks exact ties).
-    fn opposite_snap(&self, axis: Axis, released: i16, down: &[u64]) -> Option<i16> {
-        let mut best: Option<i16> = None;
-        for &(a, v, k) in &self.axis_entries {
-            let opposite = (released < 0 && v > 0) || (released > 0 && v < 0);
-            if a != axis || !opposite || !self.holds(k, down) {
-                continue;
-            }
-            best = Some(match best {
-                Some(b) if b.unsigned_abs() >= v.unsigned_abs() => b,
-                _ => v,
-            });
+    fn set_buttons(&mut self, flag: XButtons, on: bool) {
+        if on {
+            self.current.buttons |= flag;
+        } else {
+            self.current.buttons &= !flag;
         }
-        best
     }
 
     // ---- chords ------------------------------------------------------------
@@ -764,7 +869,7 @@ impl SlotRuntime {
                 for b in 0..self.holder_bindings[h as usize].len() {
                     let binding = self.holder_bindings[h as usize][b];
                     if now {
-                        self.press(binding);
+                        self.press(binding, down);
                     } else {
                         self.release(binding, down);
                     }
@@ -795,6 +900,9 @@ impl SlotRuntime {
             p.pos_was = false;
             p.pos_wins = false;
         }
+        // The resolver's recency memory is holder state like any other: a
+        // session reset must not leave an axis leaning on a sign nobody holds.
+        self.axis_sign_last = [0; 4];
         self.macro_dirty.clear();
         self.held.iter_mut().for_each(|w| *w = 0);
         self.prev_held.iter_mut().for_each(|w| *w = 0);
@@ -1266,7 +1374,7 @@ impl EngineTables {
         for (si, rs) in slots.iter().enumerate() {
             let keyboard = rs.spec.keyboard.as_ref().map(|d| intern(&mut devices, d));
             let mouse = rs.spec.mouse.as_ref().map(|d| intern(&mut devices, d));
-            let mut endpoint_keys: HashMap<Binding, SmallVec<[u32; 4]>> = HashMap::new();
+            let mut endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>> = HashMap::new();
             let mut axis_entries = Vec::new();
 
             for &(key, binding) in &rs.preset.entries {
@@ -1281,9 +1389,10 @@ impl EngineTables {
                     slot: si as u8,
                     binding,
                 });
-                endpoint_keys.entry(binding).or_default().push(dense);
                 if let Binding::Axis { axis, value } = binding {
                     axis_entries.push((axis, value, dense));
+                } else if let Some(control) = PadControl::of(binding) {
+                    endpoint_keys.entry(control).or_default().push(dense);
                 }
             }
 
@@ -1370,6 +1479,7 @@ impl EngineTables {
                 chord_device: keyboard.or(mouse),
                 endpoint_keys,
                 axis_entries,
+                axis_sign_last: [0; 4],
                 current: PadState::default(),
                 last_emitted: PadState::default(),
                 chords: chord_rts,
@@ -1539,7 +1649,7 @@ impl EngineTables {
                         }
                     }
                 }
-                // Chords join the all-keys-up and opposite-axis tables as
+                // Chords join the all-keys-up and analog holder tables as
                 // ordinary holders, so "released only when nothing drives it"
                 // covers a chord exactly like a key.
                 for c in 0..runtimes[si].chords.len() {
@@ -1548,17 +1658,18 @@ impl EngineTables {
                     if binding == Binding::Consume {
                         continue;
                     }
-                    runtimes[si]
-                        .endpoint_keys
-                        .entry(binding)
-                        .or_default()
-                        .push(id);
                     if let Binding::Axis { axis, value } = binding {
                         runtimes[si].axis_entries.push((axis, value, id));
+                    } else if let Some(control) = PadControl::of(binding) {
+                        runtimes[si]
+                            .endpoint_keys
+                            .entry(control)
+                            .or_default()
+                            .push(id);
                     }
                 }
                 // A macro step drives its `hold` set, and joins the all-keys-up
-                // and opposite-axis tables like any other holder: an endpoint a
+                // and analog holder tables like any other holder: an endpoint a
                 // macro and a key both drive stays down while either holds it,
                 // and a step handing an endpoint to the next step never emits
                 // an intermediate release.
@@ -1572,13 +1683,14 @@ impl EngineTables {
                             }
                             if !holder_bindings[id as usize].contains(&binding) {
                                 holder_bindings[id as usize].push(binding);
-                                runtimes[si]
-                                    .endpoint_keys
-                                    .entry(binding)
-                                    .or_default()
-                                    .push(id);
                                 if let Binding::Axis { axis, value } = binding {
                                     runtimes[si].axis_entries.push((axis, value, id));
+                                } else if let Some(control) = PadControl::of(binding) {
+                                    runtimes[si]
+                                        .endpoint_keys
+                                        .entry(control)
+                                        .or_default()
+                                        .push(id);
                                 }
                             }
                         }
@@ -1614,14 +1726,19 @@ impl EngineTables {
                     // never runs. Validation names it.
                     if !sources.is_empty() {
                         holder_bindings[id as usize].push(binding);
-                        let keys = runtimes[si].endpoint_keys.entry(binding).or_default();
-                        keys.retain(|k| !sources.contains(k));
-                        keys.push(id);
+                        // The analog retain is narrower than the digital one on
+                        // purpose: it drops only the exact `(axis, value)` pair
+                        // these sources drove, leaving a source key's OTHER
+                        // demand on the same axis intact.
                         if let Binding::Axis { axis, value } = binding {
                             runtimes[si].axis_entries.retain(|&(a, v, k)| {
                                 !(a == axis && v == value && sources.contains(&k))
                             });
                             runtimes[si].axis_entries.push((axis, value, id));
+                        } else if let Some(control) = PadControl::of(binding) {
+                            let keys = runtimes[si].endpoint_keys.entry(control).or_default();
+                            keys.retain(|k| !sources.contains(k));
+                            keys.push(id);
                         }
                     }
                     runtimes[si].toggle[t].sources = sources;
@@ -1657,14 +1774,17 @@ impl EngineTables {
                     // and never runs. Validation names it.
                     if !sources.is_empty() {
                         holder_bindings[id as usize].push(binding);
-                        let keys = runtimes[si].endpoint_keys.entry(binding).or_default();
-                        keys.retain(|k| !sources.contains(k));
-                        keys.push(id);
+                        // Narrower analog retain, for the reason given on the
+                        // toggle pass above.
                         if let Binding::Axis { axis, value } = binding {
                             runtimes[si].axis_entries.retain(|&(a, v, k)| {
                                 !(a == axis && v == value && sources.contains(&k))
                             });
                             runtimes[si].axis_entries.push((axis, value, id));
+                        } else if let Some(control) = PadControl::of(binding) {
+                            let keys = runtimes[si].endpoint_keys.entry(control).or_default();
+                            keys.retain(|k| !sources.contains(k));
+                            keys.push(id);
                         }
                     }
                     runtimes[si].turbo[t].sources = sources;
@@ -1778,13 +1898,20 @@ impl EngineTables {
 /// - **Fan-out**: an event is translated for *every* slot whose keyboard or
 ///   mouse matches the event's device — no early break. One physical keyboard
 ///   (an I-PAC4) legitimately drives up to 4 pads with disjoint presets.
-/// - **All-keys-up**: a function releases only when *every* key mapped to it in
-///   that slot's preset is up on the event's device. Aggregation is by
-///   `Binding` equality, consistently across every output category.
-/// - **Opposite-axis snap**: releasing a key bound to axis value `v` while a
-///   key bound to the same axis with an opposite-sign value is still held snaps
-///   the axis to the *held binding's own value* — not hardcoded ±32767. This is
-///   KSX's native custom-axis rule; document any test that depends on it.
+/// - **All-keys-up**: a DIGITAL function releases only when *every* key mapped
+///   to it in that slot's preset is up on the event's device. Aggregation is by
+///   [`PadControl`] equality. The four stick axes do not aggregate this way —
+///   they resolve; see the next bullet.
+/// - **The analog resolver** (`docs/UNIVERSAL-IO.md` §2): an axis takes the
+///   sign of the most recent rising demand on it and, among currently-held
+///   holders of that sign, the largest magnitude; with no holder it is neutral.
+///   Zero is a sign of its own — `lx.0` means "centre", not "a weak positive".
+///   The winning holder's OWN value reaches the pad, never a hardcoded ±32767,
+///   which is what makes custom axis values work. Press and release run the
+///   identical function over the post-event holder set. This replaces the older
+///   opposite-axis snap, which consulted only opposite-sign holders and so
+///   centred an axis whose surviving holders were all same-sign. It is KSX's
+///   native custom-axis rule; document any test that depends on it.
 /// - **Chords with consumption** (docs/INPUT-TRANSFORMS.md §1b): a
 ///   [`Chord`] applies only while its guard holds, and while it applies its
 ///   constituents are SUPPRESSED — their unguarded entries stop driving
@@ -1947,7 +2074,7 @@ impl Engine {
     /// Translate one key event into pad-state deltas.
     ///
     /// Applies the full contract above: fan-out to all matching slots,
-    /// per-device key-state tracking, all-keys-up release, opposite-axis snap,
+    /// per-device key-state tracking, all-keys-up release, the analog resolver,
     /// then state diffing. Events from devices assigned to no slot, and
     /// entries keyed `Key::None`, produce no deltas. Repeated key-down of an
     /// already-down key must not produce a delta (diff idempotence).
@@ -2012,7 +2139,7 @@ impl Engine {
                 continue;
             }
             if ev.down {
-                slot.press(t.binding);
+                slot.press(t.binding, down);
             } else {
                 slot.release(t.binding, down);
             }

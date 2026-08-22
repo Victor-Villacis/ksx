@@ -14,7 +14,7 @@ remain under `docs/research/`; product decisions belong here.
                   (1024; drop+count, never block).
        ↓
 [engine thread]   ksx-core: per-device key state → precompiled Key→(slot,Binding)
-                  index → PadState mutation (all-keys-up, opposite-axis snap,
+                  index → PadState mutation (all-keys-up, the analog resolver,
                   one-kbd→many-slots fan-out) → diff → deltas, try_send with
                   per-slot coalescing (a newer PadState supersedes an older one;
                   the engine never blocks on the output thread).

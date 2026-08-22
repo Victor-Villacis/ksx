@@ -247,7 +247,7 @@ proptest! {
     }
 }
 
-// ------------------------------------------- (e) SOCD / opposite-axis snap
+// ---------------------------------------- (e) SOCD / the analog resolver
 
 proptest! {
     /// (e) With both directions bindable, the axis follows the "last press

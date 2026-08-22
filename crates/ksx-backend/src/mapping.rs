@@ -3465,7 +3465,7 @@ preset = "Other"
             .value
             .to_core()
             .unwrap();
-        assert_eq!(core.entries.len(), 25);
+        assert_eq!(core.entries.len(), ksx_core::preset::MAPPABLE_COUNT);
 
         // …and one click back to the panel map.
         restore(&store, "Panel P1", RestoreKind::LatestBackup).unwrap();

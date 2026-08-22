@@ -101,12 +101,13 @@ per-axis deadzone/saturation/curves, 4-way restriction, tap/hold/double-tap.
   nowhere to land in that type."*
 - **Hiding is the expensive half of any new source.** Without it the game reads
   the real device *and* the ksx pad.
-- **Same-control/different-value conflicts are an unfixed bug.** Hold
-  `lx.8000` + `lx.16000`, release the larger → the axis snaps to 0 while the
-  smaller is still held, because `endpoint_keys` is keyed by the *whole*
-  `Binding` and `opposite_snap` (`engine.rs:484-497`) only mediates
+- **Same-control/different-value conflicts were an unfixed bug.** ✅ **FIXED in
+  M11 piece 2.** Hold `lx.8000` + `lx.16000`, release the larger → the axis
+  snapped to 0 while the smaller was still held, because `endpoint_keys` is
+  keyed by the *whole* `Binding` and `opposite_snap` only mediated
   opposite-sign holders on release. Pressure ladders hit this on the first
-  press.
+  press. Now pinned by
+  `same_sign_ladder_release_falls_back_instead_of_centering`.
 - **The control vocabulary is pinned at 25 in fixed-size arrays** —
   `zones_for() -> &'static [Zone; 25]` (`crates/ksx-studio/src/render_map.rs:280`,
   17 call sites), `FUNCTIONS: [&str; 25]` (`:3507`), `MACRO_COLUMN_COUNT = 37`
@@ -179,12 +180,34 @@ one OR and that equality is a test. `XButtons`' single free bit (0x0800) stays
 ### The resolver — one rule replaces `opposite_snap`
 
 > A digital control is the OR of its holders. **An analog control takes the
-> demand with the largest magnitude among currently-held holders**; the most
-> recent press breaks a magnitude tie; a control with no holder is neutral.
-> Press and release run the same function over the post-event holder set.
+> sign of the most recent rising demand on that axis and, among currently-held
+> holders of that sign, the largest magnitude**; a control with no holder is
+> neutral. **Zero is a sign of its own** — `lx.0` is a demand for *centre*, not
+> a weak positive. When the most recent sign has no holder left, the axis falls
+> back to the largest deflection still held, so a centre demand yields to a real
+> one. Press and release run the same function over the post-event holder set.
 
-Every existing behaviour is a special case of this (verified case-by-case in
-the design), and the ladder bug stops being possible.
+The ladder bug stops being possible, and every existing behaviour is a special
+case — but **not** of the rule as this document first stated it.
+
+> ⚠️ **Amended 2026-08-21, during M11 piece 2.** The original wording was
+> *"the demand with the largest magnitude among currently-held holders; the
+> most recent press breaks a magnitude tie"*, annotated "verified case-by-case
+> in the design". That claim was false and the rule does not ship.
+> `socd_model_holds` (`crates/ksx-core/tests/engine_proptests.rs:258-297`)
+> draws `vmin` and `vmax` *independently* and asserts that a press yields the
+> pressed key's **own** value unconditionally, so magnitude-primary fails on
+> minimal input `vmin = -16384, vmax = 32767` — measured, by installing that
+> rule and running the test. Recency has to be **primary over sign**, with
+> magnitude arbitrating **within** a sign.
+>
+> The amended rule is also *cheaper*: because magnitude decides within a sign,
+> the only ordering it consumes is which sign rose last — `[bool; 4]` per slot
+> (`SlotRuntime::axis_pos_last`), not a per-holder press stamp. That matters,
+> because holder-indexed arrays do not exist on non-stateful slots, which is
+> exactly where the axis suites run. It is also what makes SOCD's "last press
+> wins" fall out for free: `AXIS_MIN` and `AXIS_MAX` are ±32767, an exact
+> magnitude tie that no comparison of deflections could ever break.
 
 ### ⚠️ Naming collision to settle before coding
 
@@ -220,18 +243,34 @@ physical** result, never a code state.
 
 Four independent pieces, each shippable alone:
 
-1. **Kill the fixed arrays.** `zones_for -> &'static [Zone]`;
-   `FUNCTIONS` / `MACRO_COLUMN_COUNT` / `Preset::builtin_empty` all derive from
-   one `ksx_core::preset::mappable_functions()`. In this milestone that
-   function returns exactly today's 25 in today's order, so **both insta
-   snapshots stay byte-identical**. `studio-ui/src/zones.gen.ts` becomes
-   **generated** — the `tokens.gen.css` path already exists in
-   `studio-ui/build.mjs`, and hand-mirroring is the bug class this step kills.
-   Restate `the_grid_is_three_rings` as a property (8 columns per mechanism in
-   ring order; one column per non-direction zone; spans sum to the total) so no
-   literal survives.
-2. **`PadControl` + the resolver**; delete `opposite_snap`. Add the test that
-   names the bug: `same_sign_ladder_release_falls_back_instead_of_centering`.
+1. **Kill the fixed arrays** — ✅ **DONE**, see §7. The generated
+   `zones.gen.ts` is **deferred**; a drift pin ships in its place.
+
+   > ⚠️ **Four premises in this bullet's original wording were wrong**, found
+   > while implementing it on 2026-08-21. They are corrected in §7 rather than
+   > silently rewritten here, because the reasoning is the useful part:
+   >
+   > - *"`zones_for` … derives from `ksx_core::preset::mappable_functions()`"* —
+   >   **impossible, and undesirable.** `ksx-studio` links `ksx-api` and
+   >   nothing else at runtime; `ksx-core` and `ksx-config` are
+   >   `[dev-dependencies]` and their manifest comments say so deliberately
+   >   ("this crate renders and routes and knows nothing about the key
+   >   vocabulary at runtime"). Following the instruction would have broken the
+   >   boundary `docs/M9-DECISION.md` §6 exists to hold. A `Zone` is also
+   >   persona **art** — label, geometry, palette — which ksx-core has no
+   >   business knowing.
+   > - *"`mappable_functions()`"* returns names — **no.** ksx-core carries no
+   >   spellings at all; `function_name` lives in ksx-config. It returns
+   >   `&'static [Binding]`.
+   > - *"today's order keeps both snapshots byte-identical"* — true, but not for
+   >   that reason. `PresetFile::bindings` is a `BTreeMap`, so the emitted TOML
+   >   is alphabetical and **order-blind**; only the set and the spellings
+   >   matter.
+   > - *"`studio-ui/src/zones.gen.ts` becomes generated"* — that file has never
+   >   existed. The mirrors are hand-written literals in `MapIsland.ts` and
+   >   `MapPage.ts`.
+2. **`PadControl` + the resolver**; delete `opposite_snap` — ✅ **DONE**,
+   see §7.
 3. **`DeviceId(Arc<str>)`** — ✅ **DONE**, see §7.
 4. **`SdkStateMapper.Axis()` full precision** — derive the profile's logical
    range instead of assuming 8 bits. Needs new per-profile golden vectors
@@ -443,22 +482,130 @@ change**, which is the proof the abstraction was clean. New test
 `cloning_a_device_id_shares_the_string_instead_of_copying_it` pins the
 property. `cargo test -p ksx-core` green (240 tests).
 
-**Nothing else from this plan has been started.**
+**M11 piece 2 — `PadControl` + the resolver — landed.**
+New `crates/ksx-core/src/control.rs` (`PadControl`, `PadControl::of`,
+`is_analog`); `SlotRuntime::resolve` replaces `opposite_snap`, which is
+**deleted**; `press` and `release` are now two thin callers of that one
+function. `endpoint_keys` is re-keyed `HashMap<PadControl, …>` and carries
+**digital endpoints only** — `axis_entries` was already the analog holder
+table, and merging them would have broken the toggle/turbo rewiring, whose
+`keys.retain` drops a holder from an endpoint *wholesale* (right for a button,
+wrong for a key driving two values on one axis).
+
+Measured, not asserted:
+
+- `cargo test -p ksx-core`: **308 passed, 0 failed**, with **no existing test
+  edited**. `socd_model_holds` re-run at `PROPTEST_CASES=20000`.
+- The new tests were run against the **pre-change** engine and fail there, so
+  they pin the fix rather than merely passing beside it.
+  `same_sign_ladder_release_falls_back_instead_of_centering` fails with
+  `left: 0` where `16384` was still held — that is the bug itself.
+  `a_weaker_same_sign_press_does_not_stomp_a_stronger_hold` fails one
+  assertion earlier, on the boolean `assert!(d.is_empty(), …)`, because the old
+  `press` was a blind `*axis_field = value` and so emitted a delta; expect that
+  message, not a `left`/`right` pair, when reproducing.
+- The rule this document *originally* stated was installed and measured to
+  fail, which is why §2 now carries an amendment. See that ⚠️ block.
+
+**One defect this change introduced and adversarial review caught**, before it
+was committed. The first cut bucketed a demand by `value >= 0`, which made
+`lx.0` — an authorable binding whose entire meaning is "centre this axis" — a
+*positive* holder of magnitude 0. It then lost `max()` to any held positive
+holder while still beating every negative one, so the same binding centred a
+left lean and did nothing to a right one. Measured: with `lx.max` held,
+pressing `lx.0` left the axis at `32767` where the pre-change engine set it to
+`0`. The fix makes zero a **sign of its own** (`axis_sign_last: [i8; 4]`,
+`-1`/`0`/`+1`), and
+`a_zero_axis_demand_centres_whichever_way_the_stick_leans` pins the symmetry.
+The lesson is worth keeping: a green suite is evidence, not proof — no existing
+test bound `lx.0` at all.
+
+**Two deliberate semantic widenings**, neither reachable by any shipped
+template or built-in preset (both need a hand-authored custom value like
+`lx.16000`), and both are the ladder semantics M12 needs:
+
+1. A weaker **same-sign** press no longer stomps a stronger held one.
+2. Releasing a `value == 0` axis holder while an opposite-sign holder is held
+   now falls back instead of centring (`opposite_snap`'s sign filter returned
+   `None` for a released 0).
+
+M11's "no user-visible change" acceptance therefore holds for every shipped
+configuration, but not for arbitrary hand-authored ones. Comments in four test
+files that named the deleted function were re-worded; no assertion was touched.
+
+**M11 piece 1 — the fixed arrays are gone.**
+`ksx_core::preset::{MAPPABLE_COUNT, mappable_functions}` is the one vocabulary,
+derived from the four rosters by const evaluation, so an endpoint added to
+`XButton::ALL` (or `Trigger`/`Axis`/`DpadDirection`) changes every count by
+existing. `Preset::builtin_empty` is now a `map` over it. `ZONE_XBOX`/
+`ZONE_DS4` are `&[Zone]`, `zones_for` returns `&'static [Zone]`, and the
+`FUNCTIONS: [&str; 25]` and `MACRO_COLUMN_COUNT = 37` literals are **deleted** —
+the grid's width is now `non_direction_zones + mechanisms × RING.len()`.
+
+The two crates never became coupled: ksx-studio still links only `ksx-api` at
+runtime, and every derivation above happens in `#[cfg(test)]` through the
+existing dev-dependencies.
+
+*Measured:* `cargo test --workspace --exclude vigem-client` **2456 passed, 0
+failed**; both insta snapshots byte-identical with **zero `.snap.new`**; no
+`studio-ui/` file and no built asset touched.
+
+*The restated `the_grid_is_three_rings` was mutation-tested, and the results
+changed the design:*
+
+- Asserting the ring's token against `Mechanism::function` is a **tautology** —
+  `macro_columns` builds the token with that very call. Swapping two of its arms
+  left both the restated test **and the literal-glyph one it replaced** green.
+  The cardinal claim now routes through `ksx_core::socd::pointing`, "the one
+  function" for where a binding points — an independent path, and the mutation
+  now fails with *"LeftStick position 2 draws ← but lx.max points elsewhere"*.
+  This is a capability neither the old test nor the plan had.
+- Restating the band list as a property **weakened** it: a run-derived
+  comparison cannot catch a reordered band, which the old literal could. Band
+  order is a design decision that does **not** grow with the vocabulary, so the
+  literal is kept alongside the derived checks. Verified by mutation.
+- One assertion remains structurally circular (the grid's mechanism order
+  against the zone table's, because `macro_columns` derives band order from
+  that table). Not a regression — the old test could not see it either — but it
+  is not load-bearing and should not be trusted as such.
+
+**Deferred, deliberately: the generated `zones.gen.ts` (M11 piece 1b).**
+The vocabulary is hand-mirrored in `MapIsland.ts` (`ZONE_XBOX`, `ZONE_DS4`) and
+`MapPage.ts` (`FUNCTIONS`, the no-JS `<select>`). Generating it would force a
+`node build.mjs` and a commit of `crates/ksx-studio/assets/**`, which CI
+byte-diffs — and a concurrent branch was rewriting exactly those assets, so the
+conflict was guaranteed on files that must not be hand-merged. The generator
+also runs the wrong way today: the `tokens.gen.css` precedent is TS → Rust,
+while this needs Rust → TS plus new `ci.yml` path registrations.
+
+Shipped instead at zero collision cost:
+`the_typescript_mirrors_carry_the_same_vocabulary` `include_str!`s both files
+and pins them against `mappable_functions()`. That captures the *whole* value of
+generation — drift is caught — without touching a shared file. Verified by
+mutation: dropping one entry fails with `24` vs `25`. When the art branch lands,
+1b replaces the pin with real generation.
+
+**Not yet started:** M11 piece 4, piece 1b, and everything from M12 on.
 
 ### Recommended pickup order for a fresh agent
 
-1. **M11 piece 2** (`PadControl` + resolver, delete `opposite_snap`) — pure
-   ksx-core, fixes a live bug, and every existing engine test must stay green
-   **unchanged**. That last property is the whole gate.
-2. **M11 piece 1** (kill the fixed arrays) — the largest refactor, but purely
-   mechanical, and it is the prerequisite for every new control. Do the
-   TypeScript generation in this step, not later.
-3. **M11 piece 4** (`SdkStateMapper.Axis()`) — C#, needs new golden vectors and
+1. **M11 piece 1b** — the generated `zones.gen.ts`, once the studio-ui art
+   branch has merged. Shape: a Rust test emits/verifies
+   `studio-ui/tokens/zones.json`, `build.mjs` reads it beside the existing token
+   writes and emits `src/zones.gen.ts`, and both paths are registered in
+   `ci.yml`. Delete the drift pin in the same commit that replaces it.
+2. **M11 piece 4** (`SdkStateMapper.Axis()`) — C#, needs new golden vectors and
    a hardware leg to confirm intermediate stick travel.
-4. Then M12.
+3. Then M12. Its **axis** ladders and curve tables are the first thing to
+   exercise the resolver's magnitude clause with values other than ±32767 —
+   note that `Binding::Pressure` is **not**, because it drives a trigger and
+   `PadControl::is_analog` reports triggers as digital (ksx drives `lt`/`rt` to
+   `u8::MAX` or `0` and nothing between). Making trigger travel real is a
+   change to `is_analog` and to the resolver's digital arm, and M12 must decide
+   that deliberately rather than inherit it.
 
 ### Branch and state at handoff
 
-Branch `codex/studio-nocturne-workspace`, 9 commits ahead of origin and
-**unpushed** (the Studio Nocturne canvas work plus this change). Victor pushes
-on request only.
+Branch `codex/universal-io`, based on `codex/ds4-hybrid-controller-art`
+@`9cf3f49` (which already contains `codex/studio-nocturne-workspace`). Unpushed.
+Victor pushes on request only.

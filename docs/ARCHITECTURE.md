@@ -14,7 +14,7 @@ remain under `docs/research/`; product decisions belong here.
                   (1024; drop+count, never block).
        ↓
 [engine thread]   ksx-core: per-device key state → precompiled Key→(slot,Binding)
-                  index → PadState mutation (all-keys-up, opposite-axis snap,
+                  index → PadState mutation (all-keys-up, the analog resolver,
                   one-kbd→many-slots fan-out) → diff → deltas, try_send with
                   per-slot coalescing (a newer PadState supersedes an older one;
                   the engine never blocks on the output thread).
@@ -72,7 +72,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M8.1 | planned | VIIPER complementary virtual-USB/network/Linux lane | Separate-process prototype creates a virtual keyboard and controller locally and across Windows/Linux; licensing, USB/IP installation, authentication, feedback, reconnect and clean uninstall are acceptance work. It does not replace HIDMaestro or ViGEmBus |
 | M9 | ✅ done, **re-decided** | "ksx is a real Windows application" | Was an egui config UI; cancelled 2026-08-06 because Studio had already shipped the mapper E7 wanted a native UI for (`docs/M9-DECISION.md`). Delivered instead: an owned icon, an installer, a tray "Open ksx", and `ksx open` — daemon up, wait for the port, then a chrome-less window |
 | M10a | ✅ done | `ksx-api`: the typed, transport-free contract every surface consumes | `crates/ksx-api`. Studio and the cabinet depend on it and **not** on the backend crate, which is what makes `SURFACES.md` §1 checkable |
-| M11 | 🔨 started | Universal I/O groundwork: the control vocabulary stops being a fixed 25, one resolver replaces `opposite_snap`, `DeviceId` stops allocating per event, full stick resolution | workspace green with every existing test unchanged; snapshots and built assets byte-identical; cabinet p99 unmoved — `docs/UNIVERSAL-IO.md` §3 |
+| M11 | 🔨 pieces 1-3 done, piece 4 + 1b open | Universal I/O groundwork: the control vocabulary stops being a fixed 25, one resolver replaces `opposite_snap`, `DeviceId` stops allocating per event, full stick resolution | workspace green with every existing test unchanged; snapshots and built assets byte-identical; cabinet p99 unmoved — `docs/UNIVERSAL-IO.md` §3 |
 | M12 | planned | Analog authoring: trigger pressure, pressure ladders, integer curves/deadzones, gate restriction, tap/hold | a 5-step ladder publishes 5 distinct `rt` values in replay; intermediate stick travel visible in joy.cpl |
 | M13 | planned | The input event grows up: `SourceControl`/`Value`/`InputEvent`, N sources per slot | `SESSION_DIGEST` unmoved; every existing config byte-identical after load+save |
 | M14 | planned | Any device drives a pad: Raw Input HID + mouse readers, `[axes]`, hiding via WinUSB/HidHide | a DS4 and the panel both drive slot 1; the claimed DS4 vanishes from joy.cpl while still driving |

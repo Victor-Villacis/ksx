@@ -497,7 +497,7 @@ fn a_chord_with_no_trigger_key_is_inert() {
 /// scratch, whole-state at a time. They must agree after every single event —
 /// which is what makes "no stuck key, no missed hand-over, no order
 /// dependence" a proof rather than a hope. (Buttons only: axes are
-/// deliberately order-dependent by design — see the opposite-axis snap — and
+/// deliberately order-dependent by design — see the analog resolver — and
 /// so are not a pure function of the down set.)
 fn model_buttons(
     entries: &[(Key, XButton)],

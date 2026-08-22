@@ -128,7 +128,7 @@ disable that key's other bindings.
   still held resumes its own binding in that one batch, so lifting B while
   A stays down gives you A back with no flicker.
 - **A chord is a holder.** It participates in the all-keys-up rule and the
-  opposite-axis snap like any key, so an endpoint driven by both a key and
+  analog resolver like any key, so an endpoint driven by both a key and
   a chord stays down while either drives it.
 - **Specificity.** A bigger guard beats a smaller one *where they share a
   constituent*: A+B+C suppresses A+B, and A+B comes back the instant C
@@ -449,7 +449,7 @@ For "make THIS button auto-fire" — one number, no sequence — the answer is
 
 A macro STEP is an ordinary **holder**: `holder_bindings[first + i]` is step
 `i`'s hold set, and the step is "held" exactly while the macro is on it. So
-the all-keys-up rule, the opposite-axis snap, the releases-before-presses
+the all-keys-up rule, the analog resolver, the releases-before-presses
 order and the one-batch discipline are the chord machinery unchanged — a
 macro cannot strand a button that a chord could not. Two consequences worth
 naming: an endpoint carried from one step to the next **never flickers**
@@ -737,9 +737,11 @@ Chord::consuming(key, when)
 ```
 
 - **neutral** = `[Left+Right] → Consume`. Both keys suppressed, nothing
-  pressed in their place, so the axis falls to centre (via the existing
-  opposite-axis snap, which sees no held opposite) and both dpad bits
-  clear. Same for `[Up+Down]`.
+  pressed in their place, so the axis falls to centre — not by a rule about
+  opposites, but because consumption makes `holds()` false for both keys, so
+  the resolver finds NO holder on either sign and its third clause ("a control
+  with no holder is neutral") answers directly. Both dpad bits clear the same
+  way, by the digital arm's all-keys-up. Same for `[Up+Down]`.
 - **up-priority** = `[Down+Up] → whatever UP drove`. Consumption is
   all-or-nothing per chord, so "keep Up" is said as "consume both and
   re-emit Up" — and re-emit it *in full*, every binding that key had, or
@@ -805,7 +807,7 @@ exists either: the engine keeps one `SocdRt` per opposing CONTROL — which
 keys are the two sides, one bit for who wins — and `sync_socd` writes the
 losing side's keys into the SAME `consumed` mask chord consumption uses.
 One suppression mechanism, two writers; everything downstream (all-keys-up,
-opposite-axis snap, releases-before-presses, one-batch deltas) is
+the analog resolver, releases-before-presses, one-batch deltas) is
 untouched.
 
 The rules, each pinned in `engine_socd.rs`:

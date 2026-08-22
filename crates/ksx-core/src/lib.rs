@@ -7,7 +7,12 @@
 //! Engine contracts KSX preserves across releases:
 //! - one keyboard → many slots fan-out (the I-PAC4 case)
 //! - all-keys-up release rule incl. cross-category custom-function aggregation
-//! - opposite-axis snap (to the opposite *binding's* value — deliberate fix)
+//! - one resolver over an endpoint's holders: digital is their OR; an analog
+//!   axis takes the sign of the most recent rising demand and the largest
+//!   magnitude held at that sign (zero is a sign of its own: `lx.0` demands
+//!   centre), and centres when nothing holds it
+//!   (`docs/UNIVERSAL-IO.md` §2 — this subsumes the older opposite-axis snap,
+//!   which centred an axis whose remaining holders were all same-sign)
 //! - state-diff before submit (only genuine transitions leave the engine)
 //!
 //! Module map:
@@ -19,6 +24,8 @@
 //!   (`docs/DEVICE-IDENTITY.md`)
 //! - [`preset`] — [`Binding`], [`Chord`] (guarded bindings), [`Preset`], and
 //!   the `default`/`empty` built-ins
+//! - [`control`] — [`PadControl`]: the ENDPOINT a [`Binding`] drives, with the
+//!   axis value collapsed out, so the engine can ask "who else drives this?"
 //! - [`macros`] — [`Macro`]: timed sequences, the sampling floor, and the
 //!   interruption policies; the scheduler that runs them lives in [`engine`]
 //! - [`slot`] — [`SlotSpec`] and the 13-variant [`InvalidationReason`] taxonomy
@@ -39,6 +46,7 @@
 //! - [`escape`] — [`EscapeDetector`], emergency-escape detection (policy lives upstream)
 
 pub mod blocking;
+pub mod control;
 pub mod device;
 pub mod diagonal;
 pub mod engine;
@@ -57,6 +65,7 @@ pub mod transport;
 pub mod vendors;
 
 pub use blocking::{Blocking, UnknownBlocking};
+pub use control::PadControl;
 pub use device::{DeviceId, KeyEvent};
 pub use diagonal::{Diag, Held};
 pub use engine::{Deltas, Engine, EngineTables, PadDelta, ResolvedSlot};

@@ -806,7 +806,11 @@ A = ["S", "Enter"]
     fn builtin_empty_survives_core_round_trip() {
         let original = Preset::builtin_empty();
         let file = PresetFile::from_core(&original);
-        assert_eq!(file.bindings.len(), 25);
+        assert_eq!(
+            file.bindings.len(),
+            ksx_core::preset::MAPPABLE_COUNT,
+            "every mappable function reaches the file"
+        );
         assert!(file
             .bindings
             .values()

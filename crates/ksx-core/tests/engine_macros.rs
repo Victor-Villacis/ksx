@@ -565,7 +565,7 @@ fn a_macro_and_a_key_can_hold_the_same_endpoint() {
     assert_eq!(state(&engine), PadState::default());
 }
 
-/// The opposite-axis snap sees a macro step like any other holder.
+/// The analog resolver sees a macro step like any other holder.
 #[test]
 fn a_macro_axis_step_snaps_against_a_held_key() {
     let left = Binding::Axis {
@@ -708,7 +708,7 @@ fn a_macro_free_preset_never_arms_a_deadline() {
 // His stick is bound to the LEFT ANALOG AXES (`lx.min/max`, `ly.min/max`) with
 // the dpad unbound, which is a different code path from the dpad hadouken
 // above: dpad directions are independent BITS in one field, while axes are
-// whole-field ASSIGNMENTS with an opposite-axis snap on release. A two-binding
+// whole-field ASSIGNMENTS resolved against the holder set on release. A two-binding
 // step therefore has to survive a mechanism where "press" can overwrite and
 // "release" can snap — so it gets its own tests rather than an argument.
 

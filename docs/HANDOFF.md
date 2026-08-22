@@ -396,6 +396,7 @@ tagging, run the fresh-customer product gate and the still-open Gate 3 in
 | how a device is identified, and why not by path | `DEVICE-IDENTITY.md` |
 | what each control surface can do | `CONTROL-SURFACE.md` |
 | keys, chords, turbo, SOCD, macros | `INPUT-TRANSFORMS.md` |
+| any device in, any device out (M11-M19) | `UNIVERSAL-IO.md` |
 | supervised hardware runbooks | `GATES.md` |
 | the panel is dead / a claim went wrong | `RECOVERY.md` |
 | driver policy: pins, signatures, consent | `DRIVERS.md` |

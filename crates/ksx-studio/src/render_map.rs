@@ -198,7 +198,7 @@ const fn zone(
 /// function`): face buttons sized to the drawn circles, and the four
 /// stick-direction wedges RING the stick with the L3/R3 click zone as the
 /// 8×10 center hub — adjacent, never covering it.
-pub(crate) const ZONE_XBOX: [Zone; 25] = [
+pub(crate) const ZONE_XBOX: &[Zone] = &[
     // Shoulders (not drawn in the icon art): slim chips stacked trigger-over-
     // bumper like the real pad, anchored just above the body's top plateau
     // (stage x ≈ 32..68) — .z-bumper drops a connector line onto the body.
@@ -241,7 +241,7 @@ pub(crate) const ZONE_XBOX: [Zone; 25] = [
 /// Sony labels, XInput functions). Same disjoint-rect rules as [`ZONE_XBOX`]:
 /// stick wedges ring the L3/R3 hub, dpad arrow boxes sit on the drawn arrows
 /// pushed slightly outward so the diagonal pairs never intersect.
-pub(crate) const ZONE_DS4: [Zone; 25] = [
+pub(crate) const ZONE_DS4: &[Zone] = &[
     // Shoulders: same trigger-over-bumper stack as ZONE_XBOX, anchored on the
     // DS4 body's raised humps (stage x ≈ 19 / 81, where L1/R1 really sit).
     zone("lt", "L2", "sh", [17.0, 4.6, 9.5, 5.2], "trigger"),
@@ -277,11 +277,22 @@ pub(crate) const ZONE_DS4: [Zone; 25] = [
     zone("rx.max", "→", "dir", [72.85, 56.8, 5.5, 7.0], "chip"),
 ];
 
-pub(crate) fn zones_for(persona: &str) -> &'static [Zone; 25] {
+/// The zone table a persona draws with.
+///
+/// Returns a SLICE, not a fixed-size array: the control vocabulary grows in
+/// M11-M19 (`docs/UNIVERSAL-IO.md`), and a `[Zone; 25]` return type made every
+/// caller a place the count had to be repeated. Nothing here derives from
+/// `ksx_core::preset::mappable_functions()` and nothing should — a `Zone`
+/// carries persona ART (label, geometry, kind), which this crate owns and
+/// ksx-core has no business knowing. The two are tied together by
+/// `zone_tables_cover_every_mappable_function` instead, which is a test, not a
+/// dependency: ksx-studio links ksx-core only as a dev-dependency and that
+/// boundary is deliberate (`docs/M9-DECISION.md` §6).
+pub(crate) fn zones_for(persona: &str) -> &'static [Zone] {
     if art_for(persona) == crate::render::ART_DS4 {
-        &ZONE_DS4
+        ZONE_DS4
     } else {
-        &ZONE_XBOX
+        ZONE_XBOX
     }
 }
 
@@ -2615,11 +2626,6 @@ const RING: [RingPos; 8] = [
     RingPos::Diagonal(Diag::UpRight),
 ];
 
-/// 25 zones → 37 columns: the twelve cardinal-only direction zones become three
-/// rings of eight. Pinned against the tables by `the_grid_is_three_rings`.
-#[cfg(test)]
-const MACRO_COLUMN_COUNT: usize = 37;
-
 /// One grid column: what it is called, what a click on it means, and which
 /// band it sits under.
 pub(crate) struct MacroColumn {
@@ -3502,41 +3508,118 @@ mod tests {
     /// Both tables cover exactly the 25 mappable functions, once each — a
     /// zone the preset vocabulary cannot store, or a function without a
     /// zone, is a build error here, not a dead click in the browser.
+    /// The TypeScript twins. `include_str!` and not a path check: move or rename
+    /// either file and this crate stops compiling, which is the point.
+    const MAP_ISLAND_TS: &str = include_str!("../../../studio-ui/src/MapIsland.ts");
+    const MAP_PAGE_TS: &str = include_str!("../../../studio-ui/src/MapPage.ts");
+
+    /// Pull the first quoted string out of every element of a TS array literal
+    /// named `name`, stopping at the closing `];`.
+    fn ts_array_heads(source: &str, name: &str) -> Vec<String> {
+        let start = source
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} is gone from the TypeScript"));
+        let body = &source[start..];
+        let end = body
+            .find("\n];")
+            .unwrap_or_else(|| panic!("{name} has no end"));
+        body[..end]
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let t = line.trim_start();
+                if !(t.starts_with('[') || t.starts_with('{')) {
+                    return None;
+                }
+                let open = line.find('"')?;
+                let rest = &line[open + 1..];
+                let close = rest.find('"')?;
+                Some(rest[..close].to_owned())
+            })
+            .collect()
+    }
+
+    /// The vocabulary is mirrored BY HAND into TypeScript in three places, and
+    /// nothing generated it — `studio-ui/src/zones.gen.ts` does not exist, which
+    /// is a stale premise in `docs/UNIVERSAL-IO.md` M11 piece 1. Until a
+    /// generator lands, this is the only thing standing between a new control
+    /// and a dead click in the hydrated page: the Rust page would offer it and
+    /// the TypeScript would not know it existed.
+    ///
+    /// Deliberately a Rust test rather than a build step: generation has to
+    /// cross a language boundary in the direction the build does not currently
+    /// run, and would force an asset rebuild on every vocabulary change.
+    #[test]
+    fn the_typescript_mirrors_carry_the_same_vocabulary() {
+        let want: Vec<String> = {
+            let mut v: Vec<String> = ksx_core::preset::mappable_functions()
+                .iter()
+                .map(ksx_config::function_name)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+
+        for (label, name) in [
+            ("MapIsland ZONE_XBOX", "const ZONE_XBOX: ZoneDef[] = ["),
+            ("MapIsland ZONE_DS4", "const ZONE_DS4: ZoneDef[] = ["),
+        ] {
+            let mut got = ts_array_heads(MAP_ISLAND_TS, name);
+            assert_eq!(
+                got.len(),
+                ksx_core::preset::MAPPABLE_COUNT,
+                "{label}: one entry per function"
+            );
+            got.sort_unstable();
+            assert_eq!(got, want, "{label} has drifted from the Rust vocabulary");
+        }
+
+        let mut options = ts_array_heads(MAP_PAGE_TS, "const FUNCTIONS: KeyOpt[] = [");
+        assert_eq!(
+            options.len(),
+            ksx_core::preset::MAPPABLE_COUNT,
+            "MapPage FUNCTIONS: the no-JS <select> must offer every function"
+        );
+        options.sort_unstable();
+        assert_eq!(
+            options, want,
+            "MapPage FUNCTIONS has drifted from the Rust vocabulary"
+        );
+
+        // ...and the Rust tables the TypeScript claims to mirror.
+        for table in [ZONE_XBOX, ZONE_DS4] {
+            let mut names: Vec<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
+            names.sort_unstable();
+            assert_eq!(names, want);
+        }
+    }
+
     #[test]
     fn zone_tables_cover_every_mappable_function() {
-        const FUNCTIONS: [&str; 25] = [
-            "A",
-            "B",
-            "X",
-            "Y",
-            "lb",
-            "rb",
-            "lt",
-            "rt",
-            "back",
-            "start",
-            "guide",
-            "lthumb",
-            "rthumb",
-            "dpad.up",
-            "dpad.down",
-            "dpad.left",
-            "dpad.right",
-            "lx.min",
-            "lx.max",
-            "ly.min",
-            "ly.max",
-            "rx.min",
-            "rx.max",
-            "ry.min",
-            "ry.max",
-        ];
-        for table in [&ZONE_XBOX, &ZONE_DS4] {
-            let mut names: Vec<&str> = table.iter().map(|z| z.fn_name).collect();
+        // No literal list any more. ksx-core owns the SET of mappable functions,
+        // ksx-config owns their SPELLINGS, and this crate owns the ART — so the
+        // pin lives here and derives from the other two rather than any of the
+        // three transcribing the others. Both are dev-dependencies: the runtime
+        // boundary (`docs/M9-DECISION.md` §6) is untouched.
+        let mut want: Vec<String> = ksx_core::preset::mappable_functions()
+            .iter()
+            .map(ksx_config::function_name)
+            .collect();
+        want.sort_unstable();
+        for table in [ZONE_XBOX, ZONE_DS4] {
+            let mut names: Vec<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
             names.sort_unstable();
-            let mut want = FUNCTIONS.to_vec();
-            want.sort_unstable();
-            assert_eq!(names, want);
+            assert_eq!(
+                names, want,
+                "the zone table must cover exactly the vocabulary"
+            );
+            // Sorted-set equality alone would accept a duplicated zone paired
+            // with a missing one, so pin the count independently.
+            assert_eq!(
+                table.len(),
+                ksx_core::preset::MAPPABLE_COUNT,
+                "one zone per function, no duplicates"
+            );
             // Every zone stays inside the stage.
             for z in table.iter() {
                 assert!(
@@ -5126,15 +5209,63 @@ mod tests {
     /// diagonal is a column you can point at.
     #[test]
     fn the_grid_is_three_rings() {
+        // Stated as PROPERTIES, with no literal count, glyph run or band list
+        // left: M11 grows the control vocabulary (`docs/UNIVERSAL-IO.md` §3),
+        // and every literal here was a place the new size would have to be
+        // re-typed. The oracle is the ZONE TABLE, which is an independent path
+        // from `macro_columns` — deriving the expectation from the output
+        // itself would make this vacuous.
+
+        // P0 — `zones_for` is TOTAL: an unknown persona still draws a pad.
+        assert_eq!(
+            zones_for("something nobody has shipped").len(),
+            ZONE_XBOX.len(),
+            "an unrecognised persona must fall back, not render an empty stage"
+        );
+
+        // ksx-core's mechanism vocabulary, for the independent check in P4.
+        let as_core = |m: Mechanism| match m {
+            Mechanism::Dpad => ksx_core::DirMechanism::Dpad,
+            Mechanism::LeftStick => ksx_core::DirMechanism::LeftStick,
+            Mechanism::RightStick => ksx_core::DirMechanism::RightStick,
+        };
+
+        let mut all_tokens: Vec<Vec<String>> = Vec::new();
+        let mut all_bands: Vec<Vec<String>> = Vec::new();
+
         for persona in ["xbox360", "playstation"] {
+            let zones = zones_for(persona);
             let columns = macro_columns(persona);
+
+            // Mechanisms in ZONE-TABLE first-appearance order.
+            let mut mechs: Vec<Mechanism> = Vec::new();
+            for z in zones {
+                if let Some(m) = Mechanism::of(z.fn_name) {
+                    if !mechs.contains(&m) {
+                        mechs.push(m);
+                    }
+                }
+            }
+            let non_dir = zones
+                .iter()
+                .filter(|z| Mechanism::of(z.fn_name).is_none())
+                .count();
+
+            // P1 — the count, derived: every non-direction zone keeps its
+            // column, and each mechanism's cardinals become a full ring.
+            assert_eq!(
+                mechs.len(),
+                Mechanism::ALL.len(),
+                "{persona}: a mechanism has no zones"
+            );
             assert_eq!(
                 columns.len(),
-                MACRO_COLUMN_COUNT,
-                "{persona}: 25 zones → 37 columns"
+                non_dir + mechs.len() * RING.len(),
+                "{persona}: non-direction zones plus one ring per mechanism"
             );
-            // Every mappable function still has exactly one column…
-            for z in zones_for(persona).iter() {
+
+            // P2 — one column per zone.
+            for z in zones {
                 assert_eq!(
                     columns.iter().filter(|c| c.token == z.fn_name).count(),
                     1,
@@ -5142,13 +5273,18 @@ mod tests {
                     z.fn_name
                 );
             }
-            // …plus twelve new picks nobody has had before.
+
+            // P3 — the diagonals nobody could point at before.
             let diagonals: Vec<&str> = columns
                 .iter()
                 .filter(|c| c.token.starts_with("diag:"))
                 .map(|c| c.token.as_str())
                 .collect();
-            assert_eq!(diagonals.len(), 12, "{persona}: {diagonals:?}");
+            assert_eq!(
+                diagonals.len(),
+                mechs.len() * Diag::ALL.len(),
+                "{persona}: {diagonals:?}"
+            );
             for mechanism in Mechanism::ALL {
                 for diag in Diag::ALL {
                     assert!(
@@ -5157,20 +5293,73 @@ mod tests {
                     );
                 }
             }
-            // RING ORDER — ↑ ↖ ← ↙ ↓ ↘ → ↗ — is what makes a motion a shape.
-            let glyphs: Vec<&str> = columns
-                .iter()
-                .filter(|c| c.idcls.starts_with("maccolid ") || c.token.starts_with("diag:"))
-                .map(|c| c.glyph.as_str())
-                .collect();
-            assert_eq!(
-                glyphs,
-                ["↑", "↖", "←", "↙", "↓", "↘", "→", "↗"].repeat(3),
-                "{persona}"
-            );
-            // The band, and the fact it exists for: three identical rings.
-            let bands = macro_groups(Some(&slot(1, persona, "p")));
-            let SlotValue::Array(bands) = bands else {
+
+            // P4 — RING ORDER, and where each position actually POINTS.
+            //
+            // Checking the token against `Mechanism::function` would be a
+            // tautology: `macro_columns` builds it with that very call.
+            // MEASURED — swapping two of its arms leaves both this test and the
+            // literal-glyph one it replaced green. So the cardinal claim is
+            // routed through an INDEPENDENT oracle instead: the token is parsed
+            // by the file format and handed to `ksx_core::socd::pointing`, "the
+            // one function" for where a binding points, which is the same
+            // definition SOCD and the diagonal lens are built on.
+            for m in &mechs {
+                let idx: Vec<usize> = columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.band == m.band() && c.idcls.starts_with("maccolid "))
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(
+                    idx.len(),
+                    RING.len(),
+                    "{persona}: {m:?}'s ring is not one full turn"
+                );
+                assert!(
+                    idx.windows(2).all(|w| w[1] == w[0] + 1),
+                    "{persona}: {m:?}'s ring is interleaved with another band"
+                );
+                for (k, pos) in RING.iter().enumerate() {
+                    let c = &columns[idx[k]];
+                    let (glyph, token) = match pos {
+                        RingPos::Cardinal { vertical, positive } => (
+                            cardinal_glyph(*vertical, *positive).to_owned(),
+                            m.function(*vertical, *positive).to_owned(),
+                        ),
+                        RingPos::Diagonal(d) => (d.glyph().to_owned(), diag_token(*m, *d)),
+                    };
+                    assert_eq!(c.glyph, glyph, "{persona}: {m:?} ring position {k}");
+                    assert_eq!(
+                        c.token, token,
+                        "{persona}: {m:?} ring position {k} drives the wrong control"
+                    );
+                    if let RingPos::Cardinal { vertical, positive } = pos {
+                        let binding = ksx_config::parse_function(&c.token).unwrap_or_else(|e| {
+                            panic!("{persona}: {} is unparseable: {e}", c.token)
+                        });
+                        let points = ksx_core::socd::pointing(binding)
+                            .unwrap_or_else(|| panic!("{persona}: {} points nowhere", c.token));
+                        assert_eq!(
+                            points.mechanism,
+                            as_core(*m),
+                            "{persona}: {} is not a {m:?} control",
+                            c.token
+                        );
+                        assert_eq!(
+                            (points.vertical, points.positive),
+                            (*vertical, *positive),
+                            "{persona}: {m:?} position {k} draws {glyph} but {} points elsewhere",
+                            c.token
+                        );
+                    }
+                }
+            }
+
+            // P5 — the bands. `macro_groups` is built FROM `macro_columns`, so
+            // comparing it to a de-duplicated run of the columns is the honest
+            // check; the content is in the two asserts under it.
+            let SlotValue::Array(bands) = macro_groups(Some(&slot(1, persona, "p"))) else {
                 panic!("bands are a list")
             };
             let labels: Vec<String> = bands
@@ -5183,21 +5372,7 @@ mod tests {
                     other => panic!("{other:?}"),
                 })
                 .collect();
-            assert_eq!(
-                labels,
-                [
-                    "SHOULDERS",
-                    "FACE",
-                    "SYSTEM",
-                    "LEFT STICK",
-                    "D-PAD",
-                    "RIGHT STICK"
-                ],
-                "{persona}"
-            );
-            // Spans sum to the column count, or the header would not line up
-            // with the matrix under it.
-            let spans: usize = bands
+            let spans: Vec<usize> = bands
                 .iter()
                 .map(|b| match b {
                     SlotValue::Object(fields) => match &fields[1].1 {
@@ -5209,9 +5384,80 @@ mod tests {
                     },
                     other => panic!("{other:?}"),
                 })
-                .sum();
-            assert_eq!(spans, MACRO_COLUMN_COUNT, "{persona}");
+                .collect();
+
+            let mut runs: Vec<(&str, usize)> = Vec::new();
+            for c in &columns {
+                match runs.last_mut() {
+                    Some((b, n)) if *b == c.band => *n += 1,
+                    _ => runs.push((c.band, 1)),
+                }
+            }
+
+            // The band ORDER is a design decision, not a derived property, and it
+            // does not grow when the vocabulary does — so it stays pinned by a
+            // literal. M11 is about removing literals that track the vocabulary
+            // SIZE; dropping this one only cost the ability to catch a reordered
+            // zone table, which is measured: swapping two band groups leaves the
+            // run-derived comparison below green.
+            assert_eq!(
+                labels,
+                [
+                    "SHOULDERS",
+                    "FACE",
+                    "SYSTEM",
+                    "LEFT STICK",
+                    "D-PAD",
+                    "RIGHT STICK"
+                ],
+                "{persona}: the header bands changed order"
+            );
+            assert_eq!(
+                labels,
+                runs.iter()
+                    .map(|(b, _)| (*b).to_owned())
+                    .collect::<Vec<_>>(),
+                "{persona}: the header does not describe the columns under it"
+            );
+            assert_eq!(
+                runs.iter()
+                    .map(|(b, _)| *b)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                runs.len(),
+                "{persona}: a band appears in two runs — one header cannot span it"
+            );
+            assert_eq!(
+                runs.iter()
+                    .map(|(b, _)| *b)
+                    .filter(|b| Mechanism::ALL.iter().any(|m| m.band() == *b))
+                    .collect::<Vec<_>>(),
+                mechs.iter().map(|m| m.band()).collect::<Vec<_>>(),
+                "{persona}: the grid's mechanism order left the zone table's"
+            );
+
+            // P6 — per-band spans, not merely their sum: a band split in two
+            // still totals correctly.
+            assert_eq!(
+                spans,
+                runs.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+                "{persona}"
+            );
+            assert_eq!(spans.iter().sum::<usize>(), columns.len(), "{persona}");
+
+            all_tokens.push(columns.iter().map(|c| c.token.clone()).collect());
+            all_bands.push(labels);
         }
+
+        // P7 — a function added to one zone table only.
+        let (mut a, mut b) = (all_tokens[0].clone(), all_tokens[1].clone());
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the two personas do not offer the same controls");
+        assert_eq!(
+            all_bands[0], all_bands[1],
+            "the two personas band differently"
+        );
     }
 
     /// THE ROUND TRIP, which is the whole promise: a step nobody made through
@@ -5483,10 +5729,12 @@ mod tests {
         let out = render_map(&page(), &sample(), None);
         let html = &out.html;
 
-        // 4 steps × 37 columns, every cell addressable as `step|token`.
+        // 4 steps × every column, each cell addressable as `step|token`. The
+        // width is derived, not written down; `the_grid_is_three_rings` P7
+        // proves both personas expose the same columns, so naming one is safe.
         assert_eq!(
             html.matches(r#"class="maccell"#).count(),
-            4 * MACRO_COLUMN_COUNT,
+            4 * macro_columns("xbox360").len(),
             "one cell per (step, column): {html}"
         );
         assert!(html.contains(r#"data-cell="0|dpad.down""#), "{html}");
@@ -6328,7 +6576,7 @@ mod tests {
         );
         assert_eq!(
             out.html.matches(r#"class="maccell"#).count(),
-            MACRO_COLUMN_COUNT,
+            macro_columns("xbox360").len(),
             "one step = one row of cells: {}",
             out.html
         );

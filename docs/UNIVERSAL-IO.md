@@ -243,16 +243,32 @@ physical** result, never a code state.
 
 Four independent pieces, each shippable alone:
 
-1. **Kill the fixed arrays.** `zones_for -> &'static [Zone]`;
-   `FUNCTIONS` / `MACRO_COLUMN_COUNT` / `Preset::builtin_empty` all derive from
-   one `ksx_core::preset::mappable_functions()`. In this milestone that
-   function returns exactly today's 25 in today's order, so **both insta
-   snapshots stay byte-identical**. `studio-ui/src/zones.gen.ts` becomes
-   **generated** — the `tokens.gen.css` path already exists in
-   `studio-ui/build.mjs`, and hand-mirroring is the bug class this step kills.
-   Restate `the_grid_is_three_rings` as a property (8 columns per mechanism in
-   ring order; one column per non-direction zone; spans sum to the total) so no
-   literal survives.
+1. **Kill the fixed arrays** — ✅ **DONE**, see §7. The generated
+   `zones.gen.ts` is **deferred**; a drift pin ships in its place.
+
+   > ⚠️ **Four premises in this bullet's original wording were wrong**, found
+   > while implementing it on 2026-08-21. They are corrected in §7 rather than
+   > silently rewritten here, because the reasoning is the useful part:
+   >
+   > - *"`zones_for` … derives from `ksx_core::preset::mappable_functions()`"* —
+   >   **impossible, and undesirable.** `ksx-studio` links `ksx-api` and
+   >   nothing else at runtime; `ksx-core` and `ksx-config` are
+   >   `[dev-dependencies]` and their manifest comments say so deliberately
+   >   ("this crate renders and routes and knows nothing about the key
+   >   vocabulary at runtime"). Following the instruction would have broken the
+   >   boundary `docs/M9-DECISION.md` §6 exists to hold. A `Zone` is also
+   >   persona **art** — label, geometry, palette — which ksx-core has no
+   >   business knowing.
+   > - *"`mappable_functions()`"* returns names — **no.** ksx-core carries no
+   >   spellings at all; `function_name` lives in ksx-config. It returns
+   >   `&'static [Binding]`.
+   > - *"today's order keeps both snapshots byte-identical"* — true, but not for
+   >   that reason. `PresetFile::bindings` is a `BTreeMap`, so the emitted TOML
+   >   is alphabetical and **order-blind**; only the set and the spellings
+   >   matter.
+   > - *"`studio-ui/src/zones.gen.ts` becomes generated"* — that file has never
+   >   existed. The mirrors are hand-written literals in `MapIsland.ts` and
+   >   `MapPage.ts`.
 2. **`PadControl` + the resolver**; delete `opposite_snap` — ✅ **DONE**,
    see §7.
 3. **`DeviceId(Arc<str>)`** — ✅ **DONE**, see §7.
@@ -517,13 +533,67 @@ M11's "no user-visible change" acceptance therefore holds for every shipped
 configuration, but not for arbitrary hand-authored ones. Comments in four test
 files that named the deleted function were re-worded; no assertion was touched.
 
-**Not yet started:** M11 pieces 1 and 4, and everything from M12 on.
+**M11 piece 1 — the fixed arrays are gone.**
+`ksx_core::preset::{MAPPABLE_COUNT, mappable_functions}` is the one vocabulary,
+derived from the four rosters by const evaluation, so an endpoint added to
+`XButton::ALL` (or `Trigger`/`Axis`/`DpadDirection`) changes every count by
+existing. `Preset::builtin_empty` is now a `map` over it. `ZONE_XBOX`/
+`ZONE_DS4` are `&[Zone]`, `zones_for` returns `&'static [Zone]`, and the
+`FUNCTIONS: [&str; 25]` and `MACRO_COLUMN_COUNT = 37` literals are **deleted** —
+the grid's width is now `non_direction_zones + mechanisms × RING.len()`.
+
+The two crates never became coupled: ksx-studio still links only `ksx-api` at
+runtime, and every derivation above happens in `#[cfg(test)]` through the
+existing dev-dependencies.
+
+*Measured:* `cargo test --workspace --exclude vigem-client` **2456 passed, 0
+failed**; both insta snapshots byte-identical with **zero `.snap.new`**; no
+`studio-ui/` file and no built asset touched.
+
+*The restated `the_grid_is_three_rings` was mutation-tested, and the results
+changed the design:*
+
+- Asserting the ring's token against `Mechanism::function` is a **tautology** —
+  `macro_columns` builds the token with that very call. Swapping two of its arms
+  left both the restated test **and the literal-glyph one it replaced** green.
+  The cardinal claim now routes through `ksx_core::socd::pointing`, "the one
+  function" for where a binding points — an independent path, and the mutation
+  now fails with *"LeftStick position 2 draws ← but lx.max points elsewhere"*.
+  This is a capability neither the old test nor the plan had.
+- Restating the band list as a property **weakened** it: a run-derived
+  comparison cannot catch a reordered band, which the old literal could. Band
+  order is a design decision that does **not** grow with the vocabulary, so the
+  literal is kept alongside the derived checks. Verified by mutation.
+- One assertion remains structurally circular (the grid's mechanism order
+  against the zone table's, because `macro_columns` derives band order from
+  that table). Not a regression — the old test could not see it either — but it
+  is not load-bearing and should not be trusted as such.
+
+**Deferred, deliberately: the generated `zones.gen.ts` (M11 piece 1b).**
+The vocabulary is hand-mirrored in `MapIsland.ts` (`ZONE_XBOX`, `ZONE_DS4`) and
+`MapPage.ts` (`FUNCTIONS`, the no-JS `<select>`). Generating it would force a
+`node build.mjs` and a commit of `crates/ksx-studio/assets/**`, which CI
+byte-diffs — and a concurrent branch was rewriting exactly those assets, so the
+conflict was guaranteed on files that must not be hand-merged. The generator
+also runs the wrong way today: the `tokens.gen.css` precedent is TS → Rust,
+while this needs Rust → TS plus new `ci.yml` path registrations.
+
+Shipped instead at zero collision cost:
+`the_typescript_mirrors_carry_the_same_vocabulary` `include_str!`s both files
+and pins them against `mappable_functions()`. That captures the *whole* value of
+generation — drift is caught — without touching a shared file. Verified by
+mutation: dropping one entry fails with `24` vs `25`. When the art branch lands,
+1b replaces the pin with real generation.
+
+**Not yet started:** M11 piece 4, piece 1b, and everything from M12 on.
 
 ### Recommended pickup order for a fresh agent
 
-1. **M11 piece 1** (kill the fixed arrays) — the largest refactor, but purely
-   mechanical, and it is the prerequisite for every new control. Do the
-   TypeScript generation in this step, not later.
+1. **M11 piece 1b** — the generated `zones.gen.ts`, once the studio-ui art
+   branch has merged. Shape: a Rust test emits/verifies
+   `studio-ui/tokens/zones.json`, `build.mjs` reads it beside the existing token
+   writes and emits `src/zones.gen.ts`, and both paths are registered in
+   `ci.yml`. Delete the drift pin in the same commit that replaces it.
 2. **M11 piece 4** (`SdkStateMapper.Axis()`) — C#, needs new golden vectors and
    a hardware leg to confirm intermediate stick travel.
 3. Then M12. Its **axis** ladders and curve tables are the first thing to

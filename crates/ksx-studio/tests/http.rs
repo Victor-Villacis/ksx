@@ -6649,7 +6649,11 @@ fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
         "the stage follows the selection"
     );
     let rows = api["view"]["bind_rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 25, "one row per zone: {api}");
+    assert_eq!(
+        rows.len(),
+        ksx_core::preset::MAPPABLE_COUNT,
+        "one row per zone: {api}"
+    );
     let bound_before = rows.iter().filter(|r| r["keys"] != "—").count();
     assert!(bound_before > 0, "{api}");
     let cleared_fn = rows
@@ -6950,7 +6954,11 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     .iter()
     .map(|k| api["view"][k].as_array().expect(k).len())
     .sum();
-    assert_eq!(rows.len() + free_total, 25, "{api}");
+    assert_eq!(
+        rows.len() + free_total,
+        ksx_core::preset::MAPPABLE_COUNT,
+        "bound plus free is the whole vocabulary: {api}"
+    );
     assert!(
         api["view"]["bind_face_n"]
             .as_str()
@@ -7470,11 +7478,17 @@ fn nocturne_serves_the_macro_step_editor() {
         "the shape before the detail: {mac}"
     );
     assert_eq!(mac["close_href"], "/nocturne?slot=1", "{mac}");
-    // 25 zones become 37 columns: three rings of eight, so a diagonal is a
-    // thing you point at instead of a thing you know how to build.
-    assert_eq!(mac["cols"].as_array().expect("cols").len(), 37, "{mac}");
-    assert_eq!(mac["cells"].as_array().expect("cells").len(), 74, "{mac}");
-    assert_eq!(mac["rows"].as_array().expect("rows").len(), 2, "{mac}");
+    // The direction zones become three rings of eight, so a diagonal is a thing
+    // you point at instead of a thing you know how to build. The width is
+    // derived: `the_grid_is_three_rings` owns the shape, this owns the wiring.
+    let cols = mac["cols"].as_array().expect("cols").len();
+    let rows_n = mac["rows"].as_array().expect("rows").len();
+    assert_eq!(rows_n, 2, "{mac}");
+    assert_eq!(
+        mac["cells"].as_array().expect("cells").len(),
+        cols * rows_n,
+        "one cell per (step, column): {mac}"
+    );
 
     // THE LENS: the pair reads as one control, and the file's spelling is
     // beside it rather than hidden in the TOML.

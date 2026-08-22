@@ -964,7 +964,7 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 29] = [
+        const CLIENT_ONLY_SLOTS: [&str; 39] = [
             "nMacSay",
             "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
@@ -976,6 +976,18 @@ mod tests {
             // ...and the keyboard's learn cue is its mirror.
             "nKeyCueCls",
             "nKeyCueText",
+            // Keyboard material and the detachable-key workbench are local
+            // visual/layout preferences. They never claim daemon bindings.
+            "nKeyboardTheme",
+            "nKeyboardWorkbenchOpen",
+            "show:nKeyboardWorkbenchOpen",
+            "nKbtCarbonPressed",
+            "nKbtLunarPressed",
+            "nKbtVioletPressed",
+            "nKbtGlacierPressed",
+            "nKbtMintPressed",
+            "nKbtRetroPressed",
+            "nKbWorkbenchPressed",
             // The expand/collapse-all toggle's label follows which editors
             // the BROWSER is holding open — state no server request carries.
             "nExpandLbl",

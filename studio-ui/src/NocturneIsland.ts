@@ -28,6 +28,26 @@ import {
   XBOX_SERIES_PREMIUM_VARIANTS,
   type XboxSeriesPremiumVariantSlug,
 } from "./xboxSeriesPremiumGeometry";
+import {
+  DEFAULT_KEYBOARD_WORKBENCH_STATE,
+  KEYBOARD_WORKBENCH_BOUNDS,
+  KEYBOARD_WORKBENCH_STORAGE_KEY,
+  KEYBOARD_WORKBENCH_STORE_VERSION,
+  canonicalKeyboardDeviceIdentity,
+  cloneKeyboardWorkbenchState,
+  keyboardThemeIsValid,
+  keyboardWorkbenchStateForDevice,
+  layoutKeyboardWorkbenchKeys,
+  sanitizeKeyboardWorkbenchStore,
+  withKeyboardWorkbenchPosition,
+  withKeyboardWorkbenchState,
+  type KeyboardThemeSlug,
+  type KeyboardWorkbenchPlacedKey,
+  type KeyboardWorkbenchRecord,
+  type KeyboardWorkbenchRenderMode,
+  type KeyboardWorkbenchState,
+  type KeyboardWorkbenchStore,
+} from "./keyboardWorkbench";
 
 // ── /nocturne — THE NOCTURNE FRONT END, MIGRATING ONTO THE REAL BACKEND ────
 //
@@ -116,6 +136,7 @@ export interface NocturneOptionRowView {
 }
 
 export interface NocturneKeyCellView {
+  aria: string;
   cap: string;
   key: string;
   cls: string;
@@ -530,6 +551,15 @@ const [nKbTrayHead, setNKbTrayHead] = createSignal("");
 const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
 const [nKbMoreCls, setNKbMoreCls] = createSignal("n-lgdmore none");
+const [nKeyboardTheme, setNKeyboardTheme] = createSignal<KeyboardThemeSlug>("carbon-forge");
+const [nKeyboardWorkbenchOpen, setNKeyboardWorkbenchOpen] = createSignal(false);
+const [nKbtCarbonPressed, setNKbtCarbonPressed] = createSignal("true");
+const [nKbtLunarPressed, setNKbtLunarPressed] = createSignal("false");
+const [nKbtVioletPressed, setNKbtVioletPressed] = createSignal("false");
+const [nKbtGlacierPressed, setNKbtGlacierPressed] = createSignal("false");
+const [nKbtMintPressed, setNKbtMintPressed] = createSignal("false");
+const [nKbtRetroPressed, setNKbtRetroPressed] = createSignal("false");
+const [nKbWorkbenchPressed, setNKbWorkbenchPressed] = createSignal("false");
 // ── The macro step editor. Its data is SERVED, so a reader with no
 // scripting can open a macro by link and read every step; only the editing
 // controls are gated on `.js`, because a control that cannot do anything is
@@ -953,6 +983,7 @@ export function applyNocturne(p: NocturnePayload): void {
   }
   lastBindView = v;
   if (learnRoot) {
+    reconcileKeyboardWorkbenchIdentity();
     syncPadWidgets();
     // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
@@ -1071,6 +1102,26 @@ let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let padWidgetPrint = "";
 const padItems = new Map<number, HTMLElement>();
+let keyboardWorkbenchStore: KeyboardWorkbenchStore = {
+  version: KEYBOARD_WORKBENCH_STORE_VERSION,
+  devices: {},
+};
+let keyboardWorkbenchState = cloneKeyboardWorkbenchState(DEFAULT_KEYBOARD_WORKBENCH_STATE);
+let keyboardWorkbenchIdentity = canonicalKeyboardDeviceIdentity("");
+let keyboardWorkbenchLastSelector = "";
+let keyboardWorkbenchItem: HTMLElement | null = null;
+let keyboardWorkbenchItemIdentity = "";
+let keyboardWorkbenchSelectedKey = "";
+let keyboardWorkbenchDrag: {
+  pointerId: number;
+  key: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+  scaleX: number;
+  scaleY: number;
+} | null = null;
 
 /** Where the board and the first pads land with an empty store: keyboard
  *  low, controllers in a row above — a deliberate opening arrangement, not
@@ -1215,6 +1266,133 @@ function saveControllerFinishes(): void {
   }
 }
 
+// ── KEYBOARD MATERIAL + CONTROL-SURFACE WORKBENCH ────────────────────────
+// The daemon owns key identity and bindings. This browser-kept model owns
+// only presentation and placement: a pulled cap is a linked visual clone of
+// the same canonical key, never a second binding or a reparented served node.
+
+function currentKeyboardWorkbenchIdentity(): string {
+  const selector = nCapSelector().trim();
+  const title = nKbTitle().trim();
+  if (selector) {
+    keyboardWorkbenchLastSelector = selector;
+    return canonicalKeyboardDeviceIdentity("keyboard:" + selector);
+  }
+  // The server deliberately clears cap_selector when its staged read is
+  // unavailable. Its title then becomes an error sentence, not a different
+  // keyboard: keep the last concrete selector through that transient state.
+  if (keyboardWorkbenchLastSelector && !title.startsWith("No keyboard selected")) {
+    return canonicalKeyboardDeviceIdentity("keyboard:" + keyboardWorkbenchLastSelector);
+  }
+  if (title.startsWith("No keyboard selected")) keyboardWorkbenchLastSelector = "";
+  return canonicalKeyboardDeviceIdentity("keyboard:" + (title || "default"));
+}
+
+function saveKeyboardWorkbenchPrefs(): void {
+  keyboardWorkbenchStore = withKeyboardWorkbenchState(
+    keyboardWorkbenchStore,
+    keyboardWorkbenchIdentity,
+    keyboardWorkbenchState,
+  );
+  try {
+    window.localStorage.setItem(
+      KEYBOARD_WORKBENCH_STORAGE_KEY,
+      JSON.stringify(keyboardWorkbenchStore),
+    );
+  } catch {
+    // A material/layout preference may remain session-only when storage is blocked.
+  }
+}
+
+function applyKeyboardWorkbenchState(
+  state: KeyboardWorkbenchState,
+  persist: boolean,
+  reveal = false,
+): void {
+  keyboardWorkbenchState = cloneKeyboardWorkbenchState(state);
+  setNKeyboardTheme(keyboardWorkbenchState.theme);
+  setNKeyboardWorkbenchOpen(keyboardWorkbenchState.open);
+  setNKbtCarbonPressed(String(keyboardWorkbenchState.theme === "carbon-forge"));
+  setNKbtLunarPressed(String(keyboardWorkbenchState.theme === "lunar-shell"));
+  setNKbtVioletPressed(String(keyboardWorkbenchState.theme === "violet-circuit"));
+  setNKbtGlacierPressed(String(keyboardWorkbenchState.theme === "glacier-current"));
+  setNKbtMintPressed(String(keyboardWorkbenchState.theme === "ghost-mint"));
+  setNKbtRetroPressed(String(keyboardWorkbenchState.theme === "retro-terminal"));
+  setNKbWorkbenchPressed(String(keyboardWorkbenchState.open));
+  if (persist) saveKeyboardWorkbenchPrefs();
+  syncKeyboardSourceCaps();
+  syncKeyboardWorkbenchWidget(reveal);
+}
+
+function reconcileKeyboardWorkbenchSelection(
+  state: KeyboardWorkbenchState,
+): { state: KeyboardWorkbenchState; changed: boolean } {
+  const records = keyboardWorkbenchRecords();
+  // An unavailable payload proves nothing about which saved keys still
+  // exist. Preserve the board until a real canonical-key roster answers.
+  if (records.length === 0) return { state, changed: false };
+  const known = new Set(records.map((record) => record.key));
+  const selectedKeys = state.selectedKeys.filter((key) => known.has(key));
+  const selected = new Set(selectedKeys);
+  if (keyboardWorkbenchSelectedKey && !selected.has(keyboardWorkbenchSelectedKey)) {
+    keyboardWorkbenchSelectedKey = "";
+  }
+  const changed = selectedKeys.length !== state.selectedKeys.length;
+  return { state: changed ? { ...state, selectedKeys } : state, changed };
+}
+
+function loadKeyboardWorkbenchPrefs(): void {
+  try {
+    keyboardWorkbenchStore = sanitizeKeyboardWorkbenchStore(
+      window.localStorage.getItem(KEYBOARD_WORKBENCH_STORAGE_KEY),
+    );
+  } catch {
+    keyboardWorkbenchStore = {
+      version: KEYBOARD_WORKBENCH_STORE_VERSION,
+      devices: {},
+    };
+  }
+  keyboardWorkbenchIdentity = currentKeyboardWorkbenchIdentity();
+  const reconciled = reconcileKeyboardWorkbenchSelection(
+    keyboardWorkbenchStateForDevice(keyboardWorkbenchStore, keyboardWorkbenchIdentity),
+  );
+  applyKeyboardWorkbenchState(reconciled.state, reconciled.changed);
+}
+
+/** A different physical keyboard gets its own finish and loose-cap board. */
+function reconcileKeyboardWorkbenchIdentity(): void {
+  const identity = currentKeyboardWorkbenchIdentity();
+  if (identity !== keyboardWorkbenchIdentity) {
+    keyboardWorkbenchIdentity = identity;
+    keyboardWorkbenchSelectedKey = "";
+    const reconciled = reconcileKeyboardWorkbenchSelection(
+      keyboardWorkbenchStateForDevice(keyboardWorkbenchStore, identity),
+    );
+    applyKeyboardWorkbenchState(reconciled.state, reconciled.changed);
+    return;
+  }
+  // Poll reconciliation can replace or remove keys. Keep selections whose
+  // canonical source still exists, but never erase a saved board merely
+  // because an unreachable/empty payload arrived.
+  const reconciled = reconcileKeyboardWorkbenchSelection(keyboardWorkbenchState);
+  if (reconciled.changed) {
+    applyKeyboardWorkbenchState(reconciled.state, true);
+  } else {
+    syncKeyboardSourceCaps();
+    syncKeyboardWorkbenchWidget(false);
+  }
+}
+
+function chooseKeyboardTheme(value: string): void {
+  if (!keyboardThemeIsValid(value) || value === keyboardWorkbenchState.theme) return;
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, theme: value }, true);
+}
+
+function keyboardWorkbenchAnnounce(message: string): void {
+  const sr = learnRoot?.querySelector<HTMLElement>(".n-live-sr");
+  if (sr) sr.textContent = message;
+}
+
 /** Repaint a premium controller without moving a single source-authored path
  * or transparent mapper hook. The body keeps its native geometry; only the
  * source's semantic paint variables and the shared shell gradient change. */
@@ -1258,6 +1436,10 @@ function padStoreKeys(
   return keys;
 }
 
+function keyboardWorkbenchCanvasKey(identity = keyboardWorkbenchIdentity): string {
+  return "kw:" + identity;
+}
+
 /** Read every mounted widget's geometry plus the camera back into the store
  *  — called from the engine's onCommit (its own durable boundary), from the
  *  debounced onChange trail (so a kill mid-arrangement loses at most the
@@ -1270,6 +1452,10 @@ function persistCanvas(): void {
   const widgets: Record<string, CanvasItemGeometry> = { ...canvasPrefs.widgets };
   const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
   if (kb && kb.dataset.canvasX !== undefined) widgets["kb"] = canvas.getItemState(kb);
+  if (keyboardWorkbenchItem?.dataset.canvasX !== undefined) {
+    widgets[keyboardWorkbenchCanvasKey(keyboardWorkbenchItemIdentity)] =
+      canvas.getItemState(keyboardWorkbenchItem);
+  }
   const storeKeys = padStoreKeys(v?.pads ?? []);
   for (const [slot, item] of padItems) {
     const key = storeKeys.get(slot);
@@ -1313,6 +1499,12 @@ function labelCanvasMarkers(): void {
     if (id === "keyboard") {
       marker.textContent = "KB";
       marker.classList.add("nm-kb");
+      continue;
+    }
+    if (id === "key-workbench") {
+      marker.textContent = "LAB";
+      marker.classList.add("nm-kb", "nm-keylab");
+      marker.title = "Key Workbench · pulled keys and leverless layouts";
       continue;
     }
     const slot = Number(id.startsWith("pad-") ? id.slice(4) : NaN);
@@ -1416,16 +1608,18 @@ function arrangeCanvas(): void {
   const root = learnRoot;
   if (!canvas || !root) return;
   const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
+  const keylab = keyboardWorkbenchItem;
   const pads = Array.from(padItems.entries())
     .sort(([a], [b]) => a - b)
     .map(([, item]) => item);
-  if (!kb && pads.length === 0) return;
+  if (!kb && !keylab && pads.length === 0) return;
   const GAP = 48;
   const ORIGIN_Y = 140;
   // Tidying is a RESET, not a repack: a widget somebody had shrunk to 60%
   // would otherwise keep its odd size in an otherwise even row, which is
   // exactly the untidiness the button is meant to end.
   if (kb) canvas.resetItemScale(kb);
+  if (keylab) canvas.resetItemScale(keylab);
   for (const item of pads) canvas.resetItemScale(item);
   // A widget's world footprint includes its manual scale: a widget the user
   // made bigger must be given the room it actually occupies.
@@ -1438,6 +1632,7 @@ function arrangeCanvas(): void {
   // what decides where you are looking afterwards.
   const widest = Math.max(
     kb ? footprint(kb).w : 0,
+    keylab ? footprint(keylab).w : 0,
     ...pads.map((item) => footprint(item).w),
     1,
   );
@@ -1449,6 +1644,12 @@ function arrangeCanvas(): void {
     boardWidth = board.w;
     canvas.placeItem(kb, ORIGIN_X + Math.round((widest - board.w) / 2), y);
     y += board.h + GAP;
+  }
+  if (keylab) {
+    const lab = footprint(keylab);
+    boardWidth = Math.max(boardWidth, lab.w);
+    canvas.placeItem(keylab, ORIGIN_X + Math.round((widest - lab.w) / 2), y);
+    y += lab.h + GAP;
   }
   if (pads.length > 0) {
     // Rows are as wide as the board (or the widest pad, whichever is more),
@@ -1491,6 +1692,525 @@ function arrangeCanvas(): void {
   // The arrangement is only half the ask: "bring all widgets in the
   // viewport" is the other half.
   canvas.fitAll();
+}
+
+function keyboardWorkbenchRecords(): KeyboardWorkbenchRecord[] {
+  const v = lastBindView;
+  if (!v) return [];
+  const rows = [
+    v.kb_row1,
+    v.kb_row2,
+    v.kb_row3,
+    v.kb_row4,
+    v.kb_row5,
+    v.kb_row6,
+    v.kb_tray,
+  ];
+  const records: KeyboardWorkbenchRecord[] = [];
+  const seen = new Set<string>();
+  for (const cell of rows.flat()) {
+    const key = cell.key.trim();
+    if (!key || seen.has(key) || cell.cls.split(/\s+/).includes("ghost")) continue;
+    seen.add(key);
+    records.push({
+      key,
+      cls: cell.cls,
+      cap: cell.cap,
+      short: cell.short,
+      aria: cell.aria || cell.title || key,
+    });
+  }
+  return records;
+}
+
+/** Leave the served key exactly where it is; an extracted cap exposes a
+ *  socket while its linked clone lives in the separate client widget. */
+function syncKeyboardSourceCaps(): void {
+  const root = learnRoot;
+  if (!root) return;
+  const selected = new Set(
+    keyboardWorkbenchState.open ? keyboardWorkbenchState.selectedKeys : [],
+  );
+  const caps = Array.from(
+    root.querySelectorAll<HTMLElement>(".n-widget-kb [data-key]"),
+  ).filter((cap) => !cap.classList.contains("ghost"));
+  const active = document.activeElement;
+  let roving: HTMLElement | null = null;
+  for (const cap of caps) {
+    const key = cap.getAttribute("data-key") ?? "";
+    cap.classList.toggle("extracted", selected.has(key));
+    if (keyboardWorkbenchState.open) {
+      cap.setAttribute("role", "button");
+      cap.setAttribute("aria-pressed", String(selected.has(key)));
+      cap.tabIndex = -1;
+      if (cap === active) roving = cap;
+    } else {
+      cap.setAttribute("role", "img");
+      cap.removeAttribute("aria-pressed");
+      cap.removeAttribute("tabindex");
+    }
+  }
+  if (keyboardWorkbenchState.open && caps.length > 0) (roving ?? caps[0]).tabIndex = 0;
+}
+
+function keyboardWorkbenchPlacedKeys(): KeyboardWorkbenchPlacedKey[] {
+  return layoutKeyboardWorkbenchKeys(keyboardWorkbenchRecords(), keyboardWorkbenchState);
+}
+
+function keyboardWorkbenchSetSelected(key: string): void {
+  keyboardWorkbenchSelectedKey = key;
+  const item = keyboardWorkbenchItem;
+  if (!item) return;
+  for (const button of Array.from(item.querySelectorAll<HTMLElement>(".n-deck-key"))) {
+    const selected = button.dataset.keylabKey === key;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  }
+  const returnButton = item.querySelector<HTMLButtonElement>('[data-nx="keylab-return"]');
+  if (returnButton) returnButton.disabled = key === "";
+}
+
+function syncKeyboardWorkbenchToolbar(): void {
+  const item = keyboardWorkbenchItem;
+  if (!item) return;
+  for (const button of Array.from(item.querySelectorAll<HTMLButtonElement>("button[data-mode]"))) {
+    const mode = button.dataset.mode ?? "";
+    const pressed = mode === keyboardWorkbenchState.layoutMode ||
+      mode === keyboardWorkbenchState.renderMode;
+    button.setAttribute("aria-pressed", String(pressed));
+  }
+  const count = keyboardWorkbenchState.selectedKeys.length;
+  const status = item.querySelector<HTMLElement>(".n-keylab-status");
+  if (status) {
+    status.textContent = count === 0
+      ? "Pull a key from the keyboard, or start with the selected player's mapped keys."
+      : `${count} ${count === 1 ? "key" : "keys"} · ${
+        keyboardWorkbenchState.layoutMode === "free"
+          ? "custom layout"
+          : keyboardWorkbenchState.layoutMode
+      } · ${keyboardWorkbenchState.renderMode === "arcade" ? "arcade buttons" : "keycaps"}`;
+  }
+  const deck = item.querySelector<HTMLElement>(".n-keylab-deck");
+  if (deck) {
+    deck.dataset.renderMode = keyboardWorkbenchState.renderMode;
+    deck.classList.toggle("empty", count === 0);
+  }
+  const clear = item.querySelector<HTMLButtonElement>('[data-nx="keylab-clear"]');
+  if (clear) clear.disabled = count === 0;
+  const mapped = item.querySelector<HTMLButtonElement>('[data-nx="keylab-pull-mapped"]');
+  if (mapped) {
+    mapped.disabled = !keyboardWorkbenchRecords().some((record) =>
+      record.cls.split(/\s+/).includes("bound")
+    );
+  }
+  const returnButton = item.querySelector<HTMLButtonElement>('[data-nx="keylab-return"]');
+  if (returnButton) returnButton.disabled = keyboardWorkbenchSelectedKey === "";
+}
+
+function deckKeyModifier(key: string): boolean {
+  return /^(?:Left|Right)?(?:Shift|Control|Alt|Meta)$/.test(key) ||
+    new Set(["Tab", "CapsLock", "Enter", "Backspace", "Escape", "Space"]).has(key);
+}
+
+function keyboardWorkbenchCloneClass(sourceClass: string): string {
+  const semantic = sourceClass.split(/\s+/).filter((cls) =>
+    cls === "n-key" || cls === "bound" || cls === "shared" || cls === "bstack" ||
+    /^(?:bn|bcount|ba|bb|bc|bd)\d+$/.test(cls)
+  );
+  if (!semantic.includes("n-key")) semantic.unshift("n-key");
+  semantic.push("n-deck-key");
+  return [...new Set(semantic)].join(" ");
+}
+
+function renderKeyboardWorkbenchKeys(): void {
+  const item = keyboardWorkbenchItem;
+  const deck = item?.querySelector<HTMLElement>(".n-keylab-deck");
+  if (!item || !deck) return;
+  const placed = keyboardWorkbenchPlacedKeys();
+  const existing = new Map<string, HTMLButtonElement>();
+  for (const button of Array.from(deck.querySelectorAll<HTMLButtonElement>(".n-deck-key"))) {
+    existing.set(button.dataset.keylabKey ?? "", button);
+  }
+  for (const record of placed) {
+    let button = existing.get(record.key);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.dataset.keylabKey = record.key;
+      button.dataset.key = record.key;
+      const cap = document.createElement("span");
+      cap.className = "n-key-cap";
+      const short = document.createElement("span");
+      short.className = "n-key-short";
+      button.append(cap, short);
+    }
+    existing.delete(record.key);
+    button.className = keyboardWorkbenchCloneClass(record.cls);
+    button.classList.toggle("modifier", deckKeyModifier(record.key));
+    button.classList.toggle("wide", record.width >= 82);
+    button.classList.toggle("wider", record.width >= 120);
+    button.classList.toggle("space", record.key === "Space");
+    button.classList.toggle("selected", record.key === keyboardWorkbenchSelectedKey);
+    button.dataset.keyWidth = String(record.width);
+    button.dataset.keyHeight = String(record.height);
+    button.style.left = `${(record.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+    button.style.top = `${(record.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+    button.style.width = `${(record.width / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+    button.style.height = `${(record.height / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+    button.title = `${record.aria} · drag or use arrow keys to arrange · Delete returns it`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(record.key === keyboardWorkbenchSelectedKey));
+    const cap = button.querySelector<HTMLElement>(".n-key-cap");
+    const short = button.querySelector<HTMLElement>(".n-key-short");
+    if (cap) cap.textContent = record.cap;
+    if (short) short.textContent = record.short;
+    deck.append(button);
+  }
+  for (const button of existing.values()) button.remove();
+  syncKeyboardWorkbenchToolbar();
+  liveKeyNodes = null;
+}
+
+function makeKeyboardWorkbenchButton(
+  label: string,
+  nx: string,
+  title: string,
+  mode = "",
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "n-keylab-button";
+  button.dataset.nx = nx;
+  if (mode) {
+    button.dataset.mode = mode;
+    button.setAttribute("aria-pressed", "false");
+  }
+  button.title = title;
+  button.textContent = label;
+  return button;
+}
+
+function createKeyboardWorkbenchItem(): HTMLElement {
+  const content = document.createElement("div");
+  content.className = "n-keylab";
+  content.setAttribute("data-forma-runtime-host", "");
+
+  const head = document.createElement("div");
+  head.className = "n-keylab-head";
+  const heading = document.createElement("div");
+  const kicker = document.createElement("span");
+  kicker.className = "n-kick";
+  kicker.textContent = "Key Workbench";
+  const sub = document.createElement("span");
+  sub.className = "n-keylab-sub";
+  sub.textContent = "One physical key · one linked control token";
+  heading.append(kicker, sub);
+  const close = makeKeyboardWorkbenchButton(
+    "Close",
+    "kb-workbench",
+    "Return to the full keyboard without discarding this layout",
+  );
+  close.classList.add("quiet");
+  head.append(heading, close);
+
+  const tools = document.createElement("div");
+  tools.className = "n-keylab-tools";
+  tools.setAttribute("role", "group");
+  tools.setAttribute("aria-label", "Key Workbench tools");
+  tools.append(
+    makeKeyboardWorkbenchButton(
+      "Pull mapped",
+      "keylab-pull-mapped",
+      "Pull every key mapped to the selected controller",
+    ),
+    makeKeyboardWorkbenchButton("Compact", "keylab-layout-compact", "Pack selected keys", "compact"),
+    makeKeyboardWorkbenchButton(
+      "Leverless",
+      "keylab-layout-leverless",
+      "Arrange movement and action clusters in an original generic leverless layout",
+      "leverless",
+    ),
+    makeKeyboardWorkbenchButton("Keycaps", "keylab-render-keycap", "Render mechanical keycaps", "keycap"),
+    makeKeyboardWorkbenchButton("Arcade", "keylab-render-arcade", "Render the same keys as arcade buttons", "arcade"),
+    makeKeyboardWorkbenchButton("Return key", "keylab-return", "Return the selected token to the keyboard"),
+    makeKeyboardWorkbenchButton("Return all", "keylab-clear", "Return every pulled key to the keyboard"),
+  );
+
+  const status = document.createElement("p");
+  status.className = "n-keylab-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+
+  const deck = document.createElement("div");
+  deck.className = "n-keylab-deck empty";
+  deck.setAttribute("role", "group");
+  deck.setAttribute("aria-label", "Arrangeable pulled keys");
+  deck.addEventListener("pointerdown", keyboardWorkbenchPointerDown);
+  deck.addEventListener("pointermove", keyboardWorkbenchPointerMove);
+  deck.addEventListener("pointerup", keyboardWorkbenchPointerEnd);
+  deck.addEventListener("pointercancel", keyboardWorkbenchPointerEnd);
+  deck.addEventListener("dblclick", (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLElement>(".n-deck-key");
+    const key = button?.dataset.keylabKey ?? "";
+    if (!key) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleKeyboardWorkbenchKey(key, false);
+  });
+
+  const note = document.createElement("p");
+  note.className = "n-keylab-note";
+  note.textContent =
+    "Drag to place · arrows nudge · Shift+arrow moves farther · Delete returns a key · double-click also returns it";
+  content.append(head, tools, status, deck, note);
+
+  const item = createCanvasItem({
+    instanceId: "key-workbench",
+    displayName: "Key Workbench",
+    preferredWidth: 940,
+    minHeight: 430,
+    content,
+  });
+  item.classList.add("n-widget", "n-widget-keylab");
+  item.dataset.clientWidget = "";
+  item.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === "F2") && event.target === item) {
+      event.preventDefault();
+      event.stopPropagation();
+      tools.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    } else if (event.key === "Escape" && content.contains(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
+      item.focus();
+    }
+  }, { capture: true });
+  return item;
+}
+
+function keyboardWorkbenchHome(): CanvasItemGeometry {
+  const canvas = nCanvas;
+  const kb = learnRoot?.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
+  if (canvas && kb) {
+    const state = canvas.getItemState(kb);
+    return {
+      x: state.x + 20,
+      y: state.y + state.height * state.manualScale + 48,
+      width: 940,
+      height: 430,
+      z: state.z + 1,
+      manualScale: 1,
+    };
+  }
+  return { x: 110, y: 950, width: 940, height: 430, z: 2, manualScale: 1 };
+}
+
+function syncKeyboardWorkbenchWidget(reveal: boolean): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  if (
+    keyboardWorkbenchItem &&
+    (!keyboardWorkbenchState.open || keyboardWorkbenchItemIdentity !== keyboardWorkbenchIdentity)
+  ) {
+    if (keyboardWorkbenchItem.dataset.canvasX !== undefined) {
+      canvasPrefs.widgets[keyboardWorkbenchCanvasKey(keyboardWorkbenchItemIdentity)] =
+        canvas.getItemState(keyboardWorkbenchItem);
+      saveCanvasPrefs();
+    }
+    canvas.removeItem(keyboardWorkbenchItem, { selectFallback: false });
+    keyboardWorkbenchItem = null;
+    keyboardWorkbenchItemIdentity = "";
+    keyboardWorkbenchDrag = null;
+  }
+  if (!keyboardWorkbenchState.open) {
+    if (reveal) {
+      const kb = learnRoot?.querySelector<HTMLElement>(
+        '.n-canvas [data-instance-id="keyboard"]',
+      );
+      if (kb) canvas.focusItem(kb);
+    }
+    labelCanvasMarkers();
+    return;
+  }
+  if (!keyboardWorkbenchItem) {
+    keyboardWorkbenchItem = createKeyboardWorkbenchItem();
+    keyboardWorkbenchItemIdentity = keyboardWorkbenchIdentity;
+    const restored = canvasPrefs.widgets[keyboardWorkbenchCanvasKey()] ?? keyboardWorkbenchHome();
+    canvas.mountItem(keyboardWorkbenchItem, restored, { focus: false });
+  }
+  keyboardWorkbenchItem.dataset.keyboardTheme = keyboardWorkbenchState.theme;
+  const content = keyboardWorkbenchItem.querySelector<HTMLElement>(".n-keylab");
+  if (content) {
+    for (const cls of Array.from(content.classList)) {
+      if (/^np\d+$/.test(cls)) content.classList.remove(cls);
+    }
+    const selectedClass = nKbCls().split(/\s+/).find((cls) => /^np\d+$/.test(cls));
+    if (selectedClass) content.classList.add(selectedClass);
+  }
+  renderKeyboardWorkbenchKeys();
+  labelCanvasMarkers();
+  if (reveal) canvas.focusItem(keyboardWorkbenchItem);
+}
+
+function toggleKeyboardWorkbenchKey(key: string, pulled?: boolean): void {
+  const known = keyboardWorkbenchRecords().some((record) => record.key === key);
+  if (!known) return;
+  const selected = new Set(keyboardWorkbenchState.selectedKeys);
+  const shouldPull = pulled ?? !selected.has(key);
+  const deckKeys = Array.from(
+    keyboardWorkbenchItem?.querySelectorAll<HTMLElement>(".n-deck-key") ?? [],
+  );
+  const focusedDeckKey = (document.activeElement as HTMLElement | null)
+    ?.closest<HTMLElement>(".n-deck-key");
+  const focusFallbackIndex = !shouldPull && focusedDeckKey?.dataset.keylabKey === key
+    ? deckKeys.indexOf(focusedDeckKey)
+    : -1;
+  if (shouldPull) selected.add(key);
+  else selected.delete(key);
+  keyboardWorkbenchSelectedKey = shouldPull ? key : "";
+  applyKeyboardWorkbenchState(
+    { ...keyboardWorkbenchState, selectedKeys: [...selected] },
+    true,
+  );
+  keyboardWorkbenchAnnounce(
+    shouldPull ? `${key} moved to the Key Workbench.` : `${key} returned to the keyboard.`,
+  );
+  if (focusFallbackIndex >= 0) {
+    window.requestAnimationFrame(() => {
+      const item = keyboardWorkbenchItem;
+      if (!item) return;
+      const remaining = Array.from(item.querySelectorAll<HTMLElement>(".n-deck-key"));
+      const next = remaining[Math.min(focusFallbackIndex, remaining.length - 1)];
+      if (next) {
+        keyboardWorkbenchSetSelected(next.dataset.keylabKey ?? "");
+        next.focus({ preventScroll: true });
+      } else {
+        keyboardWorkbenchSetSelected("");
+        item.querySelector<HTMLButtonElement>('[data-nx="kb-workbench"]')
+          ?.focus({ preventScroll: true });
+      }
+    });
+  }
+}
+
+function pullMappedKeyboardWorkbenchKeys(): void {
+  const mapped = keyboardWorkbenchRecords()
+    .filter((record) => record.cls.split(/\s+/).includes("bound"))
+    .map((record) => record.key);
+  if (mapped.length === 0) return;
+  keyboardWorkbenchSelectedKey = mapped[0];
+  applyKeyboardWorkbenchState(
+    { ...keyboardWorkbenchState, selectedKeys: mapped, layoutMode: "compact" },
+    true,
+  );
+  keyboardWorkbenchAnnounce(
+    `${mapped.length} mapped ${mapped.length === 1 ? "key" : "keys"} moved to the Key Workbench.`,
+  );
+}
+
+function setKeyboardWorkbenchLayout(mode: "compact" | "leverless"): void {
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, layoutMode: mode }, true);
+  keyboardWorkbenchAnnounce(
+    mode === "leverless" ? "Leverless arrangement applied." : "Compact arrangement applied.",
+  );
+}
+
+function setKeyboardWorkbenchRenderMode(mode: KeyboardWorkbenchRenderMode): void {
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, renderMode: mode }, true);
+  keyboardWorkbenchAnnounce(
+    mode === "arcade" ? "Keys now wear arcade buttons." : "Keys now wear mechanical keycaps.",
+  );
+}
+
+function clearKeyboardWorkbenchKeys(): void {
+  if (keyboardWorkbenchState.selectedKeys.length === 0) return;
+  keyboardWorkbenchSelectedKey = "";
+  applyKeyboardWorkbenchState(
+    { ...keyboardWorkbenchState, selectedKeys: [], positions: {}, layoutMode: "compact" },
+    true,
+  );
+  keyboardWorkbenchAnnounce("Every pulled key returned to the keyboard.");
+}
+
+function returnSelectedKeyboardWorkbenchKey(): void {
+  if (keyboardWorkbenchSelectedKey) toggleKeyboardWorkbenchKey(keyboardWorkbenchSelectedKey, false);
+}
+
+function nudgeKeyboardWorkbenchKey(key: string, dx: number, dy: number): void {
+  const current = keyboardWorkbenchPlacedKeys().find((record) => record.key === key);
+  if (!current) return;
+  keyboardWorkbenchSelectedKey = key;
+  const moved = withKeyboardWorkbenchPosition(
+    { ...keyboardWorkbenchState, layoutMode: "free" },
+    key,
+    { x: current.x + dx, y: current.y + dy },
+  );
+  applyKeyboardWorkbenchState(moved, true);
+}
+
+function keyboardWorkbenchPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !event.isPrimary) return;
+  const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(".n-deck-key");
+  const deck = button?.closest<HTMLElement>(".n-keylab-deck");
+  const key = button?.dataset.keylabKey ?? "";
+  if (!button || !deck || !key) return;
+  const placed = keyboardWorkbenchPlacedKeys().find((record) => record.key === key);
+  const rect = deck.getBoundingClientRect();
+  if (!placed || rect.width <= 0 || rect.height <= 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  keyboardWorkbenchSetSelected(key);
+  button.focus({ preventScroll: true });
+  button.classList.add("dragging");
+  button.setPointerCapture(event.pointerId);
+  keyboardWorkbenchDrag = {
+    pointerId: event.pointerId,
+    key,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: placed.x,
+    startY: placed.y,
+    scaleX: KEYBOARD_WORKBENCH_BOUNDS.width / rect.width,
+    scaleY: KEYBOARD_WORKBENCH_BOUNDS.height / rect.height,
+  };
+}
+
+function keyboardWorkbenchPointerMove(event: PointerEvent): void {
+  const drag = keyboardWorkbenchDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const current = keyboardWorkbenchPlacedKeys().find((record) => record.key === drag.key);
+  if (!current) return;
+  const nextX = drag.startX + (event.clientX - drag.startClientX) * drag.scaleX;
+  const nextY = drag.startY + (event.clientY - drag.startClientY) * drag.scaleY;
+  keyboardWorkbenchState = withKeyboardWorkbenchPosition(
+    { ...keyboardWorkbenchState, layoutMode: "free" },
+    drag.key,
+    { x: nextX, y: nextY },
+  );
+  const button = keyboardWorkbenchItem?.querySelector<HTMLElement>(
+    `.n-deck-key[data-keylab-key="${CSS.escape(drag.key)}"]`,
+  );
+  const moved = keyboardWorkbenchPlacedKeys().find((record) => record.key === drag.key);
+  if (button && moved) {
+    button.style.left = `${(moved.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+    button.style.top = `${(moved.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+  }
+  syncKeyboardWorkbenchToolbar();
+}
+
+function keyboardWorkbenchPointerEnd(event: PointerEvent): void {
+  const drag = keyboardWorkbenchDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  keyboardWorkbenchDrag = null;
+  keyboardWorkbenchItem
+    ?.querySelector<HTMLElement>(`.n-deck-key[data-keylab-key="${CSS.escape(drag.key)}"]`)
+    ?.classList.remove("dragging");
+  saveKeyboardWorkbenchPrefs();
+  renderKeyboardWorkbenchKeys();
+  keyboardWorkbenchAnnounce(`${drag.key} placed in a custom layout.`);
 }
 
 /** Every staged controller as a canvas widget, rebuilt when the roster
@@ -1750,9 +2470,11 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   setCanvasMap(canvasPrefs.mapHidden === true);
   const kb = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
   if (kb) nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
+  syncKeyboardSourceCaps();
   labelCanvasMarkers();
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
+  syncKeyboardWorkbenchWidget(false);
   if (Object.keys(canvasPrefs.widgets).length === 0) {
     // Nothing arranged yet: open the way "Tidy up" would leave it, rather
     // than at spawn positions the user never chose. One frame later, so the
@@ -3207,6 +3929,7 @@ export function nocturneWire(root: HTMLElement): void {
   loadHiddenStrips();
   loadDs4Variants();
   loadControllerFinishes();
+  loadKeyboardWorkbenchPrefs();
   applyNocturneUi();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // auto-map button) reveals off it, and the parity gate normalizes it.
@@ -3287,6 +4010,79 @@ export function nocturneWire(root: HTMLElement): void {
     if (rate) void macAct(`rate|${rate.value}`);
   });
   root.addEventListener("keydown", (ev) => {
+    const deckKey = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".n-deck-key");
+    if (deckKey) {
+      const keyName = deckKey.dataset.keylabKey ?? "";
+      const key = (ev as KeyboardEvent).key;
+      if ((key === "Delete" || key === "Backspace") && keyName) {
+        ev.preventDefault();
+        toggleKeyboardWorkbenchKey(keyName, false);
+        return;
+      }
+      const step = (ev as KeyboardEvent).shiftKey ? 12 : 4;
+      const dx = key === "ArrowRight" ? step : key === "ArrowLeft" ? -step : 0;
+      const dy = key === "ArrowDown" ? step : key === "ArrowUp" ? -step : 0;
+      if ((dx !== 0 || dy !== 0) && keyName) {
+        ev.preventDefault();
+        nudgeKeyboardWorkbenchKey(keyName, dx, dy);
+        window.requestAnimationFrame(() => {
+          keyboardWorkbenchItem
+            ?.querySelector<HTMLElement>(
+              `.n-deck-key[data-keylab-key="${CSS.escape(keyName)}"]`,
+            )
+            ?.focus({ preventScroll: true });
+        });
+        return;
+      }
+    }
+    const sourceCap = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".n-widget-kb [data-key]",
+    );
+    if (sourceCap && keyboardWorkbenchState.open) {
+      const keyName = sourceCap.getAttribute("data-key") ?? "";
+      const key = (ev as KeyboardEvent).key;
+      if ((key === "Enter" || key === " ") && keyName) {
+        ev.preventDefault();
+        toggleKeyboardWorkbenchKey(keyName);
+        sourceCap.tabIndex = 0;
+        sourceCap.focus({ preventScroll: true });
+        return;
+      }
+      if (key.startsWith("Arrow")) {
+        const rows = Array.from(
+          root.querySelectorAll<HTMLElement>(".n-widget-kb .n-kbrow, .n-widget-kb .n-kbtray-row"),
+        );
+        const row = sourceCap.closest<HTMLElement>(".n-kbrow, .n-kbtray-row");
+        const rowIndex = row ? rows.indexOf(row) : -1;
+        const members = row
+          ? Array.from(row.querySelectorAll<HTMLElement>("[data-key]:not(.ghost)"))
+          : [];
+        const memberIndex = members.indexOf(sourceCap);
+        let next: HTMLElement | undefined;
+        if (key === "ArrowLeft" || key === "ArrowRight") {
+          next = members[Math.min(
+            Math.max(memberIndex + (key === "ArrowRight" ? 1 : -1), 0),
+            members.length - 1,
+          )];
+        } else if (rowIndex >= 0) {
+          const nextRow = rows[Math.min(
+            Math.max(rowIndex + (key === "ArrowDown" ? 1 : -1), 0),
+            rows.length - 1,
+          )];
+          const nextMembers = Array.from(
+            nextRow?.querySelectorAll<HTMLElement>("[data-key]:not(.ghost)") ?? [],
+          );
+          next = nextMembers[Math.min(Math.max(memberIndex, 0), nextMembers.length - 1)];
+        }
+        if (next && next !== sourceCap) {
+          ev.preventDefault();
+          sourceCap.tabIndex = -1;
+          next.tabIndex = 0;
+          next.focus({ preventScroll: true });
+        }
+        return;
+      }
+    }
     const box = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>("[data-macdur]");
     if (box && (ev as KeyboardEvent).key === "Enter") {
       ev.preventDefault();
@@ -3628,12 +4424,27 @@ export function nocturneWire(root: HTMLElement): void {
       void startLearn({ fn: rowFn, label: rowLabel, slot: padSlot, mode: "replace" });
       return;
     }
+    // A loose token selects itself for arrow nudges / Return. It carries the
+    // same data-key for live paint, but it is not a second mapper surface.
+    const workbenchKey = target?.closest<HTMLElement>(".n-deck-key[data-keylab-key]");
+    if (workbenchKey) {
+      ev.preventDefault();
+      keyboardWorkbenchSetSelected(workbenchKey.dataset.keylabKey ?? "");
+      return;
+    }
     // A board cap flips the pane to the BY-KEY view and finds its row —
     // the same gesture as clicking the pad, read from the other side.
-    const cap = target?.closest<HTMLElement>(".n-kb [data-key]");
+    const cap = target?.closest<HTMLElement>(".n-widget-kb [data-key]");
     if (cap) {
       closeMenu();
       const key = cap.getAttribute("data-key") ?? "";
+      if (keyboardWorkbenchState.open && key && !cap.classList.contains("ghost")) {
+        ev.preventDefault();
+        toggleKeyboardWorkbenchKey(key);
+        cap.tabIndex = 0;
+        cap.focus({ preventScroll: true });
+        return;
+      }
       if (learnRow && key) {
         // A control is waiting: clicking a cap IS pressing the key.
         const row = learnRow;
@@ -3762,6 +4573,42 @@ export function nocturneWire(root: HTMLElement): void {
       // convention every editor keeps. It is silent by nature, so the
       // chips that came back say so once.
       if (leaving) flashRestoredChips();
+    } else if (hit === "kb-theme") {
+      const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
+        ?.dataset.keyboardTheme ?? "";
+      chooseKeyboardTheme(theme);
+    } else if (hit === "kb-workbench") {
+      if (!keyboardWorkbenchState.open) {
+        // Pull mode and learn mode both claim the next key. Entering the
+        // workshop makes that choice explicit and ends any half-finished map.
+        autoMap = null;
+        void cancelLearn();
+        cancelAssign();
+      }
+      applyKeyboardWorkbenchState(
+        { ...keyboardWorkbenchState, open: !keyboardWorkbenchState.open },
+        true,
+        true,
+      );
+      keyboardWorkbenchAnnounce(
+        keyboardWorkbenchState.open
+          ? "Key Workbench opened. Choose caps on the keyboard to pull them."
+          : "Key Workbench closed. Its layout is saved.",
+      );
+    } else if (hit === "keylab-pull-mapped") {
+      pullMappedKeyboardWorkbenchKeys();
+    } else if (hit === "keylab-layout-compact") {
+      setKeyboardWorkbenchLayout("compact");
+    } else if (hit === "keylab-layout-leverless") {
+      setKeyboardWorkbenchLayout("leverless");
+    } else if (hit === "keylab-render-keycap") {
+      setKeyboardWorkbenchRenderMode("keycap");
+    } else if (hit === "keylab-render-arcade") {
+      setKeyboardWorkbenchRenderMode("arcade");
+    } else if (hit === "keylab-return") {
+      returnSelectedKeyboardWorkbenchKey();
+    } else if (hit === "keylab-clear") {
+      clearKeyboardWorkbenchKeys();
     } else if (hit === "legend-mute") {
       // One chip, one player's color on the keys. Keyed by PRESET like
       // the colors themselves, so muting follows a controller through a
@@ -5336,6 +6183,7 @@ export function NocturneIsland() {
                   "data-canvas-resizable": "false",
                   "aria-keyshortcuts":
                     "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
+                  "data-keyboard-theme": () => nKeyboardTheme(),
                 },
                 h(
                   "header",
@@ -5413,6 +6261,78 @@ export function NocturneIsland() {
             ),
           ),
           h("div", { class: "n-spring" }),
+          // Material belongs to the keyboard, never to a controller seat.
+          // These are six app-owned paints over the same semantic geometry;
+          // the ownership bands remain a separate layer on every finish.
+          h(
+            "div",
+            { class: "n-kbthemes", role: "group", "aria-label": "Keyboard finish" },
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "carbon-forge",
+              title: "Carbon Forge",
+              "aria-label": "Carbon Forge keyboard finish",
+              "aria-pressed": () => nKbtCarbonPressed(),
+            }),
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "lunar-shell",
+              title: "Lunar Shell",
+              "aria-label": "Lunar Shell keyboard finish",
+              "aria-pressed": () => nKbtLunarPressed(),
+            }),
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "violet-circuit",
+              title: "Violet Circuit",
+              "aria-label": "Violet Circuit keyboard finish",
+              "aria-pressed": () => nKbtVioletPressed(),
+            }),
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "glacier-current",
+              title: "Glacier Current",
+              "aria-label": "Glacier Current keyboard finish",
+              "aria-pressed": () => nKbtGlacierPressed(),
+            }),
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "ghost-mint",
+              title: "Ghost Mint",
+              "aria-label": "Ghost Mint keyboard finish",
+              "aria-pressed": () => nKbtMintPressed(),
+            }),
+            h("button", {
+              type: "button",
+              class: "n-kbtheme",
+              "data-nx": "kb-theme",
+              "data-keyboard-theme": "retro-terminal",
+              title: "Retro Terminal",
+              "aria-label": "Retro Terminal keyboard finish",
+              "aria-pressed": () => nKbtRetroPressed(),
+            }),
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-kbbuild",
+              "data-nx": "kb-workbench",
+              title: "Lift keycaps onto a separate control-surface workbench",
+              "aria-pressed": () => nKbWorkbenchPressed(),
+            },
+            () => nKeyboardWorkbenchOpen() ? "Building" : "Build board",
+          ),
           // Focus the board on the controller you are editing: everyone
           // else's color greys out — nothing is hidden, so a key never
           // looks unbound when it is not. Default ships in the markup

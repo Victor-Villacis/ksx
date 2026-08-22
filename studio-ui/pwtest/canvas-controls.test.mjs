@@ -683,6 +683,561 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("keyboard finishes preserve ownership while Key Workbench builds a persistent leverless deck", async () => {
+    const page = await openCanvas();
+    const bindingPosts = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) bindingPosts.push(pathname);
+    });
+
+    const sourceSelector = ".n-widget-kb .n-kbcase .n-key[data-key]";
+    const ownerClasses = (className) => className
+      .split(/\s+/)
+      .filter((name) =>
+        name === "bound" ||
+        name === "shared" ||
+        name === "bstack" ||
+        /^(?:bn|ba|bb|bc|bd|bcount)\d+$/.test(name)
+      )
+      .sort();
+    const readKeyboard = () => page.evaluate((selector) => {
+      const widget = document.querySelector(".n-widget-kb");
+      const keyboardCase = widget?.querySelector(".n-kbcase");
+      const sampleCap = widget?.querySelector('.n-key[data-key="Q"]');
+      const caseRect = keyboardCase?.getBoundingClientRect();
+      const scaleX = keyboardCase && caseRect ? caseRect.width / keyboardCase.offsetWidth : 1;
+      const scaleY = keyboardCase && caseRect ? caseRect.height / keyboardCase.offsetHeight : 1;
+      // Normalize through the canvas scale, then ignore sub-hundredth pixel
+      // transform noise while still pinning every authored cap dimension.
+      const round = (value) => Math.round(value * 100) / 100;
+      const keys = Array.from(document.querySelectorAll(selector));
+      const buttons = Array.from(document.querySelectorAll(".n-kbtheme"));
+      return {
+        theme: widget?.getAttribute("data-keyboard-theme") ?? null,
+        paint: keyboardCase ? getComputedStyle(keyboardCase).backgroundImage : "",
+        capPaint: sampleCap ? getComputedStyle(sampleCap, "::before").backgroundImage : "",
+        source: keys.map((key) => {
+          const rect = key.getBoundingClientRect();
+          return {
+            key: key.getAttribute("data-key") ?? "",
+            className: key.className,
+            rect: caseRect
+              ? [
+                  round((rect.left - caseRect.left) / scaleX),
+                  round((rect.top - caseRect.top) / scaleY),
+                  round(rect.width / scaleX),
+                  round(rect.height / scaleY),
+                ]
+              : [],
+          };
+        }),
+        buttons: buttons.map((button) => ({
+          native: button instanceof HTMLButtonElement,
+          type: button.type,
+          label: button.getAttribute("aria-label") ?? "",
+          slug: button.getAttribute("data-keyboard-theme") ?? "",
+          pressed: button.getAttribute("aria-pressed"),
+        })),
+      };
+    }, sourceSelector);
+    const readDeck = () => page.evaluate(() => {
+      const deck = document.querySelector(".n-widget-keylab .n-keylab-deck");
+      const keys = Array.from(deck?.querySelectorAll(".n-deck-key[data-keylab-key]") ?? []);
+      return {
+        widgetCount: document.querySelectorAll(".n-widget-keylab").length,
+        renderMode: deck?.getAttribute("data-render-mode") ?? null,
+        keys: keys.map((key) => {
+          const rect = key.getBoundingClientRect();
+          const style = getComputedStyle(key);
+          return {
+            key: key.getAttribute("data-keylab-key") ?? "",
+            canonicalKey: key.getAttribute("data-key") ?? "",
+            className: key.className,
+            left: key.style.left,
+            top: key.style.top,
+            width: rect.width,
+            height: rect.height,
+            radius: style.borderTopLeftRadius,
+            paint: style.backgroundImage,
+          };
+        }),
+      };
+    });
+    const readSourceSemantics = () => page.evaluate(() => {
+      const caps = Array.from(
+        document.querySelectorAll(".n-widget-kb [data-key]:not(.ghost)"),
+      );
+      return {
+        count: caps.length,
+        roles: caps.map((cap) => cap.getAttribute("role")),
+        tabStops: caps.filter((cap) => cap.tabIndex === 0)
+          .map((cap) => cap.getAttribute("data-key")),
+        negativeTabs: caps.filter((cap) => cap.tabIndex === -1).length,
+        pressed: caps.filter((cap) => cap.getAttribute("aria-pressed") === "true")
+          .map((cap) => cap.getAttribute("data-key")),
+        invalidPressed: caps.filter((cap) => !["true", "false"].includes(
+          cap.getAttribute("aria-pressed") ?? "",
+        )).length,
+      };
+    });
+    const persistedWorkbench = () => page.evaluate(() => {
+      const raw = localStorage.getItem("ksx-nocturne-keyboard-workbench1");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return Object.values(parsed.devices ?? {})[0] ?? null;
+    });
+
+    try {
+      const themeSlugs = [
+        "carbon-forge",
+        "lunar-shell",
+        "violet-circuit",
+        "glacier-current",
+        "ghost-mint",
+        "retro-terminal",
+      ];
+      const initial = await readKeyboard();
+      assert.equal(initial.source.length, 108, "the standard board starts with all 108 served cells");
+      assert.equal(initial.buttons.length, 6, "the keyboard exposes six restrained finish dashes");
+      assert.ok(initial.buttons.every((button) => button.native), "every finish is a native button");
+      assert.ok(initial.buttons.every((button) => button.type === "button"));
+      assert.deepEqual(
+        initial.buttons.map((button) => button.slug),
+        themeSlugs,
+        "the finish rail exposes the exact six app-owned materials",
+      );
+      assert.equal(new Set(initial.buttons.map((button) => button.label)).size, 6);
+      assert.ok(initial.buttons.every((button) => button.label), "every finish has a unique name");
+      assert.equal(
+        initial.buttons.filter((button) => button.pressed === "true").length,
+        1,
+        "exactly one keyboard finish exposes selected state",
+      );
+
+      const themePaints = [];
+      for (const slug of [
+        "lunar-shell",
+        "violet-circuit",
+        "glacier-current",
+        "ghost-mint",
+        "retro-terminal",
+        "carbon-forge",
+      ]) {
+        await page.click(`.n-kbtheme[data-keyboard-theme="${slug}"]`);
+        await page.waitForFunction(
+          (theme) => document.querySelector(".n-widget-kb")?.getAttribute(
+            "data-keyboard-theme",
+          ) === theme,
+          slug,
+        );
+        await page.waitForTimeout(200);
+        const themed = await readKeyboard();
+        assert.deepEqual(
+          themed.buttons
+            .filter((button) => button.pressed === "true")
+            .map((button) => button.slug),
+          [slug],
+          `${slug} is the sole selected finish`,
+        );
+        assert.deepEqual(
+          themed.source.map((key) => key.key),
+          initial.source.map((key) => key.key),
+          `${slug} preserves canonical key order`,
+        );
+        assert.deepEqual(
+          themed.source.map((key) => key.rect),
+          initial.source.map((key) => key.rect),
+          `${slug} cannot move or resize a source key`,
+        );
+        assert.deepEqual(
+          themed.source.map((key) => ownerClasses(key.className)),
+          initial.source.map((key) => ownerClasses(key.className)),
+          `${slug} remains separate from every controller ownership band`,
+        );
+        themePaints.push({ slug, casePaint: themed.paint, capPaint: themed.capPaint });
+      }
+      assert.equal(
+        new Set(themePaints.map((theme) => theme.casePaint)).size,
+        themeSlugs.length,
+        "all six materials have distinct case paint",
+      );
+      assert.equal(
+        new Set(themePaints.map((theme) => theme.capPaint)).size,
+        themeSlugs.length,
+        "all six materials have distinct keycap paint",
+      );
+
+      await page.click('.n-kbtheme[data-keyboard-theme="lunar-shell"]');
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-kb")?.getAttribute("data-keyboard-theme") ===
+          "lunar-shell",
+      );
+      await page.waitForTimeout(200);
+      const lunar = await readKeyboard();
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-kb")?.getAttribute("data-keyboard-theme") ===
+          "lunar-shell",
+        null,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      const restoredTheme = await readKeyboard();
+      assert.equal(restoredTheme.paint, lunar.paint, "the selected material survives reload");
+      assert.deepEqual(
+        restoredTheme.buttons
+          .filter((button) => button.pressed === "true")
+          .map((button) => button.slug),
+        ["lunar-shell"],
+      );
+      await page.evaluate((selector) => {
+        window.__ksxKeyboardSourceAudit = Array.from(document.querySelectorAll(selector)).map(
+          (node) => ({ node, parent: node.parentElement, key: node.getAttribute("data-key") ?? "" }),
+        );
+      }, sourceSelector);
+
+      await page.locator(".n-kbbuild").evaluate((button) => button.click());
+      await page.waitForSelector(".n-widget-keylab");
+      await settle(page);
+      assert.equal(
+        await page.locator(".n-widget-keylab").count(),
+        1,
+        "Build board mounts exactly one client-owned workbench widget",
+      );
+      assert.equal(
+        await page.locator(sourceSelector).count(),
+        108,
+        "opening the workbench never reparents or removes source cells",
+      );
+      const propagatedTheme = await page.evaluate(() => {
+        const keyboard = document.querySelector(".n-widget-kb");
+        const workbench = document.querySelector(".n-widget-keylab");
+        return {
+          keyboardTheme: keyboard?.getAttribute("data-keyboard-theme"),
+          workbenchTheme: workbench?.getAttribute("data-keyboard-theme"),
+          keyboardCap: keyboard
+            ? getComputedStyle(keyboard).getPropertyValue("--n-kb-key-face-top").trim()
+            : "",
+          workbenchCap: workbench
+            ? getComputedStyle(workbench).getPropertyValue("--n-kb-key-face-top").trim()
+            : "",
+        };
+      });
+      assert.deepEqual(
+        [propagatedTheme.keyboardTheme, propagatedTheme.workbenchTheme],
+        ["lunar-shell", "lunar-shell"],
+        "the physical keyboard and linked workbench share the selected material",
+      );
+      assert.equal(
+        propagatedTheme.workbenchCap,
+        propagatedTheme.keyboardCap,
+        "the workbench inherits the same keycap paint variables",
+      );
+      const openSemantics = await readSourceSemantics();
+      assert.ok(
+        openSemantics.roles.every((role) => role === "button"),
+        "build mode exposes every physical cap as a button",
+      );
+      assert.equal(openSemantics.tabStops.length, 1, "the source board has one roving tab stop");
+      assert.equal(openSemantics.negativeTabs, openSemantics.count - 1);
+      assert.deepEqual(openSemantics.pressed, []);
+      assert.equal(openSemantics.invalidPressed, 0, "every source cap exposes pressed state");
+
+      const liftedKeys = ["W", "A", "S", "D"];
+      for (const key of liftedKeys) {
+        const cap = page.locator(`.n-widget-kb .n-key[data-key="${key}"]`);
+        await cap.focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-keylab .n-deck-key").length === 4,
+      );
+      assert.equal(
+        await page.locator(".n-widget-kb .n-key.extracted").count(),
+        4,
+        "four lifted caps leave four source sockets",
+      );
+      assert.equal(await page.locator(sourceSelector).count(), 108, "sockets retain the full layout");
+      const extractedKeyboard = await readKeyboard();
+      assert.deepEqual(
+        extractedKeyboard.source.map((key) => key.key),
+        restoredTheme.source.map((key) => key.key),
+        "extraction preserves the source DOM order",
+      );
+      const maxSocketGeometryDrift = Math.max(...extractedKeyboard.source.flatMap(
+        (key, index) => key.rect.map(
+          (value, coordinate) => Math.abs(
+            value - restoredTheme.source[index].rect[coordinate],
+          ),
+        ),
+      ));
+      assert.ok(
+        maxSocketGeometryDrift <= 0.02,
+        `a socket occupies its lifted keycap geometry (max drift ${maxSocketGeometryDrift}px)`,
+      );
+      const sourceIdentity = await page.evaluate((selector) => {
+        const baseline = window.__ksxKeyboardSourceAudit ?? [];
+        const current = Array.from(document.querySelectorAll(selector));
+        return {
+          sameLength: current.length === baseline.length,
+          sameNodes: current.every((node, index) => node === baseline[index]?.node),
+          sameParents: current.every(
+            (node, index) => node.parentElement === baseline[index]?.parent,
+          ),
+          sameKeys: current.every(
+            (node, index) => (node.getAttribute("data-key") ?? "") === baseline[index]?.key,
+          ),
+        };
+      }, sourceSelector);
+      assert.deepEqual(
+        sourceIdentity,
+        { sameLength: true, sameNodes: true, sameParents: true, sameKeys: true },
+        "lifting caps mutates the served nodes in place without reparenting or replacing them",
+      );
+      const extractedSemantics = await readSourceSemantics();
+      assert.equal(extractedSemantics.tabStops.length, 1, "roving focus remains singular");
+      assert.equal(extractedSemantics.negativeTabs, extractedSemantics.count - 1);
+      assert.deepEqual(extractedSemantics.pressed.sort(), [...liftedKeys].sort());
+      assert.equal(extractedSemantics.invalidPressed, 0);
+
+      const linked = await page.evaluate((keys) => {
+        const ownership = (element) => Array.from(element.classList)
+          .filter((name) =>
+            name === "bound" ||
+            name === "shared" ||
+            name === "bstack" ||
+            /^(?:bn|ba|bb|bc|bd|bcount)\d+$/.test(name)
+          )
+          .sort();
+        return keys.map((key) => {
+          const source = document.querySelector(`.n-widget-kb .n-key[data-key="${key}"]`);
+          const clone = document.querySelector(`.n-widget-keylab .n-deck-key[data-keylab-key="${key}"]`);
+          return {
+            key,
+            sourcePresent: Boolean(source),
+            sourceExtracted: source?.classList.contains("extracted") ?? false,
+            cloneCanonicalKey: clone?.getAttribute("data-key") ?? null,
+            sourceOwnership: source ? ownership(source) : [],
+            cloneOwnership: clone ? ownership(clone) : [],
+          };
+        });
+      }, liftedKeys);
+      assert.ok(linked.every((entry) => entry.sourcePresent && entry.sourceExtracted));
+      assert.deepEqual(linked.map((entry) => entry.cloneCanonicalKey), liftedKeys);
+      for (const entry of linked) {
+        assert.deepEqual(
+          entry.cloneOwnership,
+          entry.sourceOwnership,
+          `${entry.key} carries its controller ownership onto the deck clone`,
+        );
+      }
+
+      const compact = await readDeck();
+      await page.click('.n-widget-keylab [data-nx="keylab-layout-leverless"]');
+      await page.waitForFunction(
+        () => document.querySelector(
+          '.n-widget-keylab [data-mode="leverless"]',
+        )?.getAttribute("aria-pressed") === "true",
+      );
+      const leverless = await readDeck();
+      assert.deepEqual(
+        leverless.keys.map((key) => key.key).sort(),
+        [...liftedKeys].sort(),
+        "leverless arrangement changes placement, not the selected set",
+      );
+      assert.notDeepEqual(
+        leverless.keys.map((key) => [key.key, key.left, key.top]),
+        compact.keys.map((key) => [key.key, key.left, key.top]),
+        "leverless gives WASD its movement-cluster positions",
+      );
+      assert.equal(
+        new Set(leverless.keys.map((key) => `${key.left}|${key.top}`)).size,
+        4,
+        "every leverless token receives a distinct position",
+      );
+
+      await page.click('.n-widget-keylab [data-nx="keylab-render-arcade"]');
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
+          "data-render-mode",
+        ) === "arcade",
+      );
+      const arcade = await readDeck();
+      assert.equal(arcade.renderMode, "arcade");
+      assert.deepEqual(
+        arcade.keys.map((key) => key.key).sort(),
+        [...liftedKeys].sort(),
+        "arcade rendering changes silhouette, not key identity",
+      );
+      assert.ok(
+        arcade.keys.every((key) => key.radius === "50%"),
+        "every extracted key wears a round arcade rim",
+      );
+      assert.ok(
+        arcade.keys.every((key) => Math.abs(key.width - key.height) <= 2),
+        "arcade tokens render as circles rather than rounded keycaps",
+      );
+      assert.ok(
+        arcade.keys.every((key) => key.paint !== "none"),
+        "the arcade silhouette retains the themed physical paint",
+      );
+
+      const aButton = page.locator('.n-deck-key[data-keylab-key="A"]');
+      const beforeDragA = await aButton.evaluate((button) => ({
+        left: button.style.left,
+        top: button.style.top,
+      }));
+      const workbenchBeforeDrag = await page.locator(".n-widget-keylab").evaluate((widget) => ({
+        x: widget.getAttribute("data-canvas-x"),
+        y: widget.getAttribute("data-canvas-y"),
+      }));
+      const aBox = await aButton.boundingBox();
+      assert.ok(aBox, "the focused workbench exposes a real draggable A button");
+      await page.mouse.move(aBox.x + aBox.width / 2, aBox.y + aBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(
+        aBox.x + aBox.width / 2 + 48,
+        aBox.y + aBox.height / 2 + 28,
+        { steps: 5 },
+      );
+      await page.mouse.up();
+      await page.waitForFunction(
+        ({ left, top }) => {
+          const key = document.querySelector('.n-deck-key[data-keylab-key="A"]');
+          return key?.style.left !== left && key?.style.top !== top;
+        },
+        beforeDragA,
+      );
+      const afterDragA = await aButton.evaluate((button) => ({
+        left: button.style.left,
+        top: button.style.top,
+      }));
+      assert.notDeepEqual(afterDragA, beforeDragA, "pointer drag moves the loose arcade token");
+      assert.deepEqual(
+        await page.locator(".n-widget-keylab").evaluate((widget) => ({
+          x: widget.getAttribute("data-canvas-x"),
+          y: widget.getAttribute("data-canvas-y"),
+        })),
+        workbenchBeforeDrag,
+        "dragging a token never drags its canvas widget",
+      );
+      const draggedState = await persistedWorkbench();
+      assert.equal(draggedState?.layoutMode, "free", "pointerup commits a custom layout");
+      assert.ok(draggedState?.positions?.A, "pointerup persists A's logical board position");
+
+      const wButton = page.locator('.n-deck-key[data-keylab-key="W"]');
+      await wButton.focus();
+      const beforeNudge = await wButton.evaluate((button) => ({
+        left: button.style.left,
+        top: button.style.top,
+      }));
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        (left) => document.querySelector('.n-deck-key[data-keylab-key="W"]')?.style.left !== left,
+        beforeNudge.left,
+      );
+      const afterNudge = await page.locator('.n-deck-key[data-keylab-key="W"]').evaluate(
+        (button) => ({ left: button.style.left, top: button.style.top }),
+      );
+      assert.notEqual(afterNudge.left, beforeNudge.left, "arrow keys nudge a focused deck token");
+      assert.equal(afterNudge.top, beforeNudge.top, "a horizontal nudge leaves its row untouched");
+
+      const dButton = page.locator('.n-deck-key[data-keylab-key="D"]');
+      await dButton.focus();
+      await page.keyboard.press("Delete");
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-keylab .n-deck-key").length === 3,
+      );
+      await page.waitForFunction(() => {
+        const active = document.activeElement;
+        return Boolean(active?.matches(".n-widget-keylab .n-deck-key, .n-widget-keylab button"));
+      });
+      const focusAfterDelete = await page.evaluate(() => ({
+        inWorkbench: Boolean(document.activeElement?.closest(".n-widget-keylab")),
+        isControl: Boolean(document.activeElement?.matches(".n-deck-key, button")),
+        key: document.activeElement?.getAttribute("data-keylab-key"),
+      }));
+      assert.equal(focusAfterDelete.inWorkbench, true, "Delete keeps keyboard focus in the workbench");
+      assert.equal(focusAfterDelete.isControl, true, "focus lands on another usable control");
+      assert.notEqual(focusAfterDelete.key, "D", "focus never points at the removed token");
+      assert.equal(
+        await page.locator('.n-widget-kb .n-key[data-key="D"].extracted').count(),
+        0,
+        "Delete returns the focused token to its source socket",
+      );
+      assert.deepEqual(
+        (await readDeck()).keys.map((key) => key.key).sort(),
+        ["A", "S", "W"],
+      );
+      assert.deepEqual(bindingPosts, [], "workbench gestures never post a binding or learner write");
+
+      const saved = await persistedWorkbench();
+      assert.equal(saved?.theme, "lunar-shell");
+      assert.equal(saved?.open, true);
+      assert.equal(saved?.layoutMode, "free", "manual nudging persists a custom layout");
+      assert.equal(saved?.renderMode, "arcade");
+      assert.deepEqual([...saved.selectedKeys].sort(), ["A", "S", "W"]);
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-keylab .n-deck-key").length === 3,
+        null,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      const restoredDeck = await readDeck();
+      assert.equal(restoredDeck.widgetCount, 1);
+      assert.equal(restoredDeck.renderMode, "arcade");
+      assert.deepEqual(restoredDeck.keys.map((key) => key.key).sort(), ["A", "S", "W"]);
+      assert.deepEqual(
+        restoredDeck.keys.find((key) => key.key === "W") && {
+          left: restoredDeck.keys.find((key) => key.key === "W").left,
+          top: restoredDeck.keys.find((key) => key.key === "W").top,
+        },
+        afterNudge,
+        "the custom W position survives reload",
+      );
+      assert.deepEqual(
+        restoredDeck.keys.find((key) => key.key === "A") && {
+          left: restoredDeck.keys.find((key) => key.key === "A").left,
+          top: restoredDeck.keys.find((key) => key.key === "A").top,
+        },
+        afterDragA,
+        "the pointer-dragged A position survives reload",
+      );
+      assert.equal(await page.locator(".n-widget-kb .n-key.extracted").count(), 3);
+
+      const beforeClose = restoredDeck.keys.map((key) => [key.key, key.left, key.top]);
+      await page.locator('.n-widget-keylab [data-nx="kb-workbench"]').evaluate(
+        (button) => button.click(),
+      );
+      await page.waitForFunction(() => !document.querySelector(".n-widget-keylab"));
+      assert.equal(
+        await page.locator(".n-widget-kb .n-key.extracted").count(),
+        0,
+        "closing the editor shows the complete physical keyboard again",
+      );
+      await page.locator(".n-kbbuild").evaluate((button) => button.click());
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-keylab .n-deck-key").length === 3,
+      );
+      const reopened = await readDeck();
+      assert.deepEqual(
+        reopened.keys.map((key) => [key.key, key.left, key.top]),
+        beforeClose,
+        "closing and reopening retains the exact custom control surface",
+      );
+      assert.equal(reopened.renderMode, "arcade");
+      assert.deepEqual(bindingPosts, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a ViGEm PlayStation seat wears hybrid DualShock 4 art and remembers its color", async () => {
     const page = await openCanvas();
     try {

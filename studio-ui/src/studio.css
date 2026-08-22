@@ -8518,8 +8518,255 @@ a.wsrow-title:hover {
   pointer-events: none;
 }
 
+/* Keyboard finishes are PAINT, never identity. The physical layout and the
+   controller-ownership bands remain the one truthful geometry; these tokens
+   only change the case, neutral cap plastic, legends and empty switch wells.
+   Key Workbench repeats the same token contract so a lifted cap still looks
+   as though it came from its source board. */
+.n-widget-kb,
+.n-widget-keylab {
+  --n-kb-case-top: #232532;
+  --n-kb-case-mid: #1a1c28;
+  --n-kb-case-bottom: #171823;
+  --n-kb-case-edge: #0f1118;
+  --n-kb-case-grain: rgba(255, 255, 255, 0.013);
+  --n-kb-case-highlight: rgba(233, 233, 237, 0.1);
+  --n-kb-case-lowlight: rgba(0, 0, 0, 0.4);
+  --n-kb-key-side-top: #0e1017;
+  --n-kb-key-side-bottom: #0a0c12;
+  --n-kb-key-face-top: #323548;
+  --n-kb-key-face-mid: #262939;
+  --n-kb-key-face-bottom: #222534;
+  --n-kb-key-face-highlight: rgba(233, 233, 237, 0.14);
+  --n-kb-owner-face-top: #2e3142;
+  --n-kb-owner-face-bottom: #242737;
+  --n-kb-owner-rail: transparent;
+  --n-kb-owner-rail-size: 0px;
+  --n-kb-key-legend: #a9adbf;
+  --n-kb-bound-legend: var(--n-text);
+  --n-kb-key-secondary: var(--n-accent-2);
+  --n-kb-owned-cap-ink: var(--n-kb-key-legend);
+  --n-kb-owned-short-ink: var(--n-kb-key-secondary);
+  --n-kb-deck-bound-ink: var(--n-kb-bound-legend);
+  --n-kb-owned-label-bg: transparent;
+  --n-kb-owned-label-pad: 0;
+  --n-kb-owned-label-radius: 0;
+  --n-kb-owned-label-shadow: none;
+  --n-kb-owned-cap-offset: 0;
+  --n-kb-owned-short-offset: 0;
+  --n-kb-focus-ring: var(--n-accent);
+  --n-kb-focus-halo: transparent;
+  --n-kb-homing: rgba(233, 233, 237, 0.16);
+  --n-kb-socket-top: #12141d;
+  --n-kb-socket-bottom: #080a10;
+  --n-kb-socket-edge: #3b3e4d;
+  --n-kb-deck-top: #202330;
+  --n-kb-deck-bottom: #12141d;
+  --n-kb-deck-grid: rgba(233, 233, 237, 0.07);
+  --n-kb-band-strength: 30%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #1a1c28 0 48%, #323548 48% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="carbon-forge"],
+.n-widget-keylab[data-keyboard-theme="carbon-forge"] {
+  --n-kb-theme-swatch: linear-gradient(90deg, #1a1c28 0 48%, #323548 48% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="lunar-shell"],
+.n-widget-keylab[data-keyboard-theme="lunar-shell"] {
+  --n-kb-case-top: #e6e7e4;
+  --n-kb-case-mid: #b4b8bb;
+  --n-kb-case-bottom: #7e8389;
+  --n-kb-case-edge: #575c63;
+  --n-kb-case-grain: rgba(21, 24, 30, 0.025);
+  --n-kb-case-highlight: rgba(255, 255, 255, 0.72);
+  --n-kb-case-lowlight: rgba(31, 34, 41, 0.38);
+  --n-kb-key-side-top: #5e636a;
+  --n-kb-key-side-bottom: #34383e;
+  --n-kb-key-face-top: #f3f2ec;
+  --n-kb-key-face-mid: #dadbd7;
+  --n-kb-key-face-bottom: #c3c6c5;
+  --n-kb-key-face-highlight: rgba(255, 255, 255, 0.78);
+  --n-kb-owner-face-top: #41464f;
+  --n-kb-owner-face-bottom: #272b33;
+  --n-kb-owner-rail: #11151c;
+  --n-kb-owner-rail-size: 3px;
+  --n-kb-key-legend: #343741;
+  --n-kb-bound-legend: #171a21;
+  --n-kb-key-secondary: #5d5591;
+  --n-kb-owned-cap-ink: #f8f9fb;
+  --n-kb-owned-short-ink: #f8f9fb;
+  --n-kb-deck-bound-ink: #f8f9fb;
+  --n-kb-owned-label-bg: rgba(8, 10, 15, 0.86);
+  --n-kb-owned-label-pad: 0 2px;
+  --n-kb-owned-label-radius: 2px;
+  --n-kb-owned-label-shadow: 0 1px 2px rgba(0, 0, 0, 0.48);
+  --n-kb-owned-cap-offset: -2px;
+  --n-kb-owned-short-offset: -2px;
+  --n-kb-focus-ring: #171a21;
+  --n-kb-focus-halo: #f8f8f4;
+  --n-kb-homing: rgba(32, 35, 42, 0.22);
+  --n-kb-socket-top: #333841;
+  --n-kb-socket-bottom: #171a20;
+  --n-kb-socket-edge: #777d84;
+  --n-kb-deck-top: #343842;
+  --n-kb-deck-bottom: #1c1f27;
+  --n-kb-deck-grid: rgba(233, 233, 237, 0.1);
+  --n-kb-band-strength: 78%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #d8d9d5 0 48%, #777c83 48% 62%, #f1f0ea 62% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="violet-circuit"],
+.n-widget-keylab[data-keyboard-theme="violet-circuit"] {
+  --n-kb-case-top: #43385e;
+  --n-kb-case-mid: #2c2942;
+  --n-kb-case-bottom: #1d1d2e;
+  --n-kb-case-edge: #11121c;
+  --n-kb-case-grain: rgba(221, 210, 255, 0.018);
+  --n-kb-case-highlight: rgba(226, 216, 255, 0.17);
+  --n-kb-key-side-top: #191724;
+  --n-kb-key-side-bottom: #0e0e16;
+  --n-kb-key-face-top: #4a465f;
+  --n-kb-key-face-mid: #363349;
+  --n-kb-key-face-bottom: #29283a;
+  --n-kb-key-face-highlight: rgba(235, 229, 255, 0.19);
+  --n-kb-owner-face-top: #454159;
+  --n-kb-owner-face-bottom: #302e43;
+  --n-kb-key-legend: #d5d0e9;
+  --n-kb-bound-legend: #f2effb;
+  --n-kb-key-secondary: #c1b4ff;
+  --n-kb-homing: rgba(237, 232, 255, 0.21);
+  --n-kb-socket-top: #171520;
+  --n-kb-socket-bottom: #09090f;
+  --n-kb-socket-edge: #5e5777;
+  --n-kb-deck-top: #29253b;
+  --n-kb-deck-bottom: #13121e;
+  --n-kb-deck-grid: rgba(199, 183, 255, 0.09);
+  --n-kb-band-strength: 34%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #3e3458 0 48%, #1b1a2a 48% 62%, #716a8b 62% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="glacier-current"],
+.n-widget-keylab[data-keyboard-theme="glacier-current"] {
+  --n-kb-case-top: #254657;
+  --n-kb-case-mid: #1b303d;
+  --n-kb-case-bottom: #121f29;
+  --n-kb-case-edge: #0a1219;
+  --n-kb-case-grain: rgba(196, 240, 250, 0.02);
+  --n-kb-case-highlight: rgba(194, 237, 247, 0.18);
+  --n-kb-key-side-top: #10212a;
+  --n-kb-key-side-bottom: #091319;
+  --n-kb-key-face-top: #3a505b;
+  --n-kb-key-face-mid: #2b3d47;
+  --n-kb-key-face-bottom: #22323b;
+  --n-kb-key-face-highlight: rgba(205, 244, 251, 0.19);
+  --n-kb-owner-face-top: #38515d;
+  --n-kb-owner-face-bottom: #273a45;
+  --n-kb-key-legend: #cde5e9;
+  --n-kb-bound-legend: #effcfd;
+  --n-kb-key-secondary: #88d7e4;
+  --n-kb-homing: rgba(209, 245, 249, 0.2);
+  --n-kb-socket-top: #101c23;
+  --n-kb-socket-bottom: #060d12;
+  --n-kb-socket-edge: #426776;
+  --n-kb-deck-top: #1c3542;
+  --n-kb-deck-bottom: #0c171e;
+  --n-kb-deck-grid: rgba(137, 217, 231, 0.1);
+  --n-kb-band-strength: 34%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #214354 0 48%, #132630 48% 62%, #7ac5d2 62% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="ghost-mint"],
+.n-widget-keylab[data-keyboard-theme="ghost-mint"] {
+  --n-kb-case-top: #c9ddd7;
+  --n-kb-case-mid: #96aaa5;
+  --n-kb-case-bottom: #647a75;
+  --n-kb-case-edge: #43534f;
+  --n-kb-case-grain: rgba(15, 42, 35, 0.025);
+  --n-kb-case-highlight: rgba(249, 255, 252, 0.68);
+  --n-kb-case-lowlight: rgba(16, 36, 31, 0.38);
+  --n-kb-key-side-top: #61736d;
+  --n-kb-key-side-bottom: #35433f;
+  --n-kb-key-face-top: #eef4ef;
+  --n-kb-key-face-mid: #d0dcd7;
+  --n-kb-key-face-bottom: #b7c8c1;
+  --n-kb-key-face-highlight: rgba(255, 255, 255, 0.78);
+  --n-kb-owner-face-top: #304b43;
+  --n-kb-owner-face-bottom: #1b302a;
+  --n-kb-owner-rail: #0e211b;
+  --n-kb-owner-rail-size: 3px;
+  --n-kb-key-legend: #293a35;
+  --n-kb-bound-legend: #14251f;
+  --n-kb-key-secondary: #1d5b51;
+  --n-kb-owned-cap-ink: #f8fbfa;
+  --n-kb-owned-short-ink: #f8fbfa;
+  --n-kb-deck-bound-ink: #f8fbfa;
+  --n-kb-owned-label-bg: rgba(7, 14, 12, 0.86);
+  --n-kb-owned-label-pad: 0 2px;
+  --n-kb-owned-label-radius: 2px;
+  --n-kb-owned-label-shadow: 0 1px 2px rgba(0, 0, 0, 0.48);
+  --n-kb-owned-cap-offset: -2px;
+  --n-kb-owned-short-offset: -2px;
+  --n-kb-focus-ring: #10211c;
+  --n-kb-focus-halo: #effbf7;
+  --n-kb-homing: rgba(23, 57, 48, 0.23);
+  --n-kb-socket-top: #30433e;
+  --n-kb-socket-bottom: #15231f;
+  --n-kb-socket-edge: #78968d;
+  --n-kb-deck-top: #2b403a;
+  --n-kb-deck-bottom: #12211d;
+  --n-kb-deck-grid: rgba(190, 236, 223, 0.11);
+  --n-kb-band-strength: 78%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #bdd4cd 0 48%, #647a74 48% 62%, #edf3ee 62% 100%);
+}
+
+.n-widget-kb[data-keyboard-theme="retro-terminal"],
+.n-widget-keylab[data-keyboard-theme="retro-terminal"] {
+  --n-kb-case-top: #b9ae90;
+  --n-kb-case-mid: #857b62;
+  --n-kb-case-bottom: #5c5544;
+  --n-kb-case-edge: #3e392e;
+  --n-kb-case-grain: rgba(47, 41, 27, 0.032);
+  --n-kb-case-highlight: rgba(255, 249, 221, 0.42);
+  --n-kb-case-lowlight: rgba(41, 35, 24, 0.44);
+  --n-kb-key-side-top: #5a5445;
+  --n-kb-key-side-bottom: #322f27;
+  --n-kb-key-face-top: #ddd5ba;
+  --n-kb-key-face-mid: #bcb49a;
+  --n-kb-key-face-bottom: #9f9780;
+  --n-kb-key-face-highlight: rgba(255, 250, 225, 0.55);
+  --n-kb-owner-face-top: #4a4030;
+  --n-kb-owner-face-bottom: #2b251b;
+  --n-kb-owner-rail: #18150f;
+  --n-kb-owner-rail-size: 3px;
+  --n-kb-key-legend: #2e302a;
+  --n-kb-bound-legend: #181a16;
+  --n-kb-key-secondary: #493822;
+  --n-kb-owned-cap-ink: #fffaf0;
+  --n-kb-owned-short-ink: #fffaf0;
+  --n-kb-deck-bound-ink: #fffaf0;
+  --n-kb-owned-label-bg: rgba(13, 11, 8, 0.87);
+  --n-kb-owned-label-pad: 0 2px;
+  --n-kb-owned-label-radius: 2px;
+  --n-kb-owned-label-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --n-kb-owned-cap-offset: -2px;
+  --n-kb-owned-short-offset: -2px;
+  --n-kb-focus-ring: #14120d;
+  --n-kb-focus-halo: #fff4d8;
+  --n-kb-homing: rgba(48, 43, 31, 0.26);
+  --n-kb-socket-top: #3e3a31;
+  --n-kb-socket-bottom: #1d1b17;
+  --n-kb-socket-edge: #756c58;
+  --n-kb-deck-top: #413c31;
+  --n-kb-deck-bottom: #1d1b17;
+  --n-kb-deck-grid: rgba(239, 225, 181, 0.1);
+  --n-kb-band-strength: 78%;
+  --n-kb-theme-swatch: linear-gradient(90deg, #ada284 0 48%, #5f5747 48% 62%, #d6ceb3 62% 100%);
+}
+
 .n-kbhead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 14px 4px 8px;
@@ -8529,6 +8776,132 @@ a.wsrow-title:hover {
    after the hint); the hint sits right. */
 .n-kbhead .n-kick {
   order: 0;
+}
+
+/* Six finish dashes: a large hit target around a deliberately quiet sliver.
+   The sliver previews case / edge / cap without competing with the player
+   colors immediately below it. */
+.n-kbthemes {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+}
+
+.n-kbtheme {
+  --n-kbtheme-chip: var(--n-kb-theme-swatch);
+
+  position: relative;
+  width: 26px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.n-kbtheme::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+  background: var(--n-kbtheme-chip);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  transform: translate(-50%, -50%);
+  transition: width 120ms ease, height 120ms ease, box-shadow 120ms ease;
+}
+
+.n-kbtheme:is([data-theme="carbon-forge"], [data-keyboard-theme="carbon-forge"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #1a1c28 0 48%, #323548 48% 100%);
+}
+
+.n-kbtheme:is([data-theme="lunar-shell"], [data-keyboard-theme="lunar-shell"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #d8d9d5 0 48%, #777c83 48% 62%, #f1f0ea 62% 100%);
+}
+
+.n-kbtheme:is([data-theme="violet-circuit"], [data-keyboard-theme="violet-circuit"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #3e3458 0 48%, #1b1a2a 48% 62%, #716a8b 62% 100%);
+}
+
+.n-kbtheme:is([data-theme="glacier-current"], [data-keyboard-theme="glacier-current"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #214354 0 48%, #132630 48% 62%, #7ac5d2 62% 100%);
+}
+
+.n-kbtheme:is([data-theme="ghost-mint"], [data-keyboard-theme="ghost-mint"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #bdd4cd 0 48%, #647a74 48% 62%, #edf3ee 62% 100%);
+}
+
+.n-kbtheme:is([data-theme="retro-terminal"], [data-keyboard-theme="retro-terminal"]) {
+  --n-kbtheme-chip: linear-gradient(90deg, #ada284 0 48%, #5f5747 48% 62%, #d6ceb3 62% 100%);
+}
+
+.n-kbtheme:hover::before {
+  width: 18px;
+}
+
+.n-kbtheme[aria-pressed="true"]::before {
+  width: 20px;
+  height: 4px;
+  border-color: var(--n-text);
+  box-shadow:
+    0 0 0 1px rgba(150, 138, 224, 0.68),
+    0 0 8px rgba(150, 138, 224, 0.48);
+}
+
+.n-kbtheme:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: -2px;
+}
+
+/* Build mode is a verb, not a seventh finish: a small labelled control
+   remains legible beside the color-only dashes and announces its latched
+   state through both fill and aria-pressed. */
+.n-kbbuild,
+.n-kbhead [data-nx="kb-build"] {
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: rgba(22, 24, 38, 0.4);
+  color: var(--n-text-2);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.n-kbbuild:hover,
+.n-kbhead [data-nx="kb-build"]:hover {
+  border-color: var(--n-accent-line);
+  background: var(--n-panel-2);
+  color: var(--n-text);
+}
+
+.n-kbbuild[aria-pressed="true"],
+.n-kbhead [data-nx="kb-build"][aria-pressed="true"] {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
+  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.08);
+}
+
+.n-kbbuild:focus-visible,
+.n-kbhead [data-nx="kb-build"]:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-kbtheme::before {
+    transition: none;
+  }
 }
 
 /* THE BOARD'S UNIT. Every cap width, cluster gap, cap label and homing bump
@@ -8559,16 +8932,22 @@ a.wsrow-title:hover {
   background:
     repeating-linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.013) 0 1px,
+      var(--n-kb-case-grain) 0 1px,
       rgba(0, 0, 0, 0) 1px 3px
     ),
-    linear-gradient(180deg, #232532, #1a1c28 55%, #171823);
+    linear-gradient(
+      180deg,
+      var(--n-kb-case-top),
+      var(--n-kb-case-mid) 55%,
+      var(--n-kb-case-bottom)
+    );
   box-shadow:
-    inset 0 1px 0 rgba(233, 233, 237, 0.1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
-    inset 0 0 0 1px #0f1118,
+    inset 0 1px 0 var(--n-kb-case-highlight),
+    inset 0 -1px 0 var(--n-kb-case-lowlight),
+    inset 0 0 0 1px var(--n-kb-case-edge),
     inset 0 0 22px rgba(0, 0, 0, 0.26),
     0 12px 30px rgba(0, 0, 0, 0.45);
+  transition: background 180ms ease, box-shadow 180ms ease;
 }
 
 /* Per-row sculpt profile (the Cherry-ish stagger): each row's face seats a
@@ -8612,7 +8991,7 @@ a.wsrow-title:hover {
   height: calc(var(--nku) * 2 / 30);
   margin-left: calc(var(--nku) * -4 / 30);
   border-radius: 1px;
-  background: rgba(233, 233, 237, 0.16);
+  background: var(--n-kb-homing);
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
   transition: transform 70ms ease;
 }
@@ -8650,7 +9029,11 @@ a.wsrow-title:hover {
   flex: none;
   border: none;
   border-radius: 6px;
-  background: linear-gradient(180deg, #0e1017, #0a0c12);
+  background: linear-gradient(
+    180deg,
+    var(--n-kb-key-side-top),
+    var(--n-kb-key-side-bottom)
+  );
   box-shadow:
     0 1px 0 rgba(0, 0, 0, 0.55),
     inset 0 0 0 1px rgba(0, 0, 0, 0.5);
@@ -8661,9 +9044,14 @@ a.wsrow-title:hover {
   position: absolute;
   inset: 1px 2px 6px 2px;
   border-radius: 5px;
-  background: linear-gradient(180deg, #323548, #262939 60%, #222534);
+  background: linear-gradient(
+    180deg,
+    var(--n-kb-key-face-top),
+    var(--n-kb-key-face-mid) 60%,
+    var(--n-kb-key-face-bottom)
+  );
   box-shadow:
-    inset 0 1px 0 rgba(233, 233, 237, 0.14),
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
     inset 0 -1px 0 rgba(0, 0, 0, 0.3);
   transition: transform 70ms ease, background 70ms ease;
 }
@@ -8707,71 +9095,87 @@ a.wsrow-title:hover {
    bands never reorder, so the ring is what moves as you change seats. */
 .n-key.bound::before {
   box-shadow:
-    inset 0 1px 0 rgba(233, 233, 237, 0.14),
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
     inset 0 0 0 1.5px color-mix(in srgb, var(--mine, var(--n-accent)) 70%, transparent);
 }
 
-.n-kb.np1 {
+.n-kb.np1,
+.n-keylab.np1 {
   --mine: var(--kb1);
 }
 
-.n-kb.np2 {
+.n-kb.np2,
+.n-keylab.np2 {
   --mine: var(--kb2);
 }
 
-.n-kb.np3 {
+.n-kb.np3,
+.n-keylab.np3 {
   --mine: var(--kb3);
 }
 
-.n-kb.np4 {
+.n-kb.np4,
+.n-keylab.np4 {
   --mine: var(--kb4);
 }
 
-.n-kb.np5 {
+.n-kb.np5,
+.n-keylab.np5 {
   --mine: var(--kb5);
 }
 
-.n-kb.np6 {
+.n-kb.np6,
+.n-keylab.np6 {
   --mine: var(--kb6);
 }
 
-.n-kb.np7 {
+.n-kb.np7,
+.n-keylab.np7 {
   --mine: var(--kb7);
 }
 
-.n-kb.np8 {
+.n-kb.np8,
+.n-keylab.np8 {
   --mine: var(--kb8);
 }
 
-.n-kb.np9 {
+.n-kb.np9,
+.n-keylab.np9 {
   --mine: var(--kb9);
 }
 
-.n-kb.np10 {
+.n-kb.np10,
+.n-keylab.np10 {
   --mine: var(--kb10);
 }
 
-.n-kb.np11 {
+.n-kb.np11,
+.n-keylab.np11 {
   --mine: var(--kb11);
 }
 
-.n-kb.np12 {
+.n-kb.np12,
+.n-keylab.np12 {
   --mine: var(--kb12);
 }
 
-.n-kb.np13 {
+.n-kb.np13,
+.n-keylab.np13 {
   --mine: var(--kb13);
 }
 
-.n-kb.np14 {
+.n-kb.np14,
+.n-keylab.np14 {
   --mine: var(--kb14);
 }
 
-.n-kb.np15 {
+.n-kb.np15,
+.n-keylab.np15 {
   --mine: var(--kb15);
 }
 
-.n-kb.np16 {
+.n-kb.np16,
+.n-keylab.np16 {
   --mine: var(--kb16);
 }
 
@@ -8823,13 +9227,13 @@ a.wsrow-title:hover {
   left: calc(var(--nku) * 5 / 30);
   z-index: 1;
   font-size: calc(var(--nku) * 9.5 / 30);
-  color: #a9adbf;
+  color: var(--n-kb-key-legend);
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
   transition: transform 70ms ease;
 }
 
 .n-key.bound .n-key-cap {
-  color: var(--n-text);
+  color: var(--n-kb-bound-legend);
 }
 
 .n-key-short {
@@ -8839,7 +9243,7 @@ a.wsrow-title:hover {
   z-index: 1;
   font-size: calc(var(--nku) * 8.5 / 30);
   font-weight: 700;
-  color: var(--n-accent-2);
+  color: var(--n-kb-key-secondary);
   transition: transform 70ms ease;
 }
 
@@ -9518,6 +9922,16 @@ button.n-krow-tg {
   transform: translateY(-2px) scale(1.1);
   z-index: 3;
   filter: brightness(1.2);
+}
+
+.n-kb .n-key:focus-visible {
+  z-index: 4;
+  outline: 2px solid var(--n-kb-focus-ring);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 6px var(--n-kb-focus-halo),
+    0 1px 0 rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
 .n-kb .n-key.assign {
@@ -11118,48 +11532,72 @@ button.n-keychip:hover {
 
 .n-key.bn1::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--band-a) 30%, transparent) 0 100%
+      color-mix(in srgb, var(--band-a) var(--n-kb-band-strength), transparent) 0 100%
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
 }
 
 .n-key.bn2::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--band-a) 30%, transparent) 0 50%,
-      color-mix(in srgb, var(--band-b) 30%, transparent) 50% 100%
+      color-mix(in srgb, var(--band-a) var(--n-kb-band-strength), transparent) 0 50%,
+      color-mix(in srgb, var(--band-b) var(--n-kb-band-strength), transparent) 50% 100%
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
 }
 
 .n-key.bn3::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--band-a) 30%, transparent) 0 33.34%,
-      color-mix(in srgb, var(--band-b) 30%, transparent) 33.34% 66.67%,
-      color-mix(in srgb, var(--band-c) 30%, transparent) 66.67% 100%
+      color-mix(in srgb, var(--band-a) var(--n-kb-band-strength), transparent) 0 33.34%,
+      color-mix(in srgb, var(--band-b) var(--n-kb-band-strength), transparent) 33.34% 66.67%,
+      color-mix(in srgb, var(--band-c) var(--n-kb-band-strength), transparent) 66.67% 100%
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
 }
 
 .n-key.bn4::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--band-a) 30%, transparent) 0 25%,
-      color-mix(in srgb, var(--band-b) 30%, transparent) 25% 50%,
-      color-mix(in srgb, var(--band-c) 30%, transparent) 50% 75%,
-      color-mix(in srgb, var(--band-d) 30%, transparent) 75% 100%
+      color-mix(in srgb, var(--band-a) var(--n-kb-band-strength), transparent) 0 25%,
+      color-mix(in srgb, var(--band-b) var(--n-kb-band-strength), transparent) 25% 50%,
+      color-mix(in srgb, var(--band-c) var(--n-kb-band-strength), transparent) 50% 75%,
+      color-mix(in srgb, var(--band-d) var(--n-kb-band-strength), transparent) 75% 100%
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
 }
 
 /* THE STACK. Past four owners the cap stops naming anyone. Three colors
@@ -11173,6 +11611,8 @@ button.n-keychip:hover {
    says whether one of them is yours. */
 .n-key.bstack::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     repeating-linear-gradient(
       45deg,
       rgba(233, 233, 237, 0.06) 0 1px,
@@ -11180,13 +11620,40 @@ button.n-keychip:hover {
     ),
     repeating-linear-gradient(
       135deg,
-      color-mix(in srgb, var(--pal1) 30%, transparent) 0 2px,
-      color-mix(in srgb, var(--pal2) 30%, transparent) 2px 4px,
-      color-mix(in srgb, var(--pal3) 30%, transparent) 4px 6px,
-      color-mix(in srgb, var(--pal4) 30%, transparent) 6px 8px
+      color-mix(in srgb, var(--pal1) var(--n-kb-band-strength), transparent) 0 2px,
+      color-mix(in srgb, var(--pal2) var(--n-kb-band-strength), transparent) 2px 4px,
+      color-mix(in srgb, var(--pal3) var(--n-kb-band-strength), transparent) 4px 6px,
+      color-mix(in srgb, var(--pal4) var(--n-kb-band-strength), transparent) 6px 8px
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
+}
+
+/* The light finishes keep their neutral, unowned caps pale, then move owned
+   caps onto a dark substrate with a vivid identity wash. Tiny neutral legend
+   chips keep both the key name and its mapping abbreviation readable without
+   altering any player hue. Dark finishes resolve these tokens to their
+   original transparent/no-offset treatment. */
+.n-key:is(.bn1, .bn2, .bn3, .bn4, .bstack) .n-key-cap {
+  margin-left: var(--n-kb-owned-cap-offset);
+  padding: var(--n-kb-owned-label-pad);
+  border-radius: var(--n-kb-owned-label-radius);
+  background: var(--n-kb-owned-label-bg);
+  box-shadow: var(--n-kb-owned-label-shadow);
+  color: var(--n-kb-owned-cap-ink);
+}
+
+.n-key:is(.bn1, .bn2, .bn3, .bn4, .bstack) .n-key-short {
+  margin-right: var(--n-kb-owned-short-offset);
+  padding: var(--n-kb-owned-label-pad);
+  border-radius: var(--n-kb-owned-label-radius);
+  background: var(--n-kb-owned-label-bg);
+  box-shadow: var(--n-kb-owned-label-shadow);
+  color: var(--n-kb-owned-short-ink);
 }
 
 /* Under the lens only one controller matters, so a "many players" weave
@@ -11195,6 +11662,8 @@ button.n-keychip:hover {
    share a key is a fact, not a color. */
 .n-center.solo .n-key.bstack::before {
   background:
+    linear-gradient(var(--n-kb-owner-rail), var(--n-kb-owner-rail)) top / 100%
+      var(--n-kb-owner-rail-size) no-repeat,
     repeating-linear-gradient(
       45deg,
       rgba(233, 233, 237, 0.16) 0 2px,
@@ -11202,10 +11671,14 @@ button.n-keychip:hover {
     ),
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--band-mute) 30%, transparent) 0 100%
+      color-mix(in srgb, var(--band-mute) var(--n-kb-band-strength), transparent) 0 100%
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.08)),
-    linear-gradient(180deg, #2e3142, #242737);
+    linear-gradient(
+      180deg,
+      var(--n-kb-owner-face-top),
+      var(--n-kb-owner-face-bottom)
+    );
 }
 
 /* The total, in the one corner a keycap has left: the legend sits top
@@ -11532,73 +12005,73 @@ button.n-keychip:hover {
 }
 
 /* A muted controller keeps its keys — it just stops coloring them. */
-.n-center.mute1 .n-kb {
+.n-center.mute1 :is(.n-kb, .n-keylab) {
   --kb1: var(--band-mute);
 }
 
-.n-center.mute2 .n-kb {
+.n-center.mute2 :is(.n-kb, .n-keylab) {
   --kb2: var(--band-mute);
 }
 
-.n-center.mute3 .n-kb {
+.n-center.mute3 :is(.n-kb, .n-keylab) {
   --kb3: var(--band-mute);
 }
 
-.n-center.mute4 .n-kb {
+.n-center.mute4 :is(.n-kb, .n-keylab) {
   --kb4: var(--band-mute);
 }
 
-.n-center.mute5 .n-kb {
+.n-center.mute5 :is(.n-kb, .n-keylab) {
   --kb5: var(--band-mute);
 }
 
-.n-center.mute6 .n-kb {
+.n-center.mute6 :is(.n-kb, .n-keylab) {
   --kb6: var(--band-mute);
 }
 
-.n-center.mute7 .n-kb {
+.n-center.mute7 :is(.n-kb, .n-keylab) {
   --kb7: var(--band-mute);
 }
 
-.n-center.mute8 .n-kb {
+.n-center.mute8 :is(.n-kb, .n-keylab) {
   --kb8: var(--band-mute);
 }
 
-.n-center.mute9 .n-kb {
+.n-center.mute9 :is(.n-kb, .n-keylab) {
   --kb9: var(--band-mute);
 }
 
-.n-center.mute10 .n-kb {
+.n-center.mute10 :is(.n-kb, .n-keylab) {
   --kb10: var(--band-mute);
 }
 
-.n-center.mute11 .n-kb {
+.n-center.mute11 :is(.n-kb, .n-keylab) {
   --kb11: var(--band-mute);
 }
 
-.n-center.mute12 .n-kb {
+.n-center.mute12 :is(.n-kb, .n-keylab) {
   --kb12: var(--band-mute);
 }
 
-.n-center.mute13 .n-kb {
+.n-center.mute13 :is(.n-kb, .n-keylab) {
   --kb13: var(--band-mute);
 }
 
-.n-center.mute14 .n-kb {
+.n-center.mute14 :is(.n-kb, .n-keylab) {
   --kb14: var(--band-mute);
 }
 
-.n-center.mute15 .n-kb {
+.n-center.mute15 :is(.n-kb, .n-keylab) {
   --kb15: var(--band-mute);
 }
 
-.n-center.mute16 .n-kb {
+.n-center.mute16 :is(.n-kb, .n-keylab) {
   --kb16: var(--band-mute);
 }
 
 /* Solo: every controller greys out, then the selected one is given its
    color back. Nothing is hidden, so a key never looks unbound. */
-.n-center.solo .n-kb {
+.n-center.solo :is(.n-kb, .n-keylab) {
   --kb1: var(--band-mute);
   --kb2: var(--band-mute);
   --kb3: var(--band-mute);
@@ -11617,67 +12090,67 @@ button.n-keychip:hover {
   --kb16: var(--band-mute);
 }
 
-.n-center.solo .n-kb.np1 {
+.n-center.solo :is(.n-kb, .n-keylab).np1 {
   --kb1: var(--pcs1-key);
 }
 
-.n-center.solo .n-kb.np2 {
+.n-center.solo :is(.n-kb, .n-keylab).np2 {
   --kb2: var(--pcs2-key);
 }
 
-.n-center.solo .n-kb.np3 {
+.n-center.solo :is(.n-kb, .n-keylab).np3 {
   --kb3: var(--pcs3-key);
 }
 
-.n-center.solo .n-kb.np4 {
+.n-center.solo :is(.n-kb, .n-keylab).np4 {
   --kb4: var(--pcs4-key);
 }
 
-.n-center.solo .n-kb.np5 {
+.n-center.solo :is(.n-kb, .n-keylab).np5 {
   --kb5: var(--pcs5-key);
 }
 
-.n-center.solo .n-kb.np6 {
+.n-center.solo :is(.n-kb, .n-keylab).np6 {
   --kb6: var(--pcs6-key);
 }
 
-.n-center.solo .n-kb.np7 {
+.n-center.solo :is(.n-kb, .n-keylab).np7 {
   --kb7: var(--pcs7-key);
 }
 
-.n-center.solo .n-kb.np8 {
+.n-center.solo :is(.n-kb, .n-keylab).np8 {
   --kb8: var(--pcs8-key);
 }
 
-.n-center.solo .n-kb.np9 {
+.n-center.solo :is(.n-kb, .n-keylab).np9 {
   --kb9: var(--pcs9-key);
 }
 
-.n-center.solo .n-kb.np10 {
+.n-center.solo :is(.n-kb, .n-keylab).np10 {
   --kb10: var(--pcs10-key);
 }
 
-.n-center.solo .n-kb.np11 {
+.n-center.solo :is(.n-kb, .n-keylab).np11 {
   --kb11: var(--pcs11-key);
 }
 
-.n-center.solo .n-kb.np12 {
+.n-center.solo :is(.n-kb, .n-keylab).np12 {
   --kb12: var(--pcs12-key);
 }
 
-.n-center.solo .n-kb.np13 {
+.n-center.solo :is(.n-kb, .n-keylab).np13 {
   --kb13: var(--pcs13-key);
 }
 
-.n-center.solo .n-kb.np14 {
+.n-center.solo :is(.n-kb, .n-keylab).np14 {
   --kb14: var(--pcs14-key);
 }
 
-.n-center.solo .n-kb.np15 {
+.n-center.solo :is(.n-kb, .n-keylab).np15 {
   --kb15: var(--pcs15-key);
 }
 
-.n-center.solo .n-kb.np16 {
+.n-center.solo :is(.n-kb, .n-keylab).np16 {
   --kb16: var(--pcs16-key);
 }
 
@@ -13455,9 +13928,579 @@ a.nm-link {
 
 .n-key.live .n-key-cap,
 .n-key.live .n-key-short {
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   transform: translateY(3px);
   color: #161826;
   text-shadow: none;
+}
+
+/* A lifted source cap leaves an honest switch socket behind. Its slot never
+   collapses, so extracting keys cannot rewrite or even nudge the physical
+   keyboard layout. The thin owner-colored rim preserves territory context;
+   the complete colored cap travels to Key Workbench. */
+.n-widget-kb .n-key.extracted {
+  background: linear-gradient(
+    180deg,
+    color-mix(
+      in srgb,
+      var(--band-a, var(--n-kb-socket-edge)) 18%,
+      var(--n-kb-socket-top)
+    ),
+    var(--n-kb-socket-bottom)
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(
+      in srgb,
+      var(--band-a, var(--n-kb-socket-edge)) 50%,
+      var(--n-kb-socket-edge)
+    ),
+    inset 0 5px 9px rgba(0, 0, 0, 0.42),
+    0 1px 0 rgba(255, 255, 255, 0.035);
+  filter: none;
+}
+
+.n-widget-kb .n-kbcase .n-key.extracted::before,
+.n-widget-kb .n-kbtray .n-key.extracted::before {
+  inset: 5px;
+  border-radius: 4px;
+  background: linear-gradient(
+    145deg,
+    var(--n-kb-socket-top),
+    var(--n-kb-socket-bottom) 72%
+  );
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1px var(--n-kb-socket-edge);
+  filter: none;
+  transform: none;
+}
+
+.n-widget-kb .n-key.extracted::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  bottom: auto;
+  left: 50%;
+  z-index: 2;
+  width: calc(var(--nku, 35.5px) * 11 / 30);
+  height: calc(var(--nku, 35.5px) * 11 / 30);
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--n-kb-socket-edge) 72%, #ffffff);
+  border-radius: 2px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 34%,
+      color-mix(in srgb, var(--n-kb-socket-edge) 68%, #ffffff) 34% 66%,
+      transparent 66%
+    ),
+    linear-gradient(
+      0deg,
+      transparent 34%,
+      color-mix(in srgb, var(--n-kb-socket-edge) 68%, #ffffff) 34% 66%,
+      transparent 66%
+    ),
+    var(--n-kb-socket-bottom);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translate(-50%, -50%);
+}
+
+.n-widget-kb .n-key.extracted .n-key-cap,
+.n-widget-kb .n-key.extracted .n-key-short {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.82);
+  pointer-events: none;
+}
+
+.n-widget-kb .n-key.extracted:not(.ghost):hover {
+  z-index: 2;
+  transform: none;
+  filter: brightness(1.12);
+}
+
+.n-widget-kb .n-key.extracted.bound::before {
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1.5px color-mix(
+      in srgb,
+      var(--mine, var(--n-accent)) 76%,
+      var(--n-kb-socket-edge)
+    );
+}
+
+.n-widget-kb .n-key.extracted.live::before {
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--band-a, var(--n-accent)) 44%, var(--n-kb-socket-top)),
+    var(--n-kb-socket-bottom) 76%
+  );
+  box-shadow:
+    inset 0 0 0 1px var(--band-a, var(--n-accent)),
+    0 0 12px color-mix(in srgb, var(--band-a, var(--n-accent)) 55%, transparent);
+  transform: none;
+}
+
+.n-widget-kb .n-key.extracted.live::after {
+  border-color: var(--band-a, var(--n-accent));
+  filter: brightness(1.35);
+  transform: translate(-50%, -50%) translateY(1px);
+}
+
+/* ── Key Workbench ──────────────────────────────────────────────────────
+   A second, client-owned surface for the caps lifted above. It deliberately
+   looks like a small machinist's plate rather than another physical device:
+   arranging a hitbox changes presentation, never the selected keyboard's
+   identity or served key geometry. */
+.n-widget-keylab .n-widget-body {
+  display: block;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--n-line);
+  background: var(--n-bg);
+}
+
+.n-keylab {
+  --nku: 42px;
+  --nkg: 6px;
+  --kbt: var(--n-accent);
+  --band-mute: #454956;
+  --kb1: var(--pcs1-key);
+  --kb2: var(--pcs2-key);
+  --kb3: var(--pcs3-key);
+  --kb4: var(--pcs4-key);
+  --kb5: var(--pcs5-key);
+  --kb6: var(--pcs6-key);
+  --kb7: var(--pcs7-key);
+  --kb8: var(--pcs8-key);
+  --kb9: var(--pcs9-key);
+  --kb10: var(--pcs10-key);
+  --kb11: var(--pcs11-key);
+  --kb12: var(--pcs12-key);
+  --kb13: var(--pcs13-key);
+  --kb14: var(--pcs14-key);
+  --kb15: var(--pcs15-key);
+  --kb16: var(--pcs16-key);
+
+  min-width: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--n-line);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
+    var(--n-bg);
+}
+
+.n-keylab-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 34px;
+  padding: 2px 2px 9px;
+}
+
+.n-keylab-head .n-kick,
+.n-keylab-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--n-text);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.n-keylab-sub,
+.n-keylab-subtitle,
+.n-keylab-count {
+  display: block;
+  margin-top: 1px;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.n-keylab-head .n-keylab-button {
+  margin-inline-start: auto;
+}
+
+.n-keylab-status,
+.n-keylab-note {
+  margin: 0;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.n-keylab-status {
+  min-height: 17px;
+  padding: 7px 2px 6px;
+  color: var(--n-text-2);
+}
+
+.n-keylab-note {
+  padding: 8px 2px 0;
+}
+
+.n-keylab-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: auto;
+}
+
+.n-keylab-button,
+.n-keylab-tools button {
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.n-keylab-button:hover,
+.n-keylab-tools button:hover {
+  border-color: var(--n-line-2);
+  background: var(--n-panel-2);
+  color: var(--n-text-2);
+}
+
+.n-keylab-button[aria-pressed="true"],
+.n-keylab-tools button[aria-pressed="true"],
+.n-keylab-tools button.on {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
+}
+
+.n-keylab-button:focus-visible,
+.n-keylab-tools button:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.n-keylab-button.quiet {
+  background: rgba(22, 24, 38, 0.35);
+}
+
+.n-keylab-button:disabled,
+.n-keylab-tools button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.n-keylab-button:disabled:hover,
+.n-keylab-tools button:disabled:hover {
+  border-color: var(--n-line);
+  background: transparent;
+  color: var(--n-text-3);
+}
+
+.n-keylab-deck {
+  position: relative;
+  width: 100%;
+  min-width: 780px;
+  min-height: 260px;
+  aspect-ratio: 3 / 1;
+  overflow: visible;
+  border: 1px solid var(--n-kb-case-edge);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 1px 1px, var(--n-kb-deck-grid) 1px, transparent 1.5px) 0 0 / 16px 16px,
+    linear-gradient(155deg, var(--n-kb-deck-top), var(--n-kb-deck-bottom));
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-case-highlight),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    inset 0 -26px 55px rgba(0, 0, 0, 0.16),
+    0 12px 28px rgba(0, 0, 0, 0.34);
+  isolation: isolate;
+}
+
+.n-keylab-deck::before {
+  content: "KEY WORKBENCH";
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: -1;
+  color: color-mix(in srgb, var(--n-kb-key-legend) 20%, transparent);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  pointer-events: none;
+}
+
+.n-keylab-deck.empty::after,
+.n-keylab-deck[data-empty="true"]::after {
+  content: "Build mode lifts selected keycaps onto this board";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(320px, calc(100% - 48px));
+  padding: 15px 18px;
+  border: 1px dashed color-mix(in srgb, var(--n-kb-socket-edge) 74%, transparent);
+  border-radius: 10px;
+  color: color-mix(in srgb, var(--n-kb-key-legend) 72%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+/* Deck keys use the same two-layer cap construction and may also carry
+   `n-key`, `bn*`, `ba*` and `bound` classes. These declarations reset only
+   positioning and workbench dimensions, never the source board's metrics. */
+.n-deck-key {
+  position: absolute;
+  width: var(--deck-key-width, var(--nku));
+  height: var(--deck-key-height, calc(var(--nku) * 34 / 30));
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: linear-gradient(
+    180deg,
+    var(--n-kb-key-side-top),
+    var(--n-kb-key-side-bottom)
+  );
+  box-shadow:
+    0 3px 5px rgba(0, 0, 0, 0.48),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+  color: var(--n-kb-key-legend);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: filter 100ms ease, box-shadow 100ms ease, transform 100ms ease;
+}
+
+.n-deck-key::before {
+  content: "";
+  position: absolute;
+  inset: 1px 2px 6px;
+  border-radius: 6px;
+  background: linear-gradient(
+    180deg,
+    var(--n-kb-key-face-top),
+    var(--n-kb-key-face-mid) 60%,
+    var(--n-kb-key-face-bottom)
+  );
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+}
+
+.n-deck-key:hover {
+  z-index: 3;
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.n-deck-key:active,
+.n-deck-key.dragging {
+  z-index: 5;
+  cursor: grabbing;
+  filter: brightness(1.17);
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.54),
+    0 0 0 1px var(--n-accent-line);
+  transform: translateY(-3px) scale(1.025);
+}
+
+.n-deck-key:focus-visible,
+.n-deck-key.selected {
+  z-index: 4;
+  outline: 2px solid var(--n-accent);
+  outline-offset: 3px;
+}
+
+.n-deck-key .n-key-cap {
+  color: var(--n-kb-key-legend);
+}
+
+.n-deck-key.bound .n-key-cap {
+  color: var(--n-kb-deck-bound-ink);
+}
+
+.n-deck-key.modifier::before,
+.n-deck-key.mod::before {
+  filter: saturate(0.82) brightness(0.94);
+}
+
+.n-deck-key.wide {
+  width: calc(1.5 * var(--nku) + 0.5 * var(--nkg));
+}
+
+.n-deck-key.wider {
+  width: calc(2 * var(--nku) + var(--nkg));
+}
+
+.n-deck-key.space {
+  width: calc(3.25 * var(--nku) + 2.25 * var(--nkg));
+}
+
+.n-deck-key.thumb {
+  width: calc(1.5 * var(--nku) + 0.5 * var(--nkg));
+  height: calc(1.15 * var(--nku));
+}
+
+.n-deck-key.bound::before {
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
+    inset 0 0 0 1.5px color-mix(
+      in srgb,
+      var(--band-a, var(--mine, var(--n-accent))) 76%,
+      transparent
+    );
+}
+
+.n-deck-key.live::before {
+  transform: translateY(3px);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--band-a, var(--n-accent)) 55%, #ffffff),
+    var(--band-a, var(--n-accent)) 70%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 14px rgba(150, 138, 224, 0.45);
+}
+
+.n-deck-key.live .n-key-cap,
+.n-deck-key.live .n-key-short {
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: translateY(3px);
+  color: #161826;
+  text-shadow: none;
+}
+
+.n-deck-key.shared::before {
+  border: 1px dashed rgba(150, 138, 224, 0.75);
+}
+
+/* The same semantic token can preview a generic arcade/hitbox button. Only
+   its silhouette changes: ownership bands, live press, label and DOM key
+   identity stay on the exact same node. */
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key,
+.n-keylab-deck.arcade .n-deck-key {
+  border-radius: 50%;
+  box-shadow:
+    0 5px 8px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.54);
+}
+
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key::before,
+.n-keylab-deck.arcade .n-deck-key::before {
+  inset: 3px 3px 7px;
+  border-radius: 50%;
+}
+
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key::after,
+.n-keylab-deck.arcade .n-deck-key::after {
+  display: none;
+}
+
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key .n-key-cap,
+.n-keylab-deck.arcade .n-deck-key .n-key-cap {
+  top: 50%;
+  left: 50%;
+  max-width: 72%;
+  overflow: hidden;
+  font-size: clamp(8px, calc(var(--nku) * 8.5 / 30), 12px);
+  text-align: center;
+  text-overflow: ellipsis;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key .n-key-short,
+.n-keylab-deck.arcade .n-deck-key .n-key-short {
+  display: none;
+}
+
+.n-keylab-deck[data-render-mode="arcade"] .n-deck-key.live .n-key-cap,
+.n-keylab-deck.arcade .n-deck-key.live .n-key-cap {
+  transform: translate(-50%, calc(-50% + 3px));
+}
+
+@media (width <= 720px) {
+  .n-kbthemes {
+    order: 3;
+    width: 100%;
+  }
+
+  .n-kbtheme {
+    flex: 1 1 34px;
+    max-width: 52px;
+  }
+
+  .n-kbbuild,
+  .n-kbhead [data-nx="kb-build"] {
+    margin-inline-start: auto;
+  }
+
+  .n-keylab {
+    overflow-x: auto;
+    padding-bottom: 5px;
+  }
+
+  .n-keylab-head {
+    position: sticky;
+    left: 0;
+  }
+
+  .n-keylab-tools {
+    width: 100%;
+    margin-inline-start: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .n-keylab-tools button {
+    flex: 0 0 auto;
+  }
+}
+
+@media (pointer: coarse) {
+  .n-kbtheme {
+    width: 40px;
+  }
+
+  .n-keylab-tools button,
+  .n-kbbuild,
+  .n-kbhead [data-nx="kb-build"] {
+    min-height: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-kbcase,
+  .n-deck-key,
+  .n-widget-kb .n-key.extracted .n-key-cap,
+  .n-widget-kb .n-key.extracted .n-key-short {
+    transition: none;
+  }
+
+  .n-deck-key:hover,
+  .n-deck-key:active,
+  .n-deck-key.dragging {
+    transform: none;
+  }
 }
 
 .n-bind.live .n-bind-dot {

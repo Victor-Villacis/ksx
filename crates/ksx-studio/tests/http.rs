@@ -7687,6 +7687,11 @@ fn nocturne_does_not_turn_unavailable_macro_data_into_an_empty_answer() {
     assert_eq!(pad["mapping_available"], false, "{pad}");
     assert_eq!(pad["fn_keys"], serde_json::json!({}), "{pad}");
     assert_eq!(
+        pad["controls"],
+        serde_json::json!([]),
+        "an unavailable authoring read must not look like a controller with every control unbound: {pad}"
+    );
+    assert_eq!(
         pad["mapping_reason"],
         "Player 1's controller layout is not available. Refresh the unsaved setup.",
         "{pad}"
@@ -8737,6 +8742,145 @@ fn nocturne_stacks_a_key_five_controllers_share() {
         api["view"]["kb_more_cls"], "n-lgdmore none",
         "and the legend's key stays away until a cap actually stacks: {api}"
     );
+}
+
+/// The canvas authoring projection is backend-owned: every zone appears once
+/// in a normalized group order, persona labels come from that controller's
+/// art vocabulary, and exact keys plus per-control transforms come directly
+/// from the staged mapper rather than from the legacy pane rows.
+#[test]
+fn nocturne_serves_ordered_canvas_control_authoring() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                preset,
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: Some(12),
+                toggle: Some(true),
+            })
+            .ok
+    );
+
+    let addr = start_server(control);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pad = &api["view"]["pads"][0];
+    assert_eq!(pad["mapping_available"], true, "{pad}");
+    assert_eq!(pad["mapping_reason"], "", "{pad}");
+    let controls = pad["controls"].as_array().expect("controls");
+    assert_eq!(controls.len(), ksx_core::preset::MAPPABLE_COUNT, "{pad}");
+
+    let expected = [
+        "A",
+        "B",
+        "X",
+        "Y",
+        "dpad.up",
+        "dpad.down",
+        "dpad.left",
+        "dpad.right",
+        "lb",
+        "rb",
+        "lt",
+        "rt",
+        "lthumb",
+        "ly.max",
+        "ly.min",
+        "lx.min",
+        "lx.max",
+        "rthumb",
+        "ry.max",
+        "ry.min",
+        "rx.min",
+        "rx.max",
+        "back",
+        "guide",
+        "start",
+    ];
+    let functions: Vec<&str> = controls
+        .iter()
+        .map(|control| control["function"].as_str().expect("function"))
+        .collect();
+    assert_eq!(functions, expected, "normalized authoring order drifted");
+    for (order, control) in controls.iter().enumerate() {
+        assert_eq!(control["order"].as_u64(), Some(order as u64), "{control}");
+    }
+    let groups: Vec<&str> = controls
+        .iter()
+        .map(|control| control["group"].as_str().expect("group"))
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            "face",
+            "face",
+            "face",
+            "face",
+            "dpad",
+            "dpad",
+            "dpad",
+            "dpad",
+            "shoulders",
+            "shoulders",
+            "shoulders",
+            "shoulders",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "system",
+            "system",
+            "system",
+        ],
+        "{pad}"
+    );
+
+    let a = controls
+        .iter()
+        .find(|control| control["function"] == "A")
+        .expect("A control");
+    assert_eq!(a["label"], "✕", "the label must speak PlayStation: {a}");
+    assert_eq!(a["keys"], serde_json::json!(["G", "H"]), "{a}");
+    assert_eq!(a["toggle"], true, "{a}");
+    assert_eq!(a["turbo_hz"], 12, "{a}");
+    // The exact vector is the new contract; the old joined callout remains
+    // for existing clients during migration.
+    assert_eq!(pad["fn_keys"]["A"], "G · H", "{pad}");
+
+    let b = controls
+        .iter()
+        .find(|control| control["function"] == "B")
+        .expect("B control");
+    assert_eq!(b["label"], "○", "{b}");
+    assert_eq!(b["keys"], serde_json::json!([]), "{b}");
+    assert_eq!(b["toggle"], false, "{b}");
+    assert_eq!(b["turbo_hz"], serde_json::Value::Null, "{b}");
 }
 
 /// **The multi-pad payload**: every staged controller serves its family,

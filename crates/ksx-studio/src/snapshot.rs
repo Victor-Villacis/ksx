@@ -4138,6 +4138,14 @@ pub struct NocturnePadView {
     pub mapping_available: bool,
     #[serde(default)]
     pub mapping_reason: String,
+    /// Every controller control in one stable authoring order. Unlike
+    /// `fn_keys`, this keeps the exact key vector and the per-control
+    /// transforms the canvas needs to edit a connection without reading the
+    /// legacy binding pane's DOM. Empty is meaningful only while
+    /// `mapping_available` is true; otherwise `mapping_reason` says why no
+    /// authoring projection could be made.
+    #[serde(default)]
+    pub controls: Vec<NocturneControlAuthoring>,
     /// Canonical fn → the persona's readable label ("LS ↑", "△") — the
     /// toast's vocabulary for arming ANY pad's control, not just the
     /// selected one.
@@ -4154,6 +4162,31 @@ pub struct NocturnePadView {
     pub macro_available: bool,
     #[serde(default)]
     pub macro_reason: String,
+}
+
+/// One controller-side endpoint in the canvas authoring graph.
+///
+/// The identity comes from [`crate::render_map::zones_for`], while binding
+/// and transform facts come straight from [`ksx_api::MapperSlot`]. This is a
+/// normalized backend projection, not a transcription of whichever rows a
+/// surface happens to render.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneControlAuthoring {
+    /// Canonical mapper function spelling (`A`, `dpad.up`, `lx.min`).
+    pub function: String,
+    /// Persona-aware control name (`A`, `△`, `Create`, `LS ←`).
+    pub label: String,
+    /// Stable machine group slug: face, dpad, shoulders, left-stick,
+    /// right-stick, or system.
+    pub group: String,
+    /// Zero-based position in the complete normalized control sequence.
+    pub order: usize,
+    /// Exact authored OR-chain, in file order. Empty means unbound.
+    pub keys: Vec<String>,
+    /// Whether a press latches until the next press.
+    pub toggle: bool,
+    /// Authored auto-fire rate; absent means ordinary non-turbo behavior.
+    pub turbo_hz: Option<u32>,
 }
 
 /// The read-only part of one macro needed by the canvas signal graph.
@@ -4462,6 +4495,18 @@ const NOCTURNE_BIND_GROUP_LABELS: [&str; 6] = [
     "System",
 ];
 
+/// Stable canvas vocabulary for the same six physical clusters. These are
+/// slugs rather than display copy so a frontend can group controls without
+/// inheriting the right pane's headings.
+const NOCTURNE_CONTROL_GROUPS: [&str; 6] = [
+    "face",
+    "dpad",
+    "shoulders",
+    "left-stick",
+    "right-stick",
+    "system",
+];
+
 /// Which drawn body a seat wears — the ONE rule, read by both the per-slot
 /// pad views (what each canvas widget clones) and the no-JS master classes.
 ///
@@ -4499,6 +4544,92 @@ fn nocturne_bind_group(function: &str) -> usize {
         f if f.starts_with("rx.") || f.starts_with("ry.") => 4,
         _ => 5,
     }
+}
+
+/// A human-scannable order independent of the art tables' drawing order.
+/// The tables remain the source of which controls and persona labels exist;
+/// this rank only normalizes those controls into face, D-pad, shoulders,
+/// sticks, system for any authoring surface.
+fn nocturne_control_rank(function: &str) -> (usize, usize) {
+    let group = nocturne_bind_group(function);
+    let normalized = function.to_ascii_lowercase();
+    let within = match group {
+        0 => ["a", "b", "x", "y"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        1 => ["dpad.up", "dpad.down", "dpad.left", "dpad.right"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        2 => ["lb", "rb", "lt", "rt"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        3 => ["lthumb", "ly.max", "ly.min", "lx.min", "lx.max"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        4 => ["rthumb", "ry.max", "ry.min", "rx.min", "rx.max"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        _ => ["back", "guide", "start"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+    };
+    (group, within)
+}
+
+fn nocturne_control_authoring(
+    persona: &str,
+    mapper: &ksx_api::MapperSlot,
+) -> Vec<NocturneControlAuthoring> {
+    let mut zones: Vec<_> = crate::render_map::zones_for(persona).iter().collect();
+    zones.sort_by_key(|zone| nocturne_control_rank(zone.fn_name));
+    zones
+        .into_iter()
+        .enumerate()
+        .map(|(order, zone)| {
+            // Face-button casing differs between some mapper providers and
+            // the art vocabulary. Read every authored fact case-bridged, but
+            // always serialize the zone table's canonical spelling.
+            let keys = mapper
+                .bindings
+                .get(zone.fn_name)
+                .or_else(|| {
+                    mapper
+                        .bindings
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(zone.fn_name))
+                        .map(|(_, keys)| keys)
+                })
+                .cloned()
+                .unwrap_or_default();
+            let toggle = mapper
+                .toggle
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(zone.fn_name));
+            let turbo_hz = mapper.turbo.get(zone.fn_name).copied().or_else(|| {
+                mapper
+                    .turbo
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(zone.fn_name))
+                    .map(|(_, rate)| *rate)
+            });
+            let group = nocturne_bind_group(zone.fn_name);
+            NocturneControlAuthoring {
+                function: zone.fn_name.to_owned(),
+                label: crate::render_map::legend_label_for_persona(persona, zone),
+                group: NOCTURNE_CONTROL_GROUPS[group].to_owned(),
+                order,
+                keys,
+                toggle,
+                turbo_hz,
+            }
+        })
+        .collect()
 }
 
 impl NocturneDerived {
@@ -5094,6 +5225,10 @@ impl NocturneDerived {
                         }
                     }
                 }
+                let controls = mapper
+                    .as_ref()
+                    .map(|mapper| nocturne_control_authoring(&slot.persona, mapper))
+                    .unwrap_or_default();
                 let fn_names = crate::render_map::zones_for(&slot.persona)
                     .iter()
                     .map(|zone| {
@@ -5135,6 +5270,7 @@ impl NocturneDerived {
                     fn_keys,
                     mapping_available,
                     mapping_reason,
+                    controls,
                     fn_names,
                     macros,
                     macro_available: macro_snapshot.available,

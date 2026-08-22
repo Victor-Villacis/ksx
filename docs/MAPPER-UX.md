@@ -90,6 +90,52 @@ complex tool with the simplest interface."
    controller layout, keeping the out-of-box experience close to zero mapping.
    The mapper exists for the exceptions.
 
+## Canvas authoring migration (decision, 2026-08-22)
+
+Nocturne's permanent right-hand binding ledger is deprecated as a spatial
+surface, not as a capability set. The canvas is the relation now: physical
+keys → real processing steps → virtual-controller controls. A giant editor
+card placed between every source and destination would falsely claim the
+editor participates in runtime, so it is not the replacement.
+
+The replacement has four parts:
+
+1. **Semantic graph selection** is separate from widget move/resize selection.
+   Click selects one endpoint or route; Ctrl/Shift-click and a touch Select
+   mode build a set. A contextual action dock describes the exact keys,
+   controls, routes and processors selected.
+2. **The cords are the two old tabs.** Selecting a key reveals every control
+   it drives; selecting a control reveals every key that drives it. Find
+   (Ctrl+K) searches keys, controls, players, macros and routes, then pans and
+   highlights matches instead of filtering a second copy of the graph.
+3. **Only real behavior becomes a node.** A macro remains a processor. Toggle
+   and turbo form one compact behavior processor immediately before the
+   destination control, because those settings apply to that control's
+   combined incoming keys. Plain hold stays a direct cord.
+4. **A nonpersistent Connections table remains the accessible/no-script
+   escape hatch.** Native forms and consequence text survive there (and on
+   `/map`); they no longer reserve a quarter of the main canvas.
+
+Bulk connection grammar is explicit:
+
+- one key + many controls = fan-out;
+- many keys + one control = fan-in;
+- many keys + many controls must choose Pair in selection order, Connect all
+  combinations (with the exact edge count), or Map in sequence.
+
+Ghost cords preview the result before one atomic staged write. One physical
+key shared by four players remains one source endpoint with four outgoing
+cords, never four fake keycaps. The batch write carries the staged revision,
+exact additions/removals and strategy; conflict/consequence composition stays
+server-owned and the operation is all-or-nothing.
+
+Migration order is contractual: first normalize the backend authoring graph
+and remove every dependency on the ledger DOM; then ship read-only selection
+and Find; then direct/bulk authoring; then behavior and macro lifecycle; only
+then default the table closed and remove the permanent pane after parity tests.
+Hiding the pane before `Map all`, label lookup, learn/assign and open-row state
+stop querying it would silently remove features and is therefore forbidden.
+
 ## The three builds (in order)
 
 **Build A status (v7, 2026-08-05).** Landed on the mapper page: every zone

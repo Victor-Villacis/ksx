@@ -282,6 +282,19 @@ export interface NocturneBindRowView {
   tog_cls: string;
 }
 
+/** Backend-owned controller endpoint used by the canvas authoring graph.
+ * Unlike the legacy pane rows, this keeps exact keys as an array and keeps
+ * the controller's zone order even when no list is mounted in the DOM. */
+export interface NocturneControlFlowView {
+  function: string;
+  label: string;
+  group: string;
+  order: number;
+  keys: string[];
+  toggle: boolean;
+  turbo_hz: number | null;
+}
+
 export interface NocturneView {
   dev_count: string;
   dev_note: string;
@@ -388,6 +401,7 @@ export interface NocturneView {
     fn_names: Record<string, string>;
     mapping_available: boolean;
     mapping_reason: string;
+    controls?: NocturneControlFlowView[];
     macros: NocturneMacroFlowView[];
     macro_available: boolean;
     macro_reason: string;
@@ -3939,21 +3953,100 @@ async function cancelLearn(): Promise<void> {
   await cancelDaemonGen(generation);
 }
 
-function startAutoMap(): void {
-  const root = learnRoot;
-  if (!root) return;
-  const steps: { fn: string; label: string }[] = [];
-  for (const el of Array.from(
-    root.querySelectorAll<HTMLElement>(
-      ".n-bindgroups details.n-bind[data-fn], .n-bindgroups .n-ctlchip[data-fn]",
-    ),
-  )) {
-    const fn = el.getAttribute("data-fn") ?? "";
-    if (!fn || fn.startsWith("macro.")) continue;
-    const label =
-      el.querySelector(".n-bind-label")?.textContent?.trim() || el.textContent?.trim() || fn;
-    steps.push({ fn, label });
+function normalizedControlFunction(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** The old pane renders bound rows and free-control chips as separate lists.
+ * Keep that projection only as a compatibility fallback for a stale payload;
+ * current payloads carry `pad.controls`, which is the authoring contract. */
+function legacySelectedControls(view: NocturneView): NocturneControlFlowView[] {
+  const groups: readonly [
+    string,
+    readonly NocturneBindRowView[],
+    readonly NocturneCtlChipView[],
+  ][] = [
+    ["face", view.bind_face, view.avail_ctl_face],
+    ["dpad", view.bind_dpad, view.avail_ctl_dpad],
+    ["shoulders", view.bind_shoulders, view.avail_ctl_shoulders],
+    ["left-stick", view.bind_lstick, view.avail_ctl_lstick],
+    ["right-stick", view.bind_rstick, view.avail_ctl_rstick],
+    ["system", view.bind_system, view.avail_ctl_system],
+  ];
+  const controls: NocturneControlFlowView[] = [];
+  const seen = new Set<string>();
+  for (const [group, bound, available] of groups) {
+    for (const row of bound) {
+      const identity = normalizedControlFunction(row.function);
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      controls.push({
+        function: row.function,
+        label: row.label,
+        group,
+        order: controls.length,
+        keys: row.chip === "—" ? [] : row.chip.split(/\s*·\s*/u).filter(Boolean),
+        toggle: row.tog_cls.includes(" on"),
+        turbo_hz: /^\d+$/.test(row.turbo) ? Number(row.turbo) : null,
+      });
+    }
+    for (const row of available) {
+      const identity = normalizedControlFunction(row.function);
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      controls.push({
+        function: row.function,
+        label: row.label,
+        group,
+        order: controls.length,
+        keys: [],
+        toggle: false,
+        turbo_hz: null,
+      });
+    }
   }
+  return controls;
+}
+
+/** Ordered, exact controller endpoints without consulting rendered pane DOM.
+ * This is the seam the canvas selection/composer will build on. */
+function controlsForPad(
+  view: NocturneView | null,
+  slot: string,
+): NocturneControlFlowView[] {
+  if (!view) return [];
+  const pad = view.pads.find((candidate) => String(candidate.slot) === slot);
+  if (pad?.mapping_available === false) return [];
+  if (pad?.controls !== undefined) {
+    return [...pad.controls].sort((left, right) => left.order - right.order);
+  }
+  if (slot === view.slot_val) return legacySelectedControls(view);
+  return Object.entries(pad?.fn_names ?? {}).map(([fn, label], order) => ({
+    function: fn,
+    label,
+    group: "system",
+    order,
+    keys: [],
+    toggle: false,
+    turbo_hz: null,
+  }));
+}
+
+function controlForPad(
+  view: NocturneView | null,
+  slot: string,
+  rawFunction: string,
+): NocturneControlFlowView | undefined {
+  const wanted = normalizedControlFunction(rawFunction);
+  return controlsForPad(view, slot).find(
+    (control) => normalizedControlFunction(control.function) === wanted,
+  );
+}
+
+function startAutoMap(): void {
+  const steps = controlsForPad(lastBindView, nSlotVal())
+    .filter((control) => !control.function.startsWith("macro."))
+    .map((control) => ({ fn: control.function, label: control.label }));
   if (steps.length === 0) {
     applyFlash("error: No controls to map — add a controller first.");
     return;
@@ -5123,31 +5216,30 @@ export function nocturneWire(root: HTMLElement): void {
       // CANONICAL fn spelling and the readable label for ANY slot.
       const padSlot =
         zone.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ?? nSlotVal();
-      const pv = (lastBindView?.pads ?? []).find((x) => String(x.slot) === padSlot);
-      const padCanonical = pv
-        ? Object.keys(pv.fn_names).find((f) => f.toLowerCase() === fnName.toLowerCase())
-        : undefined;
-      const padLabel = padCanonical ? pv?.fn_names[padCanonical] : undefined;
+      const padView = lastBindView?.pads.find((candidate) => String(candidate.slot) === padSlot);
+      const padControl = controlForPad(lastBindView, padSlot, fnName);
+      const padCanonical = padControl?.function;
+      const padLabel = padControl?.label;
+      if (padView?.mapping_available === false) {
+        applyFlash(
+          `error: ${padView.mapping_reason || `Player ${padSlot}'s controls are not available yet.`}`,
+        );
+        return;
+      }
       if (assignKey && fnName) {
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
         const mode = assignMode;
         const chain = ev.shiftKey || chainWanted();
         cancelAssign();
-        // The pane's row (or the FREE control's group chip) carries the
-        // CANONICAL fn spelling and the label — the art's token is
-        // lowercase while face buttons are uppercase in the mapper, and
-        // the current-keys reads (add/remove) must speak the mapper's own.
-        const owner = Array.from(
-          root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
-        ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName.toLowerCase());
-        const canonical = padCanonical ?? owner?.getAttribute("data-fn") ?? fnName;
+        // Canonical spelling and persona label belong to the backend-owned
+        // endpoint projection. The right-pane row is no longer an implicit
+        // data store, so removing that presentation cannot corrupt a write.
+        const selectedControl =
+          padControl ?? controlForPad(lastBindView, nSlotVal(), fnName);
+        const canonical = padCanonical ?? selectedControl?.function ?? fnName;
         lastWrite = { origin: "assign", chain, assignMode: mode };
-        const label =
-          padLabel ||
-          owner?.querySelector(".n-bind-label")?.textContent?.trim() ||
-          (owner?.classList.contains("n-ctlchip") ? owner.textContent?.trim() : "") ||
-          fnName;
+        const label = padLabel || selectedControl?.label || fnName;
         void writeLearnedKey({ fn: canonical, label, slot: padSlot, mode }, held, false).then(
           (ok) => {
             // "Bind several": the key stays in your hand for the next
@@ -5169,11 +5261,11 @@ export function nocturneWire(root: HTMLElement): void {
               root.querySelectorAll<HTMLElement>("details.n-bind[data-fn], .n-ctlchip[data-fn]"),
             ).find((el) => (el.getAttribute("data-fn") ?? "").toLowerCase() === fnName)
           : undefined;
-      const rowFn = padCanonical ?? rowEl?.getAttribute("data-fn") ?? fnName;
+      const rowFn =
+        padCanonical ?? controlForPad(lastBindView, nSlotVal(), fnName)?.function ?? fnName;
       const rowLabel =
         padLabel ||
-        rowEl?.querySelector(".n-bind-label")?.textContent?.trim() ||
-        (rowEl?.classList.contains("n-ctlchip") ? rowEl.textContent?.trim() : "") ||
+        controlForPad(lastBindView, nSlotVal(), fnName)?.label ||
         fnName;
       if (ui.rightView !== "controls") {
         ui.rightView = "controls";

@@ -124,6 +124,19 @@ async function settle(page) {
   }
 }
 
+function setPadControlKeys(pad, functionName, keys) {
+  const wanted = functionName.trim().toLowerCase();
+  const legacyFunction = Object.keys(pad.fn_keys ?? {}).find(
+    (candidate) => candidate.trim().toLowerCase() === wanted,
+  ) ?? functionName;
+  pad.fn_keys[legacyFunction] = keys.join(" · ");
+  const control = pad.controls?.find(
+    (candidate) => candidate.function.trim().toLowerCase() === wanted,
+  );
+  assert.ok(control, `fixture payload projects the ${functionName} control`);
+  control.keys = [...keys];
+}
+
 const scaleOf = (page, id) =>
   page.evaluate(
     (instance) =>
@@ -132,6 +145,57 @@ const scaleOf = (page, id) =>
   );
 
 describe("the canvas navigation controls", () => {
+  test("mapping actions keep their controller truth after the legacy pane is absent", async () => {
+    const page = await openCanvas();
+    let resolveBind;
+    const bound = new Promise((resolve) => {
+      resolveBind = resolve;
+    });
+    await page.route("**/nocturne/api/bind", async (route) => {
+      resolveBind(JSON.parse(route.request().postData() ?? "{}"));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          message: null,
+          error: null,
+          code: null,
+          conflicts: [],
+          also_drives: [],
+        }),
+      });
+    });
+    try {
+      await page.locator(".n-right").evaluate((pane) => pane.remove());
+      assert.equal(await page.locator(".n-right").count(), 0, "the test removes the ledger entirely");
+
+      await page.click('[data-nx="auto-map"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+      assert.match(
+        await page.locator(".n-learnbar").innerText(),
+        /P1 · A — 1 of 25/i,
+        "Map all derives its ordered controls from payload data, not pane rows",
+      );
+      await page.click('[data-nx="learn-cancel"]');
+
+      await page.locator('.n-widget-kb [data-key="Q"]').click({ force: true });
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().click({ force: true });
+      const request = await bound;
+      assert.equal(request.slot, 1);
+      assert.equal(request.key, "Q");
+      assert.equal(request.function, "A", "pad art resolves the mapper's canonical spelling");
+      assert.equal(request.mode, "replace");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("the selection group is empty-handed until something is selected", async () => {
     const page = await openCanvas();
     try {
@@ -978,7 +1042,7 @@ describe("the canvas navigation controls", () => {
         }
         const payload = await response.json();
         const pad = payload.view?.pads?.[0];
-        if (pad) pad.fn_keys.a = "F13";
+        if (pad) setPadControlKeys(pad, "a", ["F13"]);
         changeNext = false;
         markChanged();
         await route.fulfill({ response, json: payload });
@@ -1014,7 +1078,12 @@ describe("the canvas navigation controls", () => {
 
   test("unavailable mapper truth never draws stale direct cords and stays discoverable", async () => {
     let servedUnavailable = false;
+    let bindRequests = 0;
     const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/nocturne/api/bind", async (route) => {
+        bindRequests += 1;
+        await route.abort();
+      });
       await candidate.route("**/api/nocturne*", async (route) => {
         const response = await route.fetch();
         if (response.status() !== 200) {
@@ -1025,6 +1094,7 @@ describe("the canvas navigation controls", () => {
         for (const pad of payload.view?.pads ?? []) {
           pad.mapping_available = false;
           pad.mapping_reason = "Fixture direct read failed.";
+          pad.controls = [];
           // Deliberately stale and non-empty: availability must win.
           pad.fn_keys = { A: "G" };
         }
@@ -1059,6 +1129,27 @@ describe("the canvas navigation controls", () => {
         await page.textContent("#n-mapping-path-status"),
         /direct mapping information is unavailable.*Fixture direct read failed/i,
       );
+      await page.click('[data-nx="auto-map"]');
+      await page.waitForFunction(() =>
+        /No controls to map/i.test(document.querySelector(".n-flash")?.textContent ?? "")
+      );
+      assert.equal(
+        await page.locator(".n-learnbar.listen").count(),
+        0,
+        "an unavailable mapper never opens canvas authoring",
+      );
+      const control = page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first();
+      await control.click({ force: true });
+      assert.equal(
+        await page.locator(".n-learnbar.listen").count(),
+        0,
+        "an unavailable controller endpoint cannot arm key listening",
+      );
+      await page.locator('.n-widget-kb [data-key="Q"]').click({ force: true });
+      await control.click({ force: true });
+      assert.equal(bindRequests, 0, "an unavailable controller endpoint cannot write a binding");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -1547,7 +1638,7 @@ describe("the canvas navigation controls", () => {
             };
           });
           if (addDirectRoute) {
-            pad.fn_keys.a = "F13";
+            setPadControlKeys(pad, "a", ["F13"]);
             markTopology();
           }
           if (changeGroupedMeta) {

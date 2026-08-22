@@ -1,14 +1,29 @@
 /**
- * Read-only mapping-flow projection for Nocturne's canvas.
+ * Normalized mapping-flow projection for Nocturne's canvas.
  *
- * The mapper owns the binding graph; this layer only turns that truth into
- * visible edges.  Keeping the graph separate from DOM anchors is deliberate:
- * direct bindings stay `key -> control`, while timed macros become
- * `key -> processor -> controls touched across the timeline`. The graph never
- * pretends that the virtual controller itself performs the transform.
+ * The mapper owns the authoring data and this topology remains read-only: this
+ * layer only turns that truth into visible edges. Keeping the graph separate
+ * from DOM anchors is deliberate. Direct bindings stay `key -> control`,
+ * while timed macros become `key -> processor -> controls touched across the
+ * timeline`. The graph never pretends that the virtual controller itself
+ * performs the transform.
  */
 
 export type MappingPathMode = "off" | "selected" | "all";
+
+/** Backend-owned controller endpoint in persona/zone order. Exact key arrays
+ * avoid recovering authoring data from presentation strings such as `G · H`;
+ * behavior fields travel with the endpoint even though this module currently
+ * projects only its topology. */
+export interface MappingFlowControl {
+  function: string;
+  label: string;
+  group: string;
+  order: number;
+  keys: readonly string[];
+  toggle: boolean;
+  turbo_hz: number | null;
+}
 
 export interface MappingFlowPad {
   slot: number;
@@ -16,6 +31,7 @@ export interface MappingFlowPad {
   title: string;
   fn_keys: Record<string, string>;
   fn_names: Record<string, string>;
+  controls?: readonly MappingFlowControl[];
   mapping_available?: boolean;
   mapping_reason?: string;
   macros?: readonly MappingFlowMacro[];
@@ -204,6 +220,13 @@ function routePart(value: string): string {
 function functionLabel(pad: MappingFlowPad, canonicalFunction: string): string {
   const functionName = normalizedFunctionName(canonicalFunction);
   const direction = directionalAnchorFunction(functionName);
+  const control = pad.controls?.find(
+    (candidate) =>
+      normalizedFunctionName(candidate.function) === functionName ||
+      (direction !== null && normalizedFunctionName(candidate.function) === direction),
+  );
+  const normalizedLabel = control?.label.trim();
+  if (normalizedLabel) return normalizedLabel;
   const labelEntry = Object.entries(pad.fn_names).find(
     ([candidate]) =>
       normalizedFunctionName(candidate) === functionName ||
@@ -221,14 +244,41 @@ export function deriveDirectMappingFlow(
   const routes: DirectMappingFlow[] = [];
   const seen = new Set<string>();
   for (const pad of [...pads].sort((left, right) => left.slot - right.slot)) {
-    const entries = Object.entries(pad.fn_keys).sort(([left], [right]) =>
-      normalizedFunctionName(left).localeCompare(normalizedFunctionName(right))
+    const controls = [...(pad.controls ?? [])]
+        .sort((left, right) =>
+          left.order - right.order ||
+          normalizedFunctionName(left.function).localeCompare(
+            normalizedFunctionName(right.function),
+          )
+        )
+        .map<[string, readonly string[]]>((control) => [control.function, control.keys]);
+    const projectedFunctions = new Set(
+      controls.map(([canonicalFunction]) => normalizedFunctionName(canonicalFunction)),
     );
-    for (const [canonicalFunction, joinedKeys] of entries) {
+    const legacyEntries = Object.entries(pad.fn_keys)
+      // The ordered zone projection intentionally covers visible controls only.
+      // Preserve non-zone mapper truth such as partial axes (`ly.-16384`) from
+      // the compatibility map while preferring exact key arrays for projected
+      // controls. These raw functions retain their route identity and merely
+      // borrow the matching directional zone as their DOM anchor.
+      .filter(([canonicalFunction]) =>
+        !projectedFunctions.has(normalizedFunctionName(canonicalFunction))
+      )
+      .sort(([left], [right]) =>
+        normalizedFunctionName(left).localeCompare(normalizedFunctionName(right))
+      )
+      .map<[string, readonly string[]]>(([canonicalFunction, joinedKeys]) => [
+        canonicalFunction,
+        joinedKeys.split(/\s*·\s*/u),
+      ]);
+    const entries: [string, readonly string[]][] = pad.controls === undefined
+      ? legacyEntries
+      : [...controls, ...legacyEntries];
+    for (const [canonicalFunction, keys] of entries) {
       const functionName = normalizedFunctionName(canonicalFunction);
       if (!functionName) continue;
       const label = functionLabel(pad, canonicalFunction);
-      for (const candidate of joinedKeys.split(/\s*·\s*/u)) {
+      for (const candidate of keys) {
         const key = candidate.trim();
         if (!key) continue;
         const signature = `${pad.slot}\u0000${key}\u0000${functionName}`;

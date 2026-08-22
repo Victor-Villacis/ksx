@@ -50,10 +50,43 @@ import {
   type KeyboardThemeSlug,
   type KeyboardWorkbenchPlacedKey,
   type KeyboardWorkbenchRecord,
-  type KeyboardWorkbenchRenderMode,
   type KeyboardWorkbenchState,
   type KeyboardWorkbenchStore,
 } from "./keyboardWorkbench";
+import {
+  CONTROL_SURFACE_BOUNDS,
+  CONTROL_SURFACE_MAX_CONTROLS,
+  CONTROL_SURFACE_STORAGE_KEY,
+  CONTROL_SURFACE_STORE_VERSION,
+  CONTROL_SURFACE_TEMPLATES,
+  DEFAULT_CONTROL_SURFACE_STATE,
+  addControlSurfaceControl,
+  applyControlSurfaceTemplate,
+  cloneControlSurfaceState,
+  controlSurfaceStateForDevice,
+  controlSurfaceWorkbenchMigrated,
+  copyControlSurfaceControl,
+  migrateKeyboardWorkbenchSurface,
+  moveControlSurfaceControl,
+  removeControlSurfaceControl,
+  renameControlSurfaceControl,
+  resolveControlSurfaceSharedSignal,
+  sanitizeControlSurfaceStore,
+  selectControlSurfaceControl,
+  setControlSurfacePlayerSlot,
+  setControlSurfaceStage,
+  teachControlSurfaceChannel,
+  withControlSurfaceState,
+  withControlSurfaceWorkbenchMigrated,
+  type ControlSurfaceChannel,
+  type ControlSurfaceControl,
+  type ControlSurfaceControlKind,
+  type ControlSurfaceMappingRecord,
+  type ControlSurfaceStage,
+  type ControlSurfaceState,
+  type ControlSurfaceStore,
+  type ControlSurfaceTemplate,
+} from "./controlSurface";
 import {
   MappingFlowLayer,
   mappingPathModeIsValid,
@@ -1031,6 +1064,7 @@ export function applyNocturne(p: NocturnePayload): void {
   refreshInspectorCopy();
   if (learnRoot) {
     reconcileKeyboardWorkbenchIdentity();
+    reconcileControlSurfaceIdentity();
     syncPadWidgets();
     syncMappingFlow();
     // Reorders move controllers between seats: the identity colors, the
@@ -1208,6 +1242,34 @@ let keyboardWorkbenchDrag: {
   pointerId: number;
   key: string;
   token: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+  scaleX: number;
+  scaleY: number;
+  moved: boolean;
+} | null = null;
+let controlSurfaceStore: ControlSurfaceStore = {
+  version: CONTROL_SURFACE_STORE_VERSION,
+  devices: {},
+  migratedWorkbench: {},
+};
+let controlSurfaceState = cloneControlSurfaceState(DEFAULT_CONTROL_SURFACE_STATE);
+let controlSurfaceIdentity = canonicalKeyboardDeviceIdentity("");
+let controlSurfaceItem: HTMLElement | null = null;
+let controlSurfaceItemIdentity = "";
+let controlSurfaceChoosingTemplate = false;
+let controlSurfacePendingTemplate: ControlSurfaceTemplate | null = null;
+let controlSurfaceUndoState: ControlSurfaceState | null = null;
+let controlSurfaceUndoIdentity = "";
+let controlSurfaceUndoAfterFingerprint = "";
+let controlSurfaceReturnFocus: HTMLElement | null = null;
+let controlSurfaceInspectorPrint = "";
+let controlSurfaceSaveFailed = false;
+let controlSurfaceDrag: {
+  pointerId: number;
+  controlId: string;
   startClientX: number;
   startClientY: number;
   startX: number;
@@ -1485,6 +1547,11 @@ function reconcileKeyboardWorkbenchIdentity(): void {
 function chooseKeyboardTheme(value: string): void {
   if (!keyboardThemeIsValid(value) || value === keyboardWorkbenchState.theme) return;
   applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, theme: value }, true);
+  // A panel starts from the selected hardware's material palette. Its
+  // component identities and player colors remain separate layers.
+  if (controlSurfaceIdentity === keyboardWorkbenchIdentity) {
+    applyControlSurfaceState({ ...controlSurfaceState, theme: value }, true);
+  }
 }
 
 function chooseKeyboardCapProfile(value: string): void {
@@ -1496,6 +1563,194 @@ function chooseKeyboardCapProfile(value: string): void {
 function keyboardWorkbenchAnnounce(message: string): void {
   const sr = learnRoot?.querySelector<HTMLElement>(".n-live-sr");
   if (sr) sr.textContent = message;
+}
+
+// ── PHYSICAL CONTROL-SURFACE DOCUMENT ──────────────────────────────────
+// The selected keyboard/encoder supplies an identity and observed host
+// signals. This document owns only component geometry and those observations;
+// controller routing remains the backend-owned mapping projection above.
+
+function controlSurfaceDocumentFingerprint(state: ControlSurfaceState): string {
+  return JSON.stringify({
+    name: state.name,
+    template: state.template,
+    panelLayout: state.panelLayout,
+    theme: state.theme,
+    controls: state.controls,
+  });
+}
+
+function clearControlSurfaceUndo(): void {
+  controlSurfaceUndoState = null;
+  controlSurfaceUndoIdentity = "";
+  controlSurfaceUndoAfterFingerprint = "";
+}
+
+function saveControlSurfacePrefs(): void {
+  if (
+    controlSurfaceUndoAfterFingerprint &&
+    controlSurfaceDocumentFingerprint(controlSurfaceState) !== controlSurfaceUndoAfterFingerprint
+  ) {
+    clearControlSurfaceUndo();
+  }
+  controlSurfaceStore = withControlSurfaceState(
+    controlSurfaceStore,
+    controlSurfaceIdentity,
+    controlSurfaceState,
+  );
+  try {
+    window.localStorage.setItem(
+      CONTROL_SURFACE_STORAGE_KEY,
+      JSON.stringify(controlSurfaceStore),
+    );
+    controlSurfaceSaveFailed = false;
+  } catch {
+    controlSurfaceSaveFailed = true;
+    // A browser-kept panel layout may remain session-only when storage is blocked.
+  }
+}
+
+function applyControlSurfaceState(
+  state: ControlSurfaceState,
+  persist: boolean,
+  reveal = false,
+): void {
+  controlSurfaceState = cloneControlSurfaceState(state);
+  if (persist) saveControlSurfacePrefs();
+  syncControlSurfaceWidget(reveal);
+}
+
+function controlSurfaceMappingRecords(): ControlSurfaceMappingRecord[] {
+  const records: ControlSurfaceMappingRecord[] = [];
+  for (const pad of lastBindView?.pads ?? []) {
+    for (const [functionName, joinedKeys] of Object.entries(pad.fn_keys)) {
+      for (const candidate of joinedKeys.split(/\s*·\s*/u)) {
+        const key = candidate.trim();
+        if (!key) continue;
+        records.push({
+          key,
+          slot: pad.slot,
+          functionName,
+          controlLabel: pad.fn_names[functionName] || functionName,
+          playerLabel: pad.title || `Player ${pad.slot}`,
+        });
+      }
+    }
+  }
+  return records;
+}
+
+function maybeMigrateKeyboardWorkbenchSurface(): boolean {
+  if (
+    controlSurfaceState.started ||
+    controlSurfaceWorkbenchMigrated(controlSurfaceStore, controlSurfaceIdentity) ||
+    (
+      keyboardWorkbenchState.renderMode !== "arcade" &&
+      keyboardWorkbenchState.layoutMode !== "leverless" &&
+      keyboardWorkbenchState.layoutMode !== "players"
+    )
+  ) {
+    return false;
+  }
+  const placed = keyboardWorkbenchPlacedKeys();
+  if (placed.length === 0) return false;
+  if (placed.length > CONTROL_SURFACE_MAX_CONTROLS) {
+    keyboardWorkbenchAnnounce(
+      `The legacy panel has ${placed.length} visual controls, above the ${CONTROL_SURFACE_MAX_CONTROLS}-control safety limit. It was left intact instead of being partially migrated.`,
+    );
+    return false;
+  }
+  controlSurfaceState = migrateKeyboardWorkbenchSurface(
+    { ...controlSurfaceState, theme: keyboardWorkbenchState.theme },
+    placed,
+    keyboardWorkbenchState.renderMode,
+    nCapSelector().trim() || controlSurfaceIdentity,
+  );
+  controlSurfaceStore = withControlSurfaceWorkbenchMigrated(
+    withControlSurfaceState(
+      controlSurfaceStore,
+      controlSurfaceIdentity,
+      controlSurfaceState,
+    ),
+    controlSurfaceIdentity,
+  );
+  let migrationSaved = false;
+  try {
+    window.localStorage.setItem(
+      CONTROL_SURFACE_STORAGE_KEY,
+      JSON.stringify(controlSurfaceStore),
+    );
+    migrationSaved = true;
+  } catch {
+    controlSurfaceSaveFailed = true;
+    // Keep the legacy surface byte-for-byte when the larger replacement could
+    // not be made durable. The in-memory copy remains available this session,
+    // but must never be announced as a completed migration.
+  }
+  if (!migrationSaved) {
+    keyboardWorkbenchAnnounce(
+      "The old panel is still intact. This browser could not save its Control Surface copy, so the migration remains session-only.",
+    );
+    return true;
+  }
+  // The legacy surface is now safe in its own document. The Workbench returns
+  // to its truthful job: arranging real keycaps from the selected keyboard.
+  applyKeyboardWorkbenchState(
+    {
+      ...keyboardWorkbenchState,
+      renderMode: "keycap",
+      layoutMode: keyboardWorkbenchState.layoutMode === "free" ? "free" : "compact",
+    },
+    true,
+  );
+  keyboardWorkbenchAnnounce(
+    "Your existing arcade or player-panel layout moved into Control Surface Builder; the Keyboard Arranger and every mapping were preserved.",
+  );
+  return true;
+}
+
+function loadControlSurfacePrefs(): void {
+  try {
+    controlSurfaceStore = sanitizeControlSurfaceStore(
+      window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY),
+    );
+  } catch {
+    controlSurfaceStore = {
+      version: CONTROL_SURFACE_STORE_VERSION,
+      devices: {},
+      migratedWorkbench: {},
+    };
+  }
+  controlSurfaceIdentity = currentKeyboardWorkbenchIdentity();
+  controlSurfaceState = controlSurfaceStateForDevice(
+    controlSurfaceStore,
+    controlSurfaceIdentity,
+    keyboardWorkbenchState.theme,
+  );
+  maybeMigrateKeyboardWorkbenchSurface();
+  applyControlSurfaceState(controlSurfaceState, false);
+}
+
+function reconcileControlSurfaceIdentity(): void {
+  const identity = currentKeyboardWorkbenchIdentity();
+  if (identity !== controlSurfaceIdentity) {
+    if (learnRow?.purpose === "surface") void cancelLearn();
+    if (assignKey) cancelAssign();
+    controlSurfaceIdentity = identity;
+    controlSurfaceChoosingTemplate = false;
+    controlSurfacePendingTemplate = null;
+    controlSurfaceUndoState = null;
+    controlSurfaceUndoIdentity = "";
+    controlSurfaceUndoAfterFingerprint = "";
+    controlSurfaceInspectorPrint = "";
+    controlSurfaceState = controlSurfaceStateForDevice(
+      controlSurfaceStore,
+      identity,
+      keyboardWorkbenchState.theme,
+    );
+  }
+  maybeMigrateKeyboardWorkbenchSurface();
+  syncControlSurfaceWidget(false);
 }
 
 /** Repaint a premium controller without moving a single source-authored path
@@ -1543,6 +1798,10 @@ function padStoreKeys(
 
 function keyboardWorkbenchCanvasKey(identity = keyboardWorkbenchIdentity): string {
   return "kw:" + identity;
+}
+
+function controlSurfaceCanvasKey(identity = controlSurfaceIdentity): string {
+  return "cs:" + identity;
 }
 
 function currentKeyboardSourceItem(): HTMLElement | null {
@@ -1620,6 +1879,10 @@ function persistCanvas(): void {
   if (keyboardWorkbenchItem?.dataset.canvasX !== undefined) {
     widgets[keyboardWorkbenchCanvasKey(keyboardWorkbenchItemIdentity)] =
       canvas.getItemState(keyboardWorkbenchItem);
+  }
+  if (controlSurfaceItem?.dataset.canvasX !== undefined) {
+    widgets[controlSurfaceCanvasKey(controlSurfaceItemIdentity)] =
+      canvas.getItemState(controlSurfaceItem);
   }
   const storeKeys = padStoreKeys(v?.pads ?? []);
   for (const [slot, item] of padItems) {
@@ -1773,9 +2036,15 @@ function labelCanvasMarkers(): void {
       continue;
     }
     if (id === "key-workbench") {
-      marker.textContent = "LAB";
+      marker.textContent = "KEYS";
       marker.classList.add("nm-kb", "nm-keylab");
-      marker.title = "Key Workbench · pulled keys and leverless layouts";
+      marker.title = "Keyboard Arranger · real keys from the selected keyboard";
+      continue;
+    }
+    if (id === "control-surface") {
+      marker.textContent = "PANEL";
+      marker.classList.add("nm-kb", "nm-surface");
+      marker.title = "Control Surface Builder · physical controls, taught inputs, and routes";
       continue;
     }
     const slot = Number(id.startsWith("pad-") ? id.slice(4) : NaN);
@@ -1880,10 +2149,11 @@ function arrangeCanvas(): void {
   if (!canvas || !root) return;
   const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
   const keylab = keyboardWorkbenchItem;
+  const surface = controlSurfaceItem;
   const pads = Array.from(padItems.entries())
     .sort(([a], [b]) => a - b)
     .map(([, item]) => item);
-  if (!kb && !keylab && pads.length === 0) return;
+  if (!kb && !keylab && !surface && pads.length === 0) return;
   const GAP = 48;
   const ORIGIN_Y = 140;
   // Tidying is a RESET, not a repack: a widget somebody had shrunk to 60%
@@ -1891,6 +2161,7 @@ function arrangeCanvas(): void {
   // exactly the untidiness the button is meant to end.
   if (kb) canvas.resetItemScale(kb);
   if (keylab) canvas.resetItemScale(keylab);
+  if (surface) canvas.resetItemScale(surface);
   for (const item of pads) canvas.resetItemScale(item);
   // A widget's world footprint includes its manual scale: a widget the user
   // made bigger must be given the room it actually occupies.
@@ -1904,6 +2175,7 @@ function arrangeCanvas(): void {
   const widest = Math.max(
     kb ? footprint(kb).w : 0,
     keylab ? footprint(keylab).w : 0,
+    surface ? footprint(surface).w : 0,
     ...pads.map((item) => footprint(item).w),
     1,
   );
@@ -1921,6 +2193,12 @@ function arrangeCanvas(): void {
     boardWidth = Math.max(boardWidth, lab.w);
     canvas.placeItem(keylab, ORIGIN_X + Math.round((widest - lab.w) / 2), y);
     y += lab.h + GAP;
+  }
+  if (surface) {
+    const panel = footprint(surface);
+    boardWidth = Math.max(boardWidth, panel.w);
+    canvas.placeItem(surface, ORIGIN_X + Math.round((widest - panel.w) / 2), y);
+    y += panel.h + GAP;
   }
   if (pads.length > 0) {
     // Rows are as wide as the board (or the widest pad, whichever is more),
@@ -2137,22 +2415,10 @@ function syncKeyboardWorkbenchToolbar(): void {
   const status = item.querySelector<HTMLElement>(".n-keylab-status");
   if (status) {
     status.textContent = count === 0
-      ? "Choose caps on the source keyboard, add this player, or build all four player panels."
-      : `${count} physical ${count === 1 ? "key" : "keys"}${
-          keyboardWorkbenchState.layoutMode === "players"
-            ? ` · ${placed.length} linked panel ${placed.length === 1 ? "control" : "controls"}`
-            : ""
-        } · ${
-        keyboardWorkbenchState.layoutMode === "free"
-          ? "custom layout"
-          : keyboardWorkbenchState.layoutMode === "players"
-          ? "four-player view"
-          : keyboardWorkbenchState.layoutMode
-      } · ${
-        keyboardWorkbenchState.renderMode === "arcade"
-          ? "arcade panel"
-          : `${KEYBOARD_CAP_PROFILES.find((profile) => profile.slug === keyboardWorkbenchState.capProfile)?.label ?? "Mechanical"} keycaps`
-      }`;
+      ? "Choose real keycaps on the source keyboard, or bring in the selected player's mapped keys."
+      : `${count} real ${count === 1 ? "key" : "keys"} · ${
+          keyboardWorkbenchState.layoutMode === "free" ? "custom arrangement" : "compact arrangement"
+        } · ${KEYBOARD_CAP_PROFILES.find((profile) => profile.slug === keyboardWorkbenchState.capProfile)?.label ?? "Mechanical"} keycaps`;
   }
   const deck = item.querySelector<HTMLElement>(".n-keylab-deck");
   if (deck) {
@@ -2182,12 +2448,6 @@ function syncKeyboardWorkbenchToolbar(): void {
   if (mapped) {
     mapped.disabled = !keyboardWorkbenchRecords().some((record) =>
       record.cls.split(/\s+/).includes("bound")
-    );
-  }
-  const allPlayers = item.querySelector<HTMLButtonElement>('[data-nx="keylab-build-players"]');
-  if (allPlayers) {
-    allPlayers.disabled = !keyboardWorkbenchRecords().some((record) =>
-      (record.playerBindings ?? []).some((binding) => binding.slot >= 1 && binding.slot <= 4)
     );
   }
   const returnButton = item.querySelector<HTMLButtonElement>('[data-nx="keylab-return"]');
@@ -2358,15 +2618,15 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   const heading = document.createElement("div");
   const kicker = document.createElement("span");
   kicker.className = "n-kick";
-  kicker.textContent = "Key Workbench";
+  kicker.textContent = "Keyboard Arranger";
   const sub = document.createElement("span");
   sub.className = "n-keylab-sub";
-  sub.textContent = "One physical switch · linked views across player panels";
+  sub.textContent = "Real keycaps from the selected keyboard · identity preserved";
   heading.append(kicker, sub);
   const close = makeKeyboardWorkbenchButton(
     "Close",
     "kb-workbench",
-    "Return to the full keyboard without discarding this layout",
+    "Close the arranger without discarding this keyboard layout",
   );
   close.classList.add("quiet");
   const sourceToggle = makeKeyboardWorkbenchButton(
@@ -2384,7 +2644,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
 
   const tools = document.createElement("div");
   tools.className = "n-keylab-tools";
-  tools.setAttribute("aria-label", "Control Surface Builder settings");
+  tools.setAttribute("aria-label", "Keyboard Arranger settings");
   const profileButtons = KEYBOARD_CAP_PROFILES.map((profile) => {
     const button = makeKeyboardWorkbenchButton(
       profile.label,
@@ -2416,46 +2676,15 @@ function createKeyboardWorkbenchItem(): HTMLElement {
     return button;
   });
   tools.append(
-    makeKeyboardWorkbenchGroup("Add keys", "n-keylab-add-group", [
+    makeKeyboardWorkbenchGroup("Bring onto arranger", "n-keylab-add-group", [
       makeKeyboardWorkbenchButton(
-        "Add this player",
+        "Mapped keys",
         "keylab-pull-mapped",
         "Add every key mapped to the currently selected player without removing keys already on the board",
       ),
-      makeKeyboardWorkbenchButton(
-        "Build 4 players",
-        "keylab-build-players",
-        "Add every proven P1-P4 key and arrange linked views in four player panels",
-      ),
-    ]),
-    makeKeyboardWorkbenchGroup("Surface", "n-keylab-surface-group", [
-      makeKeyboardWorkbenchButton(
-        "▣ Mechanical keycaps",
-        "keylab-render-keycap",
-        "Use physical keycap silhouettes",
-        "keycap",
-      ),
-      makeKeyboardWorkbenchButton(
-        "● Arcade buttons",
-        "keylab-render-arcade",
-        "Preview the same physical keys as a generic arcade panel",
-        "arcade",
-      ),
     ]),
     makeKeyboardWorkbenchGroup("Arrange", "n-keylab-layout-group", [
-      makeKeyboardWorkbenchButton("Compact", "keylab-layout-compact", "Pack selected physical keys", "compact"),
-      makeKeyboardWorkbenchButton(
-        "Leverless",
-        "keylab-layout-leverless",
-        "Arrange movement and action clusters in an original generic leverless layout",
-        "leverless",
-      ),
-      makeKeyboardWorkbenchButton(
-        "4 player panels",
-        "keylab-layout-players",
-        "Show a linked visual mirror in every P1-P4 panel that uses the physical key",
-        "players",
-      ),
+      makeKeyboardWorkbenchButton("Repack", "keylab-layout-compact", "Pack the selected real keys into a compact arrangement", "compact"),
     ]),
     makeKeyboardWorkbenchGroup("Keycap shape", "n-keylab-profile-group", profileButtons),
     makeKeyboardWorkbenchGroup("Finish", "n-keylab-finish-group", finishButtons),
@@ -2539,7 +2768,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   note.className = "n-keylab-note";
   note.id = "key-workbench-note";
   note.textContent =
-    "This panel previews existing mappings; arranging or changing a surface never changes what a key does. Drag to place · arrows nudge · Delete removes the physical key from this panel.";
+    "This is an arrangement of the actual selected keyboard. Drag to place · arrows nudge · Delete returns the keycap to the source. Build Surface is the separate path for I-PAC panels, arcade buttons, and leverless layouts.";
   const deckScroll = document.createElement("div");
   deckScroll.className = "n-keylab-deck-scroll";
   deckScroll.append(deck);
@@ -2547,7 +2776,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
 
   const item = createCanvasItem({
     instanceId: "key-workbench",
-    displayName: "Key Workbench",
+    displayName: "Keyboard Arranger",
     preferredWidth: 1240,
     minHeight: 920,
     content,
@@ -2702,52 +2931,12 @@ function pullMappedKeyboardWorkbenchKeys(): void {
   );
 }
 
-function buildFourPlayerKeyboardWorkbench(): void {
-  const records = keyboardWorkbenchRecords();
-  const mapped = records.filter((record) =>
-    (record.playerBindings ?? []).some((binding) => binding.slot >= 1 && binding.slot <= 4)
-  );
-  if (mapped.length === 0) return;
-  const selected = new Set(keyboardWorkbenchState.selectedKeys);
-  for (const record of mapped) selected.add(record.key);
-  const first = mapped[0];
-  const slot = first.playerBindings?.find((binding) => binding.slot <= 4)?.slot ?? 1;
-  keyboardWorkbenchSelectedKey = first.key;
-  keyboardWorkbenchSelectedToken = `p:${slot}:${first.key}`;
-  applyKeyboardWorkbenchState(
-    { ...keyboardWorkbenchState, selectedKeys: [...selected], layoutMode: "players" },
-    true,
-  );
-  keyboardWorkbenchAnnounce(
-    `${mapped.length} physical ${mapped.length === 1 ? "key" : "keys"} arranged across four player panels. Shared keys are linked visual mirrors of one switch.`,
-  );
-}
-
-function setKeyboardWorkbenchLayout(mode: "compact" | "leverless" | "players"): void {
+function repackKeyboardWorkbench(): void {
   if (keyboardWorkbenchSelectedKey) {
-    const record = keyboardWorkbenchRecords().find(
-      (candidate) => candidate.key === keyboardWorkbenchSelectedKey,
-    );
-    const slot = record?.playerBindings?.find((binding) => binding.slot <= 4)?.slot;
-    keyboardWorkbenchSelectedToken = mode === "players" && slot
-      ? `p:${slot}:${keyboardWorkbenchSelectedKey}`
-      : `k:${keyboardWorkbenchSelectedKey}`;
+    keyboardWorkbenchSelectedToken = `k:${keyboardWorkbenchSelectedKey}`;
   }
-  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, layoutMode: mode }, true);
-  keyboardWorkbenchAnnounce(
-    mode === "leverless"
-      ? "Leverless arrangement applied."
-      : mode === "players"
-      ? "Four-player panel arrangement applied. Shared physical keys appear as linked views."
-      : "Compact arrangement applied.",
-  );
-}
-
-function setKeyboardWorkbenchRenderMode(mode: KeyboardWorkbenchRenderMode): void {
-  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, renderMode: mode }, true);
-  keyboardWorkbenchAnnounce(
-    mode === "arcade" ? "Keys now wear arcade buttons." : "Keys now wear mechanical keycaps.",
-  );
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, layoutMode: "compact" }, true);
+  keyboardWorkbenchAnnounce("Compact arrangement applied.");
 }
 
 function setKeyboardWorkbenchCapProfile(profile: string): void {
@@ -2885,6 +3074,1136 @@ function keyboardWorkbenchPointerEnd(event: PointerEvent): void {
   keyboardWorkbenchAnnounce(
     `${drag.key}${drag.token.startsWith("p:") ? " player view" : ""} placed in a custom layout.`,
   );
+}
+
+function selectedControlSurfaceControl(): ControlSurfaceControl | null {
+  return controlSurfaceState.controls.find(
+    (control) => control.id === controlSurfaceState.selectedControlId,
+  ) ?? null;
+}
+
+function selectedControlSurfaceChannel(): ControlSurfaceChannel | null {
+  const control = selectedControlSurfaceControl();
+  return control?.channels.find(
+    (channel) => channel.id === controlSurfaceState.selectedChannelId,
+  ) ?? control?.channels[0] ?? null;
+}
+
+function controlSurfaceRoutesForKey(key: string): { slot: number; label: string; title: string }[] {
+  if (!key) return [];
+  const routes: { slot: number; label: string; title: string }[] = [];
+  for (const pad of lastBindView?.pads ?? []) {
+    for (const [functionName, joinedKeys] of Object.entries(pad.fn_keys)) {
+      const keys = joinedKeys.split(/\s*·\s*/u).map((candidate) => candidate.trim());
+      if (!keys.includes(key)) continue;
+      routes.push({
+        slot: pad.slot,
+        label: `P${pad.slot} ${pad.fn_names[functionName] || functionName}`,
+        title: `${key} routes to ${pad.title || `Player ${pad.slot}`} · ${pad.fn_names[functionName] || functionName}`,
+      });
+    }
+  }
+  return routes;
+}
+
+function controlSurfaceRelationship(
+  control: ControlSurfaceControl,
+): "mirror" | "duplicate" | "shared-signal" | "single" {
+  if (control.physicalResolution === "unresolved-shared-signal") {
+    return "shared-signal";
+  }
+  if (controlSurfaceState.controls.some(
+    (candidate) => candidate.id !== control.id && candidate.physicalId === control.physicalId,
+  )) {
+    return "mirror";
+  }
+  const keys = new Set(
+    control.channels
+      .filter((channel) => channel.input.kind === "keyboard")
+      .map((channel) => channel.input.key),
+  );
+  if (
+    keys.size > 0 &&
+    controlSurfaceState.controls.some((candidate) =>
+      candidate.id !== control.id &&
+      candidate.physicalId !== control.physicalId &&
+      candidate.channels.some(
+        (channel) => channel.input.kind === "keyboard" && keys.has(channel.input.key),
+      )
+    )
+  ) {
+    return "duplicate";
+  }
+  return "single";
+}
+
+function syncControlSurfaceInspector(): void {
+  const item = controlSurfaceItem;
+  const inspector = item?.querySelector<HTMLElement>(".n-surface-inspector");
+  if (!item || !inspector) return;
+  const control = selectedControlSurfaceControl();
+  const channel = selectedControlSurfaceChannel();
+  const relationship = control ? controlSurfaceRelationship(control) : "single";
+  const routeRows = channel?.input.kind === "keyboard"
+    ? controlSurfaceRoutesForKey(channel.input.key)
+    : [];
+  const print = JSON.stringify({
+    control,
+    channel,
+    relationship,
+    routeRows,
+    stage: controlSurfaceState.stage,
+    selectedDevice: nCapInstance(),
+  });
+  if (print === controlSurfaceInspectorPrint && inspector.childElementCount > 0) return;
+  controlSurfaceInspectorPrint = print;
+  const active = document.activeElement instanceof HTMLElement &&
+      inspector.contains(document.activeElement)
+    ? document.activeElement
+    : null;
+  const focusToken = active?.dataset.nx ?? "";
+  const focusPlayer = active?.dataset.playerSlot ?? "";
+  const focusChannel = active?.dataset.surfaceChannelId ?? "";
+  inspector.replaceChildren();
+
+  const kicker = document.createElement("span");
+  kicker.className = "n-surface-inspector-kick";
+  kicker.textContent = control ? "Selected physical control" : "Nothing selected";
+  const title = document.createElement("strong");
+  title.className = "n-surface-inspector-title";
+  title.textContent = control?.label ?? "Choose a component on the panel";
+  const copy = document.createElement("p");
+  copy.className = "n-surface-inspector-copy";
+  if (!control || !channel) {
+    copy.textContent = "Add or select a button, keycap, or stick. Design, teaching, and routing stay available in any order.";
+    inspector.append(kicker, title, copy);
+    return;
+  }
+
+  const relationshipCopy = relationship === "mirror"
+    ? "Mirror · this is another view of the same physical control. Teaching either view updates both."
+    : relationship === "duplicate"
+    ? "Duplicate signal · this is a separate physical control that currently emits the same signal."
+    : relationship === "shared-signal"
+    ? "Shared signal · mappings prove these views use the same Windows key; the physical wiring is not confirmed yet."
+    : "Independent physical control";
+  copy.textContent = relationshipCopy;
+
+  const identity = document.createElement("div");
+  identity.className = "n-surface-identity-editor";
+  const identityLabel = document.createElement("label");
+  identityLabel.textContent = "Component name";
+  const identityInput = document.createElement("input");
+  identityInput.type = "text";
+  identityInput.maxLength = 64;
+  identityInput.value = control.label;
+  identityInput.dataset.nx = "surface-label";
+  identityInput.dataset.surfaceControlId = control.id;
+  identityInput.setAttribute("aria-label", "Component name");
+  identityLabel.append(identityInput);
+  identity.append(identityLabel);
+
+  const owner = document.createElement("div");
+  owner.className = "n-surface-owner-picker";
+  owner.setAttribute("role", "group");
+  owner.setAttribute("aria-label", `${control.label} player view`);
+  const ownerLabel = document.createElement("span");
+  ownerLabel.textContent = "Player view";
+  owner.append(ownerLabel);
+  const ownerOptions: [number, string][] = [
+    [0, "Panel-wide"],
+    [1, "P1"],
+    [2, "P2"],
+    [3, "P3"],
+    [4, "P4"],
+  ];
+  ownerOptions.forEach(([slot, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.nx = "surface-owner";
+    button.dataset.playerSlot = String(slot);
+    button.dataset.surfaceControlId = control.id;
+    button.setAttribute("aria-pressed", String((control.playerSlot ?? 0) === slot));
+    button.textContent = label;
+    owner.append(button);
+  });
+
+  const channels = document.createElement("div");
+  channels.className = "n-surface-channel-picker";
+  channels.setAttribute("role", "group");
+  channels.setAttribute("aria-label", `${control.label} input channels`);
+  for (const candidate of control.channels) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.nx = "surface-channel";
+    button.dataset.surfaceControlId = control.id;
+    button.dataset.surfaceChannelId = candidate.id;
+    button.setAttribute("aria-pressed", String(candidate.id === channel.id));
+    button.textContent = candidate.label;
+    channels.append(button);
+  }
+
+  const signal = document.createElement("div");
+  signal.className = "n-surface-signal";
+  const signalLabel = document.createElement("span");
+  signalLabel.textContent = "Observed input";
+  const signalValue = document.createElement("strong");
+  signalValue.textContent = channel.input.kind === "keyboard" ? channel.input.key : "Unassigned";
+  const signalMeta = document.createElement("small");
+  const selectedDevice = nCapInstance().trim();
+  const verifiedDevice = channel.input.kind === "keyboard" &&
+    Boolean(channel.input.device.trim()) && Boolean(selectedDevice) &&
+    channel.input.device.trim().toLocaleUpperCase() === selectedDevice.toLocaleUpperCase();
+  signalMeta.textContent = channel.input.kind === "keyboard"
+    ? verifiedDevice
+      ? `${channel.input.device} · verified against the selected Windows device`
+      : `${channel.input.device || "existing mapping"} · inherited signal; re-teach to verify this physical source`
+    : "Select Teach input, then press the real wired control.";
+  signal.append(signalLabel, signalValue, signalMeta);
+
+  const actions = document.createElement("div");
+  actions.className = "n-surface-inspector-actions";
+  const teach = makeKeyboardWorkbenchButton(
+    channel.input.kind === "keyboard" ? "Re-teach input" : "Teach input",
+    "surface-teach",
+    "Listen for the signal Windows receives from this physical control without changing any mapping",
+  );
+  const route = makeKeyboardWorkbenchButton(
+    "Route output",
+    "surface-route",
+    "Hold this learned signal, then choose one or more virtual-controller controls on the canvas",
+  );
+  route.disabled = channel.input.kind !== "keyboard";
+  actions.append(teach, route);
+
+  const routes = document.createElement("div");
+  routes.className = "n-surface-routes";
+  const routeTitle = document.createElement("span");
+  routeTitle.className = "n-surface-routes-label";
+  routeTitle.textContent = "Backend routes";
+  routes.append(routeTitle);
+  if (routeRows.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "n-surface-route-empty";
+    empty.textContent = channel.input.kind === "keyboard"
+      ? "Not routed yet"
+      : "Teach an input first";
+    routes.append(empty);
+  } else {
+    for (const routeRow of routeRows) {
+      const badge = document.createElement("span");
+      badge.className = `n-surface-route np${routeRow.slot}`;
+      badge.title = routeRow.title;
+      badge.textContent = routeRow.label;
+      routes.append(badge);
+    }
+  }
+
+  const copies = document.createElement("div");
+  copies.className = "n-surface-inspector-actions secondary";
+  if (relationship === "shared-signal") {
+    const resolution = document.createElement("div");
+    resolution.className = "n-surface-resolution";
+    const resolutionLabel = document.createElement("span");
+    resolutionLabel.textContent = "Confirm the wiring";
+    resolution.append(
+      resolutionLabel,
+      makeKeyboardWorkbenchButton(
+        "Link as one physical control",
+        "surface-resolve-mirror",
+        "Confirm that every unresolved view carrying this signal represents one physical switch",
+      ),
+      makeKeyboardWorkbenchButton(
+        "Confirm separate controls",
+        "surface-resolve-duplicate",
+        "Confirm that each unresolved view carrying this signal is independently wired",
+      ),
+    );
+    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, resolution, copies);
+  } else {
+    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, copies);
+  }
+  if (relationship !== "shared-signal") {
+    copies.append(
+      makeKeyboardWorkbenchButton(
+      "Mirror view",
+      "surface-mirror",
+      "Show this same physical control somewhere else; both views stay linked",
+      ),
+      makeKeyboardWorkbenchButton(
+      "Duplicate control",
+      "surface-duplicate",
+      "Add a separate physical control with the same current signal",
+      ),
+    );
+  }
+  copies.append(
+    makeKeyboardWorkbenchButton(
+      "Remove",
+      "surface-remove",
+      "Remove this visual physical control; KSX mappings remain unchanged",
+    ),
+  );
+  if (focusToken) {
+    let selector = `[data-nx="${CSS.escape(focusToken)}"]`;
+    if (focusPlayer) selector += `[data-player-slot="${CSS.escape(focusPlayer)}"]`;
+    if (focusChannel) selector += `[data-surface-channel-id="${CSS.escape(focusChannel)}"]`;
+    inspector.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+  }
+}
+
+function renderControlSurfaceControls(): void {
+  const item = controlSurfaceItem;
+  const deck = item?.querySelector<HTMLElement>(".n-surface-deck");
+  if (!item || !deck) return;
+  const existing = new Map<string, HTMLButtonElement>();
+  for (const button of Array.from(deck.querySelectorAll<HTMLButtonElement>(".n-surface-control"))) {
+    existing.set(button.dataset.surfaceControlId ?? "", button);
+  }
+  for (const control of controlSurfaceState.controls) {
+    let button = existing.get(control.id);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "n-surface-control";
+      const face = document.createElement("span");
+      face.className = "n-surface-control-face";
+      const label = document.createElement("span");
+      label.className = "n-surface-control-label";
+      const signal = document.createElement("span");
+      signal.className = "n-surface-control-signal";
+      const relation = document.createElement("span");
+      relation.className = "n-surface-control-relation";
+      button.append(face, label, signal, relation);
+    }
+    existing.delete(control.id);
+    const relationship = controlSurfaceRelationship(control);
+    const selected = control.id === controlSurfaceState.selectedControlId;
+    const taught = control.channels.some((channel) => channel.input.kind === "keyboard");
+    const teaching = learnRow?.purpose === "surface" &&
+      learnRow.surfaceIdentity === controlSurfaceIdentity &&
+      learnRow.surfaceControlId === control.id;
+    const assigning = Boolean(assignKey) && control.channels.some(
+      (channel) => channel.input.kind === "keyboard" && channel.input.key === assignKey,
+    );
+    button.className = `n-surface-control kind-${control.kind}${selected ? " selected" : ""}${taught ? " taught" : " unassigned"}${relationship !== "single" ? ` ${relationship}` : ""}${control.playerSlot ? ` np${control.playerSlot}` : ""}${teaching ? " teach" : ""}${assigning ? " assign" : ""}`;
+    button.dataset.surfaceControlId = control.id;
+    button.dataset.controlKind = control.kind;
+    button.dataset.physicalId = control.physicalId;
+    if (control.playerSlot === null) delete button.dataset.playerSlot;
+    else button.dataset.playerSlot = String(control.playerSlot);
+    button.style.left = `${(control.x / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
+    button.style.top = `${(control.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
+    button.style.width = `${(control.width / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
+    button.style.height = `${(control.height / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
+    const inputCopy = control.channels
+      .map((channel) => channel.input.kind === "keyboard" ? `${channel.label}: ${channel.input.key}` : `${channel.label}: unassigned`)
+      .join(" · ");
+    const kindCopy = control.kind === "button30"
+      ? "30 millimeter arcade button"
+      : control.kind === "button24"
+      ? "24 millimeter arcade button"
+      : control.kind === "joystick"
+      ? "joystick"
+      : "mechanical keycap";
+    const ownerCopy = control.playerSlot === null ? "panel-wide" : `P${control.playerSlot} view`;
+    const relationCopy = relationship === "mirror"
+      ? " · linked mirror of one physical control"
+      : relationship === "duplicate"
+      ? " · separate control emitting a duplicate signal"
+      : relationship === "shared-signal"
+      ? " · shared mapped signal; physical relationship not confirmed"
+      : "";
+    button.title = `${control.label} · ${kindCopy} · ${ownerCopy} · ${inputCopy}${relationCopy} · drag or use arrow keys to arrange`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(selected));
+    const label = button.querySelector<HTMLElement>(".n-surface-control-label");
+    const signal = button.querySelector<HTMLElement>(".n-surface-control-signal");
+    const relation = button.querySelector<HTMLElement>(".n-surface-control-relation");
+    if (label) label.textContent = control.label;
+    if (signal) {
+      const assigned = control.channels.filter((channel) => channel.input.kind === "keyboard");
+      signal.textContent = assigned.length === 0
+        ? "Teach"
+        : assigned.map((channel) => channel.input.key).join(" / ");
+    }
+    if (relation) {
+      relation.textContent = relationship === "mirror"
+        ? "LINK"
+        : relationship === "duplicate"
+        ? "DUPE"
+        : relationship === "shared-signal"
+        ? "SIGNAL?"
+        : "";
+    }
+
+    for (const old of Array.from(button.querySelectorAll(".n-surface-channel-anchor"))) old.remove();
+    for (const channel of control.channels) {
+      const anchor = document.createElement("span");
+      anchor.className = `n-surface-channel-anchor channel-${channel.id}`;
+      anchor.dataset.surfaceChannelId = channel.id;
+      anchor.dataset.surfaceControlId = control.id;
+      anchor.dataset.controlKind = control.kind;
+      anchor.dataset.selected = String(
+        selected && channel.id === controlSurfaceState.selectedChannelId,
+      );
+      if (control.playerSlot !== null) anchor.dataset.playerSlot = String(control.playerSlot);
+      if (channel.input.kind === "keyboard") {
+        anchor.dataset.key = channel.input.key;
+        anchor.title = `${channel.label} · ${channel.input.key}`;
+      }
+      anchor.setAttribute("aria-hidden", "true");
+      button.append(anchor);
+    }
+    deck.append(button);
+  }
+  for (const button of existing.values()) button.remove();
+  deck.dataset.template = controlSurfaceState.template;
+  deck.dataset.panelLayout = controlSurfaceState.panelLayout;
+  deck.dataset.stage = controlSurfaceState.stage;
+  deck.dataset.empty = String(controlSurfaceState.controls.length === 0);
+  item.dataset.keyboardTheme = controlSurfaceState.theme;
+  liveKeyNodes = null;
+  syncControlSurfaceInspector();
+  mappingFlowLayer?.scheduleLayout();
+}
+
+function syncControlSurfaceChrome(): void {
+  const item = controlSurfaceItem;
+  if (!item) return;
+  const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
+  const starters = item.querySelector<HTMLElement>(".n-surface-starters");
+  const workarea = item.querySelector<HTMLElement>(".n-surface-workarea");
+  const tools = item.querySelector<HTMLElement>(".n-surface-tools");
+  if (starters) starters.hidden = !choosing;
+  if (workarea) workarea.hidden = choosing;
+  if (tools) tools.hidden = choosing;
+  const mappingRecords = controlSurfaceMappingRecords();
+  const selectedSlot = Number(nSlotVal() || "1");
+  for (const card of Array.from(item.querySelectorAll<HTMLButtonElement>("[data-surface-template]"))) {
+    const template = card.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;
+    const descriptor = CONTROL_SURFACE_TEMPLATES.find((candidate) => candidate.slug === template);
+    const label = card.querySelector<HTMLElement>("strong");
+    const pending = controlSurfaceState.started && controlSurfacePendingTemplate === template;
+    card.classList.toggle("confirm", pending);
+    card.setAttribute("aria-pressed", String(pending));
+    if (label) {
+      label.textContent = pending
+        ? `Confirm replacement · ${descriptor?.label ?? template}`
+        : `${controlSurfaceState.started ? "Replace with " : ""}${descriptor?.label ?? template}`;
+    }
+    if (template === "mapping-selected") {
+      card.disabled = !mappingRecords.some((record) => record.slot === selectedSlot);
+    } else if (template === "mapping-four") {
+      card.disabled = !mappingRecords.some((record) => record.slot >= 1 && record.slot <= 4);
+    }
+  }
+  const cancel = item.querySelector<HTMLButtonElement>('[data-nx="surface-template-cancel"]');
+  if (cancel) cancel.hidden = !controlSurfaceState.started;
+  const undo = item.querySelector<HTMLButtonElement>('[data-nx="surface-undo"]');
+  if (undo) {
+    undo.disabled = !controlSurfaceUndoState || controlSurfaceUndoIdentity !== controlSurfaceIdentity;
+  }
+  for (const stageButton of Array.from(item.querySelectorAll<HTMLButtonElement>("[data-surface-stage]"))) {
+    stageButton.setAttribute(
+      "aria-pressed",
+      String(stageButton.dataset.surfaceStage === controlSurfaceState.stage),
+    );
+    stageButton.disabled = !controlSurfaceState.started;
+  }
+  const status = item.querySelector<HTMLElement>(".n-surface-status");
+  if (status) {
+    const physical = new Map<string, ControlSurfaceControl>();
+    for (const control of controlSurfaceState.controls) {
+      if (!physical.has(control.physicalId)) physical.set(control.physicalId, control);
+    }
+    const selectedDevice = nCapInstance().trim().toLocaleUpperCase();
+    const verified = [...physical.values()].reduce(
+      (count, control) => count + control.channels.filter((channel) =>
+        channel.input.kind === "keyboard" && Boolean(selectedDevice) &&
+        channel.input.device.trim().toLocaleUpperCase() === selectedDevice
+      ).length,
+      0,
+    );
+    const channels = [...physical.values()].reduce(
+      (count, control) => count + control.channels.length,
+      0,
+    );
+    const nextStatus = choosing
+      ? controlSurfaceState.started
+        ? "Choose a replacement only when you mean to reset this panel; Cancel keeps every current component."
+        : "Choose a starting shape. Templates create physical controls only—no KSX mapping is changed."
+      : `${physical.size} physical ${physical.size === 1 ? "component" : "components"} · ${controlSurfaceState.controls.length} visual ${controlSurfaceState.controls.length === 1 ? "view" : "views"} · ${verified} of ${channels} physical ${channels === 1 ? "input" : "inputs"} verified · ${
+          controlSurfaceState.stage === "design"
+            ? "Design: add and arrange hardware"
+            : controlSurfaceState.stage === "teach"
+            ? "Teach: press what Windows receives"
+            : "Route: connect learned signals to KSX outputs"
+        }${controlSurfaceSaveFailed ? " · Not saved: browser storage is unavailable" : " · Browser draft saved locally"}`;
+    if (status.textContent !== nextStatus) status.textContent = nextStatus;
+  }
+  renderControlSurfaceControls();
+}
+
+function createControlSurfaceItem(): HTMLElement {
+  const content = document.createElement("div");
+  content.className = "n-surface";
+  content.setAttribute("data-forma-runtime-host", "");
+
+  const head = document.createElement("div");
+  head.className = "n-surface-head";
+  const heading = document.createElement("div");
+  const kicker = document.createElement("span");
+  kicker.className = "n-kick";
+  kicker.textContent = "Control Surface Builder";
+  const sub = document.createElement("span");
+  sub.className = "n-surface-sub";
+  sub.textContent = "Browser draft · physical hardware → observed signal → KSX route";
+  heading.append(kicker, sub);
+  const close = makeKeyboardWorkbenchButton(
+    "Close",
+    "surface-close",
+    "Close the builder without discarding this panel",
+  );
+  close.classList.add("quiet");
+  head.append(heading, close);
+
+  const stages = document.createElement("nav");
+  stages.className = "n-surface-stages";
+  stages.setAttribute("aria-label", "Control surface workflow");
+  ([
+    ["design", "1", "Design", "Add and arrange the physical parts"],
+    ["teach", "2", "Teach inputs", "Press each wired control and record what Windows receives"],
+    ["route", "3", "Route outputs", "Connect learned signals through KSX to virtual controls"],
+  ] as const).forEach(([stage, number, label, title]) => {
+    const button = makeKeyboardWorkbenchButton(label, "surface-stage", title, stage);
+    button.classList.add("n-surface-stage");
+    button.dataset.surfaceStage = stage;
+    const badge = document.createElement("span");
+    badge.textContent = number;
+    button.prepend(badge);
+    stages.append(button);
+  });
+
+  const status = document.createElement("p");
+  status.className = "n-surface-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+
+  const starters = document.createElement("section");
+  starters.className = "n-surface-starters";
+  const starterHead = document.createElement("div");
+  starterHead.className = "n-surface-starter-head";
+  const starterTitle = document.createElement("strong");
+  starterTitle.textContent = "Start the physical panel";
+  const starterCopy = document.createElement("span");
+  starterCopy.textContent = "Build first, import existing mappings, or start from nothing.";
+  starterHead.append(starterTitle, starterCopy);
+  const starterGrid = document.createElement("div");
+  starterGrid.className = "n-surface-starter-grid";
+  for (const template of CONTROL_SURFACE_TEMPLATES) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.dataset.nx = "surface-template";
+    card.dataset.surfaceTemplate = template.slug;
+    card.title = template.note;
+    const label = document.createElement("strong");
+    label.textContent = template.label;
+    const note = document.createElement("span");
+    note.textContent = template.note;
+    card.append(label, note);
+    starterGrid.append(card);
+  }
+  const starterCancel = makeKeyboardWorkbenchButton(
+    "Cancel",
+    "surface-template-cancel",
+    "Keep the current panel",
+  );
+  starterCancel.classList.add("quiet");
+  starters.append(starterHead, starterGrid, starterCancel);
+
+  const tools = document.createElement("div");
+  tools.className = "n-surface-tools";
+  tools.append(
+    makeKeyboardWorkbenchGroup("Add physical part", "n-surface-add", [
+      makeKeyboardWorkbenchButton("● 30 mm", "surface-add", "Add a standard arcade action button", "button30"),
+      makeKeyboardWorkbenchButton("● 24 mm", "surface-add", "Add a compact Start, Coin, or auxiliary button", "button24"),
+      makeKeyboardWorkbenchButton("▣ Keycap", "surface-add", "Add one mechanical key switch", "keycap"),
+      makeKeyboardWorkbenchButton("✣ Stick", "surface-add", "Add a four-channel arcade joystick", "joystick"),
+    ]),
+    makeKeyboardWorkbenchGroup("Panel", "n-surface-panel-actions", [
+      makeKeyboardWorkbenchButton("Choose template…", "surface-new", "Replace this panel only after choosing and confirming a new starting layout"),
+      makeKeyboardWorkbenchButton("Undo removal / replacement", "surface-undo", "Restore the panel from immediately before the last destructive edit"),
+    ]),
+  );
+  for (const button of Array.from(tools.querySelectorAll<HTMLButtonElement>('[data-nx="surface-add"]'))) {
+    button.dataset.controlKind = button.dataset.mode ?? "";
+    button.removeAttribute("data-mode");
+    button.removeAttribute("aria-pressed");
+  }
+
+  const workarea = document.createElement("div");
+  workarea.className = "n-surface-workarea";
+  const deckScroll = document.createElement("div");
+  deckScroll.className = "n-surface-deck-scroll";
+  const deck = document.createElement("div");
+  deck.className = "n-surface-deck";
+  deck.setAttribute("role", "group");
+  deck.setAttribute("aria-label", "Arrangeable physical control surface");
+  const playerZones = document.createElement("div");
+  playerZones.className = "n-surface-player-zones";
+  playerZones.setAttribute("aria-hidden", "true");
+  for (let slot = 1; slot <= 4; slot += 1) {
+    const zone = document.createElement("span");
+    zone.className = `n-surface-player-zone np${slot}`;
+    zone.textContent = `P${slot}`;
+    playerZones.append(zone);
+  }
+  deck.append(playerZones);
+  deck.addEventListener("pointerdown", controlSurfacePointerDown);
+  deck.addEventListener("pointermove", controlSurfacePointerMove);
+  deck.addEventListener("pointerup", controlSurfacePointerEnd);
+  deck.addEventListener("pointercancel", controlSurfacePointerEnd);
+  deckScroll.append(deck);
+  const inspector = document.createElement("aside");
+  inspector.className = "n-surface-inspector";
+  workarea.append(deckScroll, inspector);
+
+  const note = document.createElement("p");
+  note.className = "n-surface-note";
+  note.textContent =
+    "Teach listens to keyboard-class sources but accepts a hit only from the exact selected Windows device. It never programs an encoder or changes a KSX mapping. Route output performs the real backend mapping. XInput-source capture is future work and is not presented as a keyboard here.";
+  content.append(head, stages, status, starters, tools, workarea, note);
+
+  const item = createCanvasItem({
+    instanceId: "control-surface",
+    displayName: "Control Surface Builder",
+    preferredWidth: 1320,
+    minHeight: 940,
+    content,
+  });
+  item.classList.add("n-widget", "n-widget-surface");
+  item.dataset.clientWidget = "";
+  item.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === "F2") && event.target === item) {
+      event.preventDefault();
+      event.stopPropagation();
+      focusControlSurfacePrimary();
+    } else if (event.key === "Escape" && content.contains(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
+      item.focus({ preventScroll: true });
+    }
+  }, { capture: true });
+  return item;
+}
+
+function controlSurfaceHome(): CanvasItemGeometry {
+  const canvas = nCanvas;
+  const source = keyboardWorkbenchItem ?? learnRoot?.querySelector<HTMLElement>(
+    '.n-canvas [data-instance-id="keyboard"]',
+  );
+  if (canvas && source) {
+    const state = canvas.getItemState(source);
+    return {
+      x: state.x + 24,
+      y: state.y + state.height * state.manualScale + 56,
+      width: 1320,
+      height: 940,
+      z: state.z + 1,
+      manualScale: 1,
+    };
+  }
+  return { x: 130, y: 960, width: 1320, height: 940, z: 3, manualScale: 1 };
+}
+
+function focusControlSurfacePrimary(): void {
+  window.requestAnimationFrame(() => {
+    const item = controlSurfaceItem;
+    if (!item) return;
+    const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
+    const target = choosing
+      ? item.querySelector<HTMLButtonElement>("[data-surface-template]")
+      : item.querySelector<HTMLButtonElement>(
+          `.n-surface-control[data-surface-control-id="${CSS.escape(controlSurfaceState.selectedControlId)}"]`,
+        ) ?? item.querySelector<HTMLButtonElement>(".n-surface-control") ??
+          item.querySelector<HTMLButtonElement>('[data-nx="surface-add"]');
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function rememberControlSurfaceUndo(): void {
+  controlSurfaceUndoState = cloneControlSurfaceState(controlSurfaceState);
+  controlSurfaceUndoIdentity = controlSurfaceIdentity;
+  controlSurfaceUndoAfterFingerprint = "";
+}
+
+function finishControlSurfaceUndoArm(): void {
+  if (controlSurfaceUndoState && controlSurfaceUndoIdentity === controlSurfaceIdentity) {
+    controlSurfaceUndoAfterFingerprint = controlSurfaceDocumentFingerprint(controlSurfaceState);
+  }
+}
+
+function undoControlSurfaceDestructiveEdit(): void {
+  if (!controlSurfaceUndoState || controlSurfaceUndoIdentity !== controlSurfaceIdentity) return;
+  if (learnRow?.purpose === "surface") void cancelLearn();
+  if (assignKey) cancelAssign();
+  const restore = cloneControlSurfaceState(controlSurfaceUndoState);
+  clearControlSurfaceUndo();
+  controlSurfacePendingTemplate = null;
+  controlSurfaceChoosingTemplate = false;
+  applyControlSurfaceState({ ...restore, open: true }, true, true);
+  keyboardWorkbenchAnnounce("The panel from before the last removal or replacement was restored.");
+  focusControlSurfacePrimary();
+}
+
+function syncControlSurfaceWidget(reveal: boolean): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  if (
+    controlSurfaceItem &&
+    (!controlSurfaceState.open || controlSurfaceItemIdentity !== controlSurfaceIdentity)
+  ) {
+    if (controlSurfaceItem.dataset.canvasX !== undefined) {
+      canvasPrefs.widgets[controlSurfaceCanvasKey(controlSurfaceItemIdentity)] =
+        canvas.getItemState(controlSurfaceItem);
+      saveCanvasPrefs();
+    }
+    canvas.removeItem(controlSurfaceItem, { selectFallback: false });
+    controlSurfaceItem = null;
+    controlSurfaceItemIdentity = "";
+    controlSurfaceDrag = null;
+  }
+  if (!controlSurfaceState.open) {
+    labelCanvasMarkers();
+    return;
+  }
+  if (!controlSurfaceItem) {
+    controlSurfaceItem = createControlSurfaceItem();
+    controlSurfaceItemIdentity = controlSurfaceIdentity;
+    const restored = canvasPrefs.widgets[controlSurfaceCanvasKey()] ?? controlSurfaceHome();
+    canvas.mountItem(controlSurfaceItem, restored, { focus: false });
+  }
+  syncControlSurfaceChrome();
+  labelCanvasMarkers();
+  if (reveal) {
+    canvas.focusItem(controlSurfaceItem);
+    focusControlSurfacePrimary();
+  }
+}
+
+function openControlSurfaceBuilder(): void {
+  if (document.activeElement instanceof HTMLElement) {
+    controlSurfaceReturnFocus = document.activeElement;
+  }
+  autoMap = null;
+  void cancelLearn();
+  cancelAssign();
+  controlSurfaceChoosingTemplate = !controlSurfaceState.started;
+  controlSurfacePendingTemplate = null;
+  applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, true);
+  keyboardWorkbenchAnnounce(
+    controlSurfaceState.started
+      ? "Control Surface Builder opened with its saved physical panel."
+      : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
+  );
+}
+
+function closeControlSurfaceBuilder(): void {
+  if (learnRow?.purpose === "surface") void cancelLearn();
+  if (assignKey) cancelAssign();
+  controlSurfaceChoosingTemplate = false;
+  controlSurfacePendingTemplate = null;
+  applyControlSurfaceState({ ...controlSurfaceState, open: false }, true);
+  keyboardWorkbenchAnnounce(
+    controlSurfaceSaveFailed
+      ? "Control Surface Builder closed. Browser storage is unavailable, so this draft lasts only for this session."
+      : "Control Surface Builder closed. Its draft is saved in this browser.",
+  );
+  const restore = controlSurfaceReturnFocus?.isConnected
+    ? controlSurfaceReturnFocus
+    : learnRoot?.querySelector<HTMLElement>('[data-nx="surface-open"]') ?? null;
+  controlSurfaceReturnFocus = null;
+  window.requestAnimationFrame(() => restore?.focus({ preventScroll: true }));
+}
+
+function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
+  const records = controlSurfaceMappingRecords();
+  const selectedSlot = Number(nSlotVal() || "1");
+  const generatedRecords = template === "mapping-selected"
+    ? records.filter((record) => record.slot === selectedSlot)
+    : template === "mapping-four"
+    ? records.filter((record) => record.slot >= 1 && record.slot <= 4)
+    : [];
+  const generatedCount = new Set(
+    generatedRecords.map((record) => `${record.slot}\u0000${record.key}`),
+  ).size;
+  if (generatedCount > CONTROL_SURFACE_MAX_CONTROLS) {
+    keyboardWorkbenchAnnounce(
+      `This mapping would create ${generatedCount} visual controls, above the ${CONTROL_SURFACE_MAX_CONTROLS}-control safety limit. The current panel was kept intact.`,
+    );
+    return;
+  }
+  if (
+    template === "mapping-selected" &&
+    !records.some((record) => record.slot === selectedSlot)
+  ) {
+    keyboardWorkbenchAnnounce(`Player ${selectedSlot} has no existing mappings to generate.`);
+    return;
+  }
+  if (
+    template === "mapping-four" &&
+    !records.some((record) => record.slot >= 1 && record.slot <= 4)
+  ) {
+    keyboardWorkbenchAnnounce("Players 1–4 have no existing mappings to generate.");
+    return;
+  }
+  if (controlSurfaceState.started && controlSurfacePendingTemplate !== template) {
+    controlSurfacePendingTemplate = template;
+    syncControlSurfaceChrome();
+    keyboardWorkbenchAnnounce(
+      `Replacement is not applied yet. Press Confirm replacement · ${CONTROL_SURFACE_TEMPLATES.find((candidate) => candidate.slug === template)?.label ?? template}, or Cancel to keep this panel.`,
+    );
+    controlSurfaceItem
+      ?.querySelector<HTMLButtonElement>(`[data-surface-template="${CSS.escape(template)}"]`)
+      ?.focus({ preventScroll: true });
+    return;
+  }
+  if (learnRow?.purpose === "surface") void cancelLearn();
+  if (assignKey) cancelAssign();
+  if (controlSurfaceState.started) rememberControlSurfaceUndo();
+  controlSurfacePendingTemplate = null;
+  controlSurfaceChoosingTemplate = false;
+  applyControlSurfaceState(
+    applyControlSurfaceTemplate(
+      { ...controlSurfaceState, theme: keyboardWorkbenchState.theme },
+      template,
+      records,
+      selectedSlot,
+      nCapSelector().trim() || controlSurfaceIdentity,
+    ),
+    true,
+    true,
+  );
+  finishControlSurfaceUndoArm();
+  keyboardWorkbenchAnnounce(
+    template.startsWith("mapping-")
+      ? "Panel generated from backend-owned mappings. Repeated signals stay visibly unresolved until the physical wiring is identified."
+      : `${CONTROL_SURFACE_TEMPLATES.find((candidate) => candidate.slug === template)?.label ?? "Panel"} created with unassigned physical inputs.`,
+  );
+  focusControlSurfacePrimary();
+}
+
+function addPhysicalControl(kind: ControlSurfaceControlKind): void {
+  const selected = selectedControlSurfaceControl();
+  const currentSlot = Number(nSlotVal() || "1");
+  const playerSlot = controlSurfaceState.panelLayout === "four-player"
+    ? selected?.playerSlot ?? (currentSlot >= 1 && currentSlot <= 4 ? currentSlot : 1)
+    : null;
+  const next = addControlSurfaceControl(controlSurfaceState, kind, playerSlot);
+  if (next.controls.length === controlSurfaceState.controls.length) {
+    keyboardWorkbenchAnnounce(
+      `This panel has reached its ${CONTROL_SURFACE_MAX_CONTROLS}-component visual limit. Nothing was added.`,
+    );
+    return;
+  }
+  applyControlSurfaceState(next, true);
+  keyboardWorkbenchAnnounce("Physical component added. Arrange it, then teach the signal its wiring emits.");
+}
+
+function chooseControlSurfaceStage(stage: ControlSurfaceStage): void {
+  applyControlSurfaceState(setControlSurfaceStage(controlSurfaceState, stage), true);
+  const hasControl = controlSurfaceState.controls.length > 0;
+  keyboardWorkbenchAnnounce(
+    stage === "design"
+      ? "Design selected. Add, name, link, duplicate, and arrange physical parts."
+      : !hasControl
+      ? `${stage === "teach" ? "Teach inputs" : "Route outputs"} selected. Add a physical component first.`
+      : stage === "teach"
+      ? "Teach inputs selected. Choose Teach input for a component, then press its real wired control."
+      : "Route outputs selected. Choose Route output for a learned signal, then choose its virtual controller control.",
+  );
+  window.requestAnimationFrame(() => {
+    const item = controlSurfaceItem;
+    if (!item) return;
+    const target = stage === "design" || !hasControl
+      ? item.querySelector<HTMLElement>('[data-nx="surface-add"]')
+      : stage === "teach"
+      ? item.querySelector<HTMLElement>('[data-nx="surface-teach"]')
+      : item.querySelector<HTMLElement>('[data-nx="surface-route"]:not(:disabled)') ??
+        item.querySelector<HTMLElement>('[data-nx="surface-teach"]');
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function selectControlSurfaceChannel(controlId: string, channelId = ""): void {
+  applyControlSurfaceState(
+    selectControlSurfaceControl(controlSurfaceState, controlId, channelId),
+    true,
+  );
+  const channel = selectedControlSurfaceChannel();
+  if (channel?.input.kind === "keyboard") setInspectorContext({ kind: "key", key: channel.input.key });
+}
+
+function removeSelectedControlSurfaceControl(): void {
+  const control = selectedControlSurfaceControl();
+  if (!control) return;
+  if (learnRow?.purpose === "surface" && learnRow.surfaceControlId === control.id) {
+    void cancelLearn();
+  }
+  if (assignKey) cancelAssign();
+  rememberControlSurfaceUndo();
+  applyControlSurfaceState(
+    removeControlSurfaceControl(controlSurfaceState, control.id),
+    true,
+  );
+  finishControlSurfaceUndoArm();
+  keyboardWorkbenchAnnounce(`${control.label} removed from the panel. Backend mappings were not changed.`);
+  window.requestAnimationFrame(() => {
+    const nextControl = controlSurfaceItem?.querySelector<HTMLElement>(
+      `.n-surface-control[data-surface-control-id="${CSS.escape(controlSurfaceState.selectedControlId)}"]`,
+    );
+    const fallback = controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-add"]');
+    (nextControl ?? fallback)?.focus({ preventScroll: true });
+  });
+}
+
+function copySelectedControlSurfaceControl(mode: "duplicate" | "mirror"): void {
+  const control = selectedControlSurfaceControl();
+  if (!control) return;
+  if (control.physicalResolution === "unresolved-shared-signal") {
+    keyboardWorkbenchAnnounce(
+      "Confirm whether the existing signal views are one switch or separate wiring before making another view.",
+    );
+    return;
+  }
+  const next = copyControlSurfaceControl(controlSurfaceState, control.id, mode);
+  if (next.controls.length === controlSurfaceState.controls.length) {
+    keyboardWorkbenchAnnounce(
+      `This panel has reached its ${CONTROL_SURFACE_MAX_CONTROLS}-component visual limit. Nothing was copied.`,
+    );
+    return;
+  }
+  applyControlSurfaceState(next, true);
+  keyboardWorkbenchAnnounce(
+    mode === "mirror"
+      ? `${control.label} now has a linked visual mirror of the same physical input.`
+      : `${control.label} duplicated as a separate physical control with the same current signal.`,
+  );
+  window.requestAnimationFrame(() => {
+    controlSurfaceItem?.querySelector<HTMLElement>(
+      `.n-surface-control[data-surface-control-id="${CSS.escape(controlSurfaceState.selectedControlId)}"]`,
+    )?.focus({ preventScroll: true });
+  });
+}
+
+function resolveSelectedControlSurfaceSignal(resolution: "mirror" | "duplicate"): void {
+  const control = selectedControlSurfaceControl();
+  const channel = selectedControlSurfaceChannel();
+  if (!control || !channel) return;
+  const before = controlSurfaceState.controls.filter(
+    (candidate) => candidate.physicalResolution === "unresolved-shared-signal",
+  ).length;
+  const next = resolveControlSurfaceSharedSignal(
+    controlSurfaceState,
+    control.id,
+    channel.id,
+    resolution,
+  );
+  const after = next.controls.filter(
+    (candidate) => candidate.physicalResolution === "unresolved-shared-signal",
+  ).length;
+  if (before === after) {
+    keyboardWorkbenchAnnounce("No unresolved views share this channel's current signal.");
+    return;
+  }
+  applyControlSurfaceState(next, true);
+  keyboardWorkbenchAnnounce(
+    resolution === "mirror"
+      ? "These signal views are now linked as one confirmed physical control."
+      : "These signal views are now confirmed as separately wired physical controls.",
+  );
+  window.requestAnimationFrame(() => {
+    controlSurfaceItem?.querySelector<HTMLElement>(
+      `.n-surface-control[data-surface-control-id="${CSS.escape(control.id)}"]`,
+    )?.focus({ preventScroll: true });
+  });
+}
+
+function startControlSurfaceTeach(): void {
+  const control = selectedControlSurfaceControl();
+  const channel = selectedControlSurfaceChannel();
+  if (!control || !channel) {
+    keyboardWorkbenchAnnounce("Select a physical component before teaching an input.");
+    return;
+  }
+  const expectedDevice = nCapInstance().trim();
+  if (!expectedDevice) {
+    keyboardWorkbenchAnnounce(
+      "Select a keyboard or keyboard-mode encoder with a verified Windows device before teaching its physical inputs.",
+    );
+    return;
+  }
+  chooseControlSurfaceStage("teach");
+  void startLearn({
+    fn: "",
+    label: `${control.label} · ${channel.label}`,
+    slot: nSlotVal() || "1",
+    mode: "replace",
+    purpose: "surface",
+    surfaceIdentity: controlSurfaceIdentity,
+    surfaceControlId: control.id,
+    surfaceChannelId: channel.id,
+    surfacePhysicalId: control.physicalId,
+    surfaceExpectedDevice: expectedDevice,
+  });
+}
+
+function teachSelectedControlSurfaceWithKey(
+  identity: string,
+  controlId: string,
+  channelId: string,
+  physicalId: string,
+  key: string,
+  device: string,
+  expectedDevice: string,
+): boolean {
+  const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
+  if (
+    identity !== controlSurfaceIdentity ||
+    !control ||
+    control.physicalId !== physicalId ||
+    !control.channels.some((channel) => channel.id === channelId)
+  ) {
+    keyboardWorkbenchAnnounce(
+      "That teaching attempt belonged to an older panel or component, so its input was ignored.",
+    );
+    return false;
+  }
+  if (
+    !expectedDevice || !device ||
+    device.trim().toLocaleUpperCase() !== expectedDevice.trim().toLocaleUpperCase()
+  ) {
+    keyboardWorkbenchAnnounce(
+      `Ignored ${key}: Windows reported ${device || "an unknown device"}, not the selected keyboard or encoder. Nothing changed.`,
+    );
+    return false;
+  }
+  applyControlSurfaceState(
+    teachControlSurfaceChannel(
+      controlSurfaceState,
+      controlId,
+      channelId,
+      key,
+      device || nCapSelector().trim() || controlSurfaceIdentity,
+    ),
+    true,
+  );
+  setInspectorContext({ kind: "key", key });
+  keyboardWorkbenchAnnounce(
+    `${key} learned for the selected physical control. No KSX mapping changed; Route output chooses its destination.`,
+  );
+  return true;
+}
+
+function routeSelectedControlSurfaceChannel(): void {
+  const channel = selectedControlSurfaceChannel();
+  if (!channel || channel.input.kind !== "keyboard") {
+    keyboardWorkbenchAnnounce("Teach this physical input before routing it.");
+    return;
+  }
+  chooseControlSurfaceStage("route");
+  setInspectorContext({ kind: "key", key: channel.input.key });
+  const routeSlots = new Set(controlSurfaceRoutesForKey(channel.input.key).map((route) => route.slot));
+  const currentSlot = Number(nSlotVal() || "1");
+  const needsAllPlayers = routeSlots.size > 1 || [...routeSlots].some((slot) => slot !== currentSlot);
+  const currentMode = canvasPrefs.mappingPaths ?? "off";
+  if (needsAllPlayers && currentMode !== "all") setMappingPathMode("all");
+  else if (currentMode === "off") setMappingPathMode("selected");
+  armAssign(channel.input.key, "replace");
+}
+
+function nudgeControlSurfaceControl(controlId: string, dx: number, dy: number): void {
+  const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
+  if (!control) return;
+  applyControlSurfaceState(
+    moveControlSurfaceControl(controlSurfaceState, controlId, control.x + dx, control.y + dy),
+    true,
+  );
+}
+
+function controlSurfacePointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !event.isPrimary) return;
+  const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(".n-surface-control");
+  const deck = button?.closest<HTMLElement>(".n-surface-deck");
+  const controlId = button?.dataset.surfaceControlId ?? "";
+  const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
+  const rect = deck?.getBoundingClientRect();
+  if (!button || !deck || !control || !rect || rect.width <= 0 || rect.height <= 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  selectControlSurfaceChannel(controlId);
+  button.focus({ preventScroll: true });
+  button.classList.add("dragging");
+  button.setPointerCapture(event.pointerId);
+  controlSurfaceDrag = {
+    pointerId: event.pointerId,
+    controlId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: control.x,
+    startY: control.y,
+    scaleX: CONTROL_SURFACE_BOUNDS.width / rect.width,
+    scaleY: CONTROL_SURFACE_BOUNDS.height / rect.height,
+    moved: false,
+  };
+}
+
+function controlSurfacePointerMove(event: PointerEvent): void {
+  const drag = controlSurfaceDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!drag.moved) {
+    drag.moved = Math.hypot(
+      event.clientX - drag.startClientX,
+      event.clientY - drag.startClientY,
+    ) >= 4;
+    if (!drag.moved) return;
+  }
+  controlSurfaceState = moveControlSurfaceControl(
+    controlSurfaceState,
+    drag.controlId,
+    drag.startX + (event.clientX - drag.startClientX) * drag.scaleX,
+    drag.startY + (event.clientY - drag.startClientY) * drag.scaleY,
+  );
+  const moved = controlSurfaceState.controls.find((control) => control.id === drag.controlId);
+  const button = controlSurfaceItem?.querySelector<HTMLElement>(
+    `.n-surface-control[data-surface-control-id="${CSS.escape(drag.controlId)}"]`,
+  );
+  if (moved && button) {
+    button.style.left = `${(moved.x / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
+    button.style.top = `${(moved.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
+  }
+  mappingFlowLayer?.scheduleLayout();
+}
+
+function controlSurfacePointerEnd(event: PointerEvent): void {
+  const drag = controlSurfaceDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  controlSurfaceDrag = null;
+  controlSurfaceItem
+    ?.querySelector<HTMLElement>(
+      `.n-surface-control[data-surface-control-id="${CSS.escape(drag.controlId)}"]`,
+    )
+    ?.classList.remove("dragging");
+  if (drag.moved) {
+    saveControlSurfacePrefs();
+    syncControlSurfaceChrome();
+    keyboardWorkbenchAnnounce("Physical component placed in the custom panel layout.");
+  }
 }
 
 /** Every staged controller as a canvas widget, rebuilt when the roster
@@ -3174,6 +4493,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
   syncKeyboardWorkbenchWidget(false);
+  syncControlSurfaceWidget(false);
   if (flowLines && flowPorts && flowNodes) {
     mappingFlowLayer?.dispose();
     mappingFlowLayer = new MappingFlowLayer(
@@ -3606,6 +4926,12 @@ interface LearnTarget {
   label: string;
   slot: string;
   mode: "replace" | "add" | "remove";
+  purpose?: "binding" | "surface";
+  surfaceIdentity?: string;
+  surfaceControlId?: string;
+  surfaceChannelId?: string;
+  surfacePhysicalId?: string;
+  surfaceExpectedDevice?: string;
 }
 
 /** PadForge's recorder tick — snappy but far under the daemon's own rate. */
@@ -3798,6 +5124,23 @@ function setRailGlow(on: boolean): void {
 }
 
 function armLearnUi(row: LearnTarget): void {
+  if (row.purpose === "surface") {
+    setNLearnCls("n-learnbar listen");
+    setNLearnText(`Teach physical input · ${row.label}`);
+    setNLearnSub("Press the real wired control. KSX records what Windows receives; no mapping changes. Esc cancels.");
+    setNLearnSkipCls("n-bbtn sm none");
+    setNChainCls("n-chain none");
+    setNKeyCueCls("n-key-cue");
+    setNKeyCueText(`Teaching ${row.label} — press the real wired control`);
+    markArmedRow(null);
+    controlSurfaceItem
+      ?.querySelector<HTMLElement>(
+        `.n-surface-control[data-surface-control-id="${CSS.escape(row.surfaceControlId ?? "")}"]`,
+      )
+      ?.classList.add("teach");
+    setRailGlow(true);
+    return;
+  }
   const step = autoMap ? ` — ${autoMap.idx + 1} of ${autoMap.steps.length}` : "";
   setNLearnCls("n-learnbar listen");
   setNLearnText(`Press the panel key for P${row.slot} · ${row.label}${step}`);
@@ -3820,6 +5163,11 @@ function disarmLearnUi(): void {
   setChainBox(false);
   setNKeyCueCls("n-key-cue none");
   markArmedRow(null);
+  for (const control of Array.from(
+    controlSurfaceItem?.querySelectorAll<HTMLElement>(".n-surface-control.teach") ?? [],
+  )) {
+    control.classList.remove("teach");
+  }
   setRailGlow(false);
 }
 
@@ -3835,7 +5183,17 @@ function retireLearn(): void {
 
 async function startLearn(row: LearnTarget): Promise<void> {
   // PadForge convention: clicking the control being recorded cancels it.
-  if (learnRow && learnRow.fn === row.fn && learnRow.mode === row.mode) {
+  if (
+    learnRow &&
+    learnRow.fn === row.fn &&
+    learnRow.mode === row.mode &&
+    learnRow.purpose === row.purpose &&
+    learnRow.surfaceIdentity === row.surfaceIdentity &&
+    learnRow.surfaceControlId === row.surfaceControlId &&
+    learnRow.surfaceChannelId === row.surfaceChannelId &&
+    learnRow.surfacePhysicalId === row.surfacePhysicalId &&
+    learnRow.surfaceExpectedDevice === row.surfaceExpectedDevice
+  ) {
     await cancelLearn();
     return;
   }
@@ -3929,7 +5287,11 @@ async function pollLearn(): Promise<void> {
     case "listening": {
       const secs = Math.max(0, Math.ceil((learn.remaining_ms ?? 0) / 1000));
       const esc = autoMap ? "Esc skips this one." : "Esc cancels.";
-      setNLearnSub(`${learnSentence(row.mode)} ${secs}s left · ${esc}`);
+      setNLearnSub(
+        row.purpose === "surface"
+          ? `Press the real wired control; no mapping changes. ${secs}s left · Esc cancels.`
+          : `${learnSentence(row.mode)} ${secs}s left · ${esc}`,
+      );
       break;
     }
     case "hit": {
@@ -3937,6 +5299,23 @@ async function pollLearn(): Promise<void> {
       // fast-hit poll may overlap, and only the first terminal response may
       // reach the bind verb.
       const chain = chainWanted();
+      if (row.purpose === "surface") {
+        const controlId = row.surfaceControlId ?? "";
+        const channelId = row.surfaceChannelId ?? "";
+        retireLearn();
+        if (learn.key && controlId && channelId) {
+          teachSelectedControlSurfaceWithKey(
+            row.surfaceIdentity ?? "",
+            controlId,
+            channelId,
+            row.surfacePhysicalId ?? "",
+            learn.key,
+            learn.device ?? "",
+            row.surfaceExpectedDevice ?? "",
+          );
+        }
+        break;
+      }
       lastWrite = { origin: "learn", chain, assignMode: "replace" };
       retireLearn();
       if (learn.key) {
@@ -3952,7 +5331,11 @@ async function pollLearn(): Promise<void> {
     }
     case "timeout":
       retireLearn();
-      if (autoMap) {
+      if (row.purpose === "surface") {
+        applyFlash(
+          `error: Timed out — no physical input was received for ${row.label}. Nothing changed.`,
+        );
+      } else if (autoMap) {
         // A walked-away wizard must not grind through the whole queue.
         autoMap = null;
         applyFlash(
@@ -4257,6 +5640,20 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
           : `${row.label} is now ${key}.`;
     if (outcome.also_drives.length > 0) {
       line += ` That key also drives ${outcome.also_drives.join(" · ")}.`;
+    }
+    const surfaceSignal = controlSurfaceState.controls.some((control) =>
+      control.channels.some(
+        (channel) => channel.input.kind === "keyboard" && channel.input.key === key,
+      )
+    );
+    if (lastWrite.origin === "assign" && surfaceSignal) {
+      const slots = new Set(controlSurfaceRoutesForKey(key).map((route) => route.slot));
+      const routedSlot = Number(row.slot);
+      if (Number.isInteger(routedSlot) && routedSlot >= 1) slots.add(routedSlot);
+      const currentSlot = Number(nSlotVal() || "1");
+      if (slots.size > 1 || [...slots].some((slot) => slot !== currentSlot)) {
+        setMappingPathMode("all");
+      }
     }
     applyFlash(line);
     nocturnePollFn();
@@ -4728,7 +6125,7 @@ function markAssignTargets(key: string | null): void {
   if (key) {
     for (const el of Array.from(
       root.querySelectorAll<HTMLElement>(
-        `.n-kb [data-key="${CSS.escape(key)}"], .n-akey-grid [data-key="${CSS.escape(key)}"], .n-deck-key[data-keylab-key="${CSS.escape(key)}"]`,
+        `.n-kb [data-key="${CSS.escape(key)}"], .n-akey-grid [data-key="${CSS.escape(key)}"], .n-deck-key[data-keylab-key="${CSS.escape(key)}"], .n-surface-control:has(.n-surface-channel-anchor[data-key="${CSS.escape(key)}"])`,
       ),
     )) {
       el.classList.add("assign");
@@ -4785,6 +6182,12 @@ function cancelAssign(): void {
 function resolveLearnWithKey(key: string, chain: boolean): boolean {
   const row = learnRow;
   if (!row) return false;
+  if (row.purpose === "surface") {
+    keyboardWorkbenchAnnounce(
+      `${key} was only clicked in the drawing, so it was not recorded as physical input. Press the real wired control instead.`,
+    );
+    return true;
+  }
   lastWrite = { origin: "learn", chain, assignMode: "replace" };
   void cancelLearn();
   void writeLearnedKey(row, key, false).then((ok) => {
@@ -4937,6 +6340,7 @@ export function nocturneWire(root: HTMLElement): void {
   loadDs4Variants();
   loadControllerFinishes();
   loadKeyboardWorkbenchPrefs();
+  loadControlSurfacePrefs();
   applyNocturneUi();
   refreshInspectorCopy();
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
@@ -5008,6 +6412,28 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
+    const surfaceLabel = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      '[data-nx="surface-label"][data-surface-control-id]',
+    );
+    if (surfaceLabel) {
+      const controlId = surfaceLabel.dataset.surfaceControlId ?? "";
+      const before = controlSurfaceState.controls.find((control) => control.id === controlId);
+      const next = renameControlSurfaceControl(controlSurfaceState, controlId, surfaceLabel.value);
+      const after = next.controls.find((control) => control.id === controlId);
+      if (before && after) {
+        const blank = !surfaceLabel.value.trim();
+        if (blank) surfaceLabel.value = after.label;
+        applyControlSurfaceState(next, true);
+        keyboardWorkbenchAnnounce(
+          blank
+            ? "A physical component needs a name; the previous name was kept."
+            : before.label === after.label
+            ? `${after.label} kept its name.`
+            : `${before.label} renamed to ${after.label}.`,
+        );
+      }
+      return;
+    }
     const paths = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
       '[data-nx="mapping-paths"]',
     );
@@ -5025,6 +6451,37 @@ export function nocturneWire(root: HTMLElement): void {
     if (rate) void macAct(`rate|${rate.value}`);
   });
   root.addEventListener("keydown", (ev) => {
+    const surfaceControl = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".n-surface-control[data-surface-control-id]",
+    );
+    if (surfaceControl) {
+      const controlId = surfaceControl.dataset.surfaceControlId ?? "";
+      const key = (ev as KeyboardEvent).key;
+      if ((key === "Delete" || key === "Backspace") && controlId) {
+        ev.preventDefault();
+        selectControlSurfaceChannel(controlId);
+        removeSelectedControlSurfaceControl();
+        controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control")
+          ?.focus({ preventScroll: true });
+        return;
+      }
+      const step = (ev as KeyboardEvent).shiftKey ? 12 : 4;
+      const dx = key === "ArrowRight" ? step : key === "ArrowLeft" ? -step : 0;
+      const dy = key === "ArrowDown" ? step : key === "ArrowUp" ? -step : 0;
+      if ((dx !== 0 || dy !== 0) && controlId) {
+        ev.preventDefault();
+        selectControlSurfaceChannel(controlId);
+        nudgeControlSurfaceControl(controlId, dx, dy);
+        window.requestAnimationFrame(() => {
+          controlSurfaceItem
+            ?.querySelector<HTMLElement>(
+              `.n-surface-control[data-surface-control-id="${CSS.escape(controlId)}"]`,
+            )
+            ?.focus({ preventScroll: true });
+        });
+        return;
+      }
+    }
     const deckKey = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".n-deck-key");
     if (deckKey) {
       const keyName = deckKey.dataset.keylabKey ?? "";
@@ -5500,6 +6957,18 @@ export function nocturneWire(root: HTMLElement): void {
       void startLearn({ fn: rowFn, label: rowLabel, slot: padSlot, mode: "replace" });
       return;
     }
+    const physicalControl = target?.closest<HTMLElement>(
+      ".n-surface-control[data-surface-control-id]",
+    );
+    if (physicalControl) {
+      ev.preventDefault();
+      const controlId = physicalControl.dataset.surfaceControlId ?? "";
+      const channel = target?.closest<HTMLElement>(".n-surface-channel-anchor")
+        ?.dataset.surfaceChannelId ?? "";
+      if (controlId) selectControlSurfaceChannel(controlId, channel);
+      if (assignKey) cancelAssign();
+      return;
+    }
     // A loose token selects itself for arrow nudges / Return. It carries the
     // same data-key for live paint, but it is not a second mapper surface.
     const workbenchKey = target?.closest<HTMLElement>(".n-deck-key[data-keylab-key]");
@@ -5691,6 +7160,69 @@ export function nocturneWire(root: HTMLElement): void {
       const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
         ?.dataset.keyboardTheme ?? "";
       chooseKeyboardTheme(theme);
+    } else if (hit === "surface-open") {
+      openControlSurfaceBuilder();
+    } else if (hit === "surface-close") {
+      closeControlSurfaceBuilder();
+    } else if (hit === "surface-template") {
+      const template = target?.closest<HTMLElement>("[data-surface-template]")
+        ?.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;
+      if (template) chooseControlSurfaceTemplate(template);
+    } else if (hit === "surface-template-cancel") {
+      controlSurfaceChoosingTemplate = false;
+      controlSurfacePendingTemplate = null;
+      syncControlSurfaceChrome();
+      keyboardWorkbenchAnnounce("The current control surface was kept unchanged.");
+      focusControlSurfacePrimary();
+    } else if (hit === "surface-new") {
+      controlSurfaceChoosingTemplate = true;
+      controlSurfacePendingTemplate = null;
+      syncControlSurfaceChrome();
+      controlSurfaceItem
+        ?.querySelector<HTMLButtonElement>("[data-surface-template]")
+          ?.focus({ preventScroll: true });
+    } else if (hit === "surface-undo") {
+      undoControlSurfaceDestructiveEdit();
+    } else if (hit === "surface-stage") {
+      const stage = target?.closest<HTMLElement>("[data-surface-stage]")
+        ?.dataset.surfaceStage as ControlSurfaceStage | undefined;
+      if (stage) chooseControlSurfaceStage(stage);
+    } else if (hit === "surface-add") {
+      const kind = target?.closest<HTMLElement>("[data-control-kind]")
+        ?.dataset.controlKind as ControlSurfaceControlKind | undefined;
+      if (kind) addPhysicalControl(kind);
+    } else if (hit === "surface-channel") {
+      const button = target?.closest<HTMLElement>("[data-surface-channel-id]");
+      const controlId = button?.dataset.surfaceControlId ?? "";
+      const channelId = button?.dataset.surfaceChannelId ?? "";
+      if (controlId && channelId) selectControlSurfaceChannel(controlId, channelId);
+    } else if (hit === "surface-owner") {
+      const button = target?.closest<HTMLElement>("[data-player-slot][data-surface-control-id]");
+      const controlId = button?.dataset.surfaceControlId ?? "";
+      const value = Number(button?.dataset.playerSlot ?? "0");
+      if (controlId && Number.isInteger(value) && value >= 0 && value <= 4) {
+        applyControlSurfaceState(
+          setControlSurfacePlayerSlot(controlSurfaceState, controlId, value === 0 ? null : value),
+          true,
+        );
+        keyboardWorkbenchAnnounce(
+          value === 0 ? "Component shown panel-wide without a player owner." : `Component assigned to the Player ${value} panel view.`,
+        );
+      }
+    } else if (hit === "surface-teach") {
+      startControlSurfaceTeach();
+    } else if (hit === "surface-route") {
+      routeSelectedControlSurfaceChannel();
+    } else if (hit === "surface-mirror") {
+      copySelectedControlSurfaceControl("mirror");
+    } else if (hit === "surface-duplicate") {
+      copySelectedControlSurfaceControl("duplicate");
+    } else if (hit === "surface-resolve-mirror") {
+      resolveSelectedControlSurfaceSignal("mirror");
+    } else if (hit === "surface-resolve-duplicate") {
+      resolveSelectedControlSurfaceSignal("duplicate");
+    } else if (hit === "surface-remove") {
+      removeSelectedControlSurfaceControl();
     } else if (hit === "kb-workbench") {
       const opening = !keyboardWorkbenchState.open;
       if (opening) {
@@ -5711,23 +7243,13 @@ export function nocturneWire(root: HTMLElement): void {
       );
       keyboardWorkbenchAnnounce(
         keyboardWorkbenchState.open
-          ? "Key Workbench opened. Choose caps on the keyboard to pull them."
-          : "Key Workbench closed. Its layout is saved.",
+          ? "Keyboard Arranger opened. Choose real caps on the keyboard to move them."
+          : "Keyboard Arranger closed. Its layout is saved.",
       );
     } else if (hit === "keylab-pull-mapped") {
       pullMappedKeyboardWorkbenchKeys();
-    } else if (hit === "keylab-build-players") {
-      buildFourPlayerKeyboardWorkbench();
     } else if (hit === "keylab-layout-compact") {
-      setKeyboardWorkbenchLayout("compact");
-    } else if (hit === "keylab-layout-leverless") {
-      setKeyboardWorkbenchLayout("leverless");
-    } else if (hit === "keylab-layout-players") {
-      setKeyboardWorkbenchLayout("players");
-    } else if (hit === "keylab-render-keycap") {
-      setKeyboardWorkbenchRenderMode("keycap");
-    } else if (hit === "keylab-render-arcade") {
-      setKeyboardWorkbenchRenderMode("arcade");
+      repackKeyboardWorkbench();
     } else if (hit === "keylab-cap-profile") {
       setKeyboardWorkbenchCapProfile(
         target?.closest<HTMLElement>("[data-keycap-profile]")?.dataset.keycapProfile ?? "",
@@ -6487,6 +8009,16 @@ export function NocturneIsland() {
                 "Walk every control in turn — press a key for each. Esc skips one; Cancel stops the run.",
             },
             "Map all…",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              "data-nx": "surface-open",
+              title: "Build an I-PAC panel, leverless controller, arcade cabinet, or custom physical control surface",
+              class: "n-autobtn n-surface-open",
+            },
+            "Build surface",
           ),
           // The canvas camera's verbs, scripting-only like Map all — wheel,
           // Space-drag and the arrow keys carry the same moves for anyone
@@ -7531,10 +9063,10 @@ export function NocturneIsland() {
               type: "button",
               class: "n-kbbuild",
               "data-nx": "kb-workbench",
-              title: "Lift keycaps onto a separate control-surface workbench",
+              title: "Arrange real keycaps from this detected keyboard without changing their identities or mappings",
               "aria-pressed": () => nKbWorkbenchPressed(),
             },
-            () => nKeyboardWorkbenchOpen() ? "Building" : "Build board",
+            () => nKeyboardWorkbenchOpen() ? "Arranging" : "Arrange keys",
           ),
           // Focus the board on the controller you are editing: everyone
           // else's color greys out — nothing is hidden, so a key never

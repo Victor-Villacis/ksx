@@ -470,8 +470,14 @@ function elementPerimeterPoint(
   // Arcade presentation turns the rectangular workbench hit target into a
   // round button. Intersect its ellipse rather than its bounding box so a
   // diagonal cord never appears to float outside the visible cap.
-  const distance = element.matches(".n-deck-key") &&
+  const roundSurface = element.matches(
+    '.n-surface-channel-anchor[data-control-kind="button30"], ' +
+    '.n-surface-channel-anchor[data-control-kind="button24"]',
+  );
+  const distance = roundSurface || (
+    element.matches(".n-deck-key") &&
       element.closest<HTMLElement>('.n-keylab-deck[data-render-mode="arcade"]')
+  )
     ? 1 / Math.sqrt((dx * dx) / (halfWidth * halfWidth) + (dy * dy) / (halfHeight * halfHeight))
     : 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
   return { x: center.x + dx * distance, y: center.y + dy * distance };
@@ -571,7 +577,9 @@ export class MappingFlowLayer {
         event.propertyName === "transform" &&
         event.pseudoElement === "" &&
         event.target instanceof Element &&
-        event.target.matches(".n-widget-kb .n-key:not(.ghost), .n-deck-key")
+        event.target.matches(
+          ".n-widget-kb .n-key:not(.ghost), .n-deck-key, .n-surface-control",
+        )
       ) {
         this.scheduleLayout();
       }
@@ -1502,6 +1510,10 @@ export class MappingFlowLayer {
     const key = CSS.escape(keyName);
     const slot = String(slotNumber);
     const selectors = [
+      `.n-surface-channel-anchor[data-key="${key}"][data-selected="true"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor[data-key="${key}"][data-selected="true"]:not([data-player-slot])`,
+      `.n-surface-channel-anchor[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor[data-key="${key}"]:not([data-player-slot])`,
       `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
       `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
       `.n-widget-kb:not([data-source-hidden="true"]) [data-key="${key}"]:not(.ghost):not(.extracted)`,
@@ -1573,6 +1585,12 @@ export class MappingFlowLayer {
         slot: Number(macro.dataset.flowSlot ?? this.#selectedSlot),
       };
     }
+    const surface = target.closest<HTMLElement>(".n-surface-control");
+    const surfaceAnchor = surface?.querySelector<HTMLElement>(
+      '.n-surface-channel-anchor[data-key][data-selected="true"]',
+    ) ?? surface?.querySelector<HTMLElement>(".n-surface-channel-anchor[data-key]");
+    const surfaceKey = surfaceAnchor?.dataset.key?.trim();
+    if (surfaceKey) return { key: surfaceKey };
     const key = target.closest<HTMLElement>("[data-key]")?.dataset.key?.trim();
     if (key) return { key };
     const control = target.closest<HTMLElement>("[data-fn]");

@@ -1552,7 +1552,7 @@ export class WidgetCanvas {
     const minHeight = clamp(
       finiteNumber(Number(item.dataset.canvasMinHeight), 300),
       220,
-      720,
+      1200,
     );
     const resizable = item.dataset.canvasResizable === "true";
     return {
@@ -1563,7 +1563,7 @@ export class WidgetCanvas {
         : preferredWidth,
       height: resizable
         ? clamp(finiteNumber(restored?.height, minHeight), 220, 920)
-        : clamp(finiteNumber(restored?.height, minHeight), minHeight, 920),
+        : clamp(finiteNumber(restored?.height, minHeight), minHeight, 1600),
       z: Math.max(1, finiteNumber(restored?.z, this.#topZ + 1)),
       manualScale: clamp(
         finiteNumber(restored?.manualScale, 1),

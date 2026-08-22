@@ -290,11 +290,11 @@ try {
       "/setup": { js: ["setup"], css: ["studio"] },
     },
     outputDir,
-    // The four-player builder, typed mapping-flow lens, and contextual
-    // Inspector live in Nocturne's one island. The measured Brotli route is
-    // ~215 KB; keep a deliberately narrow 216 KB ceiling so these accepted
-    // features do not turn into an open-ended bump.
-    budgetThreshold: 216_000,
+    // The mapping-flow lens, contextual Inspector, Keyboard Arranger, and
+    // physical Control Surface Builder live in Nocturne's one island. The
+    // latter takes the measured compressed route to ~229 KB; keep a narrow
+    // 234 KB ceiling so this deliberate feature cost is not an open-ended bump.
+    budgetThreshold: 234_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

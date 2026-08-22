@@ -312,7 +312,7 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("a workbench keycap is a first-class mapping source", async () => {
+  test("an arranged keyboard keycap is a first-class mapping source", async () => {
     const page = await openCanvas();
     let resolveBound;
     const bound = new Promise((resolve) => {
@@ -335,10 +335,8 @@ describe("the canvas navigation controls", () => {
     });
     try {
       await page.click('[data-nx="kb-workbench"]');
-      await page.click('[data-nx="keylab-build-players"]');
-      const keycap = page.locator(
-        '.n-deck-key[data-keylab-key="G"][data-player-slot="1"]',
-      );
+      await page.click('[data-nx="keylab-pull-mapped"]');
+      const keycap = page.locator('.n-deck-key[data-keylab-key="G"]');
       await keycap.click();
       assert.equal((await page.textContent(".n-inspector-title")).trim(), "G");
       assert.match((await page.textContent('[data-nx="inspector-action"]')).trim(), /^Connect/);
@@ -365,25 +363,6 @@ describe("the canvas navigation controls", () => {
       assert.equal(boundBody?.key, "G");
       assert.equal(boundBody?.function, "A");
       assert.equal(boundBody?.mode, "add");
-
-      await page.selectOption('[data-nx="mapping-paths"]', "selected");
-      await page.click('.n-widget-keylab [data-nx="keylab-render-arcade"]');
-      await page.waitForFunction(() => {
-        const key = document.querySelector(
-          '.n-deck-key[data-keylab-key="G"][data-player-slot="1"]',
-        );
-        const port = document.querySelector(
-          '#n-mapping-ports [data-flow-key="G"] .n-flow-port-source',
-        );
-        if (!key || !port) return false;
-        const keyRect = key.getBoundingClientRect();
-        const portRect = port.getBoundingClientRect();
-        const dx = portRect.left + portRect.width / 2 - (keyRect.left + keyRect.width / 2);
-        const dy = portRect.top + portRect.height / 2 - (keyRect.top + keyRect.height / 2);
-        const ellipse = (dx * dx) / ((keyRect.width / 2) ** 2) +
-          (dy * dy) / ((keyRect.height / 2) ** 2);
-        return Math.abs(ellipse - 1) < 0.04;
-      });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -2631,7 +2610,7 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("keyboard finishes preserve ownership while Key Workbench builds a persistent leverless deck", async () => {
+  test("keyboard finishes preserve ownership while Keyboard Arranger keeps a persistent real-key layout", async () => {
     const page = await openCanvas();
     const bindingPosts = [];
     page.on("request", (request) => {
@@ -2908,20 +2887,20 @@ describe("the canvas navigation controls", () => {
       assert.equal(migratedDeck.renderMode, "keycap");
       assert.equal(migratedDeck.layoutMode, "compact");
       assert.equal(migratedDeck.keycapProfile, "sculpted");
-      assert.deepEqual(
+      assert.equal(
         await page.locator(
-          '.n-widget-keylab [data-nx="keylab-render-keycap"], .n-widget-keylab [data-nx="keylab-render-arcade"]',
-        ).evaluateAll((buttons) => buttons.map((button) => ({
-          native: button instanceof HTMLButtonElement,
-          type: button.type,
-          mode: button.getAttribute("data-mode"),
-          pressed: button.getAttribute("aria-pressed"),
-        }))),
-        [
-          { native: true, type: "button", mode: "keycap", pressed: "true" },
-          { native: true, type: "button", mode: "arcade", pressed: "false" },
-        ],
-        "a legacy Arcade preference opens on truthful Mechanical keycaps",
+          '.n-widget-keylab [data-nx="keylab-render-keycap"], .n-widget-keylab [data-nx="keylab-render-arcade"], .n-widget-keylab [data-nx="keylab-layout-leverless"], .n-widget-keylab [data-nx="keylab-build-players"]',
+        ).count(),
+        0,
+        "arcade and cabinet construction no longer masquerade as keyboard arrangement",
+      );
+      assert.equal(
+        (await page.textContent(".n-widget-keylab .n-kick")).trim(),
+        "Keyboard Arranger",
+      );
+      assert.match(
+        (await page.textContent(".n-widget-keylab .n-keylab-note")).trim(),
+        /Build Surface is the separate path/,
       );
       const capProfileSlugs = ["sculpted", "low-profile", "pudding", "typewriter"];
       const profileButtons = page.locator(
@@ -3276,81 +3255,9 @@ describe("the canvas navigation controls", () => {
       // the navigator at the old camera position. Follow the user-facing LAB
       // marker back to the builder before exercising its pointer surface.
       await page.locator(
-        '.forma-canvas-navigator .navigator-item[aria-label="Focus Key Workbench"]',
+        '.forma-canvas-navigator .navigator-item[aria-label="Focus Keyboard Arranger"]',
       ).click();
       await settle(page);
-
-      await page.click('.n-widget-keylab [data-nx="keylab-layout-leverless"]');
-      await page.waitForFunction(
-        () => document.querySelector(
-          '.n-widget-keylab [data-mode="leverless"]',
-        )?.getAttribute("aria-pressed") === "true",
-      );
-      const leverless = await readDeck();
-      assert.equal(leverless.layoutMode, "leverless");
-      assert.deepEqual(
-        leverless.keys.map((key) => key.key).sort(),
-        [...liftedKeys].sort(),
-        "leverless arrangement changes placement, not the selected set",
-      );
-      assert.notDeepEqual(
-        leverless.keys.map((key) => [key.key, key.left, key.top]),
-        compact.keys.map((key) => [key.key, key.left, key.top]),
-        "leverless gives WASD its movement-cluster positions",
-      );
-      assert.equal(
-        new Set(leverless.keys.map((key) => `${key.left}|${key.top}`)).size,
-        4,
-        "every leverless token receives a distinct position",
-      );
-
-      await page.click(
-        '.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile="pudding"]',
-      );
-      await page.waitForFunction(
-        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
-          "data-keycap-profile",
-        ) === "pudding",
-      );
-      await page.click('.n-widget-keylab [data-nx="keylab-render-arcade"]');
-      await page.waitForFunction(
-        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
-          "data-render-mode",
-        ) === "arcade",
-      );
-      const puddingArcadePaint = (await readDeck()).keys.map((key) => key.paint);
-      await page.locator(
-        '.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile="sculpted"]',
-      ).evaluate((button) => button.click());
-      await page.waitForFunction(
-        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
-          "data-keycap-profile",
-        ) === "sculpted",
-      );
-      const arcade = await readDeck();
-      assert.equal(arcade.renderMode, "arcade");
-      assert.deepEqual(
-        arcade.keys.map((key) => key.paint),
-        puddingArcadePaint,
-        "a hidden mechanical profile cannot leak its sidewall paint into Arcade mode",
-      );
-      assert.deepEqual(
-        arcade.keys.map((key) => key.key).sort(),
-        [...liftedKeys].sort(),
-        "arcade rendering changes silhouette, not key identity",
-      );
-      assert.ok(
-        arcade.keys.every((key) => key.radius === "50%"),
-        "every extracted key wears a round arcade rim",
-      );
-      assert.ok(
-        arcade.keys.every((key) => Math.abs(key.width - key.height) <= 2),
-        "arcade tokens render as circles rather than rounded keycaps",
-      );
-      assert.ok(
-        arcade.keys.every((key) => key.paint !== "none"),
-        "the arcade silhouette retains the themed physical paint",
-      );
 
       const aButton = page.locator('.n-deck-key[data-keylab-key="A"]');
       const beforeDragA = await aButton.evaluate((button) => ({
@@ -3362,7 +3269,7 @@ describe("the canvas navigation controls", () => {
         y: widget.getAttribute("data-canvas-y"),
       }));
       const aBox = await aButton.boundingBox();
-      assert.ok(aBox, "the focused workbench exposes a real draggable A button");
+      assert.ok(aBox, "the focused arranger exposes a real draggable A keycap");
       await page.mouse.move(aBox.x + aBox.width / 2, aBox.y + aBox.height / 2);
       await page.mouse.down();
       await page.mouse.move(
@@ -3382,7 +3289,7 @@ describe("the canvas navigation controls", () => {
         left: button.style.left,
         top: button.style.top,
       }));
-      assert.notDeepEqual(afterDragA, beforeDragA, "pointer drag moves the loose arcade token");
+      assert.notDeepEqual(afterDragA, beforeDragA, "pointer drag moves the arranged keycap");
       assert.deepEqual(
         await page.locator(".n-widget-keylab").evaluate((widget) => ({
           x: widget.getAttribute("data-canvas-x"),
@@ -3453,7 +3360,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(saved?.open, true);
       assert.equal(saved?.sourceHidden, false);
       assert.equal(saved?.layoutMode, "free", "manual nudging persists a custom layout");
-      assert.equal(saved?.renderMode, "arcade");
+      assert.equal(saved?.renderMode, "keycap");
       assert.equal(saved?.capProfile, "sculpted");
       assert.deepEqual([...saved.selectedKeys].sort(), ["A", "S", "W"]);
       assert.ok(saved?.positions?.["k:A"]);
@@ -3470,7 +3377,7 @@ describe("the canvas navigation controls", () => {
       await settle(page);
       const restoredDeck = await readDeck();
       assert.equal(restoredDeck.widgetCount, 1);
-      assert.equal(restoredDeck.renderMode, "arcade");
+      assert.equal(restoredDeck.renderMode, "keycap");
       assert.equal(restoredDeck.layoutMode, "free");
       assert.equal(restoredDeck.keycapProfile, "sculpted");
       assert.deepEqual(restoredDeck.keys.map((key) => key.key).sort(), ["A", "S", "W"]);
@@ -3510,169 +3417,946 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(
         reopened.keys.map((key) => [key.key, key.left, key.top]),
         beforeClose,
-        "closing and reopening retains the exact custom control surface",
+        "closing and reopening retains the exact custom keyboard arrangement",
       );
-      assert.equal(reopened.renderMode, "arcade");
+      assert.equal(reopened.renderMode, "keycap");
       assert.equal(reopened.layoutMode, "free");
       assert.equal(reopened.keycapProfile, "sculpted");
       assert.deepEqual(bindingPosts, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
 
-      await page.locator('.n-widget-keylab [data-nx="keylab-build-players"]').evaluate(
-        (button) => button.click(),
+  test("a legacy player Workbench migrates once into a browser-persisted four-player surface", async () => {
+    const identity = "keyboard:usb:d209:0430:00";
+    const writes = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        if (request.method() !== "POST") return;
+        const pathname = new URL(request.url()).pathname;
+        if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) writes.push(pathname);
+      });
+      await candidate.addInitScript(({ expectedOrigin, keyboardIdentity }) => {
+        if (location.origin !== expectedOrigin) return;
+        const seeded = "ksx-pwtest-legacy-workbench-seeded";
+        if (sessionStorage.getItem(seeded) === "1") return;
+        localStorage.setItem("ksx-nocturne-keyboard-workbench1", JSON.stringify({
+          version: 2,
+          devices: {
+            [keyboardIdentity]: {
+              open: true,
+              sourceHidden: false,
+              theme: "carbon-forge",
+              capProfile: "sculpted",
+              selectedKeys: ["G"],
+              layoutMode: "players",
+              renderMode: "arcade",
+              positions: {},
+            },
+          },
+        }));
+        localStorage.removeItem("ksx-nocturne-control-surfaces1");
+        sessionStorage.setItem(seeded, "1");
+      }, {
+        expectedOrigin: new URL(BASE).origin,
+        keyboardIdentity: identity,
+      });
+    });
+    const readMigration = () => page.evaluate((keyboardIdentity) => {
+      const surfaceStore = JSON.parse(
+        localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
       );
-      await page.waitForFunction(
-        () => {
-          const deck = document.querySelector(".n-widget-keylab .n-keylab-deck");
-          return deck?.getAttribute("data-layout-mode") === "players" &&
-            deck.querySelector('[data-keylab-token="p:1:G"]') &&
-            deck.querySelector('[data-keylab-token="p:2:G"]');
+      const workbenchStore = JSON.parse(
+        localStorage.getItem("ksx-nocturne-keyboard-workbench1") ?? "null",
+      );
+      const surface = surfaceStore?.devices?.[keyboardIdentity] ?? null;
+      const arranger = workbenchStore?.devices?.[keyboardIdentity] ?? null;
+      const deck = document.querySelector(".n-widget-surface .n-surface-deck");
+      const controls = Array.from(
+        document.querySelectorAll(".n-widget-surface .n-surface-control"),
+      ).map((control) => ({
+        id: control.getAttribute("data-surface-control-id"),
+        physicalId: control.getAttribute("data-physical-id"),
+        playerSlot: control.getAttribute("data-player-slot"),
+        mirror: control.classList.contains("mirror"),
+        keys: Array.from(control.querySelectorAll(".n-surface-channel-anchor[data-key]"))
+          .map((anchor) => anchor.getAttribute("data-key")),
+      })).sort((left, right) => Number(left.playerSlot) - Number(right.playerSlot));
+      return {
+        surfaceWidgetCount: document.querySelectorAll(".n-widget-surface").length,
+        surfaceDeviceCount: Object.keys(surfaceStore?.devices ?? {}).length,
+        template: surface?.template ?? null,
+        panelLayout: surface?.panelLayout ?? null,
+        deckTemplate: deck?.getAttribute("data-template") ?? null,
+        deckPanelLayout: deck?.getAttribute("data-panel-layout") ?? null,
+        marker: surfaceStore?.migratedWorkbench?.[keyboardIdentity] ?? false,
+        controls,
+        storedControls: (surface?.controls ?? []).map((control) => ({
+          id: control.id,
+          physicalId: control.physicalId,
+          physicalResolution: control.physicalResolution,
+          origin: control.origin,
+          playerSlot: control.playerSlot,
+          keys: (control.channels ?? []).map((channel) => channel.input?.key ?? ""),
+        })).sort((left, right) => Number(left.playerSlot) - Number(right.playerSlot)),
+        arranger: arranger && {
+          open: arranger.open,
+          selectedKeys: arranger.selectedKeys,
+          layoutMode: arranger.layoutMode,
+          renderMode: arranger.renderMode,
         },
+        arrangerDeck: {
+          count: document.querySelectorAll(
+            '.n-widget-keylab .n-deck-key[data-keylab-key="G"]',
+          ).length,
+          layoutMode: document.querySelector(".n-widget-keylab .n-keylab-deck")
+            ?.getAttribute("data-layout-mode") ?? null,
+          renderMode: document.querySelector(".n-widget-keylab .n-keylab-deck")
+            ?.getAttribute("data-render-mode") ?? null,
+        },
+      };
+    }, identity);
+
+    try {
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-surface .n-surface-control").length === 2,
+        null,
+        { timeout: 20_000 },
       );
-      await page.locator(
-        '.forma-canvas-navigator .navigator-item[aria-label="Focus Key Workbench"]',
-      ).click();
-      await settle(page);
-      const playerDeck = await readDeck();
-      assert.equal(playerDeck.layoutMode, "players");
+      const migrated = await readMigration();
+      assert.equal(migrated.surfaceWidgetCount, 1, "migration mounts one sibling surface builder");
+      assert.equal(migrated.surfaceDeviceCount, 1, "migration writes one device-scoped surface");
+      assert.equal(migrated.template, "workbench-migration");
+      assert.equal(migrated.deckTemplate, "workbench-migration");
+      assert.equal(migrated.panelLayout, "four-player");
       assert.equal(
-        new Set(playerDeck.keys.map((key) => key.token)).size,
-        playerDeck.keys.length,
-        "every panel control has a unique visual instance token",
+        migrated.deckPanelLayout,
+        "four-player",
+        "the panel keeps its four-player structure independently of its migration origin",
       );
-      assert.ok(
-        playerDeck.keys.every(
-          (key) => key.token === `p:${key.playerSlot}:${key.canonicalKey}`,
-        ),
-        "the fixture's mapped controls use canonical p:slot:key mirror tokens",
-      );
-      const sharedGMirrors = playerDeck.keys
-        .filter((key) => key.canonicalKey === "G")
-        .sort((a, b) => a.token.localeCompare(b.token));
+      assert.equal(migrated.marker, true, "the one-way migration marker is browser-persisted");
       assert.deepEqual(
-        sharedGMirrors.map((key) => ({
-          key: key.key,
-          canonicalKey: key.canonicalKey,
-          token: key.token,
-          playerSlot: key.playerSlot,
-          ownerSlots: key.ownerSlots,
-          ownerBadges: key.ownerBadges,
+        migrated.controls.map(({ physicalId, playerSlot, mirror, keys }) => ({
+          physicalId,
+          playerSlot,
+          mirror,
+          keys,
+        })),
+        [
+          { physicalId: "key:G", playerSlot: "1", mirror: true, keys: ["G"] },
+          { physicalId: "key:G", playerSlot: "2", mirror: true, keys: ["G"] },
+        ],
+        "the two player views visibly remain linked to the same taught G switch",
+      );
+      assert.deepEqual(
+        migrated.storedControls.map((control) => ({
+          physicalId: control.physicalId,
+          physicalResolution: control.physicalResolution,
+          origin: control.origin,
+          playerSlot: control.playerSlot,
+          keys: control.keys,
         })),
         [
           {
-            key: "G",
-            canonicalKey: "G",
-            token: "p:1:G",
-            playerSlot: "1",
-            ownerSlots: "1,2",
-            ownerBadges: ["1", "2"],
+            physicalId: "key:G",
+            physicalResolution: "confirmed",
+            origin: "workbench-migration",
+            playerSlot: 1,
+            keys: ["G"],
           },
           {
-            key: "G",
-            canonicalKey: "G",
-            token: "p:2:G",
-            playerSlot: "2",
-            ownerSlots: "1,2",
-            ownerBadges: ["1", "2"],
+            physicalId: "key:G",
+            physicalResolution: "confirmed",
+            origin: "workbench-migration",
+            playerSlot: 2,
+            keys: ["G"],
           },
         ],
-        "P1 and P2 receive linked visual mirrors, shared-owner badges, and one canonical G",
+        "Workbench player views migrate as confirmed mirrors, not inferred shared signals",
+      );
+      assert.deepEqual(migrated.arranger, {
+        open: true,
+        selectedKeys: ["G"],
+        layoutMode: "compact",
+        renderMode: "keycap",
+      });
+      assert.deepEqual(migrated.arrangerDeck, {
+        count: 1,
+        layoutMode: "compact",
+        renderMode: "keycap",
+      });
+      assert.deepEqual(writes, [], "migration never binds or starts a learner");
+
+      const firstIds = migrated.storedControls.map((control) => control.id);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-surface .n-surface-control").length === 2,
+        null,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      const restored = await readMigration();
+      assert.equal(restored.surfaceWidgetCount, 1, "reload cannot mount a second surface builder");
+      assert.equal(restored.surfaceDeviceCount, 1, "reload cannot duplicate the migrated document");
+      assert.equal(restored.marker, true);
+      assert.equal(restored.panelLayout, "four-player");
+      assert.equal(restored.deckPanelLayout, "four-player");
+      assert.deepEqual(
+        restored.storedControls.map((control) => control.id),
+        firstIds,
+        "the migration marker restores the same two visual instances instead of migrating again",
+      );
+      assert.deepEqual(restored.arranger, migrated.arranger);
+      assert.deepEqual(writes, [], "restoring a migrated surface remains read-only");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a failed surface migration preserves the complete legacy Workbench", async () => {
+    const identity = "keyboard:usb:d209:0430:00";
+    const writes = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        if (request.method() !== "POST") return;
+        const pathname = new URL(request.url()).pathname;
+        if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) writes.push(pathname);
+      });
+      await candidate.addInitScript(({ expectedOrigin, keyboardIdentity }) => {
+        if (location.origin !== expectedOrigin) return;
+        const surfaceKey = "ksx-nocturne-control-surfaces1";
+        const originalSetItem = Storage.prototype.setItem;
+        if (sessionStorage.getItem("ksx-pwtest-failed-surface-migration") !== "1") {
+          originalSetItem.call(localStorage, "ksx-nocturne-keyboard-workbench1", JSON.stringify({
+            version: 2,
+            devices: {
+              [keyboardIdentity]: {
+                open: true,
+                sourceHidden: false,
+                theme: "carbon-forge",
+                capProfile: "sculpted",
+                selectedKeys: ["G"],
+                layoutMode: "players",
+                renderMode: "arcade",
+                positions: {},
+              },
+            },
+          }));
+          localStorage.removeItem(surfaceKey);
+          originalSetItem.call(sessionStorage, "ksx-pwtest-failed-surface-migration", "1");
+        }
+        Storage.prototype.setItem = function setItem(key, value) {
+          if (this === localStorage && key === surfaceKey) {
+            throw new DOMException("Storage unavailable", "QuotaExceededError");
+          }
+          return originalSetItem.call(this, key, value);
+        };
+      }, {
+        expectedOrigin: new URL(BASE).origin,
+        keyboardIdentity: identity,
+      });
+    });
+    const readFailure = () => page.evaluate((keyboardIdentity) => {
+      const workbench = JSON.parse(
+        localStorage.getItem("ksx-nocturne-keyboard-workbench1") ?? "null",
+      )?.devices?.[keyboardIdentity] ?? null;
+      return {
+        storedSurface: localStorage.getItem("ksx-nocturne-control-surfaces1"),
+        workbench,
+        surfaceControls: document.querySelectorAll(".n-widget-surface .n-surface-control").length,
+        status: document.querySelector(".n-widget-surface .n-surface-status")?.textContent ?? "",
+        arrangerLayout: document.querySelector(".n-widget-keylab .n-keylab-deck")
+          ?.getAttribute("data-layout-mode") ?? null,
+        arrangerRender: document.querySelector(".n-widget-keylab .n-keylab-deck")
+          ?.getAttribute("data-render-mode") ?? null,
+      };
+    }, identity);
+
+    try {
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-surface .n-surface-control").length === 2,
+      );
+      let failure = await readFailure();
+      assert.equal(failure.storedSurface, null, "no migration marker is claimed after a failed write");
+      assert.deepEqual(failure.workbench, {
+        open: true,
+        sourceHidden: false,
+        theme: "carbon-forge",
+        capProfile: "sculpted",
+        selectedKeys: ["G"],
+        layoutMode: "players",
+        renderMode: "arcade",
+        positions: {},
+      });
+      assert.equal(failure.surfaceControls, 2, "the session-only copy remains usable");
+      assert.match(failure.status, /Not saved: browser storage is unavailable/i);
+      assert.equal(failure.arrangerLayout, "players");
+      assert.equal(failure.arrangerRender, "arcade");
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-widget-surface .n-surface-control").length === 2,
+      );
+      await settle(page);
+      failure = await readFailure();
+      assert.equal(failure.storedSurface, null, "reload retries instead of trusting a false marker");
+      assert.equal(failure.workbench.layoutMode, "players");
+      assert.equal(failure.workbench.renderMode, "arcade");
+      assert.match(failure.status, /Not saved/i);
+      assert.deepEqual(writes, [], "failed migration remains a visual, read-only operation");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Control Surface starters create physical hardware without writing mappings", async () => {
+    const page = await openCanvas();
+    const writes = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) writes.push(pathname);
+    });
+    const choose = async (slug, replacing = true) => {
+      if (replacing) await page.click('.n-widget-surface [data-nx="surface-new"]');
+      const card = page.locator(
+        `.n-widget-surface [data-surface-template="${slug}"]`,
+      );
+      await card.click();
+      if (replacing) {
+        assert.equal(await card.getAttribute("aria-pressed"), "true");
+        assert.match((await card.textContent()).trim(), /^Confirm replacement/);
+        await card.click();
+      }
+      await page.waitForFunction(
+        (template) => document.querySelector(".n-widget-surface .n-surface-deck")
+          ?.getAttribute("data-template") === template,
+        slug,
+      );
+    };
+    const kinds = () => page.evaluate(() => {
+      const controls = Array.from(document.querySelectorAll(
+        ".n-widget-surface .n-surface-control",
+      ));
+      return {
+        total: controls.length,
+        unassigned: controls.filter((control) => control.classList.contains("unassigned")).length,
+        button30: controls.filter((control) => control.getAttribute("data-control-kind") === "button30").length,
+        button24: controls.filter((control) => control.getAttribute("data-control-kind") === "button24").length,
+        joystick: controls.filter((control) => control.getAttribute("data-control-kind") === "joystick").length,
+        byPlayer: [1, 2, 3, 4].map((slot) => controls.filter(
+          (control) => control.getAttribute("data-player-slot") === String(slot),
+        ).length),
+      };
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForSelector(".n-widget-surface");
+      assert.equal(await page.locator(".n-widget-surface").count(), 1);
+      assert.equal(
+        await page.locator(".n-widget-surface [data-surface-template]").count(),
+        6,
+        "the starter gallery offers blank, hardware, and mapping-derived entries",
       );
       assert.equal(
-        new Set(sharedGMirrors.map((key) => key.canonicalKey)).size,
-        1,
-        "duplicate panel views still describe one physical key",
+        await page.evaluate(() => document.activeElement?.matches(
+          ".n-widget-surface [data-surface-template]",
+        )),
+        true,
+        "opening the builder puts keyboard focus into the starter gallery",
       );
-      assert.equal(
-        await page.locator('.n-widget-kb .n-key[data-key="G"].extracted').count(),
-        1,
-        "both G mirrors lift exactly one source key",
-      );
-      await page.evaluate(() => {
-        window.__ksxSharedGSource = document.querySelector('.n-widget-kb .n-key[data-key="G"]');
+
+      await choose("blank", false);
+      assert.deepEqual(await kinds(), {
+        total: 0,
+        unassigned: 0,
+        button30: 0,
+        button24: 0,
+        joystick: 0,
+        byPlayer: [0, 0, 0, 0],
+      });
+      await page.click('.n-widget-surface [data-surface-stage="teach"]');
+      await page.waitForFunction(() => document.activeElement?.matches(
+        '.n-widget-surface [data-nx="surface-add"]',
+      ));
+      assert.match(await page.textContent(".n-live-sr"), /Add a physical component first/i);
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await page.click('.n-widget-surface [data-nx="surface-remove"]');
+      await page.waitForFunction(() => document.activeElement?.matches(
+        '.n-widget-surface [data-nx="surface-add"]',
+      ));
+      assert.equal(await page.locator(".n-widget-surface .n-surface-control").count(), 0);
+
+      await choose("arcade-stick");
+      assert.deepEqual(await kinds(), {
+        total: 11,
+        unassigned: 11,
+        button30: 8,
+        button24: 2,
+        joystick: 1,
+        byPlayer: [0, 0, 0, 0],
       });
 
-      const p1GBefore = {
-        left: sharedGMirrors[0].left,
-        top: sharedGMirrors[0].top,
-      };
-      const p2GBefore = {
-        left: sharedGMirrors[1].left,
-        top: sharedGMirrors[1].top,
-      };
-      const p2GButton = page.locator('.n-deck-key[data-keylab-token="p:2:G"]');
-      const p2GBox = await p2GButton.boundingBox();
-      assert.ok(p2GBox, "the P2 G mirror is independently draggable");
-      await page.mouse.move(p2GBox.x + p2GBox.width / 2, p2GBox.y + p2GBox.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(
-        p2GBox.x + p2GBox.width / 2 + 42,
-        p2GBox.y + p2GBox.height / 2 + 24,
-        { steps: 5 },
-      );
-      await page.mouse.up();
-      await page.waitForFunction(
-        ({ left, top }) => {
-          const mirror = document.querySelector('.n-deck-key[data-keylab-token="p:2:G"]');
-          return mirror?.style.left !== left && mirror?.style.top !== top;
-        },
-        p2GBefore,
-      );
-      const draggedPlayerDeck = await readDeck();
-      const p1GAfter = draggedPlayerDeck.keys.find((key) => key.token === "p:1:G");
-      const p2GAfter = draggedPlayerDeck.keys.find((key) => key.token === "p:2:G");
-      assert.equal(
-        draggedPlayerDeck.layoutMode,
-        "players",
-        "customizing one mirror retains the four-player panel arrangement",
-      );
-      assert.deepEqual(
-        p1GAfter && { left: p1GAfter.left, top: p1GAfter.top },
-        p1GBefore,
-        "dragging P2's linked view leaves P1's mirror in place",
-      );
-      assert.notDeepEqual(
-        p2GAfter && { left: p2GAfter.left, top: p2GAfter.top },
-        p2GBefore,
-        "only the chosen player mirror receives the custom position",
-      );
-      const draggedMirrorState = await persistedWorkbench();
-      assert.equal(draggedMirrorState?.layoutMode, "players");
-      assert.ok(
-        draggedMirrorState?.positions?.["p:2:G"],
-        "the moved mirror persists by its player-scoped instance token",
-      );
-      assert.equal(draggedMirrorState?.positions?.G, undefined);
-      assert.deepEqual(bindingPosts, [], "building and arranging panels performs no binding POSTs");
+      await choose("leverless");
+      assert.deepEqual(await kinds(), {
+        total: 14,
+        unassigned: 14,
+        button30: 12,
+        button24: 2,
+        joystick: 0,
+        byPlayer: [0, 0, 0, 0],
+      });
 
-      await p2GButton.focus();
-      await page.keyboard.press("Delete");
-      await page.waitForFunction(
-        () => document.querySelectorAll(
-          '.n-widget-keylab .n-deck-key[data-keylab-key="G"]',
-        ).length === 0,
+      await choose("four-player");
+      assert.deepEqual(await kinds(), {
+        total: 36,
+        unassigned: 36,
+        button30: 24,
+        button24: 8,
+        joystick: 4,
+        byPlayer: [9, 9, 9, 9],
+      });
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-player-zones").evaluate(
+          (zones) => getComputedStyle(zones).display,
+        ),
+        "grid",
+        "the four-player structure remains visible as part of the panel layout",
       );
-      const restoredGSocket = await page.evaluate(() => {
-        const sources = Array.from(
-          document.querySelectorAll('.n-widget-kb .n-key[data-key="G"]'),
+
+      const firstP1 = page.locator(
+        '.n-widget-surface .n-surface-control[data-player-slot="1"]',
+      ).first();
+      await firstP1.click();
+      const labelInput = page.locator('.n-widget-surface [data-nx="surface-label"]');
+      await labelInput.fill("Player Two Coin");
+      await labelInput.press("Tab");
+      assert.equal(
+        (await page.locator(".n-widget-surface .n-surface-control.selected .n-surface-control-label").textContent()).trim(),
+        "Player Two Coin",
+        "physical components can be named in the contextual inspector",
+      );
+      await page.click('.n-widget-surface [data-nx="surface-owner"][data-player-slot="2"]');
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-control.selected").getAttribute("data-player-slot"),
+        "2",
+        "player ownership is explicit rather than inferred only from where a control was drawn",
+      );
+      assert.equal(
+        await page.locator('.n-widget-surface [data-nx="surface-owner"]').count(),
+        5,
+        "the picker offers Panel-wide and the four player zones the panel can actually show",
+      );
+      assert.match(await page.locator(".n-widget-surface .n-surface-control.selected").getAttribute("aria-label"),
+        /joystick.*P2 view/i);
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button24"]');
+      const addedP2 = page.locator(".n-widget-surface .n-surface-control.selected");
+      assert.equal(await addedP2.getAttribute("data-player-slot"), "2");
+      const addedPlacement = await addedP2.evaluate((control) => ({
+        left: Number.parseFloat(control.style.left),
+        top: Number.parseFloat(control.style.top),
+      }));
+      assert.ok(
+        addedPlacement.left >= 50 && addedPlacement.top < 50,
+        `a P2 part starts inside P2's quadrant (${addedPlacement.left}, ${addedPlacement.top})`,
+      );
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-deck").getAttribute("data-panel-layout"),
+        "four-player",
+        "ordinary edits preserve the durable four-player panel structure",
+      );
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-player-zones").evaluate(
+          (zones) => getComputedStyle(zones).display,
+        ),
+        "grid",
+      );
+
+      await choose("mapping-four");
+      const sharedG = await page.evaluate(() => Array.from(document.querySelectorAll(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      )).map((control) => ({
+        physicalId: control.getAttribute("data-physical-id"),
+        relationship: control.querySelector(".n-surface-control-relation")?.textContent ?? "",
+        unresolved: control.classList.contains("shared-signal"),
+      })));
+      assert.ok(sharedG.length >= 2, "the fixture supplies G to more than one player mapping");
+      assert.equal(new Set(sharedG.map((control) => control.physicalId)).size, sharedG.length);
+      assert.ok(
+        sharedG.every((control) => control.unresolved && control.relationship === "SIGNAL?"),
+        "mapping import shows a shared signal without inventing a physical mirror relationship",
+      );
+
+      const firstG = page.locator(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      ).first();
+      await firstG.evaluate((control) => control.click());
+      assert.equal(
+        await page.locator('.n-widget-surface [data-nx="surface-mirror"]').count(),
+        0,
+        "unresolved wiring must be confirmed before additional mirrors can be invented",
+      );
+      await page.selectOption('[data-nx="mapping-paths"]', "all");
+      const cordOriginHandle = await page.waitForFunction(() => {
+        const control = document.querySelector(
+          '.n-widget-surface .n-surface-control.selected:has(.n-surface-channel-anchor[data-key="G"])',
         );
+        const slot = control?.getAttribute("data-player-slot");
+        const edge = document.querySelector(
+          `#n-mapping-paths [data-flow-kind="binding"][data-flow-key="G"][data-flow-slot="${slot}"]`,
+        );
+        const flowId = edge?.getAttribute("data-flow-id");
+        const port = flowId
+          ? document.querySelector(
+              `#n-mapping-ports [data-flow-id="${CSS.escape(flowId)}"] .n-flow-port-source`,
+            )
+          : null;
+        if (!control || !port) return null;
+        const controlRect = control.getBoundingClientRect();
+        const portRect = port.getBoundingClientRect();
+        if (portRect.width < 1 || portRect.height < 1) return null;
+        const center = {
+          x: portRect.left + portRect.width / 2,
+          y: portRect.top + portRect.height / 2,
+        };
         return {
-          count: sources.length,
-          sameNode: sources[0] === window.__ksxSharedGSource,
-          connected: sources[0]?.isConnected ?? false,
-          extracted: sources[0]?.classList.contains("extracted") ?? false,
+          inside: center.x >= controlRect.left - 1 && center.x <= controlRect.right + 1 &&
+            center.y >= controlRect.top - 1 && center.y <= controlRect.bottom + 1,
+          rim: Math.min(
+            Math.abs(center.x - controlRect.left),
+            Math.abs(center.x - controlRect.right),
+            Math.abs(center.y - controlRect.top),
+            Math.abs(center.y - controlRect.bottom),
+          ),
+          ellipseRadius: Math.sqrt(
+            ((center.x - (controlRect.left + controlRect.width / 2)) / (controlRect.width / 2)) ** 2 +
+            ((center.y - (controlRect.top + controlRect.height / 2)) / (controlRect.height / 2)) ** 2,
+          ),
+          controlRect: {
+            left: controlRect.left,
+            top: controlRect.top,
+            right: controlRect.right,
+            bottom: controlRect.bottom,
+          },
+          portRect: {
+            left: portRect.left,
+            top: portRect.top,
+            right: portRect.right,
+            bottom: portRect.bottom,
+          },
+          flowId,
+          slot,
         };
       });
-      assert.deepEqual(
-        restoredGSocket,
-        { count: 1, sameNode: true, connected: true, extracted: false },
-        "deleting either linked mirror removes every G view and restores one source socket",
+      const cordOrigin = await cordOriginHandle.jsonValue();
+      assert.equal(
+        cordOrigin.inside,
+        true,
+        `the source port stays inside the selected component (${JSON.stringify(cordOrigin)})`,
+      );
+      assert.ok(
+        cordOrigin.ellipseRadius >= 0.9 && cordOrigin.ellipseRadius <= 1.05,
+        `the cord begins on the selected physical component rim (${cordOrigin.ellipseRadius})`,
+      );
+
+      await page.click('.n-widget-surface [data-nx="surface-resolve-mirror"]');
+      const linkedG = await page.evaluate(() => Array.from(document.querySelectorAll(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      )).map((control) => ({
+        physicalId: control.getAttribute("data-physical-id"),
+        relationship: control.querySelector(".n-surface-control-relation")?.textContent ?? "",
+      })));
+      assert.equal(new Set(linkedG.map((control) => control.physicalId)).size, 1);
+      assert.ok(linkedG.every((control) => control.relationship === "LINK"));
+      await page.waitForFunction(() => document.activeElement?.matches(
+        ".n-widget-surface .n-surface-control.selected",
+      ));
+
+      await choose("mapping-four");
+      const unresolvedIds = await page.locator(
+        '.n-widget-surface .n-surface-control.shared-signal:has(.n-surface-channel-anchor[data-key="G"])',
+      ).evaluateAll((controls) => controls.map((control) => control.getAttribute("data-surface-control-id")));
+      assert.ok(unresolvedIds.length >= 2);
+      for (const controlId of unresolvedIds.slice(0, -1)) {
+        await page.locator(
+          `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
+        ).evaluate((control) => control.click());
+        await page.click('.n-widget-surface [data-nx="surface-remove"]');
+      }
+      const loneG = page.locator(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      );
+      assert.equal(await loneG.count(), 1);
+      assert.equal(await loneG.evaluate((control) => control.classList.contains("shared-signal")), false);
+      assert.equal((await loneG.locator(".n-surface-control-relation").textContent()).trim(), "");
+
+      await choose("mapping-four");
+      await page.locator(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      ).first().evaluate((control) => control.click());
+      await page.click('.n-widget-surface [data-nx="surface-resolve-duplicate"]');
+      const separateG = await page.evaluate(() => Array.from(document.querySelectorAll(
+        '.n-widget-surface .n-surface-control:has(.n-surface-channel-anchor[data-key="G"])',
+      )).map((control) => ({
+        physicalId: control.getAttribute("data-physical-id"),
+        relationship: control.querySelector(".n-surface-control-relation")?.textContent ?? "",
+      })));
+      assert.equal(new Set(separateG.map((control) => control.physicalId)).size, separateG.length);
+      assert.ok(separateG.every((control) => control.relationship === "DUPE"));
+      assert.deepEqual(writes, [], "choosing and replacing physical templates performs no backend write");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("surface components keep explicit ownership and placement through drag and reload", async () => {
+    const page = await openCanvas();
+    const writes = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) writes.push(pathname);
+    });
+    const storedControl = (controlId) => page.evaluate((id) => {
+      const store = JSON.parse(localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null");
+      const surface = Object.values(store?.devices ?? {})[0];
+      const control = surface?.controls?.find((candidate) => candidate.id === id);
+      return control
+        ? { x: control.x, y: control.y, playerSlot: control.playerSlot, open: surface.open }
+        : null;
+    }, controlId);
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.locator(
+        '.n-widget-surface [data-surface-template="four-player"]',
+      ).click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-deck")
+          ?.getAttribute("data-template") === "four-player"
+      );
+
+      let control = page.locator(
+        '.n-widget-surface .n-surface-control[data-player-slot="1"]',
+      ).first();
+      await control.click();
+      const controlId = await control.getAttribute("data-surface-control-id");
+      assert.ok(controlId);
+      await page.click(
+        `.n-widget-surface [data-nx="surface-owner"][data-player-slot="0"][data-surface-control-id="${controlId}"]`,
+      );
+      await page.waitForFunction(() =>
+        document.activeElement?.matches(
+          '.n-widget-surface [data-nx="surface-owner"][data-player-slot="0"]',
+        )
+      );
+      control = page.locator(
+        `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
+      );
+      assert.equal(await control.getAttribute("data-player-slot"), null);
+      const before = await storedControl(controlId);
+      assert.equal(before.playerSlot, null);
+
+      const box = await control.boundingBox();
+      assert.ok(box, "the selected component has draggable browser geometry");
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 96, box.y + box.height / 2 + 56, {
+        steps: 5,
+      });
+      await page.mouse.up();
+      await page.waitForFunction(
+        ({ id, x, y }) => {
+          const store = JSON.parse(
+            localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+          );
+          const surface = Object.values(store?.devices ?? {})[0];
+          const moved = surface?.controls?.find((candidate) => candidate.id === id);
+          return moved && (moved.x !== x || moved.y !== y);
+        },
+        { id: controlId, x: before.x, y: before.y },
+      );
+      const moved = await storedControl(controlId);
+      assert.ok(moved.x > before.x && moved.y > before.y, "dragging persists both panel coordinates");
+      assert.equal(moved.playerSlot, null, "movement never derives semantic ownership from a quadrant");
+      assert.equal(await control.getAttribute("data-player-slot"), null);
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector(
+        `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
+      );
+      await settle(page);
+      const restored = await storedControl(controlId);
+      assert.deepEqual(restored, moved, "reload restores the exact component position and panel-wide owner");
+      const restoredView = await page.locator(
+        `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
+      ).evaluate((element) => ({
+        left: Number.parseFloat(element.style.left),
+        top: Number.parseFloat(element.style.top),
+        playerSlot: element.getAttribute("data-player-slot"),
+      }));
+      assert.ok(Math.abs(restoredView.left - (moved.x / 1200) * 100) < 0.01);
+      assert.ok(Math.abs(restoredView.top - (moved.y / 720) * 100) < 0.01);
+      assert.equal(restoredView.playerSlot, null);
+
+      await page.locator(
+        `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
+      ).click();
+      await page.click('.n-widget-surface [data-nx="surface-remove"]');
+      const undo = page.locator('.n-widget-surface [data-nx="surface-undo"]');
+      assert.equal(await undo.isDisabled(), false, "the destructive removal offers an immediate undo");
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button24"]');
+      assert.equal(
+        await undo.isDisabled(),
+        true,
+        "a later panel edit expires the snapshot before it can discard intervening work",
+      );
+      assert.deepEqual(writes, [], "visual panel placement never rewrites a KSX route");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("teaching observes a signal while routing performs the real backend bind", async () => {
+    const page = await openCanvas();
+    const bindBodies = [];
+    await page.route("**/nocturne/api/bind", async (route) => {
+      bindBodies.push(JSON.parse(route.request().postData() ?? "{}"));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          message: null,
+          error: null,
+          code: null,
+          conflicts: [],
+          also_drives: [],
+        }),
+      });
+    });
+    const controls = () => page.evaluate(() => Array.from(document.querySelectorAll(
+      ".n-widget-surface .n-surface-control",
+    )).map((control) => ({
+      id: control.getAttribute("data-surface-control-id"),
+      physicalId: control.getAttribute("data-physical-id"),
+      keys: Array.from(control.querySelectorAll(".n-surface-channel-anchor[data-key]"))
+        .map((anchor) => anchor.getAttribute("data-key")),
+      relation: control.querySelector(".n-surface-control-relation")?.textContent ?? "",
+    })));
+    const expectedDevice = await page.evaluate(() => JSON.parse(
+      document.getElementById("__ksx-payload")?.textContent ?? "{}",
+    ).view?.cap_instance ?? "");
+    assert.ok(expectedDevice, "the fixture serves the exact selected Windows device instance");
+    let physicalKey = "J";
+    let physicalDevice = expectedDevice;
+    let physicalGeneration = 900;
+    let physicalHitReady = false;
+    let holdNextPoll = false;
+    let pendingPollStarted;
+    let releasePendingPoll;
+    await page.route("**/api/learn/start", async (route) => {
+      physicalGeneration += 1;
+      physicalHitReady = false;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          state: "listening",
+          generation: physicalGeneration,
+          remaining_ms: 10_000,
+          device: null,
+          key: null,
+          error: null,
+        }),
+      });
+    });
+    await page.route("**/api/learn", async (route) => {
+      if (holdNextPoll) {
+        holdNextPoll = false;
+        pendingPollStarted?.();
+        await new Promise((resolve) => {
+          releasePendingPoll = resolve;
+        });
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          state: physicalHitReady ? "hit" : "listening",
+          generation: physicalGeneration,
+          remaining_ms: physicalHitReady ? null : 10_000,
+          device: physicalHitReady ? physicalDevice : null,
+          key: physicalHitReady ? physicalKey : null,
+          error: null,
+        }),
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.click('.n-widget-surface [data-surface-template="blank"]');
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      await page.locator('.n-widget-kb .n-key[data-key="J"]').evaluate((button) => button.click());
+      assert.equal(
+        await page.locator('.n-widget-surface .n-surface-channel-anchor[data-key="J"]').count(),
+        0,
+        "clicking a drawn key cannot masquerade as an observed hardware event",
+      );
+      assert.match(
+        await page.textContent(".n-live-sr"),
+        /only clicked in the drawing.*not recorded as physical input/i,
+      );
+      physicalHitReady = true;
+      await page.waitForFunction(() => document.querySelector(
+        '.n-widget-surface .n-surface-channel-anchor[data-key="J"]',
+      ));
+      assert.deepEqual(bindBodies, [], "Teach input never calls the binding verb");
+      assert.equal(
+        (await page.textContent(".n-widget-surface .n-surface-signal strong")).trim(),
+        "J",
       );
       assert.equal(
-        (await readDeck()).keys.some((key) => key.token === "p:1:G" || key.token === "p:2:G"),
-        false,
+        await page.locator('.n-widget-surface [data-surface-stage="teach"]').getAttribute("aria-pressed"),
+        "true",
+        "a successful capture keeps the author in Teach mode for batch wiring",
       );
-      assert.equal((await persistedWorkbench())?.selectedKeys.includes("G"), false);
-      assert.deepEqual(bindingPosts, [], "linked-view deletion remains a presentation-only edit");
+
+      await page.click('.n-widget-surface [data-nx="surface-mirror"]');
+      await page.click('.n-widget-surface [data-nx="surface-duplicate"]');
+      let views = await controls();
+      assert.equal(views.length, 3);
+      assert.equal(views[0].physicalId, views[1].physicalId, "a mirror shares physical identity");
+      assert.notEqual(views[1].physicalId, views[2].physicalId, "a duplicate is independently wired");
+      assert.deepEqual(views.map((view) => view.keys), [["J"], ["J"], ["J"]]);
+
+      physicalKey = "Z";
+      physicalDevice = "HID\\VID_0000&PID_0000\\WRONG-KEYBOARD";
+      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalHitReady = true;
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      assert.deepEqual((await controls()).map((view) => view.keys), [["J"], ["J"], ["J"]]);
+      assert.match(
+        await page.textContent(".n-live-sr"),
+        /Ignored Z: Windows reported .*WRONG-KEYBOARD, not the selected keyboard or encoder/,
+        "a hit from another attached keyboard is rejected before it becomes routable",
+      );
+
+      physicalKey = "K";
+      physicalDevice = expectedDevice;
+      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalHitReady = true;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-control.selected .n-surface-channel-anchor")
+          ?.getAttribute("data-key") === "K"
+      );
+      assert.match(
+        await page.textContent(".n-widget-surface .n-surface-signal small"),
+        /verified against the selected Windows device/,
+        "the accepted physical hit retains the exact learner-reported device",
+      );
+      views = await controls();
+      assert.deepEqual(
+        views.map((view) => view.keys),
+        [["J"], ["J"], ["K"]],
+        "the independently wired duplicate accepts its own physical signal",
+      );
+
+      await page.locator(".n-widget-surface .n-surface-control").first().evaluate(
+        (button) => button.click(),
+      );
+      physicalKey = "L";
+      physicalDevice = expectedDevice;
+      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalHitReady = true;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-control.selected .n-surface-channel-anchor")
+          ?.getAttribute("data-key") === "L"
+      );
+      views = await controls();
+      assert.deepEqual(
+        views.map((view) => view.keys),
+        [["L"], ["L"], ["K"]],
+        "teaching a mirror updates its physical twin but leaves the duplicate independent",
+      );
+
+      await page.locator(".n-widget-surface .n-surface-control").last().evaluate(
+        (button) => button.click(),
+      );
+      physicalKey = "M";
+      physicalDevice = expectedDevice;
+      holdNextPoll = true;
+      const pollStarted = new Promise((resolve) => {
+        pendingPollStarted = resolve;
+      });
+      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      await pollStarted;
+      const beforeStaleRemoval = await controls();
+      await page.click('.n-widget-surface [data-nx="surface-remove"]');
+      physicalHitReady = true;
+      releasePendingPoll?.();
+      await page.waitForTimeout(120);
+      views = await controls();
+      assert.equal(views.length, beforeStaleRemoval.length - 1);
+      assert.equal(
+        views.some((view) => view.keys.includes("M")),
+        false,
+        "a delayed learner hit cannot attach itself after its physical component was removed",
+      );
+      await page.unroute("**/api/learn/start");
+      await page.unroute("**/api/learn");
+
+      await page.click('.n-widget-surface [data-nx="surface-route"]');
+      assert.notEqual(
+        await page.inputValue('[data-nx="mapping-paths"]'),
+        "off",
+        "Route output reveals the mapping-path lens instead of creating an invisible connection",
+      );
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-control.assign").count(),
+        2,
+        "Route output visibly arms every view of the selected physical signal",
+      );
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-2"] [data-fn~="a"]',
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      assert.deepEqual(bindBodies, [{
+        slot: 2,
+        function: "A",
+        key: "L",
+        mode: "replace",
+        force: false,
+      }]);
+      assert.equal(
+        await page.inputValue('[data-nx="mapping-paths"]'),
+        "all",
+        "a P1-selected surface routed only to P2 widens the lens so its new cord is visible",
+      );
+
+      const beforeReload = await controls();
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        (expected) => document.querySelectorAll(".n-widget-surface .n-surface-control").length === expected,
+        beforeReload.length,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      assert.deepEqual(await controls(), beforeReload, "physical identities and taught signals survive reload");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

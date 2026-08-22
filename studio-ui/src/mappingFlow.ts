@@ -69,7 +69,10 @@ function normalizedFunctionName(value: string): string {
 }
 
 function routePart(value: string): string {
-  return encodeURIComponent(value).replace(/%/g, "_");
+  // These identifiers live in Maps and data attributes, not CSS id selectors.
+  // Keep URI escaping intact so values such as `A B` and `A_20B` cannot
+  // collapse to the same route identity.
+  return encodeURIComponent(value);
 }
 
 /** One edge per physical key -> virtual function, never per decorative SVG
@@ -98,7 +101,8 @@ export function deriveDirectMappingFlow(
         if (seen.has(signature)) continue;
         seen.add(signature);
         routes.push({
-          id: `binding-${pad.slot}-${routePart(key)}-${routePart(functionName)}`,
+          id:
+            `binding:${pad.slot}:${routePart(pad.preset)}:${routePart(key)}:${routePart(functionName)}`,
           kind: "binding",
           source: {
             kind: "key",
@@ -173,11 +177,13 @@ export class MappingFlowLayer {
   readonly #resizeObserver: ResizeObserver;
   readonly #abort = new AbortController();
   readonly #relatedAnchors = new Set<Element>();
+  readonly #observedAnchors = new Set<Element>();
   #routes: DirectMappingFlow[] = [];
   #fingerprint = "";
   #mode: MappingPathMode = "off";
   #selectedSlot = 0;
-  #inspection: MappingInspection | null = null;
+  #pointerInspection: MappingInspection | null = null;
+  #focusInspection: MappingInspection | null = null;
   #layoutFrame = 0;
 
   constructor(
@@ -211,20 +217,20 @@ export class MappingFlowLayer {
     });
     this.#resizeObserver = new ResizeObserver(() => this.scheduleLayout());
     this.#resizeObserver.observe(viewport);
-    root.addEventListener("pointerover", (event) => this.#inspectEvent(event), {
+    root.addEventListener("pointerover", (event) => this.#inspectEvent("pointer", event), {
       signal: this.#abort.signal,
     });
-    root.addEventListener("focusin", (event) => this.#inspectEvent(event), {
+    root.addEventListener("focusin", (event) => this.#inspectEvent("focus", event), {
       signal: this.#abort.signal,
     });
-    root.addEventListener("pointerout", (event) => this.#leaveEvent(event), {
+    root.addEventListener("pointerout", (event) => this.#leaveEvent("pointer", event), {
       signal: this.#abort.signal,
     });
-    root.addEventListener("focusout", (event) => this.#leaveEvent(event), {
+    root.addEventListener("focusout", (event) => this.#leaveEvent("focus", event), {
       signal: this.#abort.signal,
     });
     root.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && this.#inspection) this.#setInspection(null);
+      if (event.key === "Escape") this.#clearInspections();
     }, { signal: this.#abort.signal });
     this.#syncCameraTransform();
   }
@@ -254,8 +260,23 @@ export class MappingFlowLayer {
     if (fingerprint !== this.#fingerprint) {
       this.#fingerprint = fingerprint;
       this.#rebuild();
+    } else {
+      // Labels and other semantic metadata may change without changing the
+      // edge set. Keep the retained DOM entries attached to current truth.
+      for (const route of this.#routes) {
+        const entry = this.#entries.get(route.id);
+        if (entry) entry.route = route;
+      }
     }
     this.#syncCameraTransform();
+    if (hidden) {
+      if (this.#layoutFrame !== 0) cancelAnimationFrame(this.#layoutFrame);
+      this.#layoutFrame = 0;
+      this.#clearInspections();
+      this.#syncObservedAnchors(new Set());
+      this.#publishSummary({ total: 0, resolved: 0, unresolved: 0 });
+      return 0;
+    }
     this.scheduleLayout();
     return this.#routes.length;
   }
@@ -286,6 +307,7 @@ export class MappingFlowLayer {
     this.#abort.abort();
     this.#mutationObserver.disconnect();
     this.#resizeObserver.disconnect();
+    this.#observedAnchors.clear();
     this.#clearRelatedAnchors();
     this.#entries.clear();
     this.#lines.replaceChildren();
@@ -298,6 +320,7 @@ export class MappingFlowLayer {
     this.#lines.replaceChildren();
     this.#ports.replaceChildren();
     this.#resizeObserver.disconnect();
+    this.#observedAnchors.clear();
     this.#resizeObserver.observe(this.#viewport);
     const document_ = this.#root.ownerDocument;
     for (const route of this.#routes) {
@@ -344,7 +367,7 @@ export class MappingFlowLayer {
     group.dataset.flowKey = route.source.key;
     group.dataset.flowSlot = String(route.target.slot);
     group.dataset.flowFn = route.target.functionName;
-    group.dataset.flowPattern = String(((route.target.slot - 1) % 4 + 4) % 4 + 1);
+    group.dataset.flowPattern = String(((route.target.slot - 1) % 16 + 16) % 16 + 1);
     group.style.setProperty("--n-flow-color", `var(--pcs${route.target.slot})`);
   }
 
@@ -359,13 +382,19 @@ export class MappingFlowLayer {
     this.#syncCameraTransform();
     const matrix = this.#lines.getScreenCTM();
     if (!matrix) {
-      this.#onLayout({ total: this.#routes.length, resolved: 0, unresolved: this.#routes.length });
+      this.#syncObservedAnchors(new Set());
+      this.#publishSummary({
+        total: this.#routes.length,
+        resolved: 0,
+        unresolved: this.#routes.length,
+      });
       return;
     }
     const inverse = matrix.inverse();
     const scale = Math.max(0.01, Math.hypot(matrix.a, matrix.b));
     let resolved = 0;
     let index = 0;
+    const observedAnchors = new Set<Element>();
     for (const entry of this.#entries.values()) {
       const sourceElement = this.#resolveSource(entry.route);
       const targetElement = this.#resolveTarget(entry.route);
@@ -400,19 +429,37 @@ export class MappingFlowLayer {
       entry.targetPort.setAttribute("r", radius.toFixed(2));
       resolved += 1;
       index += 1;
-      this.#resizeObserver.observe(sourceElement);
-      this.#resizeObserver.observe(targetElement);
+      observedAnchors.add(sourceElement);
+      observedAnchors.add(targetElement);
     }
+    this.#syncObservedAnchors(observedAnchors);
     const summary = {
       total: this.#routes.length,
       resolved,
       unresolved: this.#routes.length - resolved,
     };
-    this.#lines.dataset.flowCount = String(resolved);
-    this.#lines.dataset.flowUnresolved = String(summary.unresolved);
-    this.#ports.dataset.flowCount = String(resolved);
-    this.#ports.dataset.flowUnresolved = String(summary.unresolved);
     this.#applyInspection();
+    this.#publishSummary(summary);
+  }
+
+  #syncObservedAnchors(next: ReadonlySet<Element>): void {
+    for (const anchor of this.#observedAnchors) {
+      if (next.has(anchor)) continue;
+      this.#resizeObserver.unobserve(anchor);
+      this.#observedAnchors.delete(anchor);
+    }
+    for (const anchor of next) {
+      if (this.#observedAnchors.has(anchor)) continue;
+      this.#resizeObserver.observe(anchor);
+      this.#observedAnchors.add(anchor);
+    }
+  }
+
+  #publishSummary(summary: MappingFlowLayoutSummary): void {
+    this.#lines.dataset.flowCount = String(summary.resolved);
+    this.#lines.dataset.flowUnresolved = String(summary.unresolved);
+    this.#ports.dataset.flowCount = String(summary.resolved);
+    this.#ports.dataset.flowUnresolved = String(summary.unresolved);
     this.#onLayout(summary);
   }
 
@@ -470,27 +517,40 @@ export class MappingFlowLayer {
     return { functionName, slot: Number.isFinite(slot) ? slot : this.#selectedSlot };
   }
 
-  #inspectEvent(event: Event): void {
+  #inspectEvent(kind: "pointer" | "focus", event: Event): void {
     const inspection = this.#inspectionFor(event.target);
-    if (inspection) this.#setInspection(inspection);
+    if (inspection) this.#setInspection(kind, inspection);
   }
 
-  #leaveEvent(event: Event): void {
+  #leaveEvent(kind: "pointer" | "focus", event: Event): void {
     const from = this.#inspectionFor(event.target);
     if (!from) return;
     const related = "relatedTarget" in event ? (event as FocusEvent).relatedTarget : null;
     const to = this.#inspectionFor(related);
-    if (!inspectionEqual(from, to)) this.#setInspection(to);
+    if (!inspectionEqual(from, to)) this.#setInspection(kind, to);
   }
 
-  #setInspection(inspection: MappingInspection | null): void {
-    if (inspectionEqual(this.#inspection, inspection)) return;
-    this.#inspection = inspection;
+  #activeInspection(): MappingInspection | null {
+    return this.#pointerInspection ?? this.#focusInspection;
+  }
+
+  #setInspection(kind: "pointer" | "focus", inspection: MappingInspection | null): void {
+    const before = this.#activeInspection();
+    if (kind === "pointer") this.#pointerInspection = inspection;
+    else this.#focusInspection = inspection;
+    if (inspectionEqual(before, this.#activeInspection())) return;
     this.#applyInspection();
   }
 
+  #clearInspections(): void {
+    const hadInspection = this.#activeInspection() !== null;
+    this.#pointerInspection = null;
+    this.#focusInspection = null;
+    if (hadInspection) this.#applyInspection();
+  }
+
   #routeMatchesInspection(route: DirectMappingFlow): boolean {
-    const inspection = this.#inspection;
+    const inspection = this.#activeInspection();
     if (!inspection) return false;
     if (inspection.key) return route.source.key === inspection.key;
     return route.target.functionName === inspection.functionName &&
@@ -504,7 +564,7 @@ export class MappingFlowLayer {
 
   #applyInspection(): void {
     this.#clearRelatedAnchors();
-    const inspecting = this.#inspection !== null;
+    const inspecting = this.#activeInspection() !== null;
     this.#lines.classList.toggle("is-inspecting", inspecting);
     this.#ports.classList.toggle("is-inspecting", inspecting);
     for (const entry of this.#entries.values()) {

@@ -1118,6 +1118,10 @@ interface CanvasPrefs {
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let mappingFlowLayer: MappingFlowLayer | null = null;
+let pendingMappingFlowAnnouncement: {
+  mode: MappingPathMode;
+  selectedSlot: number;
+} | null = null;
 let padWidgetPrint = "";
 let padRosterInitialized = false;
 const padItems = new Map<number, HTMLElement>();
@@ -1584,16 +1588,43 @@ function setCanvasMap(hidden: boolean): void {
 
 function paintMappingFlowCount(summary: MappingFlowLayoutSummary): void {
   const count = learnRoot?.querySelector<HTMLOutputElement>(".n-pathcount");
-  if (!count) return;
-  if ((canvasPrefs.mappingPaths ?? "off") === "off") {
-    count.textContent = "";
-    count.title = "Mapping paths are off";
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  if (count) {
+    if (mode === "off") {
+      count.textContent = "";
+      count.title = "Mapping paths are off";
+    } else {
+      count.textContent = `${summary.resolved} ${summary.resolved === 1 ? "cord" : "cords"}`;
+      count.title = summary.unresolved === 0
+        ? `${summary.resolved} direct mapping paths shown`
+        : `${summary.resolved} direct mapping paths shown; ${summary.unresolved} ${summary.unresolved === 1 ? "path has" : "paths have"} an endpoint that is not visible`;
+    }
+  }
+
+  const announcement = pendingMappingFlowAnnouncement;
+  if (!announcement || announcement.mode !== mode) return;
+  pendingMappingFlowAnnouncement = null;
+  if (mode === "off") {
+    keyboardWorkbenchAnnounce("Mapping paths hidden.");
     return;
   }
-  count.textContent = `${summary.resolved} ${summary.resolved === 1 ? "cord" : "cords"}`;
-  count.title = summary.unresolved === 0
-    ? `${summary.resolved} direct mapping paths shown`
-    : `${summary.resolved} direct mapping paths shown; ${summary.unresolved} endpoints are not visible`;
+  if (mode === "selected" && announcement.selectedSlot <= 0) {
+    keyboardWorkbenchAnnounce("No player is selected, so no direct mapping paths are available.");
+    return;
+  }
+  const scope = mode === "selected"
+    ? ` for Player ${announcement.selectedSlot}`
+    : " for all players";
+  if (summary.total === 0) {
+    keyboardWorkbenchAnnounce(`No direct mapping paths are available${scope}.`);
+    return;
+  }
+  const hidden = summary.unresolved === 0
+    ? ""
+    : `; ${summary.unresolved} ${summary.unresolved === 1 ? "path has" : "paths have"} endpoints that are not visible`;
+  keyboardWorkbenchAnnounce(
+    `${summary.resolved} direct mapping ${summary.resolved === 1 ? "path" : "paths"} shown${scope}${hidden}.`,
+  );
 }
 
 /** Reconcile graph truth separately from its measured anchors. That seam is
@@ -1602,23 +1633,10 @@ function paintMappingFlowCount(summary: MappingFlowLayoutSummary): void {
 function syncMappingFlow(announce = false): void {
   const mode = canvasPrefs.mappingPaths ?? "off";
   const selectedSlot = Number(nSlotVal() || "0");
-  const count = mappingFlowLayer?.setGraph(lastBindView?.pads ?? [], mode, selectedSlot) ?? 0;
+  if (announce) pendingMappingFlowAnnouncement = { mode, selectedSlot };
+  mappingFlowLayer?.setGraph(lastBindView?.pads ?? [], mode, selectedSlot);
   const select = learnRoot?.querySelector<HTMLSelectElement>('[data-nx="mapping-paths"]');
   if (select && select.value !== mode) select.value = mode;
-  if (!announce) return;
-  if (mode === "off") {
-    keyboardWorkbenchAnnounce("Mapping paths hidden.");
-  } else if (mode === "selected") {
-    keyboardWorkbenchAnnounce(
-      count === 0
-        ? `No direct mapping paths are available for Player ${selectedSlot}.`
-        : `${count} direct mapping ${count === 1 ? "path" : "paths"} shown for Player ${selectedSlot}.`,
-    );
-  } else {
-    keyboardWorkbenchAnnounce(
-      `${count} direct mapping ${count === 1 ? "path" : "paths"} shown for all players.`,
-    );
-  }
 }
 
 function setMappingPathMode(mode: MappingPathMode): void {
@@ -5968,19 +5986,19 @@ export function NocturneIsland() {
             "Fit",
           ),
           h(
-            "label",
+            "div",
             {
               class: "n-pathctl",
               title:
                 "Show the direct paths from physical keyboard keys to virtual controller controls",
             },
-            h("span", { class: "n-pathctl-label" }, "Paths"),
+            h("label", { class: "n-pathctl-label", for: "n-mapping-path-scope" }, "Paths"),
             h(
               "select",
               {
+                id: "n-mapping-path-scope",
                 class: "n-pathsel",
                 "data-nx": "mapping-paths",
-                "aria-label": "Mapping path scope",
                 "aria-controls": "n-mapping-paths n-mapping-ports",
               },
               h("option", { value: "off" }, "Off"),
@@ -5989,6 +6007,7 @@ export function NocturneIsland() {
             ),
             h("output", {
               class: "n-pathcount",
+              title: "Mapping paths are off",
               "aria-hidden": "true",
               "data-live-chatter": "",
             }),
@@ -6811,6 +6830,7 @@ export function NocturneIsland() {
                      "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
                    "data-keyboard-theme": () => nKeyboardTheme(),
                    "data-keycap-profile": () => nKeyboardCapProfile(),
+                   "data-source-hidden": "false",
                  },
                 h(
                   "header",
@@ -6856,7 +6876,11 @@ export function NocturneIsland() {
                  ),
                 h(
                   "div",
-                  { class: "n-widget-body", "data-forma-runtime-host": "" },
+                  {
+                    class: "n-widget-body",
+                    "data-forma-runtime-host": "",
+                    "aria-hidden": "false",
+                  },
         h(
           "div",
           { class: "n-kbhead" },
@@ -7229,6 +7253,9 @@ export function NocturneIsland() {
               id: "n-mapping-paths",
               class: "n-flow-layer n-flow-lines",
               "data-flow-layer": "lines",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
               "data-client-subtree": "",
               "data-client-canvas": "",
               "aria-hidden": "true",
@@ -7239,6 +7266,9 @@ export function NocturneIsland() {
               id: "n-mapping-ports",
               class: "n-flow-layer n-flow-ports",
               "data-flow-layer": "ports",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
               "data-client-subtree": "",
               "data-client-canvas": "",
               "aria-hidden": "true",

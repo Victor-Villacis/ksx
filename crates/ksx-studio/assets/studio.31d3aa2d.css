@@ -7998,7 +7998,7 @@ a.wsrow-title:hover {
 }
 
 .n-flow-edge {
-  opacity: 0.42;
+  opacity: 0.82;
   transition: opacity 120ms ease;
 }
 
@@ -8019,34 +8019,84 @@ a.wsrow-title:hover {
 }
 
 .n-flow-core {
-  stroke: var(--n-flow-color, var(--n-accent));
+  /* The player hue remains recognizable, while the white component keeps
+     every one of the sixteen palette colors above 3:1 on the canvas. */
+  stroke: color-mix(in srgb, var(--n-flow-color, var(--n-accent)) 45%, #f2f5ff);
   stroke-width: 1.9px;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--n-flow-color) 35%, transparent));
 }
 
-/* Player identity is not color-only: the first four patterns repeat across
-   the sixteen-seat palette and remain legible in monochrome screenshots. */
+/* Player identity is not color-only. Every supported seat gets its own dash
+   signature so an all-player graph remains traceable in monochrome. */
 .n-flow-edge[data-flow-pattern="2"] .n-flow-core {
-  stroke-dasharray: 8 4;
+  stroke-dasharray: 24 10;
 }
 
 .n-flow-edge[data-flow-pattern="3"] .n-flow-core {
-  stroke-dasharray: 3 4;
+  stroke-dasharray: 9 9;
 }
 
 .n-flow-edge[data-flow-pattern="4"] .n-flow-core {
-  stroke-dasharray: 11 3 2 3;
+  stroke-dasharray: 24 8 4 8;
+}
+
+.n-flow-edge[data-flow-pattern="5"] .n-flow-core {
+  stroke-dasharray: 4 7;
+}
+
+.n-flow-edge[data-flow-pattern="6"] .n-flow-core {
+  stroke-dasharray: 18 7;
+}
+
+.n-flow-edge[data-flow-pattern="7"] .n-flow-core {
+  stroke-dasharray: 12 5 3 5;
+}
+
+.n-flow-edge[data-flow-pattern="8"] .n-flow-core {
+  stroke-dasharray: 28 6 3 6;
+}
+
+.n-flow-edge[data-flow-pattern="9"] .n-flow-core {
+  stroke-dasharray: 3 10;
+}
+
+.n-flow-edge[data-flow-pattern="10"] .n-flow-core {
+  stroke-dasharray: 15 4;
+}
+
+.n-flow-edge[data-flow-pattern="11"] .n-flow-core {
+  stroke-dasharray: 8 4 2 4;
+}
+
+.n-flow-edge[data-flow-pattern="12"] .n-flow-core {
+  stroke-dasharray: 20 5 2 5 2 5;
+}
+
+.n-flow-edge[data-flow-pattern="13"] .n-flow-core {
+  stroke-dasharray: 7 12;
+}
+
+.n-flow-edge[data-flow-pattern="14"] .n-flow-core {
+  stroke-dasharray: 30 8;
+}
+
+.n-flow-edge[data-flow-pattern="15"] .n-flow-core {
+  stroke-dasharray: 5 4 14 4;
+}
+
+.n-flow-edge[data-flow-pattern="16"] .n-flow-core {
+  stroke-dasharray: 18 4 6 4 2 4;
 }
 
 .n-flow-port {
   fill: color-mix(in srgb, var(--n-bg) 82%, transparent);
-  stroke: var(--n-flow-color, var(--n-accent));
+  stroke: color-mix(in srgb, var(--n-flow-color, var(--n-accent)) 45%, #f2f5ff);
   stroke-width: 1.8px;
   opacity: 0.76;
 }
 
 .n-flow-port-target {
-  fill: var(--n-flow-color, var(--n-accent));
+  fill: color-mix(in srgb, var(--n-flow-color, var(--n-accent)) 45%, #f2f5ff);
   stroke: color-mix(in srgb, var(--n-flow-color) 55%, white);
 }
 
@@ -8067,7 +8117,7 @@ a.wsrow-title:hover {
 
 .n-flow-edge.is-related .n-flow-port,
 .n-flow-edge.is-live .n-flow-port {
-  fill: var(--n-flow-color, var(--n-accent));
+  fill: color-mix(in srgb, var(--n-flow-color, var(--n-accent)) 45%, #f2f5ff);
   stroke-width: 2.4px;
   filter: drop-shadow(0 0 5px var(--n-flow-color));
 }

@@ -245,6 +245,12 @@ describe("the canvas navigation controls", () => {
       assert.equal(await page.isHidden(lines), true, "the off lens draws no canvas layer");
       assert.equal(await page.getAttribute(lines, "aria-hidden"), "true");
       assert.equal(await page.getAttribute(lines, "focusable"), "false");
+      assert.equal(await page.getAttribute(select, "id"), "n-mapping-path-scope");
+      assert.equal(
+        await page.getAttribute('label[for="n-mapping-path-scope"]', "class"),
+        "n-pathctl-label",
+        "the select has one explicit label rather than a wrapper shared with output",
+      );
 
       const selectedSlot = await page.inputValue('input[name="slot"]');
       await page.selectOption(select, "selected");
@@ -256,6 +262,12 @@ describe("the canvas navigation controls", () => {
             document.querySelector(lines)?.dataset.flowCount === "14";
         },
         { lines, selectedSlot },
+      );
+      await page.waitForFunction(
+        (selectedSlot) =>
+          document.querySelector(".n-live-sr")?.textContent ===
+            `14 direct mapping paths shown for Player ${selectedSlot}.`,
+        selectedSlot,
       );
 
       const truth = await page.evaluate(({ lines, ports, selectedSlot }) => {
@@ -284,6 +296,60 @@ describe("the canvas navigation controls", () => {
       assert.equal(truth.transformsMatch, true, "paths share the exact canvas camera");
       assert.equal(truth.selectedOnly, true);
 
+      const minRestingContrast = await page.evaluate(() => {
+        const root = document.querySelector(".nocturne");
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        const rgb = (color) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = "#000";
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3));
+        };
+        const luminance = ([red, green, blue]) => {
+          const channel = (value) => {
+            const normalized = value / 255;
+            return normalized <= 0.04045
+              ? normalized / 12.92
+              : ((normalized + 0.055) / 1.055) ** 2.4;
+          };
+          return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+        };
+        const background = rgb("#191b28");
+        const backgroundLuminance = luminance(background);
+        for (let slot = 1; slot <= 16; slot += 1) {
+          const edge = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          edge.classList.add("n-flow-edge");
+          edge.style.setProperty("--n-flow-color", `var(--pcs${slot})`);
+          const core = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          core.classList.add("n-flow-core");
+          edge.append(core);
+          svg.append(edge);
+        }
+        root.append(svg);
+        // Re-read after connection so inherited player palette variables and
+        // color-mix() are resolved in the same tree as the real canvas.
+        const connectedContrasts = Array.from(svg.children).map((edge) => {
+          const opacity = Number(getComputedStyle(edge).opacity);
+          const stroke = rgb(getComputedStyle(edge.firstElementChild).stroke);
+          const painted = stroke.map((channel, index) =>
+            channel * opacity + background[index] * (1 - opacity));
+          const foregroundLuminance = luminance(painted);
+          return (Math.max(backgroundLuminance, foregroundLuminance) + 0.05) /
+            (Math.min(backgroundLuminance, foregroundLuminance) + 0.05);
+        });
+        svg.remove();
+        return Math.min(...connectedContrasts);
+      });
+      assert.ok(
+        minRestingContrast >= 3,
+        `all sixteen resting player cords must clear 3:1 (${minRestingContrast})`,
+      );
+
       const source = `.n-widget-kb [data-key="G"]`;
       await page.hover(source);
       await page.waitForFunction(
@@ -299,11 +365,41 @@ describe("the canvas navigation controls", () => {
         "endpoint inspection isolates every branch of the physical key",
       );
 
+      const focusedTarget = 'details[data-fn="A"] > summary';
+      await page.focus(focusedTarget);
+      await page.hover('.n-widget-kb [data-key="W"]');
+      await page.waitForFunction(
+        (lines) => {
+          const related = Array.from(document.querySelectorAll(`${lines} .n-flow-edge.is-related`));
+          return related.length === 1 && related[0].dataset.flowKey === "W";
+        },
+        lines,
+      );
+      await page.hover(select);
+      await page.waitForFunction(
+        (lines) => {
+          const related = Array.from(document.querySelectorAll(`${lines} .n-flow-edge.is-related`));
+          return related.length === 2 && related.every((edge) => edge.dataset.flowFn === "a");
+        },
+        lines,
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.closest("[data-fn]")?.getAttribute("data-fn")),
+        "A",
+        "pointer inspection falls back to the still-focused endpoint",
+      );
+
       const beforeMove = await page.getAttribute(
         `${lines} [data-flow-key="G"][data-flow-fn="a"] .n-flow-core`,
         "d",
       );
+      await page.click(`[data-instance-id="pad-${selectedSlot}"] .n-mini-head`, { force: true });
       await page.focus(`[data-instance-id="pad-${selectedSlot}"] .widget-drag-handle`);
+      assert.equal(
+        await page.getAttribute(":focus", "class"),
+        "widget-drag-handle",
+        "the movement command owns focus before the keyboard nudge",
+      );
       await page.keyboard.press("ArrowRight");
       await page.waitForFunction(
         ({ selector, beforeMove }) => document.querySelector(selector)?.getAttribute("d") !== beforeMove,
@@ -345,6 +441,36 @@ describe("the canvas navigation controls", () => {
         "the visual-only layer never enters tab order",
       );
       await page.selectOption(select, "off");
+      await page.waitForFunction(
+        ({ lines, ports }) =>
+          document.querySelector(lines)?.hasAttribute("hidden") === true &&
+          document.querySelector(ports)?.hasAttribute("hidden") === true &&
+          document.querySelector(lines)?.dataset.flowCount === "0" &&
+          document.querySelector(ports)?.dataset.flowCount === "0" &&
+          (document.querySelector(".n-pathcount")?.textContent ?? "") === "",
+        { lines, ports },
+      );
+      assert.equal(
+        await page.getAttribute(".n-pathcount", "title"),
+        "Mapping paths are off",
+        "off mode clears the prior count and its stale tooltip",
+      );
+
+      await page.evaluate(() => {
+        for (const selector of [".n-widget-kb", ".n-widget-keylab"]) {
+          const item = document.querySelector(selector);
+          if (item) item.style.visibility = "hidden";
+        }
+      });
+      await page.selectOption(select, "selected");
+      await page.waitForFunction(
+        ({ lines, selectedSlot }) =>
+          document.querySelector(lines)?.dataset.flowCount === "0" &&
+          document.querySelector(lines)?.dataset.flowUnresolved === "14" &&
+          document.querySelector(".n-live-sr")?.textContent ===
+            `0 direct mapping paths shown for Player ${selectedSlot}; 14 paths have endpoints that are not visible.`,
+        { lines, selectedSlot },
+      );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

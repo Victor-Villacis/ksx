@@ -316,6 +316,72 @@ pub struct Preset {
     pub protected: bool,
 }
 
+/// How many endpoints a preset can bind.
+///
+/// **Derived, never written down.** It is the sum of the four rosters, so an
+/// endpoint added to [`XButton::ALL`], [`Trigger::ALL`], [`Axis::ALL`] or
+/// [`DpadDirection::ALL`] changes this by existing — which is the entire point
+/// of M11 (`docs/UNIVERSAL-IO.md` §3). Axes count twice: a stick axis is two
+/// bindable functions, its negative and its positive extreme.
+pub const MAPPABLE_COUNT: usize =
+    XButton::ALL.len() + Trigger::ALL.len() + Axis::ALL.len() * 2 + DpadDirection::ALL.len();
+
+/// Every function a preset can bind, in the canonical order.
+///
+/// [`Binding::Consume`] is the array's filler and is NOT a mappable function —
+/// it drives no endpoint by definition. `the_vocabulary_has_no_filler_left`
+/// fails if one ever survives initialisation.
+const MAPPABLE: [Binding; MAPPABLE_COUNT] = {
+    let mut out = [Binding::Consume; MAPPABLE_COUNT];
+    let mut i = 0;
+    let mut n = 0;
+    while n < XButton::ALL.len() {
+        out[i] = Binding::Button(XButton::ALL[n]);
+        i += 1;
+        n += 1;
+    }
+    n = 0;
+    while n < Trigger::ALL.len() {
+        out[i] = Binding::Trigger(Trigger::ALL[n]);
+        i += 1;
+        n += 1;
+    }
+    n = 0;
+    while n < Axis::ALL.len() {
+        out[i] = Binding::Axis {
+            axis: Axis::ALL[n],
+            value: AXIS_MIN,
+        };
+        out[i + 1] = Binding::Axis {
+            axis: Axis::ALL[n],
+            value: AXIS_MAX,
+        };
+        i += 2;
+        n += 1;
+    }
+    n = 0;
+    while n < DpadDirection::ALL.len() {
+        out[i] = Binding::Dpad(DpadDirection::ALL[n]);
+        i += 1;
+        n += 1;
+    }
+    out
+};
+
+/// The ONE control vocabulary. Every count, every blank worksheet and every
+/// "does the UI offer all of them" test derives from this, so adding a function
+/// is a one-line change to a roster rather than an edit to a fixed-size array
+/// in four crates (`docs/UNIVERSAL-IO.md` §3, M11 piece 1).
+///
+/// The order is [`Preset::builtin_empty`]'s historical construction order —
+/// buttons, triggers, then per-axis negative-before-positive, then dpad. The
+/// TOML that presets round-trip through is keyed by a `BTreeMap` and so is
+/// alphabetical regardless; the order here is what keeps `entries` itself
+/// unchanged for anything that reads it positionally.
+pub const fn mappable_functions() -> &'static [Binding] {
+    &MAPPABLE
+}
+
 impl Preset {
     pub const DEFAULT_NAME: &'static str = "default";
     pub const EMPTY_NAME: &'static str = "empty";
@@ -514,32 +580,10 @@ impl Preset {
     /// and no custom functions. It is the native blank worksheet used by Setup
     /// and the mapper.
     pub fn builtin_empty() -> Self {
-        let mut entries = Vec::with_capacity(25);
-        for button in XButton::ALL {
-            entries.push((Key::None, Binding::Button(*button)));
-        }
-        for trigger in Trigger::ALL {
-            entries.push((Key::None, Binding::Trigger(*trigger)));
-        }
-        for axis in Axis::ALL {
-            entries.push((
-                Key::None,
-                Binding::Axis {
-                    axis: *axis,
-                    value: AXIS_MIN,
-                },
-            ));
-            entries.push((
-                Key::None,
-                Binding::Axis {
-                    axis: *axis,
-                    value: AXIS_MAX,
-                },
-            ));
-        }
-        for direction in DpadDirection::ALL {
-            entries.push((Key::None, Binding::Dpad(*direction)));
-        }
+        let entries = mappable_functions()
+            .iter()
+            .map(|binding| (Key::None, *binding))
+            .collect();
 
         Self {
             name: Self::EMPTY_NAME.to_owned(),
@@ -589,7 +633,11 @@ mod tests {
         assert!(empty.binds_nothing());
         assert_eq!(empty.live_bindings(), 0);
 
-        assert_eq!(Preset::builtin_default().live_bindings(), 25);
+        assert_eq!(
+            Preset::builtin_default().live_bindings(),
+            MAPPABLE_COUNT,
+            "the default preset binds every mappable function"
+        );
         assert!(!Preset::builtin_default().binds_nothing());
 
         // One live row among the placeholders is enough, and it is counted
@@ -624,9 +672,9 @@ mod tests {
         let p = Preset::builtin_default();
         assert_eq!(p.name, "default");
         assert!(p.protected);
-        // 11 buttons + 2 triggers + 8 axes + 4 dpads = 25 rows, with one
-        // unambiguous key for every controller endpoint.
-        assert_eq!(p.entries.len(), 25);
+        // One unambiguous key for every controller endpoint — the count is
+        // derived from the rosters, so adding an endpoint moves it by itself.
+        assert_eq!(p.entries.len(), MAPPABLE_COUNT);
 
         assert_eq!(
             keys_for(&p, Binding::Button(XButton::Start)),
@@ -697,14 +745,61 @@ mod tests {
         let p = Preset::builtin_empty();
         assert_eq!(p.name, "empty");
         assert!(p.protected);
-        // 11 buttons + 2 triggers + 4 axes × (Min, Max) + 4 dpads = 25 rows.
-        assert_eq!(p.entries.len(), 25);
+        // One row per mappable function, derived rather than written down.
+        assert_eq!(p.entries.len(), MAPPABLE_COUNT);
         assert!(p.entries.iter().all(|(k, _)| *k == Key::None));
         // Every function appears exactly once.
         let mut bindings: Vec<Binding> = p.entries.iter().map(|(_, b)| *b).collect();
         bindings.sort();
         bindings.dedup();
-        assert_eq!(bindings.len(), 25);
+        assert_eq!(bindings.len(), MAPPABLE_COUNT);
+        // ...and it is exactly the vocabulary, in its order.
+        assert!(
+            p.entries
+                .iter()
+                .map(|(_, b)| b)
+                .eq(mappable_functions().iter()),
+            "the blank worksheet IS the vocabulary, in order"
+        );
+    }
+
+    #[test]
+    fn the_vocabulary_has_no_filler_left() {
+        // `MAPPABLE` is initialised with `Binding::Consume` as filler. A survivor
+        // means `MAPPABLE_COUNT` and the initialiser have drifted apart — the
+        // array would be silently short a function.
+        assert!(
+            !mappable_functions().contains(&Binding::Consume),
+            "Consume drives no endpoint and is not a mappable function"
+        );
+        assert_eq!(mappable_functions().len(), MAPPABLE_COUNT);
+    }
+
+    #[test]
+    fn the_vocabulary_counts_each_roster_once_and_axes_twice() {
+        // Independent arithmetic: this must not simply restate MAPPABLE_COUNT.
+        let buttons = mappable_functions()
+            .iter()
+            .filter(|b| matches!(b, Binding::Button(_)))
+            .count();
+        let triggers = mappable_functions()
+            .iter()
+            .filter(|b| matches!(b, Binding::Trigger(_)))
+            .count();
+        let axes = mappable_functions()
+            .iter()
+            .filter(|b| matches!(b, Binding::Axis { .. }))
+            .count();
+        let dpad = mappable_functions()
+            .iter()
+            .filter(|b| matches!(b, Binding::Dpad(_)))
+            .count();
+
+        assert_eq!(buttons, XButton::ALL.len());
+        assert_eq!(triggers, Trigger::ALL.len());
+        assert_eq!(axes, Axis::ALL.len() * 2, "each axis is two functions");
+        assert_eq!(dpad, DpadDirection::ALL.len());
+        assert_eq!(buttons + triggers + axes + dpad, mappable_functions().len());
     }
 
     #[test]

@@ -683,6 +683,133 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("a newly added controller is selected, centered, and impossible to lose", async () => {
+    const page = await openCanvas();
+    let arrivingSlot = "";
+    let beforeSlots = [];
+    let cleaned = false;
+    try {
+      const beforeIds = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".n-widget-pad[data-instance-id]"), (item) =>
+          item.getAttribute("data-instance-id")
+        ).filter(Boolean)
+      );
+      beforeSlots = await page.evaluate(() =>
+        Array.from(document.querySelectorAll("[data-slot-row]"), (row) =>
+          row.getAttribute("data-slot-row")
+        ).filter(Boolean)
+      );
+
+      // Leave the whole arrangement far behind first. A passing result must
+      // be the arrival behavior, not a pad that happened to spawn on screen.
+      await page.evaluate(() => document.querySelector(".forma-canvas-viewport").focus());
+      for (let press = 0; press < 70; press++) {
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("ArrowDown");
+      }
+      await settle(page);
+      const cameraBefore = await page.evaluate(() =>
+        document.querySelector(".forma-canvas-stage").style.transform
+      );
+
+      // Duplicate is the shortest real add flow: the same POST, response,
+      // poll and roster reconciliation as Create, with no test-only hook.
+      await page.hover('[data-slot-row="1"]');
+      await page.click(
+        '[data-slot-row="1"] form[action="/nocturne/controller/duplicate"] button[type="submit"]',
+      );
+      await page.waitForFunction(
+        (count) => document.querySelectorAll(".n-widget-pad[data-instance-id]").length === count + 1,
+        beforeIds.length,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+
+      const arrival = await page.evaluate(({ beforeIds, beforeSlots }) => {
+        const priorIds = new Set(beforeIds);
+        const priorSlots = new Set(beforeSlots);
+        const item = Array.from(
+          document.querySelectorAll(".n-widget-pad[data-instance-id]"),
+        ).find((candidate) => !priorIds.has(candidate.getAttribute("data-instance-id")));
+        const row = Array.from(document.querySelectorAll("[data-slot-row]")).find(
+          (candidate) => !priorSlots.has(candidate.getAttribute("data-slot-row")),
+        );
+        const viewport = document.querySelector(".forma-canvas-viewport").getBoundingClientRect();
+        const rect = item?.getBoundingClientRect();
+        return {
+          id: item?.getAttribute("data-instance-id") ?? "",
+          slot: row?.getAttribute("data-slot-row") ?? "",
+          active: item?.classList.contains("is-active") ?? false,
+          current: item?.getAttribute("aria-current") ?? "",
+          selection: document.querySelector(".n-sel-name")?.textContent?.trim() ?? "",
+          camera: document.querySelector(".forma-canvas-stage")?.style.transform ?? "",
+          inset: rect
+            ? {
+              left: rect.left - viewport.left,
+              top: rect.top - viewport.top,
+              right: viewport.right - rect.right,
+              bottom: viewport.bottom - rect.bottom,
+            }
+            : null,
+          centerDelta: rect
+            ? {
+              x: Math.abs((rect.left + rect.right) / 2 - (viewport.left + viewport.right) / 2),
+              y: Math.abs((rect.top + rect.bottom) / 2 - (viewport.top + viewport.bottom) / 2),
+            }
+            : null,
+        };
+      }, { beforeIds, beforeSlots });
+      arrivingSlot = arrival.slot;
+
+      assert.ok(arrival.id, "the duplicate produces one new canvas widget");
+      assert.ok(arrivingSlot, "the duplicate produces one new controller slot");
+      assert.equal(arrival.active, true, "the arriving controller becomes the selected widget");
+      assert.equal(arrival.current, "true", "the selected state is exposed accessibly");
+      assert.match(arrival.selection, new RegExp(`P${arrivingSlot}\\b`));
+      assert.notEqual(arrival.camera, cameraBefore, "the camera travels to the arriving controller");
+      assert.ok(arrival.inset, "the arriving controller has measurable geometry");
+      for (const [edge, inset] of Object.entries(arrival.inset)) {
+        assert.ok(inset >= 20, `${edge} keeps a comfortable viewport gutter (${inset}px)`);
+      }
+      assert.ok(
+        arrival.centerDelta.x <= 2 && arrival.centerDelta.y <= 2,
+        `the arrival is centered (${JSON.stringify(arrival.centerDelta)})`,
+      );
+
+      await page.hover(`[data-slot-row="${arrivingSlot}"]`);
+      await page.click(
+        `[data-slot-row="${arrivingSlot}"] form[action="/nocturne/controller/remove"] button[type="submit"]`,
+      );
+      await page.waitForFunction(
+        (count) => document.querySelectorAll(".n-widget-pad[data-instance-id]").length === count,
+        beforeIds.length,
+        { timeout: 20_000 },
+      );
+      cleaned = true;
+      await page.click('[data-nx="canvas-fit"]');
+      await settle(page);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      if (!cleaned) {
+        const fallbackSlot = arrivingSlot || await page.evaluate((beforeSlots) => {
+          const prior = new Set(beforeSlots);
+          return Array.from(document.querySelectorAll("[data-slot-row]"), (row) =>
+            row.getAttribute("data-slot-row")
+          ).find((slot) => slot && !prior.has(slot)) ?? "";
+        }, beforeSlots);
+        if (fallbackSlot) {
+          await fetch(`${BASE}/nocturne/controller/remove`, {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: `number=${encodeURIComponent(fallbackSlot)}`,
+            redirect: "manual",
+          });
+        }
+      }
+      await page.close();
+    }
+  });
+
   test("keyboard finishes preserve ownership while Key Workbench builds a persistent leverless deck", async () => {
     const page = await openCanvas();
     const bindingPosts = [];

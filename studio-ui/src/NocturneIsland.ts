@@ -1109,6 +1109,7 @@ interface CanvasPrefs {
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let padWidgetPrint = "";
+let padRosterInitialized = false;
 const padItems = new Map<number, HTMLElement>();
 let keyboardWorkbenchStore: KeyboardWorkbenchStore = {
   version: KEYBOARD_WORKBENCH_STORE_VERSION,
@@ -2690,6 +2691,17 @@ export function syncPadWidgets(): void {
   const canvas = nCanvas;
   if (!root || !v || !canvas) return;
   const pads = v.pads ?? [];
+  const previousSlots = new Set(padItems.keys());
+  const storeKeys = padStoreKeys(pads);
+  let arrivingSlot: number | undefined;
+  if (padRosterInitialized) {
+    // The final new slot in roster order is the user's newest controller.
+    // Reorder and removal keep or shrink this set, while create, duplicate
+    // and undo introduce one — so non-creation changes never move the camera.
+    for (const pv of pads) {
+      if (!previousSlots.has(pv.slot)) arrivingSlot = pv.slot;
+    }
+  }
   const print = pads.map((p) => p.slot + ":" + p.family + ":" + p.preset + ":" + p.title).join("|");
   if (print !== padWidgetPrint) {
     padWidgetPrint = print;
@@ -2698,7 +2710,6 @@ export function syncPadWidgets(): void {
     // The hidden masters, keyed by the family they draw — NOT by template
     // order: a third art (the DualSense) is exactly the change that makes an
     // index silently hand every PlayStation seat the wrong body.
-    const storeKeys = padStoreKeys(pads);
     pads.forEach((pv, index) => {
       const family = new Set(["xbox", "ps", "ps5", "switchpro", "xboxseries"]).has(pv.family)
         ? pv.family
@@ -2832,6 +2843,7 @@ export function syncPadWidgets(): void {
     });
     liveFnNodes = null;
   }
+  padRosterInitialized = true;
   // Dress every widget's callouts from ITS slot's own table.
   const capFor = capForBoard(root);
   for (const [slot, item] of padItems) {
@@ -2854,6 +2866,8 @@ export function syncPadWidgets(): void {
   // The engine mints a marker per widget as it mounts, so naming them
   // belongs at the end of every roster pass, not once at startup.
   labelCanvasMarkers();
+  const revealItem = arrivingSlot === undefined ? undefined : padItems.get(arrivingSlot);
+  if (revealItem?.isConnected) canvas.focusItem(revealItem);
 }
 
 /** Adopt the served canvas skeleton and keyboard widget, then mount the

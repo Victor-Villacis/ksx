@@ -655,7 +655,7 @@ struct ScriptedLiveStream {
 impl ksx_api::LiveStream for ScriptedLiveStream {
     fn next_frame(&mut self) -> Result<ksx_api::LiveEnvelope, ksx_api::Refusal> {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let phase = self.step % 4;
+        let phase = self.step % 6;
         self.step += 1;
         // The seeded preset's own vocabulary: W holds the stick up (ly.max),
         // G is the shared key driving A and B, T is the turbo'd RT.
@@ -663,19 +663,32 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
             0 => (vec!["ly.max"], vec!["ly.max"], vec![("W", true)]),
             1 => (vec!["ly.max", "a", "b"], vec!["a", "b"], vec![("G", true)]),
             2 => (
+                // Deliberately omit G's release and report one dropped frame.
+                // A remains down in the virtual snapshot, so a client that
+                // trusts its stale physical-key ledger would falsely animate
+                // G → A. The canvas must fail closed on the gap.
+                vec!["rt", "a"],
                 vec!["rt"],
-                vec!["rt"],
-                vec![("W", false), ("G", false), ("T", true)],
+                vec![("W", false), ("T", true)],
             ),
-            _ => (
+            3 => (
                 vec![],
                 vec!["x"],
                 vec![("T", false), ("J", true), ("J", false)],
             ),
+            4 => (vec![], vec![], vec![]),
+            _ => (
+                // The frame immediately after the authoritative stop tries
+                // to drive G again. A client must keep it dark until a fresh
+                // structure payload licenses the new running session.
+                vec!["a", "b"],
+                vec!["a", "b"],
+                vec![("G", true)],
+            ),
         };
         Ok(ksx_api::LiveEnvelope {
             frame: ksx_api::LiveFrame {
-                running: true,
+                running: phase != 4,
                 slots: vec![ksx_api::SlotLive {
                     slot: 1,
                     down: down.iter().map(|s| s.to_string()).collect(),
@@ -693,6 +706,7 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
                         down: *down,
                     })
                     .collect(),
+                dropped: u64::from(phase == 2),
                 ..Default::default()
             },
             unavailable: None,

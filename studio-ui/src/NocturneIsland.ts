@@ -247,6 +247,16 @@ export interface NocturneMacroRowView {
   toggle_value: string;
 }
 
+export interface NocturneMacroFlowView {
+  name: string;
+  triggers: string[];
+  outputs: { function: string; steps: number[] }[];
+  timeline: string[];
+  meta: string;
+  disabled: boolean;
+  edit_href: string;
+}
+
 export interface NocturneGameRowView {
   title: string;
   meta: string;
@@ -376,6 +386,11 @@ export interface NocturneView {
     title: string;
     fn_keys: Record<string, string>;
     fn_names: Record<string, string>;
+    mapping_available: boolean;
+    mapping_reason: string;
+    macros: NocturneMacroFlowView[];
+    macro_available: boolean;
+    macro_reason: string;
   }[];
   avail_ctl_face: NocturneCtlChipView[];
   avail_ctl_dpad: NocturneCtlChipView[];
@@ -846,6 +861,9 @@ const [nFlashCls, setNFlashCls] = createSignal("n-flash none");
 
 /** Copy one served payload into the signals. */
 export function applyNocturne(p: NocturnePayload): void {
+  const previouslyOpenMacro = macroDialogOpen()
+    ? { slot: nMacSlot(), macro: nMacName() }
+    : null;
   const v = p.view;
   setNDevCount(v.dev_count);
   setNModeNote(v.mode_note);
@@ -1006,6 +1024,38 @@ export function applyNocturne(p: NocturnePayload): void {
     applySlotColors();
     applyNocturneUi();
     syncBoardFilter();
+  }
+  const pendingMacroFocus = focusMacroOnNextPayload;
+  if (
+    pendingMacroFocus &&
+    macroDialogOpen() &&
+    nMacSlot() === pendingMacroFocus.slot &&
+    nMacName().localeCompare(pendingMacroFocus.macro, undefined, { sensitivity: "accent" }) === 0
+  ) {
+    focusMacroOnNextPayload = null;
+    focusDialog(false);
+  } else if (pendingMacroFocus && !macroDialogOpen()) {
+    // The link can disappear between paint and the confirming read (another
+    // writer renamed or removed the macro). Settle the enhanced navigation
+    // truthfully instead of leaving a dead ?macro= URL and a focus promise
+    // that can never complete.
+    focusMacroOnNextPayload = null;
+    mergeQuery({ macro: null });
+    keyboardWorkbenchAnnounce(`Macro “${pendingMacroFocus.macro}” is no longer available.`);
+    restoreDialogFocus();
+  }
+  if (restoreMacroFocusOnNextPayload && !macroDialogOpen()) {
+    restoreMacroFocusOnNextPayload = false;
+    restoreDialogFocus();
+  } else if (previouslyOpenMacro && !macroDialogOpen()) {
+    // An ordinary poll can reveal that another writer removed or renamed the
+    // macro currently open. Treat that as a settled navigation boundary too:
+    // clear the now-dead query and return focus instead of dropping it on body.
+    mergeQuery({ macro: null });
+    keyboardWorkbenchAnnounce(
+      `Macro “${previouslyOpenMacro.macro}” is no longer available.`,
+    );
+    restoreDialogFocus();
   }
 }
 
@@ -1583,21 +1633,56 @@ function setCanvasMap(hidden: boolean): void {
   if (show) show.hidden = !hidden;
   canvasPrefs = { ...canvasPrefs, mapHidden: hidden };
   saveCanvasPrefs();
-  if (!hidden) window.requestAnimationFrame(() => nCanvas?.refreshNavigator());
+  if (!hidden) {
+    window.requestAnimationFrame(() => {
+      nCanvas?.refreshNavigator();
+      mappingFlowLayer?.scheduleLayout();
+    });
+  } else {
+    mappingFlowLayer?.scheduleLayout();
+  }
 }
 
 function paintMappingFlowCount(summary: MappingFlowLayoutSummary): void {
   const count = learnRoot?.querySelector<HTMLOutputElement>(".n-pathcount");
+  const description = learnRoot?.querySelector<HTMLElement>("#n-mapping-path-status");
   const mode = canvasPrefs.mappingPaths ?? "off";
+  const mappingUnavailable = summary.unavailableMappings.length === 0
+    ? ""
+    : `; direct mapping information is unavailable for ${summary.unavailableMappings.map((item) =>
+      `Player ${item.slot} (${item.reason.replace(/[.\s]+$/u, "")})`
+    ).join("; ")}`;
+  const macroUnavailable = summary.unavailableMacros.length === 0
+    ? ""
+    : `; macro information is unavailable for ${summary.unavailableMacros.map((item) =>
+      `Player ${item.slot} (${item.reason.replace(/[.\s]+$/u, "")})`
+    ).join("; ")}`;
+  const grouped = summary.processorOverflow === 0
+    ? ""
+    : `; ${summary.processorOverflow} ${summary.processorOverflow === 1 ? "macro is" : "macros are"} grouped in the macro bank`;
   if (count) {
     if (mode === "off") {
       count.textContent = "";
       count.title = "Mapping paths are off";
+      if (description) description.textContent = "Mapping paths are off.";
     } else {
-      count.textContent = `${summary.resolved} ${summary.resolved === 1 ? "cord" : "cords"}`;
-      count.title = summary.unresolved === 0
-        ? `${summary.resolved} direct mapping paths shown`
-        : `${summary.resolved} direct mapping paths shown; ${summary.unresolved} ${summary.unresolved === 1 ? "path has" : "paths have"} an endpoint that is not visible`;
+      const visibleCount = summary.processors > 0
+        ? `${summary.resolved} ${summary.resolved === 1 ? "link" : "links"} · ${summary.processors} ${summary.processors === 1 ? "macro" : "macros"}`
+        : `${summary.resolved} ${summary.resolved === 1 ? "cord" : "cords"}`;
+      const partial = summary.unavailableMappings.length > 0 || summary.unavailableMacros.length > 0;
+      count.textContent = `${visibleCount}${partial ? " · partial" : ""}`;
+      const directKind = summary.unavailableMappings.length > 0 ? "known direct" : "direct";
+      const parts = [
+        `${summary.resolvedDirect} ${directKind} ${summary.resolvedDirect === 1 ? "path" : "paths"}`,
+        summary.processors > 0
+          ? `${summary.resolvedMacroConnections} ${summary.resolvedMacroConnections === 1 ? "macro connection" : "macro connections"} through ${summary.processors} ${summary.processors === 1 ? "processor" : "processors"}`
+          : "",
+      ].filter(Boolean).join(" and ");
+      const hidden = summary.unresolved === 0
+        ? ""
+        : `; ${summary.unresolved} ${summary.unresolved === 1 ? "connection has" : "connections have"} an endpoint that is not visible`;
+      count.title = `${parts} shown${hidden}${grouped}${mappingUnavailable}${macroUnavailable}`;
+      if (description) description.textContent = `${count.title}.`;
     }
   }
 
@@ -1609,27 +1694,33 @@ function paintMappingFlowCount(summary: MappingFlowLayoutSummary): void {
     return;
   }
   if (mode === "selected" && announcement.selectedSlot <= 0) {
-    keyboardWorkbenchAnnounce("No player is selected, so no direct mapping paths are available.");
+    keyboardWorkbenchAnnounce("No player is selected, so no signal paths are available.");
     return;
   }
   const scope = mode === "selected"
     ? ` for Player ${announcement.selectedSlot}`
     : " for all players";
-  if (summary.total === 0) {
-    keyboardWorkbenchAnnounce(`No direct mapping paths are available${scope}.`);
+  if (summary.total === 0 && summary.processors === 0) {
+    const certainty = summary.unavailableMappings.length > 0 || summary.unavailableMacros.length > 0
+      ? "No known signal paths are available"
+      : "No direct signal paths are available";
+    keyboardWorkbenchAnnounce(
+      `${certainty}${scope}${mappingUnavailable}${macroUnavailable}.`,
+    );
     return;
   }
   const hidden = summary.unresolved === 0
     ? ""
-    : `; ${summary.unresolved} ${summary.unresolved === 1 ? "path has" : "paths have"} endpoints that are not visible`;
+    : `; ${summary.unresolved} ${summary.unresolved === 1 ? "connection has" : "connections have"} endpoints that are not visible`;
+  const composition = summary.processors > 0
+    ? `: ${summary.resolvedDirect} ${summary.unavailableMappings.length > 0 ? "known direct" : "direct"} and ${summary.resolvedMacroConnections} through ${summary.processors} ${summary.processors === 1 ? "macro" : "macros"}`
+    : "";
   keyboardWorkbenchAnnounce(
-    `${summary.resolved} direct mapping ${summary.resolved === 1 ? "path" : "paths"} shown${scope}${hidden}.`,
+    `${summary.resolved} signal ${summary.resolved === 1 ? "link" : "links"} shown${scope}${composition}${hidden}${grouped}${mappingUnavailable}${macroUnavailable}.`,
   );
 }
 
-/** Reconcile graph truth separately from its measured anchors. That seam is
- * what lets a later macro node split key -> control into
- * key -> transformation -> control without changing canvas plumbing. */
+/** Reconcile backend-owned graph truth separately from measured anchors. */
 function syncMappingFlow(announce = false): void {
   const mode = canvasPrefs.mappingPaths ?? "off";
   const selectedSlot = Number(nSlotVal() || "0");
@@ -2977,6 +3068,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   const stage = surface?.querySelector<HTMLElement>(".forma-canvas-stage");
   const flowLines = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="lines"]');
   const flowPorts = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="ports"]');
+  const flowNodes = surface?.querySelector<HTMLElement>('[data-flow-layer="processors"]');
   // The zoom readout IS the 100% button in the meta bar: the engine writes
   // the live percentage into whatever element it is handed, and a button
   // that reads the zoom and resets it on click is one control instead of a
@@ -3047,7 +3139,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   syncPadWidgets();
   syncKeyboardWorkbenchWidget(false);
-  if (flowLines && flowPorts) {
+  if (flowLines && flowPorts && flowNodes) {
     mappingFlowLayer?.dispose();
     mappingFlowLayer = new MappingFlowLayer(
       scope,
@@ -3055,6 +3147,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
       stage,
       flowLines,
       flowPorts,
+      flowNodes,
       paintMappingFlowCount,
     );
     syncMappingFlow();
@@ -4011,6 +4104,8 @@ const liveFnsDown = new Set<string>();
 /** Per-slot down/hit sets — the multi-pad grid lights each clone from its
  *  OWN slot's frame. */
 const liveSlotFns = new Map<number, Set<string>>();
+const liveSlotFnsDown = new Map<number, Set<string>>();
+const liveSlotFnHits = new Map<number, Set<string>>();
 const EMPTY_FNS: ReadonlySet<string> = new Set();
 const liveTicker: string[] = [];
 /** Cached paint targets — invalidated whenever reconciliation may have
@@ -4041,7 +4136,7 @@ function clearLivePaint(): void {
   if (stats) stats.textContent = "";
   const ticker = learnRoot.querySelector<HTMLElement>(".n-ticker");
   if (ticker) ticker.textContent = "";
-  mappingFlowLayer?.setLive(EMPTY_FNS, new Map());
+  mappingFlowLayer?.setLive(EMPTY_FNS, EMPTY_FNS, new Map(), new Map());
 }
 
 function resetLiveLedger(): void {
@@ -4051,6 +4146,8 @@ function resetLiveLedger(): void {
   liveKeysDown.clear();
   liveFnsDown.clear();
   liveSlotFns.clear();
+  liveSlotFnsDown.clear();
+  liveSlotFnHits.clear();
   liveTicker.length = 0;
   clearLivePaint();
 }
@@ -4102,7 +4199,11 @@ function normalizedFn(control: string): string {
 
 function paintLive(envelope: NocturneLiveEnvelope): void {
   if (!envelope.frame.running) {
-    resetLiveLedger();
+    // A stopped frame is an authoritative session boundary. Revoke the
+    // staged-origin license as well as its visual ledger; a later running
+    // frame may belong to a different session and must wait for structure
+    // truth from /api/nocturne before it can paint.
+    invalidateLive();
     liveAnnounce("Live input is inactive.");
     return;
   }
@@ -4119,20 +4220,32 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
   // Every slot's frame, keyed — each pad lights from its OWN; the pane
   // rows and the board speak for the SELECTED slot.
   liveSlotFns.clear();
+  liveSlotFnsDown.clear();
+  liveSlotFnHits.clear();
   for (const sf of envelope.frame.slots) {
-    const set = new Set<string>();
-    for (const control of sf.down) set.add(normalizedFn(control));
-    for (const control of sf.hit) set.add(normalizedFn(control));
-    liveSlotFns.set(sf.slot, set);
+    const down = new Set(sf.down.map(normalizedFn));
+    const hits = new Set(sf.hit.map(normalizedFn));
+    liveSlotFnsDown.set(sf.slot, down);
+    liveSlotFnHits.set(sf.slot, hits);
+    liveSlotFns.set(sf.slot, new Set([...down, ...hits]));
   }
   const selectedFrame =
     liveSlotFns.get(Number(nSlotVal() || "1")) ?? liveSlotFns.values().next().value ?? EMPTY_FNS;
   liveFnsDown.clear();
   for (const control of selectedFrame) liveFnsDown.add(control);
+  // A dropped frame may have contained a release. The transition stream has
+  // no authoritative held-key snapshot, so keeping the old ledger would turn
+  // uncertainty into a false active cord. Fail closed, then rebuild only from
+  // transitions this frame actually carries.
+  if (envelope.frame.dropped > 0) liveKeysDown.clear();
+  const liveKeyHits = new Set<string>();
   for (const hit of envelope.frame.keys) {
     const key = hit.key.trim();
     if (key === "") continue;
-    if (hit.down) liveKeysDown.add(key);
+    if (hit.down) {
+      liveKeysDown.add(key);
+      liveKeyHits.add(key);
+    }
     else liveKeysDown.delete(key);
     liveEvents += 1;
     liveTicker.push(`${key}${hit.down ? "↓" : "↑"}`);
@@ -4155,7 +4268,8 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
     }));
   }
   for (const el of liveKeyNodes) {
-    el.classList.toggle("live", liveKeysDown.has(el.dataset.key ?? ""));
+    const key = el.dataset.key ?? "";
+    el.classList.toggle("live", liveKeysDown.has(key) || liveKeyHits.has(key));
   }
   for (const { el, fns, slot } of liveFnNodes) {
     // Space-separated where one element stands for several functions — a
@@ -4171,7 +4285,7 @@ function paintLive(envelope: NocturneLiveEnvelope): void {
   // Runtime paint is separate from configuration truth: a cord moves only
   // when this exact physical key and its mapped control are both present in
   // the same frame. Fan-in therefore never lights the wrong source strand.
-  mappingFlowLayer?.setLive(liveKeysDown, liveSlotFns);
+  mappingFlowLayer?.setLive(liveKeysDown, liveKeyHits, liveSlotFnsDown, liveSlotFnHits);
   const stats = root.querySelector<HTMLElement>(".n-livestats");
   if (stats) {
     const parts = ["Live"];
@@ -4417,6 +4531,8 @@ function cancelAssign(): void {
  *  the opener on close. (The learn guard's capture listener still owns
  *  Escape while a capture is armed.) */
 let dialogReturnFocus: HTMLElement | null = null;
+let focusMacroOnNextPayload: { slot: string; macro: string } | null = null;
+let restoreMacroFocusOnNextPayload = false;
 
 function macroDialogOpen(): boolean {
   return !nMacBackCls().includes("none");
@@ -4446,6 +4562,8 @@ function closeMacroDialog(): void {
   macDraft = null;
   macDirtyMark();
   mergeQuery({ macro: null });
+  focusMacroOnNextPayload = null;
+  restoreMacroFocusOnNextPayload = true;
   nocturnePollFn();
 }
 
@@ -4467,8 +4585,10 @@ function closeOpenDialog(): void {
   restoreDialogFocus();
 }
 
-function focusDialog(): void {
-  dialogReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+function focusDialog(rememberReturn = true): void {
+  if (rememberReturn) {
+    dialogReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   // The createShow branch attaches on the next microtask; focus one frame on.
   window.requestAnimationFrame(() => {
     // ⚠️ THE VISIBLE ONE. The macro panel is always in the DOM and comes
@@ -4482,7 +4602,35 @@ function focusDialog(): void {
 function restoreDialogFocus(): void {
   const back = dialogReturnFocus;
   dialogReturnFocus = null;
-  if (back && back.isConnected) back.focus();
+  if (
+    back?.isConnected &&
+    !back.closest("[hidden]") &&
+    back.getClientRects().length > 0
+  ) {
+    back.focus();
+    if (document.activeElement === back) return;
+  }
+  const macroId = back?.dataset.flowMacroId;
+  const direct = macroId
+    ? learnRoot?.querySelector<HTMLAnchorElement>(
+      `#n-mapping-processors a.n-flow-processor:not([hidden])[data-flow-macro-id="${CSS.escape(macroId)}"]`,
+    )
+    : null;
+  if (direct) {
+    direct.focus();
+    return;
+  }
+  const grouped = macroId
+    ? learnRoot?.querySelector<HTMLAnchorElement>(
+      `#n-mapping-processors a.n-flow-overflow-link[data-flow-macro-id="${CSS.escape(macroId)}"]`,
+    )
+    : null;
+  if (grouped) {
+    grouped.closest<HTMLDetailsElement>("details")?.setAttribute("open", "");
+    grouped.focus();
+    return;
+  }
+  learnRoot?.querySelector<HTMLSelectElement>('[data-nx="mapping-paths"]')?.focus();
 }
 
 function trapDialogTab(ev: KeyboardEvent): void {
@@ -4902,6 +5050,32 @@ export function nocturneWire(root: HTMLElement): void {
     if (macDoor) {
       ev.preventDefault();
       closeMacroDialog();
+      return;
+    }
+    const processorDoor = target?.closest<HTMLAnchorElement>(
+      "a.n-flow-processor, a.n-flow-overflow-link",
+    );
+    if (processorDoor) {
+      if (
+        ev instanceof MouseEvent &&
+        (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)
+      ) {
+        return;
+      }
+      const url = new URL(processorDoor.href, window.location.origin);
+      const slot = url.searchParams.get("slot");
+      const macro = url.searchParams.get("macro");
+      if (!slot || !macro) return;
+      ev.preventDefault();
+      // The href remains the no-JS door. Hydrated canvases keep their camera
+      // and workbench state, then focus the reconciled modal once the poll has
+      // supplied the selected macro's existing editor projection.
+      processorDoor.focus();
+      dialogReturnFocus = processorDoor;
+      mergeQuery({ slot, macro });
+      restoreMacroFocusOnNextPayload = false;
+      focusMacroOnNextPayload = { slot, macro };
+      nocturnePollFn();
       return;
     }
     const sel = target?.closest<HTMLAnchorElement>("a.n-slot-sel");
@@ -5990,7 +6164,7 @@ export function NocturneIsland() {
             {
               class: "n-pathctl",
               title:
-                "Show the direct paths from physical keyboard keys to virtual controller controls",
+                "Show physical keys, processing steps, and the virtual controller controls they reach",
             },
             h("label", { class: "n-pathctl-label", for: "n-mapping-path-scope" }, "Paths"),
             h(
@@ -5999,7 +6173,8 @@ export function NocturneIsland() {
                 id: "n-mapping-path-scope",
                 class: "n-pathsel",
                 "data-nx": "mapping-paths",
-                "aria-controls": "n-mapping-paths n-mapping-ports",
+                "aria-controls": "n-mapping-paths n-mapping-ports n-mapping-processors",
+                "aria-describedby": "n-mapping-path-status",
               },
               h("option", { value: "off" }, "Off"),
               h("option", { value: "selected" }, "Selected player"),
@@ -6011,6 +6186,11 @@ export function NocturneIsland() {
               "aria-hidden": "true",
               "data-live-chatter": "",
             }),
+            h(
+              "span",
+              { id: "n-mapping-path-status", class: "n-sr-description" },
+              "Mapping paths are off.",
+            ),
           ),
           h(
             "button",
@@ -7256,6 +7436,14 @@ export function NocturneIsland() {
               "data-flow-mode": "off",
               "data-flow-count": "0",
               "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
               "data-client-subtree": "",
               "data-client-canvas": "",
               "aria-hidden": "true",
@@ -7269,10 +7457,37 @@ export function NocturneIsland() {
               "data-flow-mode": "off",
               "data-flow-count": "0",
               "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
               "data-client-subtree": "",
               "data-client-canvas": "",
               "aria-hidden": "true",
               focusable: "false",
+              hidden: "",
+            }),
+            h("div", {
+              id: "n-mapping-processors",
+              class: "n-flow-node-layer",
+              "data-flow-layer": "processors",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
               hidden: "",
             }),
             // The map in the corner: a button per widget (click to jump) and
@@ -9214,8 +9429,10 @@ export function NocturneIsland() {
       h(
         "div",
         {
+          id: "n-macro-dialog",
           "data-nx": "dlg-noop",
           role: "dialog",
+          "aria-modal": "true",
           tabindex: "-1",
           "aria-label": "Macro steps",
           class: "nd nd-mac",
@@ -9229,7 +9446,16 @@ export function NocturneIsland() {
           h("div", { class: "n-macmeta" }, () => nMacHead()),
           h("div", { class: "n-macdis" }, () => nMacNote()),
           h("div", { role: "status", class: () => nMacSayCls() }, () => nMacSay()),
-          h("a", { class: "n-macx", "aria-label": "Close the macro editor", href: () => nMacClose() }, "\u2715"),
+          h(
+            "a",
+            {
+              class: "n-macx",
+              "data-nx": "mac-close",
+              "aria-label": "Close the macro editor",
+              href: () => nMacClose(),
+            },
+            "\u2715",
+          ),
         ),
         // THE ROLL. Two aligned columns: the step bar (number, what the step
         // holds in words, its time and its verbs) and the scrolling matrix

@@ -291,10 +291,11 @@ try {
     },
     outputDir,
     // The four-player control-surface builder and its typed mapping-flow lens
-    // live in Nocturne's one island. Their measured Brotli route is ~207 KB;
-    // keep a deliberately narrow 210 KB ceiling so these accepted features
+    // live in Nocturne's one island. The truthful macro/live-flow slice brings
+    // the measured Brotli route to ~213 KB; keep a deliberately narrow 214 KB
+    // ceiling so these accepted features
     // do not turn into an open-ended bump.
-    budgetThreshold: 210_000,
+    budgetThreshold: 214_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

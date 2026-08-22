@@ -36,17 +36,18 @@ const targetDir = process.env.CARGO_TARGET_DIR
 
 let server;
 let browser;
+let fixtureExe;
 
-async function waitForServer(deadlineMs = 120_000) {
+async function waitForServer(base = BASE, deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
   for (;;) {
     try {
-      const res = await fetch(`${BASE}/api/map`);
+      const res = await fetch(`${base}/api/map`);
       if (res.ok) return;
     } catch {
       // not up yet
     }
-    if (Date.now() > until) throw new Error(`fixture server never answered on ${BASE}`);
+    if (Date.now() > until) throw new Error(`fixture server never answered on ${base}`);
     await new Promise((r) => setTimeout(r, 250));
   }
 }
@@ -64,14 +65,14 @@ before(async () => {
     { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
   );
   assert.equal(built.status, 0, "could not build the ksx-studio canvas fixture");
-  const exe = path.join(
+  fixtureExe = path.join(
     targetDir,
     "debug",
     "examples",
     process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
   );
-  server = spawn(exe, [String(PORT)], { cwd: repoRoot, stdio: "ignore" });
-  await waitForServer();
+  server = spawn(fixtureExe, [String(PORT)], { cwd: repoRoot, stdio: "ignore" });
+  await waitForServer(BASE);
   browser = await chromium.launch();
 });
 
@@ -87,11 +88,13 @@ after(async () => {
  *  move. Adoption lands in the island's post-mount frame — not a fixed
  *  distance behind hydration — so this waits for the engine's own geometry
  *  write rather than a delay, then lets the fit animation settle. */
-async function openCanvas() {
+async function openCanvas(options = {}, prepare = async () => {}) {
   const page = await browser.newPage({
     viewport: { width: 1600, height: 1000 },
     colorScheme: "dark",
+    ...options,
   });
+  await prepare(page);
   const noise = [];
   page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
   page.on("console", (message) => {
@@ -241,6 +244,7 @@ describe("the canvas navigation controls", () => {
       const select = '[data-nx="mapping-paths"]';
       const lines = "#n-mapping-paths";
       const ports = "#n-mapping-ports";
+      const processors = "#n-mapping-processors";
       assert.equal(await page.inputValue(select), "off", "a fresh canvas stays quiet");
       assert.equal(await page.isHidden(lines), true, "the off lens draws no canvas layer");
       assert.equal(await page.getAttribute(lines, "aria-hidden"), "true");
@@ -257,18 +261,96 @@ describe("the canvas navigation controls", () => {
       await page.waitForFunction(
         ({ lines, selectedSlot }) => {
           const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
-          return edges.length === 14 &&
+          return edges.length === 18 &&
             edges.every((edge) => edge.dataset.flowSlot === selectedSlot) &&
-            document.querySelector(lines)?.dataset.flowCount === "14";
+            document.querySelector(lines)?.dataset.flowCount === "18";
         },
         { lines, selectedSlot },
       );
       await page.waitForFunction(
         (selectedSlot) =>
           document.querySelector(".n-live-sr")?.textContent ===
-            `14 direct mapping paths shown for Player ${selectedSlot}.`,
+            `18 signal links shown for Player ${selectedSlot}: 14 direct and 4 through 1 macro.`,
         selectedSlot,
       );
+
+      const topology = await page.evaluate(({ lines, processors, selectedSlot }) => {
+        const node = document.querySelector(`${processors} a.n-flow-processor`);
+        const outputs = Array.from(
+          document.querySelectorAll(`${lines} [data-flow-kind="macro-output"]`),
+        ).map((edge) => ({
+          fn: edge.dataset.flowFn,
+          steps: edge.dataset.flowSteps,
+        })).sort((left, right) => left.fn.localeCompare(right.fn));
+        return {
+          direct: document.querySelectorAll(`${lines} [data-flow-kind="binding"]`).length,
+          triggers: document.querySelectorAll(`${lines} [data-flow-kind="macro-trigger"]`).length,
+          outputs,
+          nodes: document.querySelectorAll(`${processors} a.n-flow-processor`).length,
+          nodeSlot: node?.dataset.flowSlot,
+          nodeName: node?.querySelector(".n-flow-processor-name")?.textContent,
+          nodeHref: node?.getAttribute("href"),
+          nodeLabel: node?.getAttribute("aria-label"),
+          macroConnections: document.querySelector(lines)?.dataset.flowMacroConnections,
+          processorCount: document.querySelector(lines)?.dataset.flowProcessors,
+          unavailableMappings: document.querySelector(lines)?.dataset.flowMappingUnavailable,
+          unavailableMacros: document.querySelector(lines)?.dataset.flowMacroUnavailable,
+          selectedSlot,
+        };
+      }, { lines, processors, selectedSlot });
+      assert.equal(topology.direct, 14);
+      assert.equal(topology.triggers, 1);
+      assert.equal(topology.nodes, 1, "one macro group produces one shared processor node");
+      assert.equal(topology.nodeSlot, selectedSlot);
+      assert.equal(topology.nodeName, "hadouken");
+      assert.equal(topology.nodeHref, `/nocturne?slot=${selectedSlot}&macro=hadouken`);
+      assert.match(topology.nodeLabel, /Timeline: .* then .* then /);
+      assert.deepEqual(
+        topology.outputs,
+        [
+          { fn: "dpad.down", steps: "1 2" },
+          { fn: "dpad.right", steps: "2" },
+          { fn: "x", steps: "3" },
+        ],
+        "repeated holds deduplicate without losing where they occur in the timeline",
+      );
+      assert.equal(topology.macroConnections, "4");
+      assert.equal(topology.processorCount, "1");
+      assert.equal(topology.unavailableMappings, "0");
+      assert.equal(topology.unavailableMacros, "0");
+      assert.equal(
+        await page.evaluate((processors) => {
+          const node = document.querySelector(`${processors} a.n-flow-processor`).getBoundingClientRect();
+          return Array.from(document.querySelectorAll(".widget-drag-handle"))
+            .filter((handle) => getComputedStyle(handle).visibility !== "hidden")
+            .some((handle) => {
+              const rect = handle.getBoundingClientRect();
+              return node.left < rect.right && node.right > rect.left &&
+                node.top < rect.bottom && node.bottom > rect.top;
+            });
+        }, processors),
+        false,
+        "the processing card never covers a widget move control",
+      );
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedMotion = await page.evaluate(({ lines, processors }) => {
+        const route = document.querySelector(`${lines} [data-flow-kind="binding"]`);
+        route?.classList.add("is-live");
+        const nodeStyle = getComputedStyle(
+          document.querySelector(`${processors} a.n-flow-processor`),
+        );
+        const routeStyle = getComputedStyle(route?.querySelector(".n-flow-core"));
+        const result = {
+          nodeTransition: nodeStyle.transitionDuration,
+          routeAnimation: routeStyle.animationName,
+        };
+        route?.classList.remove("is-live");
+        return result;
+      }, { lines, processors });
+      assert.equal(reducedMotion.nodeTransition, "0s");
+      assert.equal(reducedMotion.routeAnimation, "none");
+      await page.emulateMedia({ reducedMotion: "no-preference" });
 
       const truth = await page.evaluate(({ lines, ports, selectedSlot }) => {
         const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
@@ -389,18 +471,34 @@ describe("the canvas navigation controls", () => {
         "pointer inspection falls back to the still-focused endpoint",
       );
 
+      await page.click(
+        `.forma-canvas-navigator .navigator-item[data-instance-id="pad-${selectedSlot}"]`,
+      );
+      await settle(page);
+      const padSelector = `.widget-instance[data-instance-id="pad-${selectedSlot}"]`;
+      assert.equal(
+        await page.locator(padSelector).evaluate((pad) => pad.classList.contains("is-active")),
+        true,
+        "the navigator selects the real pad",
+      );
+      const handle = `${padSelector} .widget-drag-handle`;
+      await page.focus(handle);
+      assert.equal(
+        await page.evaluate((selector) => document.activeElement?.matches(selector), handle),
+        true,
+        "the selected pad exposes its keyboard move handle",
+      );
       const beforeMove = await page.getAttribute(
         `${lines} [data-flow-key="G"][data-flow-fn="a"] .n-flow-core`,
         "d",
       );
-      await page.click(`[data-instance-id="pad-${selectedSlot}"] .n-mini-head`, { force: true });
-      await page.focus(`[data-instance-id="pad-${selectedSlot}"] .widget-drag-handle`);
-      assert.equal(
-        await page.getAttribute(":focus", "class"),
-        "widget-drag-handle",
-        "the movement command owns focus before the keyboard nudge",
-      );
+      const beforePadX = await page.getAttribute(padSelector, "data-canvas-x");
       await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ selector, beforePadX }) =>
+          document.querySelector(selector)?.getAttribute("data-canvas-x") !== beforePadX,
+        { selector: padSelector, beforePadX },
+      );
       await page.waitForFunction(
         ({ selector, beforeMove }) => document.querySelector(selector)?.getAttribute("d") !== beforeMove,
         {
@@ -416,9 +514,45 @@ describe("the canvas navigation controls", () => {
         "moving a controller leaves every curve finite",
       );
 
+      await page.click('[data-nx="canvas-zoom-in"]');
+      await page.click('[data-nx="canvas-zoom-in"]');
+      await settle(page);
+      const processorWidthBeforeFit = await page.locator(
+        `${processors} a.n-flow-processor`,
+      ).evaluate((processor) => processor.getBoundingClientRect().width);
+      await page.click('[data-nx="canvas-fit"]');
+      await page.waitForFunction(() => document.querySelector(".is-camera-animating"));
+      await page.waitForTimeout(80);
+      const processorWidthDuringFit = await page.locator(
+        `${processors} a.n-flow-processor`,
+      ).evaluate((processor) => processor.getBoundingClientRect().width);
+      await settle(page);
+      const processorGeometry = await page.evaluate(({ ports, processors }) => {
+        const node = document.querySelector(`${processors} a.n-flow-processor`).getBoundingClientRect();
+        const center = { x: node.left + node.width / 2, y: node.top + node.height / 2 };
+        const attachedPorts = [
+          document.querySelector(`${ports} [data-flow-kind="macro-trigger"] .n-flow-port-target`),
+          document.querySelector(`${ports} [data-flow-kind="macro-output"] .n-flow-port-source`),
+        ].map((port) => {
+          const rect = port.getBoundingClientRect();
+          return Math.hypot(rect.left + rect.width / 2 - center.x, rect.top + rect.height / 2 - center.y);
+        });
+        return { width: node.width, attachedPorts };
+      }, { ports, processors });
+      for (const width of [processorWidthDuringFit, processorGeometry.width]) {
+        assert.ok(
+          Math.abs(width - processorWidthBeforeFit) <= 2,
+          `processor width stays fixed through Fit (${processorWidthBeforeFit} -> ${width})`,
+        );
+      }
+      assert.ok(
+        processorGeometry.attachedPorts.every((distance) => distance <= 3),
+        `macro cords finish attached to their processor (${processorGeometry.attachedPorts.join(", ")})`,
+      );
+
       await page.selectOption(select, "all");
       await page.waitForFunction(
-        (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 28,
+        (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 36,
         lines,
       );
       assert.equal(
@@ -428,6 +562,37 @@ describe("the canvas navigation controls", () => {
         2,
         "the explicit all-player scope carries both staged players",
       );
+      assert.equal(
+        await page.locator(`${processors} a.n-flow-processor`).count(),
+        2,
+        "same-named macros in different slots remain separate processors",
+      );
+      const liveIdentity = await page.evaluate(async (lines) => {
+          const first = document.querySelector(`${lines} [data-flow-slot="1"][data-flow-kind="binding"]`);
+          const second = document.querySelector(`${lines} [data-flow-slot="2"][data-flow-kind="binding"]`);
+          first?.classList.add("is-live");
+          second?.classList.add("is-live");
+          const firstCore = first?.querySelector(".n-flow-core");
+          const secondCore = second?.querySelector(".n-flow-core");
+          const patterns = [firstCore, secondCore].map((core) =>
+            core ? getComputedStyle(core).strokeDasharray : "",
+          );
+          const offsetBefore = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
+          await new Promise((resolve) => setTimeout(resolve, 90));
+          const offsetAfter = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
+          const animation = firstCore ? getComputedStyle(firstCore).animationName : "";
+          first?.classList.remove("is-live");
+          second?.classList.remove("is-live");
+          return { patterns, offsetBefore, offsetAfter, animation };
+        }, lines);
+      assert.notEqual(liveIdentity.patterns[0], "none", "Player 1 has a visible travel rhythm");
+      assert.notEqual(
+        liveIdentity.patterns[0],
+        liveIdentity.patterns[1],
+        "live travel keeps each player's non-color dash identity",
+      );
+      assert.equal(liveIdentity.animation, "n-flow-travel");
+      assert.notEqual(liveIdentity.offsetBefore, liveIdentity.offsetAfter, "Player 1's live cord travels");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -442,13 +607,15 @@ describe("the canvas navigation controls", () => {
       );
       await page.selectOption(select, "off");
       await page.waitForFunction(
-        ({ lines, ports }) =>
+        ({ lines, ports, processors }) =>
           document.querySelector(lines)?.hasAttribute("hidden") === true &&
           document.querySelector(ports)?.hasAttribute("hidden") === true &&
+          document.querySelector(processors)?.hasAttribute("hidden") === true &&
           document.querySelector(lines)?.dataset.flowCount === "0" &&
           document.querySelector(ports)?.dataset.flowCount === "0" &&
+          document.querySelector(processors)?.dataset.flowCount === "0" &&
           (document.querySelector(".n-pathcount")?.textContent ?? "") === "",
-        { lines, ports },
+        { lines, ports, processors },
       );
       assert.equal(
         await page.getAttribute(".n-pathcount", "title"),
@@ -464,15 +631,1098 @@ describe("the canvas navigation controls", () => {
       });
       await page.selectOption(select, "selected");
       await page.waitForFunction(
-        ({ lines, selectedSlot }) =>
-          document.querySelector(lines)?.dataset.flowCount === "0" &&
-          document.querySelector(lines)?.dataset.flowUnresolved === "14" &&
-          document.querySelector(".n-live-sr")?.textContent ===
-            `0 direct mapping paths shown for Player ${selectedSlot}; 14 paths have endpoints that are not visible.`,
-        { lines, selectedSlot },
+        (lines) => document.querySelector(lines)?.dataset.flowMode === "selected",
+        lines,
+      );
+      await page.waitForFunction(
+        (lines) =>
+          document.querySelector(lines)?.dataset.flowCount === "3" &&
+          document.querySelector(lines)?.dataset.flowUnresolved === "15",
+        lines,
+      );
+      assert.deepEqual(
+        await page.evaluate((lines) => ({
+          count: document.querySelector(lines)?.dataset.flowCount,
+          unresolved: document.querySelector(lines)?.dataset.flowUnresolved,
+          announcement: document.querySelector(".n-live-sr")?.textContent,
+        }), lines),
+        {
+          count: "3",
+          unresolved: "15",
+          announcement:
+            `3 signal links shown for Player ${selectedSlot}: 0 direct and 3 through 1 macro; 15 connections have endpoints that are not visible.`,
+        },
       );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
+      await page.close();
+    }
+  });
+
+  test("a macro processor opens the exact existing step editor without writing", async () => {
+    const page = await openCanvas();
+    const writes = [];
+    let delayClose = false;
+    let releaseClose = () => {};
+    let sawCloseRequest = () => {};
+    const closeGate = new Promise((resolve) => {
+      releaseClose = resolve;
+    });
+    const closeSeen = new Promise((resolve) => {
+      sawCloseRequest = resolve;
+    });
+    await page.route("**/api/nocturne*", async (route) => {
+      const url = new URL(route.request().url());
+      if (delayClose && !url.searchParams.has("macro")) {
+        sawCloseRequest();
+        await closeGate;
+      }
+      await route.continue();
+    });
+    page.on("request", (request) => {
+      if (request.method() !== "GET" && request.method() !== "HEAD") {
+        writes.push(`${request.method()} ${request.url()}`);
+      }
+    });
+    try {
+      const slot = await page.inputValue('input[name="slot"]');
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const node = page.locator("#n-mapping-processors a.n-flow-processor");
+      await node.waitFor({ state: "visible" });
+      assert.equal(await node.getAttribute("aria-haspopup"), "dialog");
+      assert.equal(await node.getAttribute("aria-controls"), "n-macro-dialog");
+      const modified = await node.evaluate((element) => {
+        let productPrevented = true;
+        const inspect = (event) => {
+          productPrevented = event.defaultPrevented;
+          // Keep this synthetic semantics probe from performing its native
+          // navigation after the product has had its chance to handle it.
+          event.preventDefault();
+        };
+        document.addEventListener("click", inspect, { once: true });
+        element.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          ctrlKey: true,
+        }));
+        return { productPrevented, href: location.href };
+      });
+      assert.equal(modified.productPrevented, false, "Ctrl-click keeps the anchor's native semantics");
+      assert.equal(new URL(modified.href).searchParams.has("macro"), false);
+      await node.click();
+      await page.waitForURL(new RegExp(`/nocturne\\?slot=${slot}&macro=hadouken$`));
+      await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
+      assert.equal(await page.isVisible("#n-macro-dialog"), true);
+      assert.equal(await page.getAttribute("#n-macro-dialog", "role"), "dialog");
+      assert.equal(await page.getAttribute("#n-macro-dialog", "aria-modal"), "true");
+      await page.waitForFunction(
+        () => document.querySelector("#n-macro-dialog")?.contains(document.activeElement),
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.id),
+        "n-macro-dialog",
+        "the enhanced link moves focus into the modal instead of leaving it on the page body",
+      );
+      // A poll or scope change can replace the processor DOM while its editor
+      // is open. Return focus to the replacement interactive anchor, not an
+      // aria-hidden SVG group that carries the same graph identifier.
+      await page.selectOption('[data-nx="mapping-paths"]', "all");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#n-mapping-processors a.n-flow-processor").length === 2,
+      );
+      assert.equal(
+        (await page.textContent(".n-macdirty")).trim(),
+        "",
+        "opening and changing path scope do not create a macro edit",
+      );
+      delayClose = true;
+      await page.click(".n-macx");
+      const closeClick = await page.evaluate(() => ({
+        url: location.href,
+        dirty: document.querySelector(".n-macdirty")?.textContent?.trim() ?? "",
+        said: document.querySelector(".n-macsay")?.textContent?.trim() ?? "",
+      }));
+      assert.equal(
+        new URL(closeClick.url).searchParams.has("macro"),
+        false,
+        "the close click removes the macro query immediately: " + JSON.stringify(closeClick),
+      );
+      await closeSeen;
+      assert.equal(await page.isVisible("#n-macro-dialog"), true, "the modal waits for close truth");
+      assert.equal(
+        await page.evaluate(() => document.querySelector("#n-macro-dialog")?.contains(document.activeElement)),
+        true,
+        "focus stays inside while the closing payload is outstanding",
+      );
+      releaseClose();
+      await page.waitForFunction(
+        () => document.activeElement?.matches("a.n-flow-processor") &&
+          document.querySelector("#n-macro-dialog")?.closest(".nd-back")?.classList.contains("none"),
+      );
+      assert.equal(await page.isHidden("#n-macro-dialog"), true);
+      assert.deepEqual(writes, [], "opening a read-only processor issues no mapping write");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseClose();
+      await page.close();
+    }
+  });
+
+  test("a processor removed before its confirming read settles without a dead dialog URL", async () => {
+    let removed = false;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const url = new URL(route.request().url());
+        const response = await route.fetch();
+        if (response.status() !== 200 || url.searchParams.get("macro") !== "hadouken") {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          pad.macros = (pad.macros ?? []).filter((macro) => macro.name !== "hadouken");
+        }
+        payload.view.mac.back_cls = "nd-back none";
+        removed = true;
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const node = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]');
+      await node.waitFor({ state: "visible" });
+      await node.hover();
+      assert.equal(await page.locator("#n-mapping-processors").evaluate((layer) =>
+        layer.classList.contains("is-inspecting")), true);
+      await node.click();
+      await page.waitForFunction(
+        () =>
+          !new URL(location.href).searchParams.has("macro") &&
+          /no longer available/i.test(document.querySelector(".n-live-sr")?.textContent ?? ""),
+      );
+      assert.equal(removed, true);
+      assert.equal(await page.isHidden("#n-macro-dialog"), true);
+      assert.equal(
+        await page.locator("#n-mapping-processors").evaluate((layer) =>
+          layer.classList.contains("is-inspecting")),
+        false,
+        "removing the inspected macro cannot leave the surviving graph dimmed",
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.matches('[data-nx="mapping-paths"]')),
+        true,
+        "focus falls back to the path control when the processor itself no longer exists",
+      );
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await page.waitForFunction(() =>
+        document.querySelector('#n-mapping-processors a[data-flow-macro-id*="hadouken"]') !== null &&
+        document.activeElement?.matches('[data-nx="mapping-paths"]'));
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("an open processor removed by a later poll closes truthfully and restores focus", async () => {
+    let removeOnPoll = false;
+    let markRemoved = () => {};
+    const removed = new Promise((resolve) => {
+      markRemoved = resolve;
+    });
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (!removeOnPoll || response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          pad.macros = (pad.macros ?? []).filter((macro) => macro.name !== "hadouken");
+        }
+        payload.view.mac.back_cls = "nd-back none";
+        removeOnPoll = false;
+        markRemoved();
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const node = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]');
+      await node.click();
+      await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
+      removeOnPoll = true;
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await removed;
+      await page.waitForFunction(
+        () =>
+          !new URL(location.href).searchParams.has("macro") &&
+          document.querySelector("#n-macro-dialog")?.closest(".nd-back")?.classList.contains("none") &&
+          /no longer available/i.test(document.querySelector(".n-live-sr")?.textContent ?? ""),
+        null,
+        { timeout: 10_000 },
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.matches('[data-nx="mapping-paths"]')),
+        true,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Rescan freshness survives either ordering with a mutation refresh", async () => {
+    let armed = null;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const url = new URL(route.request().url());
+        const requestFresh = url.searchParams.get("fresh") === "1";
+        const gate = armed;
+        if (gate && requestFresh === gate.blockFresh && !gate.blocked) {
+          gate.blocked = true;
+          gate.markBlocked();
+          await gate.release;
+          await route.continue().catch(() => {});
+          return;
+        }
+        if (gate?.blocked && requestFresh) gate.markSuccessor(url.href);
+        await route.continue();
+      });
+    });
+    const arm = (blockFresh) => {
+      let markBlocked = () => {};
+      let releaseGate = () => {};
+      let markSuccessor = () => {};
+      const blocked = new Promise((resolve) => {
+        markBlocked = resolve;
+      });
+      const release = new Promise((resolve) => {
+        releaseGate = resolve;
+      });
+      const successor = new Promise((resolve) => {
+        markSuccessor = resolve;
+      });
+      armed = {
+        blockFresh,
+        blocked: false,
+        markBlocked,
+        release,
+        releaseGate,
+        markSuccessor,
+        successor,
+      };
+      return armed;
+    };
+    const within = (promise, label) => Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label)), 5_000)),
+    ]);
+    try {
+      const firstSlot = page.locator("a.n-slot-sel").first();
+      const selected = page.waitForResponse((response) =>
+        response.url().includes("/api/nocturne?slot=1") && response.status() === 200);
+      await firstSlot.click();
+      await selected;
+      await page.waitForURL(/\/nocturne\?slot=1$/);
+
+      const mutationFirst = arm(false);
+      await page.locator("a.n-slot-sel").first().click();
+      await within(mutationFirst.blocked, "the mutation refresh never started");
+      await page.locator('form:has(input[name="fresh"]) button[type="submit"]').click();
+      const mutationThenFresh = await within(
+        mutationFirst.successor,
+        "Rescan was lost behind an active mutation refresh",
+      );
+      assert.equal(new URL(mutationThenFresh).searchParams.get("fresh"), "1");
+      mutationFirst.releaseGate();
+      armed = null;
+
+      const freshFirst = arm(true);
+      await page.locator('form:has(input[name="fresh"]) button[type="submit"]').click();
+      await within(freshFirst.blocked, "the fresh refresh never started");
+      await page.locator("a.n-slot-sel").first().click();
+      const freshThenMutation = await within(
+        freshFirst.successor,
+        "the mutation superseded Rescan without carrying fresh=1",
+      );
+      assert.equal(new URL(freshThenMutation).searchParams.get("fresh"), "1");
+      freshFirst.releaseGate();
+      armed = null;
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      armed?.releaseGate();
+      await page.close();
+    }
+  });
+
+  test("an unrelated topology refresh preserves focus on an unchanged processor", async () => {
+    let changeNext = false;
+    let markChanged = () => {};
+    const changed = new Promise((resolve) => {
+      markChanged = resolve;
+    });
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (!changeNext || response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        const pad = payload.view?.pads?.[0];
+        if (pad) pad.fn_keys.a = "F13";
+        changeNext = false;
+        markChanged();
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const node = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]');
+      await node.waitFor({ state: "visible" });
+      await node.focus();
+      const macroId = await node.getAttribute("data-flow-macro-id");
+      changeNext = true;
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await changed;
+      await page.waitForFunction(
+        (expected) =>
+          document.querySelector(
+            '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="F13"][data-flow-fn="a"]',
+          ) !== null &&
+          document.activeElement?.getAttribute("data-flow-macro-id") === expected,
+        macroId,
+        { timeout: 10_000 },
+      );
+      assert.equal(await page.evaluate(() => document.activeElement?.tagName), "A");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("unavailable mapper truth never draws stale direct cords and stays discoverable", async () => {
+    let servedUnavailable = false;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          pad.mapping_available = false;
+          pad.mapping_reason = "Fixture direct read failed.";
+          // Deliberately stale and non-empty: availability must win.
+          pad.fn_keys = { A: "G" };
+        }
+        servedUnavailable = true;
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.waitForFunction(
+        () => document.querySelector("#n-mapping-paths")?.dataset.flowMappingUnavailable === "1",
+        null,
+        { timeout: 10_000 },
+      );
+      assert.equal(servedUnavailable, true);
+      assert.equal(
+        await page.locator('#n-mapping-paths [data-flow-kind="binding"]').count(),
+        0,
+        "stale fn_keys do not override an unavailable mapper read",
+      );
+      assert.equal(
+        await page.locator('#n-mapping-paths [data-flow-kind^="macro-"]').count(),
+        4,
+        "independently available macro topology remains visible",
+      );
+      assert.match(await page.textContent(".n-pathcount"), /partial/);
+      assert.equal(
+        await page.getAttribute('[data-nx="mapping-paths"]', "aria-describedby"),
+        "n-mapping-path-status",
+      );
+      assert.match(
+        await page.textContent("#n-mapping-path-status"),
+        /direct mapping information is unavailable.*Fixture direct read failed/i,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("partial-axis authoring keeps its raw truth while landing on the visible direction", async () => {
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        const pad = payload.view?.pads?.[0];
+        if (pad) {
+          pad.fn_keys["ly.-16384"] = "Q";
+          pad.fn_keys["ly.+16384"] = "R";
+          pad.fn_keys["ly.0"] = "T";
+          pad.fn_keys["ly.999999"] = "U";
+          const macro = pad.macros?.[0];
+          if (
+            macro &&
+            !macro.outputs.some((output) => output.function === "ly.-16384")
+          ) {
+            macro.outputs.push({ function: "ly.-16384", steps: [4] });
+            macro.timeline.push("LS ↓ at half deflection");
+          }
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const direct =
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-fn="ly.-16384"]';
+      const output =
+        '#n-mapping-paths [data-flow-kind="macro-output"][data-flow-fn="ly.-16384"]';
+      const positive =
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-fn="ly.+16384"]';
+      const zero = '#n-mapping-paths [data-flow-kind="binding"][data-flow-fn="ly.0"]';
+      const outOfRange =
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-fn="ly.999999"]';
+      await page.waitForFunction(
+        ({ direct, output, positive, zero, outOfRange }) =>
+          document.querySelector(direct) !== null &&
+          document.querySelector(output) !== null &&
+          document.querySelector(positive) !== null &&
+          document.querySelector(zero) !== null &&
+          document.querySelector(outOfRange) !== null,
+        { direct, output, positive, zero, outOfRange },
+      );
+      assert.equal(
+        await page.locator(direct).evaluate((edge) => edge.classList.contains("is-unresolved")),
+        false,
+        "the partial direct binding lands on the down-direction hook",
+      );
+      assert.equal(
+        await page.locator(output).evaluate((edge) => edge.classList.contains("is-unresolved")),
+        false,
+        "the partial macro output lands on that same hook",
+      );
+      assert.equal(await page.getAttribute(direct, "data-flow-fn"), "ly.-16384");
+      assert.equal(await page.getAttribute(output, "data-flow-fn"), "ly.-16384");
+      assert.equal(
+        await page.locator(positive).evaluate((edge) => edge.classList.contains("is-unresolved")),
+        false,
+        "an explicitly signed positive i16 value lands on the up-direction hook",
+      );
+      assert.equal(
+        await page.locator(zero).evaluate((edge) => edge.classList.contains("is-unresolved")),
+        true,
+        "zero has no directional hook",
+      );
+      assert.equal(
+        await page.locator(outOfRange).evaluate((edge) => edge.classList.contains("is-unresolved")),
+        true,
+        "values outside Rust's i16 grammar never masquerade as a direction",
+      );
+
+      await page.locator(
+        '[data-instance-id="pad-1"] svg [data-fn="ly.min"]:not(text)',
+      ).first().hover({ force: true });
+      await page.waitForFunction(
+        ({ direct, output }) =>
+          document.querySelector(direct)?.classList.contains("is-related") &&
+          document.querySelector(output)?.classList.contains("is-related"),
+        { direct, output },
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("an invalid zero-step macro is never described as a neutral step", async () => {
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        const pad = payload.view?.pads?.[0];
+        const seed = pad?.macros?.[0];
+        if (pad && seed) {
+          pad.macros.push({
+            ...JSON.parse(JSON.stringify(seed)),
+            name: "empty-sequence",
+            timeline: [],
+            meta: "0 steps",
+            edit_href: "/nocturne?slot=1&macro=empty-sequence",
+          });
+          pad.macros.push({
+            ...JSON.parse(JSON.stringify(seed)),
+            name: "neutral-sequence",
+            timeline: ["Neutral"],
+            meta: "1 step",
+            edit_href: "/nocturne?slot=1&macro=neutral-sequence",
+          });
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const empty = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="empty-sequence"]');
+      const neutral = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="neutral-sequence"]');
+      await empty.waitFor({ state: "visible" });
+      assert.match(await empty.getAttribute("title"), /Invalid macro.*Timeline: no steps/i);
+      assert.match(await empty.textContent(), /NO STEPS.*no steps/is);
+      assert.doesNotMatch(await empty.textContent(), /neutral only/i);
+      assert.match(await neutral.getAttribute("title"), /Timeline: Neutral/i);
+      assert.doesNotMatch(await neutral.getAttribute("title"), /Invalid macro/i);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("real live frames animate only correlated direct routes and fail closed after a drop", async () => {
+    const livePort = Number(process.env.KSX_PWTEST_CANVAS_LIVE_PORT ?? PORT + 17);
+    const liveBase = "http://127.0.0.1:" + livePort;
+    let liveServer;
+    let page;
+    let releaseStructure = () => {};
+    const structureGate = new Promise((resolve) => {
+      releaseStructure = resolve;
+    });
+    try {
+      const squatter = await fetch(liveBase + "/api/map").then(
+        () => true,
+        () => false,
+      );
+      assert.equal(squatter, false, "the live-fixture port must be free");
+      liveServer = spawn(fixtureExe, [String(livePort)], {
+        cwd: repoRoot,
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          KSX_FIXTURE_SESSION: "running",
+          KSX_FIXTURE_LIVE: "1",
+        },
+      });
+      await waitForServer(liveBase);
+
+      page = await browser.newPage({
+        viewport: { width: 1600, height: 1000 },
+        colorScheme: "dark",
+      });
+      const noise = [];
+      page.on("pageerror", (error) => noise.push("pageerror: " + (error.stack ?? error)));
+      page.on("console", (message) => {
+        if (message.type() === "error") noise.push("console: " + message.text());
+      });
+      // Hold the ordinary structure refresh across the scripted stop/start
+      // boundary. That makes the security contract observable: frames alone
+      // cannot re-license a possibly different session.
+      await page.route("**/api/nocturne*", async (route) => {
+        await structureGate;
+        await route.continue().catch(() => {});
+      });
+      await page.goto(liveBase + "/nocturne", { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !==
+            undefined,
+        null,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      await page.selectOption('[data-nx="mapping-paths"]', "all");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#n-mapping-paths .n-flow-edge").length === 36,
+      );
+
+      await page.evaluate(() => {
+        const samples = [];
+        const live = (selector) => document.querySelector(selector)?.classList.contains("is-live") ?? false;
+        const sample = () => {
+          const padA = Array.from(
+            document.querySelectorAll('[data-pad-slot="1"] [data-fn].live'),
+          ).some((element) =>
+            (element.getAttribute("data-fn") ?? "")
+              .split(/\s+/)
+              .some((fnName) => fnName.toLowerCase() === "a"),
+          );
+          samples.push({
+            gA: live(
+              '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="a"]',
+            ),
+            gB: live(
+              '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="b"]',
+            ),
+            jX: live(
+              '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="J"][data-flow-fn="x"]',
+            ),
+            padA,
+            dropped: /frames dropped/.test(
+              document.querySelector(".n-livestats")?.textContent ?? "",
+            ),
+            inactive: /inactive/i.test(
+              document.querySelector(".n-live-sr")?.textContent ?? "",
+            ),
+            macroLive:
+              document.querySelectorAll(
+                '#n-mapping-paths [data-flow-kind^="macro-"].is-live',
+              ).length,
+            playerTwoLive:
+              document.querySelectorAll(
+                '#n-mapping-paths [data-flow-slot="2"].is-live',
+              ).length,
+          });
+          if (samples.length > 600) samples.shift();
+        };
+        window.__ksxLiveFlowSamples = samples;
+        window.__ksxLiveFlowTimer = setInterval(sample, 20);
+        sample();
+      });
+
+      await page.waitForFunction(
+        () => window.__ksxLiveFlowSamples?.some((sample) => sample.gA && sample.gB),
+        null,
+        { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        () => {
+          const samples = window.__ksxLiveFlowSamples ?? [];
+          const liveIndex = samples.findIndex((sample) => sample.gA && sample.gB);
+          return liveIndex >= 0 && samples
+            .slice(liveIndex + 1)
+            .some((sample) => sample.dropped && sample.padA && !sample.gA && !sample.gB);
+        },
+        null,
+        { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        () => window.__ksxLiveFlowSamples?.some((sample) => sample.jX),
+        null,
+        { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        () => window.__ksxLiveFlowSamples?.some((sample) => sample.inactive),
+        null,
+        { timeout: 10_000 },
+      );
+      await page.waitForTimeout(700);
+      const boundaryAudit = await page.evaluate(() => {
+        const samples = window.__ksxLiveFlowSamples ?? [];
+        const stopped = samples.findIndex((sample) => sample.inactive);
+        return {
+          stopped,
+          litBeforeStructure: samples
+            .slice(stopped + 1)
+            .some((sample) => sample.gA || sample.gB || sample.jX),
+        };
+      });
+      assert.ok(boundaryAudit.stopped >= 0, "the scripted stop reached the browser");
+      assert.equal(
+        boundaryAudit.litBeforeStructure,
+        false,
+        "a later running frame cannot borrow the stopped session's old license",
+      );
+      releaseStructure();
+      await page.waitForFunction(
+        () => {
+          const samples = window.__ksxLiveFlowSamples ?? [];
+          const stopped = samples.findIndex((sample) => sample.inactive);
+          return stopped >= 0 && samples.slice(stopped + 1).some((sample) => sample.gA && sample.gB);
+        },
+        null,
+        { timeout: 10_000 },
+      );
+      const audit = await page.evaluate(() => {
+        clearInterval(window.__ksxLiveFlowTimer);
+        const samples = window.__ksxLiveFlowSamples ?? [];
+        const gLive = samples.findIndex((sample) => sample.gA && sample.gB);
+        const failClosed = samples.findIndex(
+          (sample, index) =>
+            index > gLive && sample.dropped && sample.padA && !sample.gA && !sample.gB,
+        );
+        return {
+          gLive,
+          failClosed,
+          sameFrameTap: samples.some((sample) => sample.jX),
+          macroEverLive: samples.some((sample) => sample.macroLive > 0),
+          playerTwoEverLive: samples.some((sample) => sample.playerTwoLive > 0),
+        };
+      });
+      assert.ok(audit.gLive >= 0, "G travels to both controls it directly drives");
+      assert.ok(
+        audit.failClosed > audit.gLive,
+        "a dropped release clears G's cords even while virtual A remains down",
+      );
+      assert.equal(audit.sameFrameTap, true, "J down+up in one frame still travels to X");
+      assert.equal(
+        audit.macroEverLive,
+        false,
+        "aggregate control frames never pretend to reveal macro-internal provenance",
+      );
+      assert.equal(
+        audit.playerTwoEverLive,
+        false,
+        "Player 1 frames cannot animate Player 2's identically bound routes",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      releaseStructure();
+      if (page) {
+        await page.evaluate(() => clearInterval(window.__ksxLiveFlowTimer)).catch(() => {});
+        await page.close();
+      }
+      await stopFixtureProcess(liveServer, "canvas live fixture");
+    }
+  });
+
+  test("processor cards remain reachable beside the compact mobile navigator", async () => {
+    const page = await openCanvas({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+    }, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        const pad = payload.view?.pads?.[0];
+        const seed = pad?.macros?.[0];
+        if (pad && seed && !pad.macros.some((macro) => macro.name === "dragon-punch")) {
+          pad.macros.push({
+            ...JSON.parse(JSON.stringify(seed)),
+            name: "dragon-punch",
+            triggers: ["O"],
+            timeline: ["→", "D-pad ↓ + Y"],
+            edit_href: "/nocturne?slot=1&macro=dragon-punch",
+          });
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const nodes = page.locator("#n-mapping-processors a.n-flow-processor");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#n-mapping-processors a.n-flow-processor").length === 2,
+      );
+      const node = nodes.first();
+      await node.waitFor({ state: "visible" });
+      await page.locator(".n-canvas").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(100);
+      const geometry = await page.evaluate(() => {
+        const viewport = document.querySelector(".forma-canvas-viewport").getBoundingClientRect();
+        const processors = Array.from(
+          document.querySelectorAll("#n-mapping-processors a.n-flow-processor"),
+        );
+        const boxes = processors.map((processor) => processor.getBoundingClientRect());
+        const map = document.querySelector(".forma-canvas-navigator").getBoundingClientRect();
+        const overlap = (left, right) =>
+          left.left < right.right && left.right > right.left &&
+          left.top < right.bottom && left.bottom > right.top;
+        return {
+          allInside: boxes.every((box) =>
+            box.left >= viewport.left - 1 && box.right <= viewport.right + 1 &&
+            box.top >= viewport.top - 1 && box.bottom <= viewport.bottom + 1),
+          allReachable: boxes.every((box, index) =>
+            document
+              .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+              ?.closest("a.n-flow-processor") === processors[index]),
+          hits: boxes.map((box) => {
+            const hit = document.elementFromPoint(
+              box.left + box.width / 2,
+              box.top + box.height / 2,
+            );
+            return {
+              macro: hit?.closest("a.n-flow-processor")?.getAttribute("data-flow-macro-id") ?? "",
+              tag: hit?.tagName ?? "",
+              cls: hit?.getAttribute("class") ?? "",
+            };
+          }),
+          processorOverlap: boxes.some((box, index) =>
+            boxes.slice(index + 1).some((other) => overlap(box, other))),
+          mapOverlaps: boxes.filter((box) => overlap(box, map)).length,
+          heights: boxes.map((box) => box.height),
+          boxes: boxes.map(({ left, top, right, bottom, width, height }) => ({
+            left,
+            top,
+            right,
+            bottom,
+            width,
+            height,
+          })),
+          documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      assert.equal(geometry.allInside, true, "every fixed-size card stays wholly inside the canvas");
+      assert.ok(
+        geometry.heights.every((height) => height >= 40),
+        "coarse targets are " + geometry.heights.join(", ") + "px high",
+      );
+      assert.equal(
+        geometry.processorOverlap,
+        false,
+        "processor cards never cover one another: " + JSON.stringify(geometry),
+      );
+      assert.equal(
+        geometry.allReachable,
+        true,
+        "every processor wins its center hit test: " + JSON.stringify(geometry),
+      );
+      assert.ok(geometry.mapOverlaps <= 1, "packing uses clear mobile space before the navigator");
+      assert.ok(geometry.documentOverflow <= 1, `mobile page overflowed by ${geometry.documentOverflow}px`);
+
+      await page.click(".n-mapclose");
+      await page.locator(".n-mapshow").waitFor({ state: "visible" });
+      await page.click(".n-mapshow");
+      await page.locator(".n-navigator").waitFor({ state: "visible" });
+      const editable = page.locator(
+        '#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]',
+      );
+      await editable.focus();
+      await page.keyboard.press("Enter");
+      await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a dense mobile macro graph folds into one reachable, scrollable bank", async () => {
+    let addDirectRoute = false;
+    let changeGroupedMeta = false;
+    let markTopology = () => {};
+    let markMetadata = () => {};
+    const topologyChanged = new Promise((resolve) => {
+      markTopology = resolve;
+    });
+    const metadataChanged = new Promise((resolve) => {
+      markMetadata = resolve;
+    });
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        const pad = payload.view?.pads?.[0];
+        const seed = pad?.macros?.[0];
+        if (pad && seed) {
+          pad.macros = Array.from({ length: 12 }, (_, index) => {
+            const name = index < 3
+              ? `alpha-${String(index + 1).padStart(2, "0")}`
+              : index === 3
+                ? "hadouken"
+                : `zeta-${String(index + 1).padStart(2, "0")}`;
+            return {
+              ...JSON.parse(JSON.stringify(seed)),
+              name,
+              triggers: [`F${index + 1}`],
+              edit_href: `/nocturne?slot=1&macro=${name}`,
+            };
+          });
+          if (addDirectRoute) {
+            pad.fn_keys.a = "F13";
+            markTopology();
+          }
+          if (changeGroupedMeta) {
+            pad.macros[11].disabled = true;
+            pad.macros[11].meta = "12 steps · off";
+            markMetadata();
+          }
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.waitForFunction(
+        () => document.querySelector("#n-mapping-processors")?.dataset.flowProcessorOverflow === "8",
+      );
+      const migrating = page.locator(
+        '#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]',
+      );
+      const migratingId = await migrating.getAttribute("data-flow-macro-id");
+      await migrating.focus();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator(".n-canvas").scrollIntoViewIfNeeded();
+      await page.waitForFunction(
+        (macroId) =>
+          document.querySelector("#n-mapping-processors")?.dataset.flowProcessorOverflow === "11" &&
+          document.activeElement?.matches("a.n-flow-overflow-link") &&
+          document.activeElement?.getAttribute("data-flow-macro-id") === macroId &&
+          document.querySelector("details.n-flow-overflow")?.hasAttribute("open"),
+        migratingId,
+      );
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await page.waitForFunction(
+        (macroId) =>
+          document.querySelector("#n-mapping-processors")?.dataset.flowProcessorOverflow === "8" &&
+          document.activeElement?.matches("a.n-flow-processor:not([hidden])") &&
+          document.activeElement?.getAttribute("data-flow-macro-id") === macroId,
+        migratingId,
+      );
+      await page.keyboard.press("Enter");
+      await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator(".n-canvas").scrollIntoViewIfNeeded();
+      await page.waitForFunction(() =>
+        document.querySelector("#n-mapping-processors")?.dataset.flowProcessorOverflow === "11");
+      await page.locator(".n-macx").click();
+      await page.waitForFunction(
+        (macroId) =>
+          document.querySelector("#n-macro-dialog")?.closest(".nd-back")?.classList.contains("none") &&
+          document.activeElement?.matches("a.n-flow-overflow-link") &&
+          document.activeElement?.getAttribute("data-flow-macro-id") === macroId &&
+          document.querySelector("details.n-flow-overflow")?.hasAttribute("open"),
+        migratingId,
+      );
+      const bank = page.locator("details.n-flow-overflow");
+      await bank.locator("summary").click();
+      assert.equal(await bank.getAttribute("open"), null);
+      const geometry = await page.evaluate(() => {
+        const viewport = document.querySelector(".forma-canvas-viewport").getBoundingClientRect();
+        const cards = [
+          ...document.querySelectorAll("#n-mapping-processors a.n-flow-processor:not([hidden])"),
+          document.querySelector("#n-mapping-processors details.n-flow-overflow:not([hidden])"),
+        ].filter(Boolean);
+        const boxes = cards.map((card) => card.getBoundingClientRect());
+        const overlap = (left, right) =>
+          left.left < right.right && left.right > right.left &&
+          left.top < right.bottom && left.bottom > right.top;
+        return {
+          cards: cards.length,
+          inside: boxes.every((box) =>
+            box.left >= viewport.left - 1 && box.right <= viewport.right + 1 &&
+            box.top >= viewport.top - 1 && box.bottom <= viewport.bottom + 1),
+          overlaps: boxes.some((box, index) =>
+            boxes.slice(index + 1).some((other) => overlap(box, other))),
+          reachable: boxes.every((box, index) =>
+            document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+              ?.closest("a.n-flow-processor, details.n-flow-overflow") === cards[index]),
+        };
+      });
+      assert.deepEqual(geometry, {
+        cards: 2,
+        inside: true,
+        overlaps: false,
+        reachable: true,
+      });
+      assert.match(await bank.textContent(), /\+11 more/);
+      assert.match(await page.textContent("#n-mapping-path-status"), /11 macros are grouped/i);
+      await bank.locator("summary").click();
+      const grouped = bank.locator("a.n-flow-overflow-link");
+      assert.equal(await grouped.count(), 11);
+      const summary = bank.locator("summary");
+      await summary.focus();
+      addDirectRoute = true;
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await topologyChanged;
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="F13"][data-flow-fn="a"]',
+        ) !== null &&
+        document.activeElement?.matches("details.n-flow-overflow summary") &&
+        document.querySelector("details.n-flow-overflow")?.hasAttribute("open"));
+
+      const last = grouped.last();
+      await last.scrollIntoViewIfNeeded();
+      const lastMacroId = await last.getAttribute("data-flow-macro-id");
+      await last.focus();
+      changeGroupedMeta = true;
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await metadataChanged;
+      await page.waitForFunction(
+        (macroId) =>
+          /12 steps · off/.test(document.activeElement?.textContent ?? "") &&
+          document.activeElement?.getAttribute("data-flow-macro-id") === macroId &&
+          document.querySelector("details.n-flow-overflow")?.hasAttribute("open"),
+        lastMacroId,
+      );
+      assert.equal(
+        await last.evaluate((link) => {
+          const box = link.getBoundingClientRect();
+          return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+            ?.closest("a.n-flow-overflow-link") === link;
+        }),
+        true,
+        "the last grouped macro remains a real reachable link",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Space and middle-button pans can begin over a processor without opening it", async () => {
+    const page = await openCanvas();
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      const viewport = page.locator(".forma-canvas-viewport");
+      const node = page.locator("#n-mapping-processors a.n-flow-processor").first();
+      await node.waitFor({ state: "visible" });
+      const beforeSpace = await page.getAttribute(".forma-canvas-stage", "style");
+      await viewport.focus();
+      await page.keyboard.down("Space");
+      await page.waitForFunction(() =>
+        document.querySelector(".forma-canvas-viewport")?.classList.contains("is-pan-ready"));
+      let box = await node.boundingBox();
+      assert.ok(box);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 35, { steps: 5 });
+      await page.mouse.up();
+      await page.keyboard.up("Space");
+      await page.waitForFunction((before) =>
+        document.querySelector(".forma-canvas-stage")?.getAttribute("style") !== before,
+      beforeSpace);
+
+      const beforeMiddle = await page.getAttribute(".forma-canvas-stage", "style");
+      box = await node.boundingBox();
+      assert.ok(box);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down({ button: "middle" });
+      await page.mouse.move(box.x + box.width / 2 - 55, box.y + box.height / 2 + 25, { steps: 5 });
+      await page.mouse.up({ button: "middle" });
+      await page.waitForFunction((before) =>
+        document.querySelector(".forma-canvas-stage")?.getAttribute("style") !== before,
+      beforeMiddle);
+      assert.equal(new URL(page.url()).searchParams.has("macro"), false);
+      assert.equal(await page.isHidden("#n-macro-dialog"), true);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.keyboard.up("Space").catch(() => {});
       await page.close();
     }
   });

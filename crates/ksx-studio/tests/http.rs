@@ -169,6 +169,12 @@ struct ScriptedControl {
     dirty: AtomicBool,
     /// Scripts `stage_apply` to refuse with `needs-restart`.
     apply_needs_restart: AtomicBool,
+    /// Emulate an older daemon whose staged slot predates the authoring table.
+    without_authoring: bool,
+    /// Keep macro tables readable while making the direct mapper projection
+    /// fail, so persona labels and the two availability channels are tested
+    /// independently.
+    invalid_mapping_authoring: AtomicBool,
     /// Optional one-shot daemon learner hit. Ordinary mapper fixtures leave
     /// this empty and continue reporting `listening`; the Identify route test
     /// supplies the exact interface path a real daemon panel tap returns.
@@ -194,6 +200,8 @@ impl ScriptedControl {
             learn_generation: AtomicUsize::new(0),
             dirty: AtomicBool::new(false),
             apply_needs_restart: AtomicBool::new(false),
+            without_authoring: false,
+            invalid_mapping_authoring: AtomicBool::new(false),
             identify_hit: Mutex::new(None),
             bound_with: std::sync::Mutex::new(None),
             restored_with: std::sync::Mutex::new(None),
@@ -214,6 +222,15 @@ impl ScriptedControl {
     fn with_identify_hit(self, device: impl Into<String>) -> Self {
         *self.identify_hit.lock().unwrap() = Some(device.into());
         self
+    }
+
+    fn without_authoring(mut self) -> Self {
+        self.without_authoring = true;
+        self
+    }
+
+    fn invalidate_mapping_authoring(&self) {
+        self.invalid_mapping_authoring.store(true, Ordering::SeqCst);
     }
 }
 
@@ -428,6 +445,20 @@ impl ControlSource for ScriptedControl {
         }
         let mut view = ksx_api::StagedSetupView::of(&self.staged.lock().unwrap());
         view.dirty = self.dirty.load(Ordering::SeqCst);
+        if self.without_authoring {
+            for slot in &mut view.slots {
+                slot.authoring = None;
+            }
+        } else if self.invalid_mapping_authoring.load(Ordering::SeqCst) {
+            for slot in &mut view.slots {
+                if let Some(authoring) = &mut slot.authoring {
+                    authoring.bindings.insert(
+                        "not.a.controller.function".into(),
+                        ksx_config::BindingEntry::Key("P".into()),
+                    );
+                }
+            }
+        }
         view
     }
 
@@ -7471,6 +7502,30 @@ fn nocturne_serves_the_macro_step_editor() {
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
     let mac = api["view"]["mac"].clone();
+    // The canvas receives the same staged macro as a per-pad topology. This
+    // catches the broken client-only shortcut that tried to derive All-player
+    // flows from selected-slot lifecycle rows (which have no step outputs).
+    let flow = api["view"]["pads"][0]["macros"][0].clone();
+    assert_eq!(api["view"]["pads"][0]["mapping_available"], true);
+    assert_eq!(api["view"]["pads"][0]["mapping_reason"], "");
+    assert_eq!(api["view"]["pads"][0]["macro_available"], true);
+    assert_eq!(api["view"]["pads"][0]["macro_reason"], "");
+    assert_eq!(flow["name"], "combo", "{flow}");
+    assert_eq!(flow["triggers"], serde_json::json!([]), "{flow}");
+    assert_eq!(flow["outputs"][0]["function"], "dpad.down", "{flow}");
+    assert_eq!(
+        flow["outputs"][0]["steps"],
+        serde_json::json!([1]),
+        "{flow}"
+    );
+    assert_eq!(flow["outputs"][1]["function"], "dpad.right", "{flow}");
+    assert_eq!(flow["outputs"][2]["function"], "A", "{flow}");
+    assert!(
+        flow["timeline"][0]
+            .as_str()
+            .is_some_and(|step| step.contains('\u{2198}')),
+        "the signal node says diagonal instead of flattening the sequence: {flow}"
+    );
     assert_eq!(mac["open"], true, "{mac}");
     assert_eq!(mac["name"], "combo", "{mac}");
     assert_eq!(
@@ -7602,6 +7657,297 @@ fn nocturne_serves_the_macro_step_editor() {
     // …and the row that opens it points at this page, not at Controls.
     let row = api["view"]["macro_rows"][0].clone();
     assert_eq!(row["edit_href"], "/nocturne?slot=1&macro=combo", "{row}");
+}
+
+/// An older daemon can still serve its staged roster while omitting the
+/// authoring table. The canvas must say that macro topology is unavailable;
+/// an empty list would falsely claim the preset defines no processors.
+#[test]
+fn nocturne_does_not_turn_unavailable_macro_data_into_an_empty_answer() {
+    let control = Arc::new(ScriptedControl::new(false).without_authoring());
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(control);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pad = api["view"]["pads"][0].clone();
+    assert_eq!(pad["mapping_available"], false, "{pad}");
+    assert_eq!(pad["fn_keys"], serde_json::json!({}), "{pad}");
+    assert_eq!(
+        pad["mapping_reason"],
+        "Player 1's controller layout is not available. Refresh the unsaved setup.",
+        "{pad}"
+    );
+    assert_eq!(pad["macro_available"], false, "{pad}");
+    assert_eq!(pad["macros"], serde_json::json!([]), "{pad}");
+    assert_eq!(
+        pad["macro_reason"],
+        "Player 1's controller layout is not available. Refresh the unsaved setup.",
+        "{pad}"
+    );
+}
+
+/// Macro authoring and direct-mapper projection are independent reads. A bad
+/// binding must not hide a readable macro, and its timeline still uses the
+/// staged controller's own button language rather than an Xbox fallback.
+#[test]
+fn nocturne_keeps_persona_macro_labels_when_direct_mapping_is_unavailable() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(Arc::clone(&control));
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"cross\",\"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+    control.invalidate_mapping_authoring();
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1&macro=cross")))
+            .expect("payload");
+    let pad = api["view"]["pads"][0].clone();
+    assert_eq!(pad["mapping_available"], false, "{pad}");
+    assert!(
+        pad["mapping_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("not.a.controller.function")),
+        "{pad}"
+    );
+    assert_eq!(pad["fn_keys"], serde_json::json!({}), "{pad}");
+    assert_eq!(pad["macro_available"], true, "{pad}");
+    assert_eq!(
+        pad["macros"][0]["timeline"],
+        serde_json::json!(["✕"]),
+        "{pad}"
+    );
+    let editor = api["view"]["mac"].clone();
+    assert_eq!(editor["open"], true, "{editor}");
+    assert_eq!(editor["rows"][0]["hold"], "✕", "{editor}");
+    let cross_column = editor["cols"]
+        .as_array()
+        .and_then(|cols| {
+            cols.iter().find(|column| {
+                column["title"]
+                    .as_str()
+                    .is_some_and(|title| title.ends_with("(A)"))
+            })
+        })
+        .expect("cross column");
+    assert_eq!(cross_column["id"], "✕", "{editor}");
+
+    // The first edit response recomposes the same editor. It must retain the
+    // staged persona even though direct mapper conversion is still refused.
+    let request = serde_json::json!({
+        "slot": 1,
+        "act": "cell|0|B",
+        "draft": editor["table"].clone()
+    })
+    .to_string();
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &request,
+    )))
+    .expect("macro edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert!(
+        edited["view"]["rows"][0]["hold"]
+            .as_str()
+            .is_some_and(|hold| hold.contains('✕') && hold.contains('○')),
+        "{edited}"
+    );
+    assert!(
+        edited["view"]["cols"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .any(|column| column["id"] == "○"),
+        "{edited}"
+    );
+}
+
+/// Canvas topology is pad-owned, not borrowed from the selected controller's
+/// macro editor. Asking to inspect P1 must therefore keep P2's complete macro
+/// chain in the payload, including P2's own controller vocabulary.
+#[test]
+fn nocturne_keeps_nonselected_player_macro_topology() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "switchpro".into(),
+            preset: "Player 2".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    for (slot, preset, name, hold) in [
+        (1, "Player 1", "p1-combo", serde_json::json!(["A"])),
+        (2, "Player 2", "p2-combo", serde_json::json!(["lt", "back"])),
+    ] {
+        let request = serde_json::json!({
+            "target": "stage",
+            "slot": slot,
+            "preset": preset,
+            "name": name,
+            "steps": [{ "hold": hold, "ms": 50 }]
+        })
+        .to_string();
+        let saved: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/macro/save", &request)))
+                .expect("macro save");
+        assert_eq!(saved["ok"], true, "{saved}");
+    }
+    for (slot, function, key) in [(1, "macro.p1-combo", "F11"), (2, "macro.p2-combo", "F12")] {
+        let request = serde_json::json!({
+            "slot": slot,
+            "function": function,
+            "key": key,
+            "mode": "replace",
+            "force": true
+        })
+        .to_string();
+        let bound: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/bind", &request)))
+                .expect("macro trigger bind");
+        assert_eq!(bound["ok"], true, "{bound}");
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    assert_eq!(pads.len(), 2, "{api}");
+    assert_eq!(pads[0]["macros"][0]["name"], "p1-combo", "{api}");
+    assert_eq!(pads[0]["macros"][0]["triggers"], serde_json::json!(["F11"]));
+    assert_eq!(pads[1]["slot"], 2, "{api}");
+    assert_eq!(pads[1]["macros"][0]["name"], "p2-combo", "{api}");
+    assert_eq!(pads[1]["macros"][0]["triggers"], serde_json::json!(["F12"]));
+    assert_eq!(
+        pads[1]["macros"][0]["timeline"],
+        serde_json::json!(["ZL + Capture"]),
+        "{api}"
+    );
+    assert_eq!(pads[1]["fn_names"]["lt"], "ZL", "{api}");
+    assert_eq!(pads[1]["fn_names"]["back"], "Capture", "{api}");
+
+    let p2: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2&macro=p2-combo")))
+            .expect("P2 editor payload");
+    let editor = &p2["view"]["mac"];
+    assert_eq!(editor["open"], true, "{editor}");
+    assert_eq!(editor["rows"][0]["hold"], "ZL + Capture", "{editor}");
+    for (function, label) in [("lt", "ZL"), ("back", "Capture")] {
+        let suffix = format!("({function})");
+        let column = editor["cols"]
+            .as_array()
+            .and_then(|cols| {
+                cols.iter().find(|column| {
+                    column["title"]
+                        .as_str()
+                        .is_some_and(|title| title.ends_with(suffix.as_str()))
+                })
+            })
+            .expect("Switch column");
+        assert_eq!(column["id"], label, "{editor}");
+    }
+}
+
+/// Existing preset files do not cap macro-name length. The canvas door must
+/// therefore encode the complete name (including query delimiters), and that
+/// exact href must reopen the existing editor instead of a truncated ghost.
+#[test]
+fn nocturne_macro_flow_href_round_trips_long_reserved_names() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(control);
+    let name = format!("{} &?#/%", "long".repeat(31));
+    assert!(name.chars().count() > 120);
+    let request = serde_json::json!({
+        "target": "stage",
+        "slot": 1,
+        "preset": "Player 1",
+        "name": name,
+        "steps": [{ "hold": ["A"], "ms": 50 }]
+    })
+    .to_string();
+    let saved: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/macro/save", &request)))
+            .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    let encoded = format!("{}%20%26%3F%23%2F%25", "long".repeat(31));
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        &format!("/api/nocturne?slot=1&macro={encoded}"),
+    )))
+    .expect("payload");
+    assert_eq!(api["view"]["mac"]["open"], true, "{api}");
+    assert_eq!(api["view"]["mac"]["name"], name, "{api}");
+    let flow = api["view"]["pads"][0]["macros"]
+        .as_array()
+        .and_then(|macros| macros.iter().find(|mac| mac["name"] == name))
+        .expect("long macro flow");
+    assert_eq!(
+        flow["edit_href"],
+        format!("/nocturne?slot=1&macro={encoded}"),
+        "{flow}"
+    );
 }
 
 /// draft; the trigger rebinds through the SAME staged bind verb as any

@@ -1386,6 +1386,7 @@ pub(super) async fn nocturne_api_macro_edit(
     let outcome = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let slot = staged.slots.iter().find(|s| s.number == body.slot);
+        let persona = slot.map_or("xbox360", |s| s.persona.as_str());
         let keyboard = staged
             .device
             .as_ref()
@@ -1404,6 +1405,7 @@ pub(super) async fn nocturne_api_macro_edit(
         };
         let view = crate::macro_editor::NocturneMacroEditor::compose(
             &draft,
+            persona,
             mapper.as_ref(),
             body.slot,
             None,

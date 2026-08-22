@@ -24,6 +24,7 @@ void NocturnePage; // compile-time anchor only (see above)
 /** Same cadence as every structure poller: the draft and the machine change
  *  on human actions, not at display rate. */
 const POLL_MS = 2000;
+const POLL_TIMEOUT_MS = 10_000;
 
 /** The last applied body, verbatim. An idle page's polls come back byte
  *  identical, and skipping the apply then costs ~50 signal writes and every
@@ -35,8 +36,19 @@ let lastBody = "";
  *  render). Manual rather than trusting the browser's cache heuristics,
  *  which do not reliably revalidate a polled fetch. */
 let lastEtag = "";
+let pollGeneration = 0;
+let activePoll: {
+  generation: number;
+  selection: string;
+  priority: number;
+  fresh: boolean;
+  controller: AbortController;
+} | null = null;
 
-async function poll(fresh = false): Promise<void> {
+async function poll(
+  fresh = false,
+  origin: "background" | "interaction" | "mutation" = "background",
+): Promise<void> {
   // A hidden tab does not need fresh paint; visibilitychange below polls
   // the moment it returns.
   if (document.hidden) return;
@@ -44,34 +56,70 @@ async function poll(fresh = false): Promise<void> {
   // the one this URL's SSR would paint (the workspace's rule). Rescan asks
   // with fresh=1, which drops the server's machine-read cache first — a
   // fresh read IS that button's promise.
-  const params = new URLSearchParams();
   const here = new URLSearchParams(window.location.search);
   const slot = here.get("slot");
-  if (slot) params.set("slot", slot);
   // ⚠️ THE MACRO SELECTION IS PART OF THE SELECTION. Without it the payload
   // composes a CLOSED editor, so an open roll vanished two seconds after it
   // was opened and every control in it went inert.
   const macro = here.get("macro");
+  const selection = `${slot ?? ""}\u0000${macro ?? ""}`;
+  let requestFresh = fresh;
+  let priority = origin === "mutation" ? 3 : fresh || origin === "interaction" ? 2 : 1;
+  // A timer refresh may not cancel the slower fresh read the Rescan button
+  // explicitly promised. A newer interaction, or a different selection,
+  // still supersedes it immediately.
+  if (activePoll?.selection === selection) {
+    if (origin === "background") return;
+    if (activePoll.fresh) {
+      // A higher-priority mutation may supersede the read, but it inherits
+      // the cache invalidation already promised by Rescan. Equal/lower work
+      // can simply share the active fresh request.
+      if (priority <= activePoll.priority) return;
+      requestFresh = true;
+    } else if (fresh) {
+      // Rescan is never discarded behind an ordinary mutation refresh. Give
+      // the replacement the stronger priority as well as fresh=1.
+      priority = Math.max(priority, activePoll.priority);
+    } else if (activePoll.priority > priority) {
+      return;
+    }
+  }
+  const params = new URLSearchParams();
+  if (slot) params.set("slot", slot);
   if (macro) params.set("macro", macro);
-  if (fresh) params.set("fresh", "1");
+  if (requestFresh) params.set("fresh", "1");
   const qs = params.toString();
   const url = qs ? `/api/nocturne?${qs}` : "/api/nocturne";
+  // Selection-changing gestures can start a poll while the 2 s timer's old
+  // selection is still in flight. Only the newest request may repaint; an
+  // older closed-macro payload must never arrive after the editor was opened.
+  const generation = ++pollGeneration;
+  activePoll?.controller.abort();
+  const controller = new AbortController();
+  activePoll = { generation, selection, priority, fresh: requestFresh, controller };
+  const timeout = window.setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
   try {
     const headers: Record<string, string> = { accept: "application/json" };
-    if (lastEtag && !fresh) headers["if-none-match"] = lastEtag;
-    const res = await fetch(url, { headers });
+    if (lastEtag && !requestFresh) headers["if-none-match"] = lastEtag;
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (generation !== pollGeneration) return;
     if (res.status === 304) return; // nothing changed, nothing to do
     if (!res.ok) throw new Error(String(res.status));
     lastEtag = res.headers.get("etag") ?? "";
     const body = await res.text();
+    if (generation !== pollGeneration) return;
     if (body === lastBody) return;
     lastBody = body;
     applyNocturne(JSON.parse(body) as NocturnePayload);
   } catch {
+    if (generation !== pollGeneration) return;
     // Recovery must re-apply even an identical payload.
     lastBody = "";
     lastEtag = "";
     applyNocturneUnreachable();
+  } finally {
+    window.clearTimeout(timeout);
+    if (activePoll?.generation === generation) activePoll = null;
   }
 }
 
@@ -94,7 +142,7 @@ function wireForms(root: HTMLElement): void {
         return;
       }
       // The Rescan form: a fresh read IS the poll — cache-busted.
-      void poll(true);
+      void poll(true, "interaction");
       return;
     }
     if (form.method.toLowerCase() !== "post") return;
@@ -148,7 +196,7 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
       control.disabled = false;
     });
   }
-  void poll();
+  void poll(false, "mutation");
 }
 
 /** The SOURCE payload the server embedded (render.rs `PAYLOAD_SCRIPT_ID`) —
@@ -174,7 +222,7 @@ activateIslands({
     if (seed) applyNocturne(seed);
     nocturneWire(el);
     wireForms(el);
-    setNocturnePoll(() => void poll());
+    setNocturnePoll(() => void poll(false, "mutation"));
     nocturneLiveConnect();
     window.setInterval(() => void poll(), POLL_MS);
     document.addEventListener("visibilitychange", () => {

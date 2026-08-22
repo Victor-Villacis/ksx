@@ -3748,7 +3748,9 @@ fn workspace_bind_rows(
                         .filter(|other| {
                             crate::render_map::keys_of(&mapper, other.fn_name).contains(&key)
                         })
-                        .map(crate::render_map::legend_label)
+                        .map(|other| {
+                            crate::render_map::legend_label_for_persona(&mapper.persona, other)
+                        })
                         .collect();
                     if !others.is_empty() {
                         parts.push(format!("{key} also drives {}", others.join(" · ")));
@@ -3768,7 +3770,7 @@ fn workspace_bind_rows(
             }
             WorkspaceBindRow {
                 function: zone.fn_name.to_owned(),
-                label: crate::render_map::legend_label(zone),
+                label: crate::render_map::legend_label_for_persona(&mapper.persona, zone),
                 keys,
                 notes: notes.join(" · "),
                 cls,
@@ -4129,10 +4131,100 @@ pub struct NocturnePadView {
     pub title: String,
     /// Canonical fn → its key chip ("G · H"), for the clone's callouts.
     pub fn_keys: std::collections::BTreeMap<String, String>,
+    /// `false` means the provider could not project this slot's direct mapper
+    /// table. An empty `fn_keys` is otherwise the valid fact "nothing is
+    /// bound", so availability has to travel separately.
+    #[serde(default)]
+    pub mapping_available: bool,
+    #[serde(default)]
+    pub mapping_reason: String,
     /// Canonical fn → the persona's readable label ("LS ↑", "△") — the
     /// toast's vocabulary for arming ANY pad's control, not just the
     /// selected one.
     pub fn_names: std::collections::BTreeMap<String, String>,
+    /// Timed processors owned by this preset. The canvas renders these as
+    /// real key → macro → control chains instead of pretending a trigger
+    /// key is a direct controller binding.
+    #[serde(default)]
+    pub macros: Vec<NocturneMacroFlow>,
+    /// `false` means the provider could not answer the macro read. It must not
+    /// collapse into an empty macro list: "unknown" and "defines none" are
+    /// different authoring facts.
+    #[serde(default)]
+    pub macro_available: bool,
+    #[serde(default)]
+    pub macro_reason: String,
+}
+
+/// The read-only part of one macro needed by the canvas signal graph.
+///
+/// This is composed from the same staged [`ksx_api::MacroSnapshot`] as the
+/// lifecycle rows and step editor. The browser receives presentation-ready
+/// step words plus canonical output names; it does not interpret macro files
+/// or invent execution semantics of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroFlow {
+    pub name: String,
+    pub triggers: Vec<String>,
+    /// Unique canonical functions touched anywhere in the timeline, in first
+    /// appearance order. A neutral-only macro legitimately leaves this empty.
+    pub outputs: Vec<NocturneMacroFlowOutput>,
+    /// One persona-aware sentence per step ("D-pad ↓", "D-pad ↘", "X").
+    pub timeline: Vec<String>,
+    pub meta: String,
+    pub disabled: bool,
+    pub edit_href: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroFlowOutput {
+    pub function: String,
+    /// One-based step numbers where this output is held. This is what keeps a
+    /// sequence from being presented as simultaneous fan-out.
+    pub steps: Vec<usize>,
+}
+
+fn nocturne_macro_meta(mac: &ksx_api::MacroView) -> String {
+    let mut notes = vec![match mac.steps.len() {
+        1 => "1 step".to_owned(),
+        n => format!("{n} steps"),
+    }];
+    match mac.repeat.as_str() {
+        "while-held" => notes.push("repeats while held".to_owned()),
+        "turbo" => notes.push(match (mac.turbo_hz, mac.gap_ms) {
+            (Some(hz), _) => format!("turbo {hz} Hz"),
+            (_, Some(gap)) => format!("turbo · {gap} ms gap"),
+            _ => "turbo".to_owned(),
+        }),
+        _ => {}
+    }
+    if mac.on_release == "abort" {
+        notes.push("aborts on release".to_owned());
+    }
+    if mac.disabled {
+        notes.push("disabled — keeps every step, never starts".to_owned());
+    }
+    notes.join(" · ")
+}
+
+fn nocturne_macro_outputs(mac: &ksx_api::MacroView) -> Vec<NocturneMacroFlowOutput> {
+    let mut positions = std::collections::HashMap::<String, usize>::new();
+    let mut outputs: Vec<NocturneMacroFlowOutput> = Vec::new();
+    for (step_index, step) in mac.steps.iter().enumerate() {
+        for function in &step.hold {
+            let normalized = function.to_ascii_lowercase();
+            if let Some(index) = positions.get(&normalized).copied() {
+                outputs[index].steps.push(step_index + 1);
+            } else {
+                positions.insert(normalized, outputs.len());
+                outputs.push(NocturneMacroFlowOutput {
+                    function: function.clone(),
+                    steps: vec![step_index + 1],
+                });
+            }
+        }
+    }
+    outputs
 }
 
 /// How many owner bands a keycap can carry before the last one becomes the
@@ -4985,7 +5077,17 @@ impl NocturneDerived {
             .iter()
             .map(|slot| {
                 let mut fn_keys = std::collections::BTreeMap::new();
-                if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                let mut mapping_available = true;
+                let mut mapping_reason = String::new();
+                let mapper = match ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                    Ok(mapper) => Some(mapper),
+                    Err(refusal) => {
+                        mapping_available = false;
+                        mapping_reason = refusal.message;
+                        None
+                    }
+                };
+                if let Some(m) = mapper.as_ref() {
                     for (fn_name, keys) in &m.bindings {
                         if !keys.is_empty() {
                             fn_keys.insert(fn_name.clone(), keys.join(" · "));
@@ -4997,8 +5099,32 @@ impl NocturneDerived {
                     .map(|zone| {
                         (
                             zone.fn_name.to_owned(),
-                            crate::render_map::legend_label(zone),
+                            crate::render_map::legend_label_for_persona(&slot.persona, zone),
                         )
+                    })
+                    .collect();
+                let macro_snapshot = ksx_api::staged_macro_snapshot(slot);
+                let macros = macro_snapshot
+                    .macros
+                    .iter()
+                    .map(|mac| NocturneMacroFlow {
+                        name: mac.name.clone(),
+                        triggers: mac.triggers.clone(),
+                        outputs: nocturne_macro_outputs(mac),
+                        timeline: mac
+                            .steps
+                            .iter()
+                            .map(|step| {
+                                crate::render_map::hold_text_for_persona(&slot.persona, &step.hold)
+                            })
+                            .collect(),
+                        meta: nocturne_macro_meta(mac),
+                        disabled: mac.disabled,
+                        edit_href: format!(
+                            "/nocturne?slot={}&macro={}",
+                            slot.number,
+                            crate::render_map::urlencode_value(&mac.name)
+                        ),
                     })
                     .collect();
                 NocturnePadView {
@@ -5007,7 +5133,12 @@ impl NocturneDerived {
                     preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
+                    mapping_available,
+                    mapping_reason,
                     fn_names,
+                    macros,
+                    macro_available: macro_snapshot.available,
+                    macro_reason: macro_snapshot.reason,
                 }
             })
             .collect();
@@ -5023,7 +5154,7 @@ impl NocturneDerived {
                 .map(|zone| {
                     (
                         zone.fn_name.to_ascii_lowercase(),
-                        crate::render_map::legend_label(zone),
+                        crate::render_map::legend_label_for_persona(persona, zone),
                     )
                 })
                 .collect();
@@ -5263,6 +5394,7 @@ impl NocturneDerived {
                     .map(|m| {
                         crate::macro_editor::NocturneMacroEditor::compose(
                             m,
+                            &slot.persona,
                             mapper.as_ref(),
                             slot.number,
                             p.q.as_deref(),
@@ -5603,25 +5735,6 @@ impl NocturneDerived {
                         .iter()
                         .map(|mac| {
                             let triggered = !mac.triggers.is_empty();
-                            let mut notes = vec![match mac.steps.len() {
-                                1 => "1 step".to_owned(),
-                                n => format!("{n} steps"),
-                            }];
-                            match mac.repeat.as_str() {
-                                "while-held" => notes.push("repeats while held".to_owned()),
-                                "turbo" => notes.push(match (mac.turbo_hz, mac.gap_ms) {
-                                    (Some(hz), _) => format!("turbo {hz} Hz"),
-                                    (_, Some(gap)) => format!("turbo · {gap} ms gap"),
-                                    _ => "turbo".to_owned(),
-                                }),
-                                _ => {}
-                            }
-                            if mac.on_release == "abort" {
-                                notes.push("aborts on release".to_owned());
-                            }
-                            if mac.disabled {
-                                notes.push("disabled — keeps every step, never starts".to_owned());
-                            }
                             NocturneMacroRow {
                                 name: mac.name.clone(),
                                 fn_name: format!("macro.{}", mac.name),
@@ -5648,7 +5761,7 @@ impl NocturneDerived {
                                 } else {
                                     "n-keychip ghost".to_owned()
                                 },
-                                meta: notes.join(" · "),
+                                meta: nocturne_macro_meta(mac),
                                 cls: if triggered && !mac.disabled {
                                     "n-bind on".to_owned()
                                 } else {
@@ -5657,7 +5770,8 @@ impl NocturneDerived {
                                 slot: slot.number.to_string(),
                                 edit_href: format!(
                                     "/nocturne?slot={}&macro={}",
-                                    slot.number, mac.name
+                                    slot.number,
+                                    crate::render_map::urlencode_value(&mac.name)
                                 ),
                                 toggle_label: if mac.disabled {
                                     "Enable".to_owned()

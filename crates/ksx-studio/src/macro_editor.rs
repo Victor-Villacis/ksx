@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use ksx_api::{MacroView, MapperSlot};
 
 use crate::render_map::{
-    column_name, dur_value, duration_text, hold_cls, hold_expand, hold_expand_cls, hold_text,
-    macro_columns, macro_motion_line, macro_policy_line, macro_toml, macro_total_ms,
-    macro_trigger_line, row_title, step_cell_states, step_is_short, step_warning,
-    step_warning_long, unit_tag, unit_title, zones_for, CellState,
+    column_name, dur_value, duration_text, hold_cls, hold_expand, hold_expand_cls,
+    hold_text_for_persona, macro_columns, macro_motion_line, macro_policy_line, macro_toml,
+    macro_total_ms, macro_trigger_line, row_title_for_persona, step_cell_states, step_is_short,
+    step_warning, step_warning_long, unit_tag, unit_title, zones_for, CellState,
 };
 
 /// One column of the roll: the glyph in its header, and what it means.
@@ -313,11 +313,11 @@ impl NocturneMacroEditor {
     /// The whole editor for one macro on one staged controller.
     pub fn compose(
         mac: &MacroView,
+        persona: &str,
         slot: Option<&MapperSlot>,
         number: u8,
         q: Option<&str>,
     ) -> Self {
-        let persona = slot.map_or("xbox360", |s| s.persona.as_str());
         let columns = macro_columns(persona);
         let zones = zones_for(persona);
 
@@ -363,7 +363,7 @@ impl NocturneMacroEditor {
                         None => band_holds.push((column.band.to_owned(), 1)),
                     }
                 }
-                let name = column_name(zones, column);
+                let name = column_name(persona, zones, column);
                 let title = match &state {
                     CellState::On if approx => format!(
                         "step {} holds {name} — as written, not at full deflection ({})",
@@ -448,7 +448,7 @@ impl NocturneMacroEditor {
                     } else {
                         "n-macrow short".to_owned()
                     },
-                    hold: hold_text(slot, &step.hold),
+                    hold: hold_text_for_persona(persona, &step.hold),
                     hold_cls: format!(
                         "n-machold{}",
                         hold_cls(&step.hold).trim_start_matches("machold")
@@ -467,7 +467,7 @@ impl NocturneMacroEditor {
                     } else {
                         "n-macdur".to_owned()
                     },
-                    dur_title: row_title(slot, step, i),
+                    dur_title: row_title_for_persona(persona, step, i),
                     unit: unit_tag(step),
                     unit_act: format!("unit|{i}"),
                     unit_title: unit_title(step, i),

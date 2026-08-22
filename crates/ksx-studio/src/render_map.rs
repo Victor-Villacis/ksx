@@ -401,7 +401,7 @@ pub(crate) fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i && keys[*j].iter().any(|k| mine.iter().any(|m| m == k)))
-                .map(|(_, z)| legend_label(z))
+                .map(|(_, z)| legend_label_for_persona(&slot.persona, z))
                 .collect()
         })
         .collect()
@@ -511,6 +511,36 @@ pub(crate) fn legend_label(z: &Zone) -> String {
     format!("{}{}", legend_group(z), z.label)
 }
 
+/// Group + identity using the words printed on the requested controller.
+///
+/// Switch Pro intentionally reuses the Xbox hit geometry and DualSense reuses
+/// the DS4 geometry, but those shared shapes do not make their shoulder and
+/// system-button legends interchangeable. Keep the small vocabulary delta
+/// here instead of cloning two 25-row geometry tables and letting them drift.
+pub(crate) fn legend_label_for_persona(persona: &str, z: &Zone) -> String {
+    let lower = persona.to_ascii_lowercase();
+    let label = if lower.contains("switchpro") || lower.contains("switch pro") {
+        match z.fn_name {
+            "lt" => "ZL",
+            "lb" => "L",
+            "rb" => "R",
+            "rt" => "ZR",
+            "back" => "Capture",
+            "start" => "Plus",
+            "guide" => "Home",
+            _ => z.label,
+        }
+    } else if lower.contains("dualsense") || lower.contains("ds5") || lower.contains("ps5") {
+        match z.fn_name {
+            "back" => "Create",
+            _ => z.label,
+        }
+    } else {
+        z.label
+    };
+    format!("{}{}", legend_group(z), label)
+}
+
 /// Mirrors MapIsland.ts `identityLabel`: the control in the words the
 /// selected persona wears, with macro triggers and unknown extension
 /// functions humanized the same way.
@@ -521,7 +551,10 @@ fn identity_label(persona: &str, fn_name: &str) -> String {
     zones_for(persona)
         .iter()
         .find(|z| z.fn_name == fn_name)
-        .map_or_else(|| fn_name.to_owned(), legend_label)
+        .map_or_else(
+            || fn_name.to_owned(),
+            |z| legend_label_for_persona(persona, z),
+        )
 }
 
 /// **The keyboard shelf, for every slot** (`MapPayload::shelf`): the selected
@@ -1519,10 +1552,10 @@ fn macro_tabs(payload: &MapPayload, current: Option<&MacroView>) -> SlotValue {
 
 /// Percent-encode a macro name for the tab's href. Names come from a file and
 /// are otherwise unconstrained, so this is not optional.
-fn urlencode_value(text: &str) -> String {
+pub(crate) fn urlencode_value(text: &str) -> String {
     let mut out = String::new();
     let mut utf8 = [0u8; 4];
-    for c in text.chars().take(120) {
+    for c in text.chars() {
         for byte in c.encode_utf8(&mut utf8).bytes() {
             match byte {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -1612,7 +1645,7 @@ fn macro_groups(slot: Option<&MapperSlot>) -> SlotValue {
 /// control) — so the row holding the MOST bindings looked like the row holding
 /// two. "D-pad and LS ↘" is one control, said on two mechanisms, and "and" is
 /// the joiner [`macro_motion_line`] already uses for exactly this list.
-fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
+fn held_label(persona: &str, zones: &[Zone], hold: &[String], held: &Held) -> String {
     match held {
         Held::Diagonal {
             diag, mechanisms, ..
@@ -1630,7 +1663,7 @@ fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
             zones
                 .iter()
                 .find(|z| z.fn_name.eq_ignore_ascii_case(f))
-                .map_or_else(|| f.clone(), legend_label)
+                .map_or_else(|| f.clone(), |z| legend_label_for_persona(persona, z))
         }
     }
 }
@@ -1643,14 +1676,22 @@ fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
 /// carries. Nothing is hidden and nothing has to be decoded from lit cells
 /// twelve columns apart.
 pub(crate) fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
+    hold_text_for_persona(slot.map_or("xbox360", |s| s.persona.as_str()), hold)
+}
+
+/// What one macro step holds, using an explicit persona even when the mapper
+/// projection itself is unavailable. Macro tables can still be readable when
+/// one malformed direct binding prevents `MapperSlot` conversion; falling back
+/// to Xbox labels in that case would repaint PlayStation/Switch authoring as a
+/// different controller.
+pub(crate) fn hold_text_for_persona(persona: &str, hold: &[String]) -> String {
     if hold.is_empty() {
         return "(nothing — neutral gap)".to_owned();
     }
-    let persona = slot.map_or("xbox360", |s| s.persona.as_str());
     let zones = zones_for(persona);
     fold(hold)
         .iter()
-        .map(|h| held_label(zones, hold, h))
+        .map(|h| held_label(persona, zones, hold, h))
         .collect::<Vec<_>>()
         .join(" + ")
 }
@@ -1694,10 +1735,20 @@ pub(crate) fn hold_expand(hold: &[String]) -> String {
 /// the narrow-width drop of the span becomes a deliberate layout choice rather
 /// than the quiet loss of the only statement of what a pick wrote.
 pub(crate) fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> String {
+    row_title_for_persona(
+        slot.map_or("xbox360", |mapper| mapper.persona.as_str()),
+        step,
+        i,
+    )
+}
+
+/// Row hover copy with an explicit persona, for editors that can still read a
+/// macro after direct mapper conversion has failed.
+pub(crate) fn row_title_for_persona(persona: &str, step: &MacroStepView, i: usize) -> String {
     let base = format!(
         "step {} holds {} for {} (the engine runs it for {} ms)",
         i + 1,
-        hold_text(slot, &step.hold),
+        hold_text_for_persona(persona, &step.hold),
         duration_text(step),
         effective_ms(step)
     );
@@ -1989,7 +2040,7 @@ fn macro_cells(
             if selected == Some(i) {
                 cls.push_str(" inrow");
             }
-            let name = column_name(zones, column);
+            let name = column_name(persona, zones, column);
             let title = match &state {
                 CellState::On if approx => format!(
                     "step {} holds {name} — as written, not at full deflection ({})",
@@ -2052,7 +2103,7 @@ pub(crate) fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
 
 /// What a column is called in a sentence — "D-pad ↘ (down-right)", "LS ↓",
 /// "✕ (A)".
-pub(crate) fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
+pub(crate) fn column_name(persona: &str, zones: &[Zone], column: &MacroColumn) -> String {
     match parse_diag_token(&column.token) {
         Some((mechanism, diag)) => {
             format!("{}{} ({})", mechanism.group(), diag.glyph(), diag.words())
@@ -2064,7 +2115,7 @@ pub(crate) fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
                 .find(|z| z.fn_name.eq_ignore_ascii_case(&column.token))
                 .map_or_else(
                     || column.token.clone(),
-                    |z| format!("{} ({})", legend_label(z), z.fn_name),
+                    |z| format!("{} ({})", legend_label_for_persona(persona, z), z.fn_name),
                 ),
         },
     }
@@ -2664,11 +2715,12 @@ pub(crate) fn macro_columns(persona: &str) -> Vec<MacroColumn> {
     let mut rung: Vec<Mechanism> = Vec::new();
     for z in zones_for(persona).iter() {
         let Some(mechanism) = Mechanism::of(z.fn_name) else {
+            let label = legend_label_for_persona(persona, z);
             out.push(MacroColumn {
                 token: z.fn_name.to_owned(),
-                glyph: z.label.to_owned(),
+                glyph: label.clone(),
                 idcls: "maccolid",
-                title: format!("{} ({})", legend_label(z), z.fn_name),
+                title: format!("{label} ({})", z.fn_name),
                 band: band_of(z.fn_name),
             });
             continue;
@@ -3715,6 +3767,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn shared_geometry_still_speaks_each_controller_persona() {
+        let xbox = |function: &str| {
+            ZONE_XBOX
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .expect("Xbox zone")
+        };
+        let sony = |function: &str| {
+            ZONE_DS4
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .expect("PlayStation zone")
+        };
+
+        assert_eq!(legend_label_for_persona("switchpro", xbox("lt")), "ZL");
+        assert_eq!(legend_label_for_persona("Switch Pro", xbox("lb")), "L");
+        assert_eq!(
+            legend_label_for_persona("switchpro", xbox("back")),
+            "Capture"
+        );
+        assert_eq!(legend_label_for_persona("switchpro", xbox("start")), "Plus");
+        assert_eq!(legend_label_for_persona("switchpro", xbox("guide")), "Home");
+        assert_eq!(
+            legend_label_for_persona("dualsense", sony("back")),
+            "Create"
+        );
+        assert_eq!(legend_label_for_persona("dualsense", sony("lt")), "L2");
+        assert_eq!(
+            hold_text_for_persona(
+                "switchpro",
+                &["lt".to_owned(), "back".to_owned(), "A".to_owned()]
+            ),
+            "ZL + Capture + A"
+        );
     }
 
     /// Pins the mapper IR's slot layout: scalars by name, the two list slot

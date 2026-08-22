@@ -964,7 +964,7 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 39] = [
+        const CLIENT_ONLY_SLOTS: [&str; 40] = [
             "nMacSay",
             "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
@@ -979,6 +979,7 @@ mod tests {
             // Keyboard material and the detachable-key workbench are local
             // visual/layout preferences. They never claim daemon bindings.
             "nKeyboardTheme",
+            "nKeyboardCapProfile",
             "nKeyboardWorkbenchOpen",
             "show:nKeyboardWorkbenchOpen",
             "nKbtCarbonPressed",

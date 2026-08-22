@@ -30,17 +30,23 @@ import {
 } from "./xboxSeriesPremiumGeometry";
 import {
   DEFAULT_KEYBOARD_WORKBENCH_STATE,
+  KEYBOARD_CAP_PROFILES,
+  KEYBOARD_THEMES,
   KEYBOARD_WORKBENCH_BOUNDS,
+  KEYBOARD_WORKBENCH_LOOSE_STRIP,
+  KEYBOARD_WORKBENCH_PLAYER_PANELS,
   KEYBOARD_WORKBENCH_STORAGE_KEY,
   KEYBOARD_WORKBENCH_STORE_VERSION,
   canonicalKeyboardDeviceIdentity,
   cloneKeyboardWorkbenchState,
+  keyboardCapProfileIsValid,
   keyboardThemeIsValid,
   keyboardWorkbenchStateForDevice,
   layoutKeyboardWorkbenchKeys,
   sanitizeKeyboardWorkbenchStore,
   withKeyboardWorkbenchPosition,
   withKeyboardWorkbenchState,
+  type KeyboardCapProfileSlug,
   type KeyboardThemeSlug,
   type KeyboardWorkbenchPlacedKey,
   type KeyboardWorkbenchRecord,
@@ -552,6 +558,8 @@ const [nKbTrayCls, setNKbTrayCls] = createSignal("n-kbtray none");
 const [nKbNote, setNKbNote] = createSignal("");
 const [nKbMoreCls, setNKbMoreCls] = createSignal("n-lgdmore none");
 const [nKeyboardTheme, setNKeyboardTheme] = createSignal<KeyboardThemeSlug>("carbon-forge");
+const [nKeyboardCapProfile, setNKeyboardCapProfile] =
+  createSignal<KeyboardCapProfileSlug>("sculpted");
 const [nKeyboardWorkbenchOpen, setNKeyboardWorkbenchOpen] = createSignal(false);
 const [nKbtCarbonPressed, setNKbtCarbonPressed] = createSignal("true");
 const [nKbtLunarPressed, setNKbtLunarPressed] = createSignal("false");
@@ -1112,9 +1120,13 @@ let keyboardWorkbenchLastSelector = "";
 let keyboardWorkbenchItem: HTMLElement | null = null;
 let keyboardWorkbenchItemIdentity = "";
 let keyboardWorkbenchSelectedKey = "";
+let keyboardWorkbenchSelectedToken = "";
+let keyboardSourceItem: HTMLElement | null = null;
+let keyboardSourceGeometry: CanvasItemGeometry | null = null;
 let keyboardWorkbenchDrag: {
   pointerId: number;
   key: string;
+  token: string;
   startClientX: number;
   startClientY: number;
   startX: number;
@@ -1311,6 +1323,7 @@ function applyKeyboardWorkbenchState(
 ): void {
   keyboardWorkbenchState = cloneKeyboardWorkbenchState(state);
   setNKeyboardTheme(keyboardWorkbenchState.theme);
+  setNKeyboardCapProfile(keyboardWorkbenchState.capProfile);
   setNKeyboardWorkbenchOpen(keyboardWorkbenchState.open);
   setNKbtCarbonPressed(String(keyboardWorkbenchState.theme === "carbon-forge"));
   setNKbtLunarPressed(String(keyboardWorkbenchState.theme === "lunar-shell"));
@@ -1320,6 +1333,7 @@ function applyKeyboardWorkbenchState(
   setNKbtRetroPressed(String(keyboardWorkbenchState.theme === "retro-terminal"));
   setNKbWorkbenchPressed(String(keyboardWorkbenchState.open));
   if (persist) saveKeyboardWorkbenchPrefs();
+  syncKeyboardSourceVisibility(reveal);
   syncKeyboardSourceCaps();
   syncKeyboardWorkbenchWidget(reveal);
 }
@@ -1336,6 +1350,7 @@ function reconcileKeyboardWorkbenchSelection(
   const selected = new Set(selectedKeys);
   if (keyboardWorkbenchSelectedKey && !selected.has(keyboardWorkbenchSelectedKey)) {
     keyboardWorkbenchSelectedKey = "";
+    keyboardWorkbenchSelectedToken = "";
   }
   const changed = selectedKeys.length !== state.selectedKeys.length;
   return { state: changed ? { ...state, selectedKeys } : state, changed };
@@ -1365,6 +1380,7 @@ function reconcileKeyboardWorkbenchIdentity(): void {
   if (identity !== keyboardWorkbenchIdentity) {
     keyboardWorkbenchIdentity = identity;
     keyboardWorkbenchSelectedKey = "";
+    keyboardWorkbenchSelectedToken = "";
     const reconciled = reconcileKeyboardWorkbenchSelection(
       keyboardWorkbenchStateForDevice(keyboardWorkbenchStore, identity),
     );
@@ -1386,6 +1402,12 @@ function reconcileKeyboardWorkbenchIdentity(): void {
 function chooseKeyboardTheme(value: string): void {
   if (!keyboardThemeIsValid(value) || value === keyboardWorkbenchState.theme) return;
   applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, theme: value }, true);
+}
+
+function chooseKeyboardCapProfile(value: string): void {
+  if (!keyboardCapProfileIsValid(value) || value === keyboardWorkbenchState.capProfile) return;
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, capProfile: value }, true);
+  keyboardWorkbenchAnnounce(`${KEYBOARD_CAP_PROFILES.find((profile) => profile.slug === value)?.label ?? value} keycaps applied.`);
 }
 
 function keyboardWorkbenchAnnounce(message: string): void {
@@ -1440,6 +1462,58 @@ function keyboardWorkbenchCanvasKey(identity = keyboardWorkbenchIdentity): strin
   return "kw:" + identity;
 }
 
+function currentKeyboardSourceItem(): HTMLElement | null {
+  if (keyboardSourceItem) return keyboardSourceItem;
+  keyboardSourceItem = learnRoot?.querySelector<HTMLElement>(
+    '.n-canvas [data-instance-id="keyboard"]',
+  ) ?? null;
+  return keyboardSourceItem;
+}
+
+/** Collapse the served keyboard widget without destroying, detaching, or
+ * cloning it. Its original canvas geometry is kept aside while the compact
+ * parked stub is visible, then restored onto the exact same article. */
+function syncKeyboardSourceVisibility(reveal: boolean): void {
+  const item = currentKeyboardSourceItem();
+  const canvas = nCanvas;
+  if (!item) return;
+  const hidden = keyboardWorkbenchState.open && keyboardWorkbenchState.sourceHidden;
+  const wasHidden = item.dataset.sourceHidden === "true";
+  if (canvas && hidden && !wasHidden) {
+    keyboardSourceGeometry = canvas.getItemState(item);
+    canvasPrefs.widgets["kb"] = keyboardSourceGeometry;
+    saveCanvasPrefs();
+  }
+  item.dataset.sourceHidden = String(hidden);
+  const body = item.querySelector<HTMLElement>(".n-widget-body");
+  if (body) {
+    body.inert = hidden;
+    body.setAttribute("aria-hidden", String(hidden));
+  }
+  if (canvas && !hidden && wasHidden) {
+    const restored = keyboardSourceGeometry ?? canvasPrefs.widgets["kb"] ?? KB_HOME;
+    canvas.restoreItemState(item, restored);
+  }
+  labelCanvasMarkers();
+  if (reveal && canvas && !hidden) canvas.focusItem(item);
+}
+
+function setKeyboardSourceHidden(hidden: boolean): void {
+  if (!keyboardWorkbenchState.open || hidden === keyboardWorkbenchState.sourceHidden) return;
+  applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, sourceHidden: hidden }, true);
+  keyboardWorkbenchAnnounce(
+    hidden
+      ? "Source keyboard hidden. Its served art, mappings, and position are preserved."
+      : "Source keyboard restored to the canvas.",
+  );
+  if (!hidden) {
+    window.requestAnimationFrame(() => {
+      const source = currentKeyboardSourceItem();
+      if (source?.isConnected) nCanvas?.focusItem(source);
+    });
+  }
+}
+
 /** Read every mounted widget's geometry plus the camera back into the store
  *  — called from the engine's onCommit (its own durable boundary), from the
  *  debounced onChange trail (so a kill mid-arrangement loses at most the
@@ -1451,7 +1525,14 @@ function persistCanvas(): void {
   if (!canvas || !root) return;
   const widgets: Record<string, CanvasItemGeometry> = { ...canvasPrefs.widgets };
   const kb = root.querySelector<HTMLElement>('.n-canvas [data-instance-id="keyboard"]');
-  if (kb && kb.dataset.canvasX !== undefined) widgets["kb"] = canvas.getItemState(kb);
+  if (kb && kb.dataset.canvasX !== undefined) {
+    keyboardSourceItem = kb;
+    const measured = canvas.getItemState(kb);
+    if (kb.dataset.sourceHidden !== "true") keyboardSourceGeometry = measured;
+    widgets["kb"] = keyboardSourceGeometry ?? measured;
+  } else if (keyboardSourceGeometry) {
+    widgets["kb"] = keyboardSourceGeometry;
+  }
   if (keyboardWorkbenchItem?.dataset.canvasX !== undefined) {
     widgets[keyboardWorkbenchCanvasKey(keyboardWorkbenchItemIdentity)] =
       canvas.getItemState(keyboardWorkbenchItem);
@@ -1697,6 +1778,41 @@ function arrangeCanvas(): void {
 function keyboardWorkbenchRecords(): KeyboardWorkbenchRecord[] {
   const v = lastBindView;
   if (!v) return [];
+  type SlotBinding = { playerLabel: string; controls: Set<string> };
+  const byKey = new Map<string, Map<number, SlotBinding>>();
+  const playerBindings = (slots: Map<number, SlotBinding>) =>
+    [...slots.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([slot, binding]) => ({
+        slot,
+        playerLabel: binding.playerLabel,
+        controls: [...binding.controls].sort(),
+      }));
+  const playerLabels = new Map<number, string>();
+  for (const pad of v.pads) {
+    playerLabels.set(pad.slot, pad.title || `Player ${pad.slot}`);
+    for (const [fnName, joinedKeys] of Object.entries(pad.fn_keys)) {
+      const control = pad.fn_names[fnName] || fnName;
+      for (const candidate of joinedKeys.split(/\s*·\s*/u)) {
+        const key = candidate.trim();
+        if (!key) continue;
+        let slots = byKey.get(key);
+        if (!slots) {
+          slots = new Map();
+          byKey.set(key, slots);
+        }
+        let binding = slots.get(pad.slot);
+        if (!binding) {
+          binding = {
+            playerLabel: pad.title || `Player ${pad.slot}`,
+            controls: new Set(),
+          };
+          slots.set(pad.slot, binding);
+        }
+        binding.controls.add(control);
+      }
+    }
+  }
   const rows = [
     v.kb_row1,
     v.kb_row2,
@@ -1712,12 +1828,49 @@ function keyboardWorkbenchRecords(): KeyboardWorkbenchRecord[] {
     const key = cell.key.trim();
     if (!key || seen.has(key) || cell.cls.split(/\s+/).includes("ghost")) continue;
     seen.add(key);
+    const slots = byKey.get(key) ?? new Map<number, SlotBinding>();
+    // The served ownership bands also include macro triggers. For one to
+    // four owners they prove membership even when fn_keys has no control
+    // label for it; retain that truth and leave the label generic.
+    for (const token of cell.cls.split(/\s+/)) {
+      const owner = token.match(/^b[abcd](\d{1,2})$/);
+      const slot = owner ? Number(owner[1]) : 0;
+      if (slot < 1 || slot > 16 || slots.has(slot)) continue;
+      slots.set(slot, {
+        playerLabel: playerLabels.get(slot) ?? `Player ${slot}`,
+        controls: new Set(),
+      });
+    }
     records.push({
       key,
       cls: cell.cls,
       cap: cell.cap,
       short: cell.short,
       aria: cell.aria || cell.title || key,
+      playerBindings: playerBindings(slots),
+    });
+  }
+  // kb_tray is authored for the selected player. A valid key can therefore
+  // be absent from every served board cell while still being mapped on a
+  // different P1-P4 controller (media keys are the common example). Preserve
+  // those proven mappings as generic wide caps instead of silently dropping
+  // them from “Build 4 players”.
+  for (const [key, slots] of [...byKey.entries()]
+    .filter(([key]) => !seen.has(key))
+    .sort(([a], [b]) => a.localeCompare(b))) {
+    const bindings = playerBindings(slots);
+    const controls = [...new Set(bindings.flatMap((binding) => binding.controls))];
+    const owners = bindings.map((binding) => {
+      const drives = binding.controls.length > 0 ? ` (${binding.controls.join(" · ")})` : "";
+      return `P${binding.slot}${drives}`;
+    }).join(", ");
+    records.push({
+      key,
+      cls: `n-key bound offboard ${key.length > 12 ? "u3" : "u2"}`,
+      cap: key,
+      short: controls[0] ?? "Mapped",
+      aria: `${key} — mapped on ${owners}`,
+      playerBindings: bindings,
     });
   }
   return records;
@@ -1757,12 +1910,13 @@ function keyboardWorkbenchPlacedKeys(): KeyboardWorkbenchPlacedKey[] {
   return layoutKeyboardWorkbenchKeys(keyboardWorkbenchRecords(), keyboardWorkbenchState);
 }
 
-function keyboardWorkbenchSetSelected(key: string): void {
+function keyboardWorkbenchSetSelected(key: string, token = key ? `k:${key}` : ""): void {
   keyboardWorkbenchSelectedKey = key;
+  keyboardWorkbenchSelectedToken = token;
   const item = keyboardWorkbenchItem;
   if (!item) return;
   for (const button of Array.from(item.querySelectorAll<HTMLElement>(".n-deck-key"))) {
-    const selected = button.dataset.keylabKey === key;
+    const selected = token !== "" && button.dataset.keylabToken === token;
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-pressed", String(selected));
   }
@@ -1776,24 +1930,61 @@ function syncKeyboardWorkbenchToolbar(): void {
   for (const button of Array.from(item.querySelectorAll<HTMLButtonElement>("button[data-mode]"))) {
     const mode = button.dataset.mode ?? "";
     const pressed = mode === keyboardWorkbenchState.layoutMode ||
-      mode === keyboardWorkbenchState.renderMode;
+      mode === keyboardWorkbenchState.renderMode ||
+      mode === keyboardWorkbenchState.capProfile;
     button.setAttribute("aria-pressed", String(pressed));
   }
+  for (const button of Array.from(
+    item.querySelectorAll<HTMLButtonElement>("button[data-keyboard-theme]"),
+  )) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.keyboardTheme === keyboardWorkbenchState.theme),
+    );
+  }
   const count = keyboardWorkbenchState.selectedKeys.length;
+  const placed = keyboardWorkbenchPlacedKeys();
   const status = item.querySelector<HTMLElement>(".n-keylab-status");
   if (status) {
     status.textContent = count === 0
-      ? "Pull a key from the keyboard, or start with the selected player's mapped keys."
-      : `${count} ${count === 1 ? "key" : "keys"} · ${
+      ? "Choose caps on the source keyboard, add this player, or build all four player panels."
+      : `${count} physical ${count === 1 ? "key" : "keys"}${
+          keyboardWorkbenchState.layoutMode === "players"
+            ? ` · ${placed.length} linked panel ${placed.length === 1 ? "control" : "controls"}`
+            : ""
+        } · ${
         keyboardWorkbenchState.layoutMode === "free"
           ? "custom layout"
+          : keyboardWorkbenchState.layoutMode === "players"
+          ? "four-player view"
           : keyboardWorkbenchState.layoutMode
-      } · ${keyboardWorkbenchState.renderMode === "arcade" ? "arcade buttons" : "keycaps"}`;
+      } · ${
+        keyboardWorkbenchState.renderMode === "arcade"
+          ? "arcade panel"
+          : `${KEYBOARD_CAP_PROFILES.find((profile) => profile.slug === keyboardWorkbenchState.capProfile)?.label ?? "Mechanical"} keycaps`
+      }`;
   }
   const deck = item.querySelector<HTMLElement>(".n-keylab-deck");
   if (deck) {
     deck.dataset.renderMode = keyboardWorkbenchState.renderMode;
+    deck.dataset.layoutMode = keyboardWorkbenchState.layoutMode;
+    deck.dataset.keycapProfile = keyboardWorkbenchState.capProfile;
     deck.classList.toggle("empty", count === 0);
+  }
+  item.dataset.keyboardTheme = keyboardWorkbenchState.theme;
+  item.dataset.keycapProfile = keyboardWorkbenchState.capProfile;
+  item.dataset.layoutMode = keyboardWorkbenchState.layoutMode;
+  item.dataset.sourceHidden = String(keyboardWorkbenchState.sourceHidden);
+  const profileGroup = item.querySelector<HTMLElement>(".n-keylab-profile-group");
+  if (profileGroup) profileGroup.hidden = keyboardWorkbenchState.renderMode === "arcade";
+  const source = item.querySelector<HTMLButtonElement>('[data-nx="keylab-source-toggle"]');
+  if (source) {
+    source.textContent = keyboardWorkbenchState.sourceHidden ? "Show source" : "Hide source";
+    // This is an action whose label changes, not a persistent pressed mode.
+    // aria-expanded carries the source body's actual visibility without the
+    // contradictory “Show source, pressed” announcement.
+    source.removeAttribute("aria-pressed");
+    source.setAttribute("aria-expanded", String(!keyboardWorkbenchState.sourceHidden));
   }
   const clear = item.querySelector<HTMLButtonElement>('[data-nx="keylab-clear"]');
   if (clear) clear.disabled = count === 0;
@@ -1803,8 +1994,29 @@ function syncKeyboardWorkbenchToolbar(): void {
       record.cls.split(/\s+/).includes("bound")
     );
   }
+  const allPlayers = item.querySelector<HTMLButtonElement>('[data-nx="keylab-build-players"]');
+  if (allPlayers) {
+    allPlayers.disabled = !keyboardWorkbenchRecords().some((record) =>
+      (record.playerBindings ?? []).some((binding) => binding.slot >= 1 && binding.slot <= 4)
+    );
+  }
   const returnButton = item.querySelector<HTMLButtonElement>('[data-nx="keylab-return"]');
   if (returnButton) returnButton.disabled = keyboardWorkbenchSelectedKey === "";
+
+  const padBySlot = new Map((lastBindView?.pads ?? []).map((pad) => [pad.slot, pad]));
+  for (const panel of Array.from(item.querySelectorAll<HTMLElement>(".n-keylab-player-panel"))) {
+    const slot = Number(panel.dataset.playerSlot ?? "");
+    const pad = padBySlot.get(slot);
+    const controls = placed.filter((record) => record.playerSlot === slot).length;
+    panel.dataset.populated = String(controls > 0);
+    const name = panel.querySelector<HTMLElement>(".n-keylab-player-name");
+    const tally = panel.querySelector<HTMLElement>(".n-keylab-player-count");
+    if (name) name.textContent = pad?.title || "No staged player";
+    if (tally) tally.textContent = `${controls} ${controls === 1 ? "control" : "controls"}`;
+  }
+  const looseCount = placed.filter((record) => record.playerSlot === null).length;
+  const loose = item.querySelector<HTMLElement>(".n-keylab-loose-panel");
+  if (loose) loose.dataset.populated = String(looseCount > 0);
 }
 
 function deckKeyModifier(key: string): boolean {
@@ -1812,11 +2024,22 @@ function deckKeyModifier(key: string): boolean {
     new Set(["Tab", "CapsLock", "Enter", "Backspace", "Escape", "Space"]).has(key);
 }
 
-function keyboardWorkbenchCloneClass(sourceClass: string): string {
+function keyboardWorkbenchCloneClass(record: KeyboardWorkbenchPlacedKey): string {
+  const sourceClass = record.cls;
   const semantic = sourceClass.split(/\s+/).filter((cls) =>
     cls === "n-key" || cls === "bound" || cls === "shared" || cls === "bstack" ||
     /^(?:bn|bcount|ba|bb|bc|bd)\d+$/.test(cls)
   );
+  if (record.playerSlot !== null) {
+    const bound = semantic.indexOf("bound");
+    if (bound >= 0) semantic.splice(bound, 1);
+    const shared = semantic.indexOf("shared");
+    if (shared >= 0) semantic.splice(shared, 1);
+    semantic.push("bound", `np${record.playerSlot}`, "n-player-token");
+    const binding = record.playerBindings?.find((item) => item.slot === record.playerSlot);
+    if ((binding?.controls.length ?? 0) > 1) semantic.push("shared");
+  }
+  if (record.linkedSlots.length > 1) semantic.push("multi-owner");
   if (!semantic.includes("n-key")) semantic.unshift("n-key");
   semantic.push("n-deck-key");
   return [...new Set(semantic)].join(" ");
@@ -1829,41 +2052,69 @@ function renderKeyboardWorkbenchKeys(): void {
   const placed = keyboardWorkbenchPlacedKeys();
   const existing = new Map<string, HTMLButtonElement>();
   for (const button of Array.from(deck.querySelectorAll<HTMLButtonElement>(".n-deck-key"))) {
-    existing.set(button.dataset.keylabKey ?? "", button);
+    existing.set(button.dataset.keylabToken ?? "", button);
   }
   for (const record of placed) {
-    let button = existing.get(record.key);
+    let button = existing.get(record.instanceId);
     if (!button) {
       button = document.createElement("button");
       button.type = "button";
       button.dataset.keylabKey = record.key;
+      button.dataset.keylabToken = record.instanceId;
       button.dataset.key = record.key;
       const cap = document.createElement("span");
       cap.className = "n-key-cap";
       const short = document.createElement("span");
       short.className = "n-key-short";
-      button.append(cap, short);
+      const owners = document.createElement("span");
+      owners.className = "n-keylab-owners";
+      owners.setAttribute("aria-hidden", "true");
+      button.append(cap, short, owners);
     }
-    existing.delete(record.key);
-    button.className = keyboardWorkbenchCloneClass(record.cls);
+    existing.delete(record.instanceId);
+    button.dataset.keylabKey = record.key;
+    button.dataset.keylabToken = record.instanceId;
+    button.dataset.key = record.key;
+    button.className = keyboardWorkbenchCloneClass(record);
     button.classList.toggle("modifier", deckKeyModifier(record.key));
     button.classList.toggle("wide", record.width >= 82);
     button.classList.toggle("wider", record.width >= 120);
     button.classList.toggle("space", record.key === "Space");
-    button.classList.toggle("selected", record.key === keyboardWorkbenchSelectedKey);
+    button.classList.toggle("selected", record.instanceId === keyboardWorkbenchSelectedToken);
+    if (record.playerSlot === null) delete button.dataset.playerSlot;
+    else button.dataset.playerSlot = String(record.playerSlot);
+    button.dataset.ownerSlots = record.linkedSlots.join(",");
+    button.dataset.ownerCount = String(record.linkedSlots.length);
+    button.dataset.linked = String(record.linkedSlots.length > 1);
     button.dataset.keyWidth = String(record.width);
     button.dataset.keyHeight = String(record.height);
     button.style.left = `${(record.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
     button.style.top = `${(record.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
     button.style.width = `${(record.width / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
     button.style.height = `${(record.height / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
-    button.title = `${record.aria} · drag or use arrow keys to arrange · Delete returns it`;
+    const linked = record.linkedSlots.length > 1
+      ? ` · one physical key linked to ${record.linkedSlots.map((slot) => `P${slot}`).join(", ")}`
+      : "";
+    const player = record.playerSlot === null
+      ? ""
+      : ` · P${record.playerSlot}${record.controlLabel ? `: ${record.controlLabel}` : ": mapped input"}`;
+    button.title = `${record.aria}${player}${linked} · drag or use arrow keys to arrange · Delete returns every linked view of this physical key`;
     button.setAttribute("aria-label", button.title);
-    button.setAttribute("aria-pressed", String(record.key === keyboardWorkbenchSelectedKey));
+    button.setAttribute("aria-pressed", String(record.instanceId === keyboardWorkbenchSelectedToken));
     const cap = button.querySelector<HTMLElement>(".n-key-cap");
     const short = button.querySelector<HTMLElement>(".n-key-short");
     if (cap) cap.textContent = record.cap;
-    if (short) short.textContent = record.short;
+    if (short) short.textContent = record.playerSlot === null ? record.short : record.controlLabel;
+    const owners = button.querySelector<HTMLElement>(".n-keylab-owners");
+    if (owners) {
+      owners.replaceChildren(...record.linkedSlots.map((slot) => {
+        const badge = document.createElement("span");
+        badge.className = `n-keylab-owner np${slot}`;
+        badge.dataset.ownerSlot = String(slot);
+        badge.textContent = `P${slot}`;
+        return badge;
+      }));
+    }
     deck.append(button);
   }
   for (const button of existing.values()) button.remove();
@@ -1890,6 +2141,22 @@ function makeKeyboardWorkbenchButton(
   return button;
 }
 
+function makeKeyboardWorkbenchGroup(
+  label: string,
+  className: string,
+  buttons: readonly HTMLButtonElement[],
+): HTMLElement {
+  const group = document.createElement("div");
+  group.className = `n-keylab-toolgroup ${className}`;
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", label);
+  const heading = document.createElement("span");
+  heading.className = "n-keylab-tool-label";
+  heading.textContent = label;
+  group.append(heading, ...buttons);
+  return group;
+}
+
 function createKeyboardWorkbenchItem(): HTMLElement {
   const content = document.createElement("div");
   content.className = "n-keylab";
@@ -1903,7 +2170,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   kicker.textContent = "Key Workbench";
   const sub = document.createElement("span");
   sub.className = "n-keylab-sub";
-  sub.textContent = "One physical key · one linked control token";
+  sub.textContent = "One physical switch · linked views across player panels";
   heading.append(kicker, sub);
   const close = makeKeyboardWorkbenchButton(
     "Close",
@@ -1911,33 +2178,113 @@ function createKeyboardWorkbenchItem(): HTMLElement {
     "Return to the full keyboard without discarding this layout",
   );
   close.classList.add("quiet");
-  head.append(heading, close);
+  const sourceToggle = makeKeyboardWorkbenchButton(
+    "Hide source",
+    "keylab-source-toggle",
+    "Temporarily hide the source keyboard widget; its art, mappings, and canvas position stay intact",
+  );
+  sourceToggle.setAttribute("aria-controls", "keyboard-source-widget");
+  sourceToggle.setAttribute("aria-expanded", "true");
+  sourceToggle.setAttribute("aria-pressed", "false");
+  const headActions = document.createElement("div");
+  headActions.className = "n-keylab-head-actions";
+  headActions.append(sourceToggle, close);
+  head.append(heading, headActions);
 
   const tools = document.createElement("div");
   tools.className = "n-keylab-tools";
-  tools.setAttribute("role", "group");
-  tools.setAttribute("aria-label", "Key Workbench tools");
+  tools.setAttribute("aria-label", "Control Surface Builder settings");
+  const profileButtons = KEYBOARD_CAP_PROFILES.map((profile) => {
+    const button = makeKeyboardWorkbenchButton(
+      profile.label,
+      "keylab-cap-profile",
+      profile.description,
+      profile.slug,
+    );
+    button.dataset.keycapProfile = profile.slug;
+    const preview = document.createElement("span");
+    preview.className = "n-keylab-profile-preview";
+    preview.setAttribute("aria-hidden", "true");
+    button.prepend(preview);
+    return button;
+  });
+  const finishButtons = KEYBOARD_THEMES.map((theme) => {
+    const button = makeKeyboardWorkbenchButton(
+      theme.label,
+      "kb-theme",
+      theme.description,
+    );
+    button.classList.add("n-keylab-finish");
+    button.dataset.keyboardTheme = theme.slug;
+    button.setAttribute("aria-pressed", "false");
+    const swatch = document.createElement("span");
+    swatch.className = "n-keylab-finish-swatch";
+    swatch.style.background = theme.swatch;
+    swatch.setAttribute("aria-hidden", "true");
+    button.prepend(swatch);
+    return button;
+  });
   tools.append(
-    makeKeyboardWorkbenchButton(
-      "Pull mapped",
-      "keylab-pull-mapped",
-      "Pull every key mapped to the selected controller",
-    ),
-    makeKeyboardWorkbenchButton("Compact", "keylab-layout-compact", "Pack selected keys", "compact"),
-    makeKeyboardWorkbenchButton(
-      "Leverless",
-      "keylab-layout-leverless",
-      "Arrange movement and action clusters in an original generic leverless layout",
-      "leverless",
-    ),
-    makeKeyboardWorkbenchButton("Keycaps", "keylab-render-keycap", "Render mechanical keycaps", "keycap"),
-    makeKeyboardWorkbenchButton("Arcade", "keylab-render-arcade", "Render the same keys as arcade buttons", "arcade"),
-    makeKeyboardWorkbenchButton("Return key", "keylab-return", "Return the selected token to the keyboard"),
-    makeKeyboardWorkbenchButton("Return all", "keylab-clear", "Return every pulled key to the keyboard"),
+    makeKeyboardWorkbenchGroup("Add keys", "n-keylab-add-group", [
+      makeKeyboardWorkbenchButton(
+        "Add this player",
+        "keylab-pull-mapped",
+        "Add every key mapped to the currently selected player without removing keys already on the board",
+      ),
+      makeKeyboardWorkbenchButton(
+        "Build 4 players",
+        "keylab-build-players",
+        "Add every proven P1-P4 key and arrange linked views in four player panels",
+      ),
+    ]),
+    makeKeyboardWorkbenchGroup("Surface", "n-keylab-surface-group", [
+      makeKeyboardWorkbenchButton(
+        "▣ Mechanical keycaps",
+        "keylab-render-keycap",
+        "Use physical keycap silhouettes",
+        "keycap",
+      ),
+      makeKeyboardWorkbenchButton(
+        "● Arcade buttons",
+        "keylab-render-arcade",
+        "Preview the same physical keys as a generic arcade panel",
+        "arcade",
+      ),
+    ]),
+    makeKeyboardWorkbenchGroup("Arrange", "n-keylab-layout-group", [
+      makeKeyboardWorkbenchButton("Compact", "keylab-layout-compact", "Pack selected physical keys", "compact"),
+      makeKeyboardWorkbenchButton(
+        "Leverless",
+        "keylab-layout-leverless",
+        "Arrange movement and action clusters in an original generic leverless layout",
+        "leverless",
+      ),
+      makeKeyboardWorkbenchButton(
+        "4 player panels",
+        "keylab-layout-players",
+        "Show a linked visual mirror in every P1-P4 panel that uses the physical key",
+        "players",
+      ),
+    ]),
+    makeKeyboardWorkbenchGroup("Keycap shape", "n-keylab-profile-group", profileButtons),
+    makeKeyboardWorkbenchGroup("Finish", "n-keylab-finish-group", finishButtons),
+    makeKeyboardWorkbenchGroup("Panel", "n-keylab-remove-group", [
+      makeKeyboardWorkbenchButton(
+        "Remove selected",
+        "keylab-return",
+        "Remove the selected physical key and every linked panel view; mappings stay unchanged",
+      ),
+      makeKeyboardWorkbenchButton(
+        "Clear panel",
+        "keylab-clear",
+        "Return every visual key to the source keyboard; mappings stay unchanged",
+      ),
+    ]),
   );
 
   const status = document.createElement("p");
   status.className = "n-keylab-status";
+  status.id = "key-workbench-status";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
@@ -1945,6 +2292,45 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   deck.className = "n-keylab-deck empty";
   deck.setAttribute("role", "group");
   deck.setAttribute("aria-label", "Arrangeable pulled keys");
+  deck.setAttribute("aria-describedby", "key-workbench-status key-workbench-note");
+  const zones = document.createElement("div");
+  zones.className = "n-keylab-player-zones";
+  zones.setAttribute("aria-hidden", "true");
+  for (const panel of KEYBOARD_WORKBENCH_PLAYER_PANELS) {
+    const zone = document.createElement("section");
+    zone.className = `n-keylab-player-panel np${panel.slot}`;
+    zone.dataset.playerSlot = String(panel.slot);
+    zone.style.left = `${(panel.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+    zone.style.top = `${(panel.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+    zone.style.width = `${(panel.width / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+    zone.style.height = `${(panel.height / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+    const zoneHead = document.createElement("div");
+    zoneHead.className = "n-keylab-player-head";
+    const badge = document.createElement("strong");
+    badge.className = "n-keylab-player-badge";
+    badge.textContent = panel.label;
+    const name = document.createElement("span");
+    name.className = "n-keylab-player-name";
+    name.textContent = "No staged player";
+    const tally = document.createElement("span");
+    tally.className = "n-keylab-player-count";
+    tally.textContent = "0 controls";
+    zoneHead.append(badge, name, tally);
+    const empty = document.createElement("span");
+    empty.className = "n-keylab-player-empty";
+    empty.textContent = "No mapped keys in this panel";
+    zone.append(zoneHead, empty);
+    zones.append(zone);
+  }
+  const loose = document.createElement("section");
+  loose.className = "n-keylab-loose-panel";
+  loose.style.left = `${(KEYBOARD_WORKBENCH_LOOSE_STRIP.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+  loose.style.top = `${(KEYBOARD_WORKBENCH_LOOSE_STRIP.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+  loose.style.width = `${(KEYBOARD_WORKBENCH_LOOSE_STRIP.width / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
+  loose.style.height = `${(KEYBOARD_WORKBENCH_LOOSE_STRIP.height / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
+  loose.textContent = "Loose keys · no proven P1-P4 owner";
+  zones.append(loose);
+  deck.append(zones);
   deck.addEventListener("pointerdown", keyboardWorkbenchPointerDown);
   deck.addEventListener("pointermove", keyboardWorkbenchPointerMove);
   deck.addEventListener("pointerup", keyboardWorkbenchPointerEnd);
@@ -1960,15 +2346,19 @@ function createKeyboardWorkbenchItem(): HTMLElement {
 
   const note = document.createElement("p");
   note.className = "n-keylab-note";
+  note.id = "key-workbench-note";
   note.textContent =
-    "Drag to place · arrows nudge · Shift+arrow moves farther · Delete returns a key · double-click also returns it";
-  content.append(head, tools, status, deck, note);
+    "This panel previews existing mappings; arranging or changing a surface never changes what a key does. Drag to place · arrows nudge · Delete removes the physical key from this panel.";
+  const deckScroll = document.createElement("div");
+  deckScroll.className = "n-keylab-deck-scroll";
+  deckScroll.append(deck);
+  content.append(head, tools, status, deckScroll, note);
 
   const item = createCanvasItem({
     instanceId: "key-workbench",
     displayName: "Key Workbench",
-    preferredWidth: 940,
-    minHeight: 430,
+    preferredWidth: 1240,
+    minHeight: 920,
     content,
   });
   item.classList.add("n-widget", "n-widget-keylab");
@@ -1995,13 +2385,13 @@ function keyboardWorkbenchHome(): CanvasItemGeometry {
     return {
       x: state.x + 20,
       y: state.y + state.height * state.manualScale + 48,
-      width: 940,
-      height: 430,
+      width: 1240,
+      height: 920,
       z: state.z + 1,
       manualScale: 1,
     };
   }
-  return { x: 110, y: 950, width: 940, height: 430, z: 2, manualScale: 1 };
+  return { x: 110, y: 950, width: 1240, height: 920, z: 2, manualScale: 1 };
 }
 
 function syncKeyboardWorkbenchWidget(reveal: boolean): void {
@@ -2038,6 +2428,8 @@ function syncKeyboardWorkbenchWidget(reveal: boolean): void {
     canvas.mountItem(keyboardWorkbenchItem, restored, { focus: false });
   }
   keyboardWorkbenchItem.dataset.keyboardTheme = keyboardWorkbenchState.theme;
+  keyboardWorkbenchItem.dataset.keycapProfile = keyboardWorkbenchState.capProfile;
+  keyboardWorkbenchItem.dataset.layoutMode = keyboardWorkbenchState.layoutMode;
   const content = keyboardWorkbenchItem.querySelector<HTMLElement>(".n-keylab");
   if (content) {
     for (const cls of Array.from(content.classList)) {
@@ -2052,8 +2444,8 @@ function syncKeyboardWorkbenchWidget(reveal: boolean): void {
 }
 
 function toggleKeyboardWorkbenchKey(key: string, pulled?: boolean): void {
-  const known = keyboardWorkbenchRecords().some((record) => record.key === key);
-  if (!known) return;
+  const record = keyboardWorkbenchRecords().find((candidate) => candidate.key === key);
+  if (!record) return;
   const selected = new Set(keyboardWorkbenchState.selectedKeys);
   const shouldPull = pulled ?? !selected.has(key);
   const deckKeys = Array.from(
@@ -2067,6 +2459,12 @@ function toggleKeyboardWorkbenchKey(key: string, pulled?: boolean): void {
   if (shouldPull) selected.add(key);
   else selected.delete(key);
   keyboardWorkbenchSelectedKey = shouldPull ? key : "";
+  const playerSlot = record.playerBindings?.find((binding) => binding.slot <= 4)?.slot;
+  keyboardWorkbenchSelectedToken = shouldPull
+    ? keyboardWorkbenchState.layoutMode === "players" && playerSlot
+      ? `p:${playerSlot}:${key}`
+      : `k:${key}`
+    : "";
   applyKeyboardWorkbenchState(
     { ...keyboardWorkbenchState, selectedKeys: [...selected] },
     true,
@@ -2081,7 +2479,10 @@ function toggleKeyboardWorkbenchKey(key: string, pulled?: boolean): void {
       const remaining = Array.from(item.querySelectorAll<HTMLElement>(".n-deck-key"));
       const next = remaining[Math.min(focusFallbackIndex, remaining.length - 1)];
       if (next) {
-        keyboardWorkbenchSetSelected(next.dataset.keylabKey ?? "");
+        keyboardWorkbenchSetSelected(
+          next.dataset.keylabKey ?? "",
+          next.dataset.keylabToken ?? "",
+        );
         next.focus({ preventScroll: true });
       } else {
         keyboardWorkbenchSetSelected("");
@@ -2097,20 +2498,57 @@ function pullMappedKeyboardWorkbenchKeys(): void {
     .filter((record) => record.cls.split(/\s+/).includes("bound"))
     .map((record) => record.key);
   if (mapped.length === 0) return;
+  const selected = new Set(keyboardWorkbenchState.selectedKeys);
+  for (const key of mapped) selected.add(key);
   keyboardWorkbenchSelectedKey = mapped[0];
+  keyboardWorkbenchSelectedToken = `k:${mapped[0]}`;
   applyKeyboardWorkbenchState(
-    { ...keyboardWorkbenchState, selectedKeys: mapped, layoutMode: "compact" },
+    { ...keyboardWorkbenchState, selectedKeys: [...selected] },
     true,
   );
   keyboardWorkbenchAnnounce(
-    `${mapped.length} mapped ${mapped.length === 1 ? "key" : "keys"} moved to the Key Workbench.`,
+    `${mapped.length} mapped ${mapped.length === 1 ? "key" : "keys"} for the selected player added. Existing panel keys stayed in place.`,
   );
 }
 
-function setKeyboardWorkbenchLayout(mode: "compact" | "leverless"): void {
+function buildFourPlayerKeyboardWorkbench(): void {
+  const records = keyboardWorkbenchRecords();
+  const mapped = records.filter((record) =>
+    (record.playerBindings ?? []).some((binding) => binding.slot >= 1 && binding.slot <= 4)
+  );
+  if (mapped.length === 0) return;
+  const selected = new Set(keyboardWorkbenchState.selectedKeys);
+  for (const record of mapped) selected.add(record.key);
+  const first = mapped[0];
+  const slot = first.playerBindings?.find((binding) => binding.slot <= 4)?.slot ?? 1;
+  keyboardWorkbenchSelectedKey = first.key;
+  keyboardWorkbenchSelectedToken = `p:${slot}:${first.key}`;
+  applyKeyboardWorkbenchState(
+    { ...keyboardWorkbenchState, selectedKeys: [...selected], layoutMode: "players" },
+    true,
+  );
+  keyboardWorkbenchAnnounce(
+    `${mapped.length} physical ${mapped.length === 1 ? "key" : "keys"} arranged across four player panels. Shared keys are linked visual mirrors of one switch.`,
+  );
+}
+
+function setKeyboardWorkbenchLayout(mode: "compact" | "leverless" | "players"): void {
+  if (keyboardWorkbenchSelectedKey) {
+    const record = keyboardWorkbenchRecords().find(
+      (candidate) => candidate.key === keyboardWorkbenchSelectedKey,
+    );
+    const slot = record?.playerBindings?.find((binding) => binding.slot <= 4)?.slot;
+    keyboardWorkbenchSelectedToken = mode === "players" && slot
+      ? `p:${slot}:${keyboardWorkbenchSelectedKey}`
+      : `k:${keyboardWorkbenchSelectedKey}`;
+  }
   applyKeyboardWorkbenchState({ ...keyboardWorkbenchState, layoutMode: mode }, true);
   keyboardWorkbenchAnnounce(
-    mode === "leverless" ? "Leverless arrangement applied." : "Compact arrangement applied.",
+    mode === "leverless"
+      ? "Leverless arrangement applied."
+      : mode === "players"
+      ? "Four-player panel arrangement applied. Shared physical keys appear as linked views."
+      : "Compact arrangement applied.",
   );
 }
 
@@ -2121,9 +2559,14 @@ function setKeyboardWorkbenchRenderMode(mode: KeyboardWorkbenchRenderMode): void
   );
 }
 
+function setKeyboardWorkbenchCapProfile(profile: string): void {
+  chooseKeyboardCapProfile(profile);
+}
+
 function clearKeyboardWorkbenchKeys(): void {
   if (keyboardWorkbenchState.selectedKeys.length === 0) return;
   keyboardWorkbenchSelectedKey = "";
+  keyboardWorkbenchSelectedToken = "";
   applyKeyboardWorkbenchState(
     { ...keyboardWorkbenchState, selectedKeys: [], positions: {}, layoutMode: "compact" },
     true,
@@ -2135,15 +2578,37 @@ function returnSelectedKeyboardWorkbenchKey(): void {
   if (keyboardWorkbenchSelectedKey) toggleKeyboardWorkbenchKey(keyboardWorkbenchSelectedKey, false);
 }
 
-function nudgeKeyboardWorkbenchKey(key: string, dx: number, dy: number): void {
-  const current = keyboardWorkbenchPlacedKeys().find((record) => record.key === key);
+function keyboardWorkbenchMoveState(
+  token: string,
+  position: { x: number; y: number },
+): KeyboardWorkbenchState {
+  const players = keyboardWorkbenchState.layoutMode === "players";
+  let state = keyboardWorkbenchState;
+  if (!players && state.layoutMode !== "free") {
+    const positions = { ...state.positions };
+    for (const record of keyboardWorkbenchPlacedKeys()) {
+      positions[record.instanceId] = { x: record.x, y: record.y };
+    }
+    state = { ...state, positions, layoutMode: "free" };
+  }
+  return withKeyboardWorkbenchPosition(
+    { ...state, layoutMode: players ? "players" : "free" },
+    token,
+    position,
+  );
+}
+
+function nudgeKeyboardWorkbenchKey(
+  key: string,
+  token: string,
+  dx: number,
+  dy: number,
+): void {
+  const current = keyboardWorkbenchPlacedKeys().find((record) => record.instanceId === token);
   if (!current) return;
   keyboardWorkbenchSelectedKey = key;
-  const moved = withKeyboardWorkbenchPosition(
-    { ...keyboardWorkbenchState, layoutMode: "free" },
-    key,
-    { x: current.x + dx, y: current.y + dy },
-  );
+  keyboardWorkbenchSelectedToken = token;
+  const moved = keyboardWorkbenchMoveState(token, { x: current.x + dx, y: current.y + dy });
   applyKeyboardWorkbenchState(moved, true);
 }
 
@@ -2152,19 +2617,21 @@ function keyboardWorkbenchPointerDown(event: PointerEvent): void {
   const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(".n-deck-key");
   const deck = button?.closest<HTMLElement>(".n-keylab-deck");
   const key = button?.dataset.keylabKey ?? "";
-  if (!button || !deck || !key) return;
-  const placed = keyboardWorkbenchPlacedKeys().find((record) => record.key === key);
+  const token = button?.dataset.keylabToken ?? "";
+  if (!button || !deck || !key || !token) return;
+  const placed = keyboardWorkbenchPlacedKeys().find((record) => record.instanceId === token);
   const rect = deck.getBoundingClientRect();
   if (!placed || rect.width <= 0 || rect.height <= 0) return;
   event.preventDefault();
   event.stopPropagation();
-  keyboardWorkbenchSetSelected(key);
+  keyboardWorkbenchSetSelected(key, token);
   button.focus({ preventScroll: true });
   button.classList.add("dragging");
   button.setPointerCapture(event.pointerId);
   keyboardWorkbenchDrag = {
     pointerId: event.pointerId,
     key,
+    token,
     startClientX: event.clientX,
     startClientY: event.clientY,
     startX: placed.x,
@@ -2179,19 +2646,15 @@ function keyboardWorkbenchPointerMove(event: PointerEvent): void {
   if (!drag || event.pointerId !== drag.pointerId) return;
   event.preventDefault();
   event.stopPropagation();
-  const current = keyboardWorkbenchPlacedKeys().find((record) => record.key === drag.key);
+  const current = keyboardWorkbenchPlacedKeys().find((record) => record.instanceId === drag.token);
   if (!current) return;
   const nextX = drag.startX + (event.clientX - drag.startClientX) * drag.scaleX;
   const nextY = drag.startY + (event.clientY - drag.startClientY) * drag.scaleY;
-  keyboardWorkbenchState = withKeyboardWorkbenchPosition(
-    { ...keyboardWorkbenchState, layoutMode: "free" },
-    drag.key,
-    { x: nextX, y: nextY },
-  );
+  keyboardWorkbenchState = keyboardWorkbenchMoveState(drag.token, { x: nextX, y: nextY });
   const button = keyboardWorkbenchItem?.querySelector<HTMLElement>(
-    `.n-deck-key[data-keylab-key="${CSS.escape(drag.key)}"]`,
+    `.n-deck-key[data-keylab-token="${CSS.escape(drag.token)}"]`,
   );
-  const moved = keyboardWorkbenchPlacedKeys().find((record) => record.key === drag.key);
+  const moved = keyboardWorkbenchPlacedKeys().find((record) => record.instanceId === drag.token);
   if (button && moved) {
     button.style.left = `${(moved.x / KEYBOARD_WORKBENCH_BOUNDS.width) * 100}%`;
     button.style.top = `${(moved.y / KEYBOARD_WORKBENCH_BOUNDS.height) * 100}%`;
@@ -2206,11 +2669,13 @@ function keyboardWorkbenchPointerEnd(event: PointerEvent): void {
   event.stopPropagation();
   keyboardWorkbenchDrag = null;
   keyboardWorkbenchItem
-    ?.querySelector<HTMLElement>(`.n-deck-key[data-keylab-key="${CSS.escape(drag.key)}"]`)
+    ?.querySelector<HTMLElement>(`.n-deck-key[data-keylab-token="${CSS.escape(drag.token)}"]`)
     ?.classList.remove("dragging");
   saveKeyboardWorkbenchPrefs();
   renderKeyboardWorkbenchKeys();
-  keyboardWorkbenchAnnounce(`${drag.key} placed in a custom layout.`);
+  keyboardWorkbenchAnnounce(
+    `${drag.key}${drag.token.startsWith("p:") ? " player view" : ""} placed in a custom layout.`,
+  );
 }
 
 /** Every staged controller as a canvas widget, rebuilt when the roster
@@ -2469,7 +2934,12 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   const kb = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
-  if (kb) nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
+  if (kb) {
+    keyboardSourceItem = kb;
+    nCanvas.mountItem(kb, canvasPrefs.widgets["kb"] ?? KB_HOME, { focus: false });
+    keyboardSourceGeometry = nCanvas.getItemState(kb);
+  }
+  syncKeyboardSourceVisibility(false);
   syncKeyboardSourceCaps();
   labelCanvasMarkers();
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
@@ -4013,6 +4483,7 @@ export function nocturneWire(root: HTMLElement): void {
     const deckKey = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".n-deck-key");
     if (deckKey) {
       const keyName = deckKey.dataset.keylabKey ?? "";
+      const token = deckKey.dataset.keylabToken ?? "";
       const key = (ev as KeyboardEvent).key;
       if ((key === "Delete" || key === "Backspace") && keyName) {
         ev.preventDefault();
@@ -4022,13 +4493,13 @@ export function nocturneWire(root: HTMLElement): void {
       const step = (ev as KeyboardEvent).shiftKey ? 12 : 4;
       const dx = key === "ArrowRight" ? step : key === "ArrowLeft" ? -step : 0;
       const dy = key === "ArrowDown" ? step : key === "ArrowUp" ? -step : 0;
-      if ((dx !== 0 || dy !== 0) && keyName) {
+      if ((dx !== 0 || dy !== 0) && keyName && token) {
         ev.preventDefault();
-        nudgeKeyboardWorkbenchKey(keyName, dx, dy);
+        nudgeKeyboardWorkbenchKey(keyName, token, dx, dy);
         window.requestAnimationFrame(() => {
           keyboardWorkbenchItem
             ?.querySelector<HTMLElement>(
-              `.n-deck-key[data-keylab-key="${CSS.escape(keyName)}"]`,
+              `.n-deck-key[data-keylab-token="${CSS.escape(token)}"]`,
             )
             ?.focus({ preventScroll: true });
         });
@@ -4429,7 +4900,10 @@ export function nocturneWire(root: HTMLElement): void {
     const workbenchKey = target?.closest<HTMLElement>(".n-deck-key[data-keylab-key]");
     if (workbenchKey) {
       ev.preventDefault();
-      keyboardWorkbenchSetSelected(workbenchKey.dataset.keylabKey ?? "");
+      keyboardWorkbenchSetSelected(
+        workbenchKey.dataset.keylabKey ?? "",
+        workbenchKey.dataset.keylabToken ?? "",
+      );
       return;
     }
     // A board cap flips the pane to the BY-KEY view and finds its row —
@@ -4578,7 +5052,8 @@ export function nocturneWire(root: HTMLElement): void {
         ?.dataset.keyboardTheme ?? "";
       chooseKeyboardTheme(theme);
     } else if (hit === "kb-workbench") {
-      if (!keyboardWorkbenchState.open) {
+      const opening = !keyboardWorkbenchState.open;
+      if (opening) {
         // Pull mode and learn mode both claim the next key. Entering the
         // workshop makes that choice explicit and ends any half-finished map.
         autoMap = null;
@@ -4586,7 +5061,11 @@ export function nocturneWire(root: HTMLElement): void {
         cancelAssign();
       }
       applyKeyboardWorkbenchState(
-        { ...keyboardWorkbenchState, open: !keyboardWorkbenchState.open },
+        {
+          ...keyboardWorkbenchState,
+          open: opening,
+          sourceHidden: opening ? keyboardWorkbenchState.sourceHidden : false,
+        },
         true,
         true,
       );
@@ -4597,14 +5076,26 @@ export function nocturneWire(root: HTMLElement): void {
       );
     } else if (hit === "keylab-pull-mapped") {
       pullMappedKeyboardWorkbenchKeys();
+    } else if (hit === "keylab-build-players") {
+      buildFourPlayerKeyboardWorkbench();
     } else if (hit === "keylab-layout-compact") {
       setKeyboardWorkbenchLayout("compact");
     } else if (hit === "keylab-layout-leverless") {
       setKeyboardWorkbenchLayout("leverless");
+    } else if (hit === "keylab-layout-players") {
+      setKeyboardWorkbenchLayout("players");
     } else if (hit === "keylab-render-keycap") {
       setKeyboardWorkbenchRenderMode("keycap");
     } else if (hit === "keylab-render-arcade") {
       setKeyboardWorkbenchRenderMode("arcade");
+    } else if (hit === "keylab-cap-profile") {
+      setKeyboardWorkbenchCapProfile(
+        target?.closest<HTMLElement>("[data-keycap-profile]")?.dataset.keycapProfile ?? "",
+      );
+    } else if (hit === "keylab-source-toggle") {
+      setKeyboardSourceHidden(!keyboardWorkbenchState.sourceHidden);
+    } else if (hit === "keylab-source-show") {
+      setKeyboardSourceHidden(false);
     } else if (hit === "keylab-return") {
       returnSelectedKeyboardWorkbenchKey();
     } else if (hit === "keylab-clear") {
@@ -6170,7 +6661,8 @@ export function NocturneIsland() {
               h(
                 "article",
                 {
-                  class: "widget-instance n-widget n-widget-kb",
+                   class: "widget-instance n-widget n-widget-kb",
+                   id: "keyboard-source-widget",
                   role: "listitem",
                   "aria-label": "Keyboard",
                   tabindex: "-1",
@@ -6181,16 +6673,17 @@ export function NocturneIsland() {
                   "data-canvas-preferred-width": "980",
                   "data-canvas-min-height": "320",
                   "data-canvas-resizable": "false",
-                  "aria-keyshortcuts":
-                    "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
-                  "data-keyboard-theme": () => nKeyboardTheme(),
-                },
+                   "aria-keyshortcuts":
+                     "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
+                   "data-keyboard-theme": () => nKeyboardTheme(),
+                   "data-keycap-profile": () => nKeyboardCapProfile(),
+                 },
                 h(
                   "header",
                   { class: "widget-chrome" },
-                  h(
-                    "div",
-                    { class: "widget-command-region", "data-widget-command-region": "" },
+                   h(
+                     "div",
+                     { class: "widget-command-region", "data-widget-command-region": "" },
                     h(
                       "button",
                       {
@@ -6204,9 +6697,29 @@ export function NocturneIsland() {
                         "data-widget-command-rail": "",
                         "aria-hidden": "true",
                       }),
-                    ),
-                  ),
-                ),
+                     ),
+                   ),
+                   h(
+                     "div",
+                     { class: "n-source-parked", "aria-live": "polite" },
+                     h(
+                       "span",
+                       { class: "n-source-parked-copy" },
+                       h("strong", null, "Source keyboard hidden"),
+                       h("small", null, "Art, mappings, and canvas position are preserved."),
+                     ),
+                     h(
+                       "button",
+                       {
+                         type: "button",
+                         class: "n-source-show",
+                         "data-nx": "keylab-source-show",
+                         "aria-controls": "keyboard-source-widget",
+                       },
+                       "Show keyboard",
+                     ),
+                   ),
+                 ),
                 h(
                   "div",
                   { class: "n-widget-body", "data-forma-runtime-host": "" },

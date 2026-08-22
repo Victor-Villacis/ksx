@@ -290,6 +290,11 @@ try {
       "/setup": { js: ["setup"], css: ["studio"] },
     },
     outputDir,
+    // The four-player control-surface builder adds its v2 migration, cap
+    // profiles, and linked-instance layout to Nocturne's one island. Its
+    // measured Brotli route is ~202.8 KB; keep a deliberately narrow 205 KB
+    // ceiling so this accepted feature does not turn into an open-ended bump.
+    budgetThreshold: 205_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

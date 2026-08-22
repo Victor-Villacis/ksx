@@ -1130,6 +1130,27 @@ export class WidgetCanvas {
     this.#scheduleChange();
   }
 
+  // ksx: a host may temporarily present one mounted item with different
+  // dimensions (for example, a parked/collapsed widget). Restoring only its
+  // width and height leaves any interim move, raise, or manual scale in the
+  // live DOM even when the durable state correctly kept the full geometry.
+  // Reuse the engine's own normalization/positioning boundary so all six
+  // fields return atomically and the resulting state is committed once.
+  restoreItemState(
+    item: HTMLElement,
+    restored: Partial<WidgetCanvasItemState>,
+  ): WidgetCanvasItemState | null {
+    if (!this.#items.has(this.#itemId(item))) return null;
+    const current = this.getItemState(item);
+    const state = this.#normalizedPlacement(item, restored);
+    if (state.manualScale !== current.manualScale) this.#suppressItemScaleTransition(item);
+    this.#positionItem(item, state);
+    this.#updateItemVisibility();
+    this.#requestNavigatorRender();
+    this.#commitChange();
+    return this.getItemState(item);
+  }
+
   adjustItemScale(item: HTMLElement, direction: -1 | 1): number {
     if (!this.#items.has(this.#itemId(item))) return 1;
     const current = this.getItemState(item).manualScale;

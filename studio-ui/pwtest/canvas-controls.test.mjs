@@ -748,12 +748,20 @@ describe("the canvas navigation controls", () => {
       return {
         widgetCount: document.querySelectorAll(".n-widget-keylab").length,
         renderMode: deck?.getAttribute("data-render-mode") ?? null,
+        layoutMode: deck?.getAttribute("data-layout-mode") ?? null,
+        keycapProfile: deck?.getAttribute("data-keycap-profile") ?? null,
         keys: keys.map((key) => {
           const rect = key.getBoundingClientRect();
           const style = getComputedStyle(key);
           return {
             key: key.getAttribute("data-keylab-key") ?? "",
             canonicalKey: key.getAttribute("data-key") ?? "",
+            token: key.getAttribute("data-keylab-token") ?? "",
+            playerSlot: key.getAttribute("data-player-slot"),
+            ownerSlots: key.getAttribute("data-owner-slots") ?? "",
+            ownerBadges: Array.from(key.querySelectorAll(".n-keylab-owner")).map(
+              (badge) => badge.getAttribute("data-owner-slot") ?? "",
+            ),
             className: key.className,
             left: key.style.left,
             top: key.style.top,
@@ -893,6 +901,42 @@ describe("the canvas navigation controls", () => {
           .map((button) => button.slug),
         ["lunar-shell"],
       );
+      const legacyIdentity = await page.evaluate(() => {
+        const storageKey = "ksx-nocturne-keyboard-workbench1";
+        const current = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+        const identity = Object.keys(current?.devices ?? {})[0] ?? "";
+        if (!identity) throw new Error("the fresh finish preference did not identify its keyboard");
+        localStorage.setItem(storageKey, JSON.stringify({
+          version: 1,
+          devices: {
+            [identity]: {
+              open: false,
+              sourceHidden: true,
+              theme: "lunar-shell",
+              capProfile: "typewriter",
+              selectedKeys: [],
+              layoutMode: "compact",
+              renderMode: "arcade",
+              positions: {},
+            },
+          },
+        }));
+        return identity;
+      });
+      assert.ok(legacyIdentity, "the legacy fixture targets the selected physical keyboard");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-kb")?.getAttribute("data-keyboard-theme") ===
+          "lunar-shell",
+        null,
+        { timeout: 20_000 },
+      );
+      await settle(page);
+      assert.equal(
+        await page.locator(".n-widget-keylab").count(),
+        0,
+        "the closed legacy board remains closed until Build board is requested",
+      );
       await page.evaluate((selector) => {
         window.__ksxKeyboardSourceAudit = Array.from(document.querySelectorAll(selector)).map(
           (node) => ({ node, parent: node.parentElement, key: node.getAttribute("data-key") ?? "" }),
@@ -911,6 +955,51 @@ describe("the canvas navigation controls", () => {
         await page.locator(sourceSelector).count(),
         108,
         "opening the workbench never reparents or removes source cells",
+      );
+      const migratedDeck = await readDeck();
+      assert.equal(migratedDeck.renderMode, "keycap");
+      assert.equal(migratedDeck.layoutMode, "compact");
+      assert.equal(migratedDeck.keycapProfile, "sculpted");
+      assert.deepEqual(
+        await page.locator(
+          '.n-widget-keylab [data-nx="keylab-render-keycap"], .n-widget-keylab [data-nx="keylab-render-arcade"]',
+        ).evaluateAll((buttons) => buttons.map((button) => ({
+          native: button instanceof HTMLButtonElement,
+          type: button.type,
+          mode: button.getAttribute("data-mode"),
+          pressed: button.getAttribute("aria-pressed"),
+        }))),
+        [
+          { native: true, type: "button", mode: "keycap", pressed: "true" },
+          { native: true, type: "button", mode: "arcade", pressed: "false" },
+        ],
+        "a legacy Arcade preference opens on truthful Mechanical keycaps",
+      );
+      const capProfileSlugs = ["sculpted", "low-profile", "pudding", "typewriter"];
+      const profileButtons = page.locator(
+        '.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile]',
+      );
+      assert.deepEqual(
+        await profileButtons.evaluateAll((buttons) => buttons.map((button) => ({
+          native: button instanceof HTMLButtonElement,
+          type: button.type,
+          slug: button.getAttribute("data-keycap-profile"),
+          pressed: button.getAttribute("aria-pressed"),
+        }))),
+        capProfileSlugs.map((slug) => ({
+          native: true,
+          type: "button",
+          slug,
+          pressed: String(slug === "sculpted"),
+        })),
+        "fresh v2 defaults expose four native cap profiles with Sculpted selected",
+      );
+      assert.equal(
+        await page.evaluate(() => JSON.parse(
+          localStorage.getItem("ksx-nocturne-keyboard-workbench1") ?? "null",
+        )?.version),
+        2,
+        "opening the migrated board rewrites it through the v2 store",
       );
       const propagatedTheme = await page.evaluate(() => {
         const keyboard = document.querySelector(".n-widget-kb");
@@ -1036,6 +1125,213 @@ describe("the canvas navigation controls", () => {
       }
 
       const compact = await readDeck();
+      assert.equal(compact.renderMode, "keycap");
+      assert.equal(compact.layoutMode, "compact");
+      assert.equal(compact.keycapProfile, "sculpted");
+      assert.deepEqual(
+        compact.keys.map((key) => key.token).sort(),
+        liftedKeys.map((key) => `k:${key}`).sort(),
+        "ordinary layouts use one stable k:key token per physical key",
+      );
+      assert.ok(
+        compact.keys.every((key) => key.radius !== "50%"),
+        "a freshly migrated workbench presents mechanical keycaps, not circles",
+      );
+      const compactIdentityAndPosition = compact.keys
+        .map((key) => ({
+          key: key.key,
+          canonicalKey: key.canonicalKey,
+          token: key.token,
+          left: key.left,
+          top: key.top,
+        }))
+        .sort((a, b) => a.token.localeCompare(b.token));
+      for (const profile of ["low-profile", "pudding", "typewriter", "sculpted"]) {
+        await page.click(
+          `.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile="${profile}"]`,
+        );
+        await page.waitForFunction(
+          (slug) => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
+            "data-keycap-profile",
+          ) === slug,
+          profile,
+        );
+        const profiled = await readDeck();
+        assert.equal(profiled.renderMode, "keycap");
+        assert.equal(profiled.keycapProfile, profile);
+        assert.deepEqual(
+          profiled.keys
+            .map((key) => ({
+              key: key.key,
+              canonicalKey: key.canonicalKey,
+              token: key.token,
+              left: key.left,
+              top: key.top,
+            }))
+            .sort((a, b) => a.token.localeCompare(b.token)),
+          compactIdentityAndPosition,
+          `${profile} changes only cap presentation, never canonical keys or positions`,
+        );
+        assert.deepEqual(
+          await profileButtons.evaluateAll((buttons) => buttons
+            .filter((button) => button.getAttribute("aria-pressed") === "true")
+            .map((button) => button.getAttribute("data-keycap-profile"))),
+          [profile],
+          `${profile} is the sole selected cap profile`,
+        );
+      }
+
+      const sourceBeforeHide = await page.evaluate((selector) => {
+        const widget = document.querySelector(".n-widget-kb");
+        const keys = Array.from(document.querySelectorAll(selector));
+        const geometry = widget
+          ? {
+              x: widget.getAttribute("data-canvas-x"),
+              y: widget.getAttribute("data-canvas-y"),
+              width: widget.getAttribute("data-canvas-width"),
+              height: widget.getAttribute("data-canvas-height"),
+              z: widget.getAttribute("data-canvas-z"),
+              manualScale: widget.getAttribute("data-canvas-manual-scale"),
+              styleWidth: widget.style.width,
+              styleMinHeight: widget.style.minHeight,
+            }
+          : null;
+        window.__ksxKeyboardHiddenAudit = {
+          widget,
+          keys,
+          parents: keys.map((key) => key.parentElement),
+          geometry,
+        };
+        return { geometry, keyCount: keys.length };
+      }, sourceSelector);
+      assert.equal(sourceBeforeHide.keyCount, 108);
+      assert.deepEqual(
+        await page.locator('.n-widget-keylab [data-nx="keylab-source-toggle"]').evaluate(
+          (button) => ({
+            pressed: button.getAttribute("aria-pressed"),
+            expanded: button.getAttribute("aria-expanded"),
+          }),
+        ),
+        { pressed: null, expanded: "true" },
+        "the changing source action uses expansion semantics, not an inverted pressed state",
+      );
+      await page.click('.n-widget-keylab [data-nx="keylab-source-toggle"]');
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-kb")?.getAttribute("data-source-hidden") === "true",
+      );
+      const hiddenSource = await page.evaluate((selector) => {
+        const audit = window.__ksxKeyboardHiddenAudit;
+        const widget = document.querySelector(".n-widget-kb");
+        const keys = Array.from(document.querySelectorAll(selector));
+        const body = widget?.querySelector(".n-widget-body");
+        return {
+          sameWidget: widget === audit?.widget,
+          widgetConnected: audit?.widget?.isConnected ?? false,
+          sameKeyCount: keys.length === audit?.keys.length,
+          sameKeyNodes: keys.every((key, index) => key === audit?.keys[index]),
+          sameParents: keys.every((key, index) => key.parentElement === audit?.parents[index]),
+          keysConnected: audit?.keys.every((key) => key.isConnected) ?? false,
+          bodyInert: body?.inert ?? false,
+          bodyAriaHidden: body?.getAttribute("aria-hidden") ?? null,
+        };
+      }, sourceSelector);
+      assert.deepEqual(
+        hiddenSource,
+        {
+          sameWidget: true,
+          widgetConnected: true,
+          sameKeyCount: true,
+          sameKeyNodes: true,
+          sameParents: true,
+          keysConnected: true,
+          bodyInert: true,
+          bodyAriaHidden: "true",
+        },
+        "Hide source parks the exact served widget and key nodes instead of destroying them",
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb [data-nx="keylab-source-show"]').count(),
+        1,
+        "the parked source exposes one explicit restore action",
+      );
+      await page.locator(
+        '.forma-canvas-navigator .navigator-item[aria-label="Focus Keyboard"]',
+      ).click();
+      await settle(page);
+      await page.locator(".n-widget-kb .widget-drag-handle").focus();
+      await page.keyboard.press("ArrowRight");
+      await page.click('[data-nx="w-zoom-in"]');
+      await page.click('.n-widget-kb [data-nx="keylab-source-show"]');
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-kb")?.getAttribute("data-source-hidden") === "false",
+      );
+      await settle(page);
+      const restoredSource = await page.evaluate((selector) => {
+        const audit = window.__ksxKeyboardHiddenAudit;
+        const widget = document.querySelector(".n-widget-kb");
+        const keys = Array.from(document.querySelectorAll(selector));
+        const body = widget?.querySelector(".n-widget-body");
+        const geometry = widget
+          ? {
+              x: widget.getAttribute("data-canvas-x"),
+              y: widget.getAttribute("data-canvas-y"),
+              width: widget.getAttribute("data-canvas-width"),
+              height: widget.getAttribute("data-canvas-height"),
+              z: widget.getAttribute("data-canvas-z"),
+              manualScale: widget.getAttribute("data-canvas-manual-scale"),
+              styleWidth: widget.style.width,
+              styleMinHeight: widget.style.minHeight,
+            }
+          : null;
+        return {
+          sameWidget: widget === audit?.widget,
+          widgetConnected: audit?.widget?.isConnected ?? false,
+          sameKeyCount: keys.length === audit?.keys.length,
+          sameKeyNodes: keys.every((key, index) => key === audit?.keys[index]),
+          sameParents: keys.every((key, index) => key.parentElement === audit?.parents[index]),
+          keysConnected: audit?.keys.every((key) => key.isConnected) ?? false,
+          bodyInert: body?.inert ?? false,
+          bodyAriaHidden: body?.getAttribute("aria-hidden") ?? null,
+          geometry,
+        };
+      }, sourceSelector);
+      assert.deepEqual(
+        restoredSource,
+        {
+          sameWidget: true,
+          widgetConnected: true,
+          sameKeyCount: true,
+          sameKeyNodes: true,
+          sameParents: true,
+          keysConnected: true,
+          bodyInert: false,
+          bodyAriaHidden: "false",
+          geometry: sourceBeforeHide.geometry,
+        },
+        "Show keyboard restores all six original geometry fields on the exact same served nodes",
+      );
+      assert.deepEqual(
+        (await readDeck()).keys
+          .map((key) => ({
+            key: key.key,
+            canonicalKey: key.canonicalKey,
+            token: key.token,
+            left: key.left,
+            top: key.top,
+          }))
+          .sort((a, b) => a.token.localeCompare(b.token)),
+        compactIdentityAndPosition,
+        "parking the source cannot disturb its linked workbench keys",
+      );
+
+      // Restoring the much larger source widget can put the workbench under
+      // the navigator at the old camera position. Follow the user-facing LAB
+      // marker back to the builder before exercising its pointer surface.
+      await page.locator(
+        '.forma-canvas-navigator .navigator-item[aria-label="Focus Key Workbench"]',
+      ).click();
+      await settle(page);
+
       await page.click('.n-widget-keylab [data-nx="keylab-layout-leverless"]');
       await page.waitForFunction(
         () => document.querySelector(
@@ -1043,6 +1339,7 @@ describe("the canvas navigation controls", () => {
         )?.getAttribute("aria-pressed") === "true",
       );
       const leverless = await readDeck();
+      assert.equal(leverless.layoutMode, "leverless");
       assert.deepEqual(
         leverless.keys.map((key) => key.key).sort(),
         [...liftedKeys].sort(),
@@ -1059,14 +1356,36 @@ describe("the canvas navigation controls", () => {
         "every leverless token receives a distinct position",
       );
 
+      await page.click(
+        '.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile="pudding"]',
+      );
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
+          "data-keycap-profile",
+        ) === "pudding",
+      );
       await page.click('.n-widget-keylab [data-nx="keylab-render-arcade"]');
       await page.waitForFunction(
         () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
           "data-render-mode",
         ) === "arcade",
       );
+      const puddingArcadePaint = (await readDeck()).keys.map((key) => key.paint);
+      await page.locator(
+        '.n-widget-keylab [data-nx="keylab-cap-profile"][data-keycap-profile="sculpted"]',
+      ).evaluate((button) => button.click());
+      await page.waitForFunction(
+        () => document.querySelector(".n-widget-keylab .n-keylab-deck")?.getAttribute(
+          "data-keycap-profile",
+        ) === "sculpted",
+      );
       const arcade = await readDeck();
       assert.equal(arcade.renderMode, "arcade");
+      assert.deepEqual(
+        arcade.keys.map((key) => key.paint),
+        puddingArcadePaint,
+        "a hidden mechanical profile cannot leak its sidewall paint into Arcade mode",
+      );
       assert.deepEqual(
         arcade.keys.map((key) => key.key).sort(),
         [...liftedKeys].sort(),
@@ -1126,7 +1445,10 @@ describe("the canvas navigation controls", () => {
       );
       const draggedState = await persistedWorkbench();
       assert.equal(draggedState?.layoutMode, "free", "pointerup commits a custom layout");
-      assert.ok(draggedState?.positions?.A, "pointerup persists A's logical board position");
+      assert.ok(
+        draggedState?.positions?.["k:A"],
+        "pointerup persists A under its v2 visual instance token",
+      );
 
       const wButton = page.locator('.n-deck-key[data-keylab-key="W"]');
       await wButton.focus();
@@ -1144,6 +1466,10 @@ describe("the canvas navigation controls", () => {
       );
       assert.notEqual(afterNudge.left, beforeNudge.left, "arrow keys nudge a focused deck token");
       assert.equal(afterNudge.top, beforeNudge.top, "a horizontal nudge leaves its row untouched");
+      assert.ok(
+        (await persistedWorkbench())?.positions?.["k:W"],
+        "keyboard nudging persists W under its v2 visual instance token",
+      );
 
       const dButton = page.locator('.n-deck-key[data-keylab-key="D"]');
       await dButton.focus();
@@ -1177,9 +1503,15 @@ describe("the canvas navigation controls", () => {
       const saved = await persistedWorkbench();
       assert.equal(saved?.theme, "lunar-shell");
       assert.equal(saved?.open, true);
+      assert.equal(saved?.sourceHidden, false);
       assert.equal(saved?.layoutMode, "free", "manual nudging persists a custom layout");
       assert.equal(saved?.renderMode, "arcade");
+      assert.equal(saved?.capProfile, "sculpted");
       assert.deepEqual([...saved.selectedKeys].sort(), ["A", "S", "W"]);
+      assert.ok(saved?.positions?.["k:A"]);
+      assert.ok(saved?.positions?.["k:W"]);
+      assert.equal(saved?.positions?.A, undefined, "new writes do not regress to legacy key ids");
+      assert.equal(saved?.positions?.W, undefined, "new writes keep every position instance-scoped");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -1191,6 +1523,8 @@ describe("the canvas navigation controls", () => {
       const restoredDeck = await readDeck();
       assert.equal(restoredDeck.widgetCount, 1);
       assert.equal(restoredDeck.renderMode, "arcade");
+      assert.equal(restoredDeck.layoutMode, "free");
+      assert.equal(restoredDeck.keycapProfile, "sculpted");
       assert.deepEqual(restoredDeck.keys.map((key) => key.key).sort(), ["A", "S", "W"]);
       assert.deepEqual(
         restoredDeck.keys.find((key) => key.key === "W") && {
@@ -1231,7 +1565,166 @@ describe("the canvas navigation controls", () => {
         "closing and reopening retains the exact custom control surface",
       );
       assert.equal(reopened.renderMode, "arcade");
+      assert.equal(reopened.layoutMode, "free");
+      assert.equal(reopened.keycapProfile, "sculpted");
       assert.deepEqual(bindingPosts, []);
+
+      await page.locator('.n-widget-keylab [data-nx="keylab-build-players"]').evaluate(
+        (button) => button.click(),
+      );
+      await page.waitForFunction(
+        () => {
+          const deck = document.querySelector(".n-widget-keylab .n-keylab-deck");
+          return deck?.getAttribute("data-layout-mode") === "players" &&
+            deck.querySelector('[data-keylab-token="p:1:G"]') &&
+            deck.querySelector('[data-keylab-token="p:2:G"]');
+        },
+      );
+      await page.locator(
+        '.forma-canvas-navigator .navigator-item[aria-label="Focus Key Workbench"]',
+      ).click();
+      await settle(page);
+      const playerDeck = await readDeck();
+      assert.equal(playerDeck.layoutMode, "players");
+      assert.equal(
+        new Set(playerDeck.keys.map((key) => key.token)).size,
+        playerDeck.keys.length,
+        "every panel control has a unique visual instance token",
+      );
+      assert.ok(
+        playerDeck.keys.every(
+          (key) => key.token === `p:${key.playerSlot}:${key.canonicalKey}`,
+        ),
+        "the fixture's mapped controls use canonical p:slot:key mirror tokens",
+      );
+      const sharedGMirrors = playerDeck.keys
+        .filter((key) => key.canonicalKey === "G")
+        .sort((a, b) => a.token.localeCompare(b.token));
+      assert.deepEqual(
+        sharedGMirrors.map((key) => ({
+          key: key.key,
+          canonicalKey: key.canonicalKey,
+          token: key.token,
+          playerSlot: key.playerSlot,
+          ownerSlots: key.ownerSlots,
+          ownerBadges: key.ownerBadges,
+        })),
+        [
+          {
+            key: "G",
+            canonicalKey: "G",
+            token: "p:1:G",
+            playerSlot: "1",
+            ownerSlots: "1,2",
+            ownerBadges: ["1", "2"],
+          },
+          {
+            key: "G",
+            canonicalKey: "G",
+            token: "p:2:G",
+            playerSlot: "2",
+            ownerSlots: "1,2",
+            ownerBadges: ["1", "2"],
+          },
+        ],
+        "P1 and P2 receive linked visual mirrors, shared-owner badges, and one canonical G",
+      );
+      assert.equal(
+        new Set(sharedGMirrors.map((key) => key.canonicalKey)).size,
+        1,
+        "duplicate panel views still describe one physical key",
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-key[data-key="G"].extracted').count(),
+        1,
+        "both G mirrors lift exactly one source key",
+      );
+      await page.evaluate(() => {
+        window.__ksxSharedGSource = document.querySelector('.n-widget-kb .n-key[data-key="G"]');
+      });
+
+      const p1GBefore = {
+        left: sharedGMirrors[0].left,
+        top: sharedGMirrors[0].top,
+      };
+      const p2GBefore = {
+        left: sharedGMirrors[1].left,
+        top: sharedGMirrors[1].top,
+      };
+      const p2GButton = page.locator('.n-deck-key[data-keylab-token="p:2:G"]');
+      const p2GBox = await p2GButton.boundingBox();
+      assert.ok(p2GBox, "the P2 G mirror is independently draggable");
+      await page.mouse.move(p2GBox.x + p2GBox.width / 2, p2GBox.y + p2GBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(
+        p2GBox.x + p2GBox.width / 2 + 42,
+        p2GBox.y + p2GBox.height / 2 + 24,
+        { steps: 5 },
+      );
+      await page.mouse.up();
+      await page.waitForFunction(
+        ({ left, top }) => {
+          const mirror = document.querySelector('.n-deck-key[data-keylab-token="p:2:G"]');
+          return mirror?.style.left !== left && mirror?.style.top !== top;
+        },
+        p2GBefore,
+      );
+      const draggedPlayerDeck = await readDeck();
+      const p1GAfter = draggedPlayerDeck.keys.find((key) => key.token === "p:1:G");
+      const p2GAfter = draggedPlayerDeck.keys.find((key) => key.token === "p:2:G");
+      assert.equal(
+        draggedPlayerDeck.layoutMode,
+        "players",
+        "customizing one mirror retains the four-player panel arrangement",
+      );
+      assert.deepEqual(
+        p1GAfter && { left: p1GAfter.left, top: p1GAfter.top },
+        p1GBefore,
+        "dragging P2's linked view leaves P1's mirror in place",
+      );
+      assert.notDeepEqual(
+        p2GAfter && { left: p2GAfter.left, top: p2GAfter.top },
+        p2GBefore,
+        "only the chosen player mirror receives the custom position",
+      );
+      const draggedMirrorState = await persistedWorkbench();
+      assert.equal(draggedMirrorState?.layoutMode, "players");
+      assert.ok(
+        draggedMirrorState?.positions?.["p:2:G"],
+        "the moved mirror persists by its player-scoped instance token",
+      );
+      assert.equal(draggedMirrorState?.positions?.G, undefined);
+      assert.deepEqual(bindingPosts, [], "building and arranging panels performs no binding POSTs");
+
+      await p2GButton.focus();
+      await page.keyboard.press("Delete");
+      await page.waitForFunction(
+        () => document.querySelectorAll(
+          '.n-widget-keylab .n-deck-key[data-keylab-key="G"]',
+        ).length === 0,
+      );
+      const restoredGSocket = await page.evaluate(() => {
+        const sources = Array.from(
+          document.querySelectorAll('.n-widget-kb .n-key[data-key="G"]'),
+        );
+        return {
+          count: sources.length,
+          sameNode: sources[0] === window.__ksxSharedGSource,
+          connected: sources[0]?.isConnected ?? false,
+          extracted: sources[0]?.classList.contains("extracted") ?? false,
+        };
+      });
+      assert.deepEqual(
+        restoredGSocket,
+        { count: 1, sameNode: true, connected: true, extracted: false },
+        "deleting either linked mirror removes every G view and restores one source socket",
+      );
+      assert.equal(
+        (await readDeck()).keys.some((key) => key.token === "p:1:G" || key.token === "p:2:G"),
+        false,
+      );
+      assert.equal((await persistedWorkbench())?.selectedKeys.includes("G"), false);
+      assert.deepEqual(bindingPosts, [], "linked-view deletion remains a presentation-only edit");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

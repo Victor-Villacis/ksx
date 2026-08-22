@@ -14869,6 +14869,71 @@ a.nm-link {
   transform: translate(-50%, -50%) translateY(1px);
 }
 
+/* The source keyboard can be parked while its caps are arranged. The exact
+   served article stays mounted (and keeps its navigator marker); only its
+   body collapses into this explicit, reversible stub. */
+.n-source-parked {
+  display: none;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 9px 4px 2px;
+}
+
+.n-source-parked-copy {
+  display: grid;
+  min-width: 0;
+  color: var(--n-text-2);
+  line-height: 1.25;
+}
+
+.n-source-parked-copy strong {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.n-source-parked-copy small {
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-source-show {
+  flex: none;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 7px;
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
+  font-size: 10.5px;
+  /* Widget chrome is intentionally click-through except for its controls. */
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.n-widget-kb[data-source-hidden="true"] {
+  width: 360px !important;
+  min-height: 58px !important;
+}
+
+.n-widget-kb[data-source-hidden="true"] > .widget-chrome {
+  min-height: 54px;
+}
+
+.n-widget-kb[data-source-hidden="true"] .n-source-parked {
+  display: flex;
+}
+
+.n-widget-kb[data-source-hidden="true"] > .n-widget-body {
+  display: none;
+}
+
 /* ── Key Workbench ──────────────────────────────────────────────────────
    A second, client-owned surface for the caps lifted above. It deliberately
    looks like a small machinist's plate rather than another physical device:
@@ -14949,11 +15014,23 @@ a.nm-link {
   margin-inline-start: auto;
 }
 
+.n-keylab-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+
+.n-keylab-head-actions .n-keylab-button {
+  margin-inline-start: 0;
+}
+
 .n-keylab-status,
 .n-keylab-note {
   margin: 0;
   color: var(--n-text-3);
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.45;
 }
 
@@ -14968,17 +15045,22 @@ a.nm-link {
 }
 
 .n-keylab-tools {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  margin-inline-start: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 7px;
+  width: 100%;
+  margin-inline-start: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--n-line) 82%, transparent);
+  border-radius: 11px;
+  background: rgba(10, 12, 20, 0.28);
 }
 
 .n-keylab-button,
 .n-keylab-tools button {
-  min-height: 28px;
-  padding: 3px 9px;
+  min-height: 34px;
+  padding: 5px 9px;
   border: 1px solid var(--n-line);
   border-radius: 7px;
   background: transparent;
@@ -14986,6 +15068,94 @@ a.nm-link {
   font-size: 10.5px;
   cursor: pointer;
   touch-action: manipulation;
+}
+
+.n-keylab-toolgroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--n-line) 74%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--n-panel-2) 52%, transparent);
+}
+
+.n-keylab-toolgroup[hidden] {
+  display: none;
+}
+
+.n-keylab-tool-label {
+  flex: 0 0 100%;
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.n-keylab-toolgroup .n-keylab-button {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.n-keylab-surface-group {
+  grid-column: span 2;
+}
+
+.n-keylab-surface-group .n-keylab-button {
+  min-height: 40px;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.n-keylab-profile-group,
+.n-keylab-finish-group {
+  grid-column: span 2;
+}
+
+.n-keylab-profile-preview,
+.n-keylab-finish-swatch {
+  display: inline-block;
+  flex: none;
+  width: 17px;
+  height: 13px;
+  margin-inline-end: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 4px;
+  vertical-align: -2px;
+  background: linear-gradient(180deg, #555b70, #222635);
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.4);
+}
+
+.n-keylab-profile-group [data-keycap-profile="low-profile"] .n-keylab-profile-preview {
+  height: 8px;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.38);
+}
+
+.n-keylab-profile-group [data-keycap-profile="pudding"] .n-keylab-profile-preview {
+  border-bottom-color: color-mix(in srgb, var(--n-accent) 72%, white);
+  background: linear-gradient(180deg, #555b70 0 58%, rgba(184, 208, 255, 0.52) 60% 100%);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--n-accent) 38%, transparent);
+}
+
+.n-keylab-profile-group [data-keycap-profile="typewriter"] .n-keylab-profile-preview {
+  height: 15px;
+  border-radius: 6px 6px 4px 4px;
+  transform: perspective(18px) rotateX(7deg);
+}
+
+.n-keylab-finish {
+  flex-basis: 28% !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-keylab-finish-swatch {
+  border-radius: 50%;
 }
 
 .n-keylab-button:hover,
@@ -15026,12 +15196,18 @@ a.nm-link {
   color: var(--n-text-3);
 }
 
+.n-keylab-deck-scroll {
+  width: 100%;
+  overflow-x: auto;
+  padding: 4px 2px 16px;
+}
+
 .n-keylab-deck {
   position: relative;
   width: 100%;
-  min-width: 780px;
-  min-height: 260px;
-  aspect-ratio: 3 / 1;
+  min-width: 1120px;
+  min-height: 672px;
+  aspect-ratio: 5 / 3;
   overflow: visible;
   border: 1px solid var(--n-kb-case-edge);
   border-radius: 16px;
@@ -15077,11 +15253,118 @@ a.nm-link {
   transform: translate(-50%, -50%);
 }
 
+.n-keylab-player-zones {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.n-keylab-deck[data-layout-mode="players"] .n-keylab-player-zones {
+  display: block;
+}
+
+.n-keylab-player-panel,
+.n-keylab-loose-panel {
+  position: absolute;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--panel-accent, var(--n-line-2)) 44%, var(--n-line));
+  border-radius: 13px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--panel-accent, var(--n-accent)) 7%, transparent), transparent 58%),
+    rgba(10, 12, 19, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    inset 0 0 28px rgba(0, 0, 0, 0.17);
+}
+
+.n-keylab-player-panel.np1 {
+  --panel-accent: var(--kb1);
+}
+
+.n-keylab-player-panel.np2 {
+  --panel-accent: var(--kb2);
+}
+
+.n-keylab-player-panel.np3 {
+  --panel-accent: var(--kb3);
+}
+
+.n-keylab-player-panel.np4 {
+  --panel-accent: var(--kb4);
+}
+
+.n-keylab-player-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 29px;
+  padding: 5px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--panel-accent) 24%, var(--n-line));
+  background: color-mix(in srgb, var(--panel-accent) 8%, rgba(14, 16, 25, 0.78));
+  color: var(--n-text-2);
+  font-size: 10px;
+}
+
+.n-keylab-player-badge {
+  min-width: 25px;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent) 65%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel-accent) 18%, transparent);
+  color: color-mix(in srgb, var(--panel-accent) 72%, white);
+  text-align: center;
+}
+
+.n-keylab-player-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-keylab-player-count {
+  margin-inline-start: auto;
+  color: var(--n-text-3);
+  white-space: nowrap;
+}
+
+.n-keylab-player-empty {
+  position: absolute;
+  top: 54%;
+  left: 50%;
+  color: color-mix(in srgb, var(--panel-accent) 34%, var(--n-text-3));
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+.n-keylab-player-panel[data-populated="true"] .n-keylab-player-empty {
+  display: none;
+}
+
+.n-keylab-loose-panel {
+  padding: 8px 10px;
+  border-style: dashed;
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.n-keylab-loose-panel[data-populated="false"] {
+  opacity: 0.48;
+}
+
 /* Deck keys use the same two-layer cap construction and may also carry
    `n-key`, `bn*`, `ba*` and `bound` classes. These declarations reset only
    positioning and workbench dimensions, never the source board's metrics. */
 .n-deck-key {
   position: absolute;
+  z-index: 1;
   width: var(--deck-key-width, var(--nku));
   height: var(--deck-key-height, calc(var(--nku) * 34 / 30));
   padding: 0;
@@ -15210,6 +15493,151 @@ a.nm-link {
   border: 1px dashed rgba(150, 138, 224, 0.75);
 }
 
+.n-deck-key[data-player-slot="1"] {
+  --mine: var(--kb1);
+}
+
+.n-deck-key[data-player-slot="2"] {
+  --mine: var(--kb2);
+}
+
+.n-deck-key[data-player-slot="3"] {
+  --mine: var(--kb3);
+}
+
+.n-deck-key[data-player-slot="4"] {
+  --mine: var(--kb4);
+}
+
+.n-deck-key[data-player-slot].bound::before {
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
+    inset 0 0 0 1.5px color-mix(in srgb, var(--mine) 82%, transparent);
+}
+
+.n-keylab-owners {
+  position: absolute;
+  right: -4px;
+  top: -7px;
+  z-index: 4;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.n-deck-key.multi-owner .n-keylab-owners,
+.n-keylab-deck[data-layout-mode="players"] .n-deck-key .n-keylab-owners {
+  display: flex;
+}
+
+.n-keylab-owner {
+  min-width: 17px;
+  padding: 1px 3px;
+  border: 1px solid color-mix(in srgb, var(--owner-color) 74%, #0b0d14);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--owner-color) 30%, #10121a);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+  color: color-mix(in srgb, var(--owner-color) 68%, white);
+  font-size: 7.5px;
+  font-weight: 850;
+  line-height: 12px;
+  text-align: center;
+}
+
+.n-keylab-owner.np1 {
+  --owner-color: var(--kb1);
+}
+
+.n-keylab-owner.np2 {
+  --owner-color: var(--kb2);
+}
+
+.n-keylab-owner.np3 {
+  --owner-color: var(--kb3);
+}
+
+.n-keylab-owner.np4 {
+  --owner-color: var(--kb4);
+}
+
+.n-keylab-owner.np5,
+.n-keylab-owner.np6,
+.n-keylab-owner.np7,
+.n-keylab-owner.np8,
+.n-keylab-owner.np9,
+.n-keylab-owner.np10,
+.n-keylab-owner.np11,
+.n-keylab-owner.np12,
+.n-keylab-owner.np13,
+.n-keylab-owner.np14,
+.n-keylab-owner.np15,
+.n-keylab-owner.np16 {
+  --owner-color: var(--n-accent);
+}
+
+/* Four mechanical profiles change only cap construction. The hit box,
+   canonical key, ownership bands, and saved coordinates never move. */
+.n-widget-kb[data-keycap-profile="low-profile"] .n-key,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="low-profile"] .n-deck-key {
+  border-radius: 5px;
+  background: linear-gradient(180deg, var(--n-kb-key-side-top), var(--n-kb-key-side-bottom));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.48);
+}
+
+.n-widget-kb[data-keycap-profile="low-profile"] .n-key::before,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="low-profile"] .n-deck-key::before {
+  inset: 2px 2px 4px;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+}
+
+.n-widget-kb[data-keycap-profile="pudding"] .n-key,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="pudding"] .n-deck-key {
+  border-color: color-mix(in srgb, var(--n-accent) 28%, transparent);
+  background:
+    linear-gradient(180deg, var(--n-kb-key-side-top) 0 54%, rgba(174, 205, 235, 0.42) 58% 100%);
+  box-shadow:
+    0 3px 6px rgba(0, 0, 0, 0.46),
+    0 0 8px color-mix(in srgb, var(--n-accent) 22%, transparent),
+    inset 0 0 0 1px rgba(217, 235, 250, 0.24);
+}
+
+.n-widget-kb[data-keycap-profile="pudding"] .n-key::before,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="pudding"] .n-deck-key::before {
+  inset: 1px 2px 9px;
+  border-radius: 6px 6px 4px 4px;
+}
+
+.n-widget-kb[data-keycap-profile="typewriter"] .n-key,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="typewriter"] .n-deck-key {
+  border-radius: 8px 8px 6px 6px;
+  box-shadow:
+    0 5px 7px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.58);
+}
+
+.n-widget-kb[data-keycap-profile="typewriter"] .n-key::before,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile="typewriter"] .n-deck-key::before {
+  inset: 2px 3px 7px;
+  border-radius: 7px 7px 5px 5px;
+  box-shadow:
+    inset 0 2px 0 var(--n-kb-key-face-highlight),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.32),
+    0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
+.n-widget-kb[data-keycap-profile] .n-key.bound::before,
+.n-keylab-deck[data-render-mode="keycap"][data-keycap-profile] .n-deck-key.bound::before {
+  box-shadow:
+    inset 0 1px 0 var(--n-kb-key-face-highlight),
+    inset 0 0 0 1.5px color-mix(in srgb, var(--mine, var(--band-a, var(--n-accent))) 78%, transparent);
+}
+
 /* The same semantic token can preview a generic arcade/hitbox button. Only
    its silhouette changes: ownership bands, live press, label and DOM key
    identity stay on the exact same node. */
@@ -15272,7 +15700,6 @@ a.nm-link {
   }
 
   .n-keylab {
-    overflow-x: auto;
     padding-bottom: 5px;
   }
 
@@ -15282,14 +15709,18 @@ a.nm-link {
   }
 
   .n-keylab-tools {
-    width: 100%;
-    margin-inline-start: 0;
-    overflow-x: auto;
-    padding-bottom: 2px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
   }
 
   .n-keylab-tools button {
     flex: 0 0 auto;
+  }
+
+  .n-keylab-surface-group,
+  .n-keylab-profile-group,
+  .n-keylab-finish-group {
+    grid-column: span 2;
   }
 }
 

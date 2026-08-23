@@ -5,8 +5,8 @@
 an older research note, a comment or a conversation disagrees with this file's
 evidence register, correct or annotate the stale claim before relying on it.
 
-**Current status — 2026-08-22 21:21 EDT: READ-ONLY DISCOVERY IMPLEMENTED AND
-FULL LOCAL GATE GREEN; FINAL COMMIT SHA AND CLEAN-RUNNER CI PENDING.** The CLI and
+**Current status — 2026-08-22 21:22 EDT: READ-ONLY DISCOVERY COMMITTED AND
+FULL LOCAL GATE GREEN; CLEAN-RUNNER CI PENDING.** The CLI and
 Control Surface Builder can identify and passively inspect a selected encoder.
 No chart-read, backup, restore or programming capability is implemented. The
 v1 boundary sends no input/feature/output report and changes no driver binding
@@ -247,6 +247,7 @@ button, not an NKRO addition.
 | 2026-08-22 21:17 EDT | same uncommitted worktree | Re-ran the focused discovery safety and contract tests. | `[MEASURED 2026-08-22 21:17 EDT]` `cargo test -p ksx-backend panel::tests::` 7/7; `cargo test -p ksx-platform hid::` 4/4; `cargo test -p ksx-app panel_status_parses_selector_json_and_has_no_consent_flag` 1/1; `cargo test -p ksx-studio --test http panel_status_` 4/4. All exited 0. Full gate and clean-runner CI remain pending. |
 | 2026-08-22 21:19 EDT | same uncommitted worktree | Corrected roadmap/state overclaims, deferred capability wording and evidence references. | `[MEASURED 2026-08-22 21:19 EDT]` `git diff --check` exit 0; `rg -n "[ \\t]+$" docs/ENHANCEMENTS.md docs/PANEL-PROGRAMMING-STATE.md` returned no match; `cargo test -p ksx-app --test docs` passed 3/3. |
 | 2026-08-22 21:21 EDT | same uncommitted worktree | Classified the two canvas-local inspector-tab slots exposed by the full seam gate, then ran the repository-wide acceptance matrix. | `[MEASURED 2026-08-22 21:21 EDT]` Focused seam test passed; `cargo fmt --all -- --check`, workspace clippy, both crates' four feature combinations and `cargo test --workspace --exclude vigem-client` all exited 0. One pre-existing timing test first missed its own channel-backlog precondition; its exact rerun and the complete workspace rerun both passed. |
+| 2026-08-22 21:22 EDT | `codex/control-surface-builder` / `50a3239fe7f6` | Committed the read-only discovery candidate, Studio inspection card, generated assets, tests and governing docs. | `[MEASURED 2026-08-22 21:22 EDT]` `git rev-parse HEAD` returned `50a3239fe7f6f6946ed20390a95e34fa490b38c8`; clean-runner CI remains pending and no shipped-binary claim is made. |
 
 ## Current pickup
 
@@ -254,9 +255,8 @@ button, not an NKRO addition.
 `codex/control-surface-builder`; `git rev-parse --short=12 HEAD` returned the
 baseline `6e519a1426ea`.
 
-`[UNVERIFIED post-commit bookkeeping]` Final v1 candidate SHA: **PENDING**.
-Replace this marker with the exact commit only after the candidate is committed;
-the baseline above is not the candidate SHA.
+`[MEASURED 2026-08-22 21:22 EDT]` Final read-only discovery implementation
+candidate SHA: `50a3239fe7f6f6946ed20390a95e34fa490b38c8`.
 
 `[SOURCE this file, V1 acceptance contract]` Next protocol pickup is evidence
 for a complete, non-mutating chart read and lossless backup representation.

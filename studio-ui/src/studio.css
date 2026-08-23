@@ -7526,10 +7526,9 @@ a.wsrow-title:hover {
   transition: opacity 120ms ease;
 }
 
-/* The all-player lens is an overview. Let shared harness spines build their
-   player color through overlap without making every individual key branch as
-   loud as a selected or live route. Inspection below still promotes the
-   exact binding to full opacity. */
+/* The all-player lens is an overview. Keep its many independent cords quieter
+   than a selected or live route; inspection below still promotes one complete
+   key-to-control relationship to full opacity. */
 .n-flow-layer[data-flow-mode="all"]
   .n-flow-edge[data-flow-kind="binding"]:not(.is-live):not(.is-related) {
   opacity: 0.62;
@@ -7731,9 +7730,8 @@ a.wsrow-title:hover {
     padding-bottom: 0;
   }
 
-  /* Keep the 44px touch controls inside the editor anchor's measured box.
-     The restored harness planner already treats that anchor as a soft cord
-     obstacle, so its original algorithm now protects the whole touch card. */
+  /* Keep the 44px touch controls inside the editor anchor's measured box so
+     every processor cord remains attached while the card is moved. */
   .n-flow-processor-shell > .n-flow-processor {
     padding-bottom: 58px;
   }

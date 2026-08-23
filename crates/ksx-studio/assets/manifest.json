@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "0be0a22a173fec4dbc5a3cd2e098c06de26bededae87cab6369b61337b51cb2d",
+  "build_hash": "a8a2516823bb805b73b5748a8809f282fddf4f4a99bed4b6927092327037f3a6",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -9,7 +9,7 @@
     "map.ir": "map.eb1d7603.ir",
     "map.js": "map.57dc7b7e.js",
     "nocturne.ir": "nocturne.074330fe.ir",
-    "nocturne.js": "nocturne.1ed69d67.js",
+    "nocturne.js": "nocturne.520489ae.js",
     "pads.ir": "pads.69bd275e.ir",
     "pads.js": "pads.be7a85f6.js",
     "profiles.ir": "profiles.d349949d.ir",
@@ -20,7 +20,7 @@
     "start.js": "start.a5f93f92.js",
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
-    "studio.css": "studio.550bda2d.css",
+    "studio.css": "studio.2d0996cc.css",
     "workspace.ir": "workspace.a7e0bee7.ir",
     "workspace.js": "workspace.c5857a02.js"
   },
@@ -30,10 +30,10 @@
         "start.a5f93f92.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 88728,
+      "total_size_br": 88736,
       "budget_warn_threshold": 258000,
       "ir": "start.b0a4715d.ir"
     },
@@ -42,22 +42,22 @@
         "workspace.c5857a02.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 87358,
+      "total_size_br": 87366,
       "budget_warn_threshold": 258000,
       "ir": "workspace.a7e0bee7.ir"
     },
     "/nocturne": {
       "js": [
-        "nocturne.1ed69d67.js"
+        "nocturne.520489ae.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 256418,
+      "total_size_br": 254130,
       "budget_warn_threshold": 258000,
       "ir": "nocturne.074330fe.ir"
     },
@@ -66,10 +66,10 @@
         "status.fa50ec52.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 86227,
+      "total_size_br": 86235,
       "budget_warn_threshold": 258000,
       "ir": "status.cee9d0b7.ir"
     },
@@ -78,10 +78,10 @@
         "map.57dc7b7e.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 113811,
+      "total_size_br": 113819,
       "budget_warn_threshold": 258000,
       "ir": "map.eb1d7603.ir"
     },
@@ -90,10 +90,10 @@
         "check.462901ec.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 85807,
+      "total_size_br": 85815,
       "budget_warn_threshold": 258000,
       "ir": "check.33266fab.ir"
     },
@@ -102,10 +102,10 @@
         "pads.be7a85f6.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 85921,
+      "total_size_br": 85929,
       "budget_warn_threshold": 258000,
       "ir": "pads.69bd275e.ir"
     },
@@ -114,10 +114,10 @@
         "devices.263a38f8.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 87400,
+      "total_size_br": 87408,
       "budget_warn_threshold": 258000,
       "ir": "devices.ba76544a.ir"
     },
@@ -126,10 +126,10 @@
         "profiles.fcb79b2f.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 86890,
+      "total_size_br": 86898,
       "budget_warn_threshold": 258000,
       "ir": "profiles.d349949d.ir"
     },
@@ -138,10 +138,10 @@
         "setup.4aa4c8d3.js"
       ],
       "css": [
-        "studio.550bda2d.css"
+        "studio.2d0996cc.css"
       ],
       "fonts": [],
-      "total_size_br": 86882,
+      "total_size_br": 86890,
       "budget_warn_threshold": 258000,
       "ir": "setup.f6d65c98.ir"
     }

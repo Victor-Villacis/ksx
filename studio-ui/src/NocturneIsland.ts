@@ -1275,6 +1275,11 @@ interface CanvasItemGeometry {
   manualScale: number;
 }
 
+interface CanvasProcessorOffset {
+  x: number;
+  y: number;
+}
+
 interface CanvasPrefs {
   camera?: { panX: number; panY: number; zoom: number };
   widgets: Record<string, CanvasItemGeometry>;
@@ -1283,9 +1288,15 @@ interface CanvasPrefs {
   mapHidden?: boolean;
   /** A supplementary graph lens over the canonical mapping tables. */
   mappingPaths?: MappingPathMode;
+  /** User-pinned macro processor displacement in canvas world coordinates. */
+  processorOffsets?: Record<string, CanvasProcessorOffset>;
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
+const sessionProcessorOffsets = Object.create(null) as Record<
+  string,
+  CanvasProcessorOffset | null
+>;
 let nCanvas: WidgetCanvas | null = null;
 let mappingFlowLayer: MappingFlowLayer | null = null;
 let pendingMappingFlowAnnouncement: {
@@ -1396,6 +1407,32 @@ function isGeometry(g: unknown): g is CanvasItemGeometry {
   );
 }
 
+function isProcessorOffset(value: unknown): value is CanvasProcessorOffset {
+  const offset = value as CanvasProcessorOffset;
+  return (
+    typeof offset === "object" && offset !== null &&
+    Number.isFinite(offset.x) && Number.isFinite(offset.y) &&
+    Math.abs(offset.x) <= CANVAS_WORLD.width &&
+    Math.abs(offset.y) <= CANVAS_WORLD.height
+  );
+}
+
+function cleanProcessorOffsets(value: unknown): Record<string, CanvasProcessorOffset> {
+  const clean = Object.create(null) as Record<string, CanvasProcessorOffset>;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return clean;
+  for (const [processorId, candidate] of Object.entries(value)) {
+    if (
+      !processorId || processorId === "__proto__" ||
+      processorId === "constructor" || processorId === "prototype" ||
+      !isProcessorOffset(candidate)
+    ) {
+      continue;
+    }
+    clean[processorId] = { x: candidate.x, y: candidate.y };
+  }
+  return clean;
+}
+
 function loadCanvasPrefs(): void {
   try {
     const raw = window.localStorage.getItem(CANVAS_STORE);
@@ -1406,10 +1443,12 @@ function loadCanvasPrefs(): void {
       if (isGeometry(g)) widgets[key] = g;
     }
     const cam = saved.camera;
+    const processorOffsets = cleanProcessorOffsets(saved.processorOffsets);
     canvasPrefs = {
       widgets,
       mapHidden: saved.mapHidden === true,
       mappingPaths: mappingPathModeIsValid(saved.mappingPaths) ? saved.mappingPaths : "off",
+      processorOffsets,
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -1423,12 +1462,74 @@ function loadCanvasPrefs(): void {
   }
 }
 
-function saveCanvasPrefs(): void {
+function writeCanvasPrefs(next: CanvasPrefs): boolean {
   try {
-    window.localStorage.setItem(CANVAS_STORE, JSON.stringify(canvasPrefs));
+    window.localStorage.setItem(CANVAS_STORE, JSON.stringify(next));
+    return true;
   } catch {
     // The arrangement simply will not survive this session.
+    return false;
   }
+}
+
+function saveCanvasPrefs(): boolean {
+  return writeCanvasPrefs(canvasPrefs);
+}
+
+function getProcessorOffset(
+  processorId: string,
+): CanvasProcessorOffset | null | undefined {
+  if (Object.prototype.hasOwnProperty.call(sessionProcessorOffsets, processorId)) {
+    const sessionOffset = sessionProcessorOffsets[processorId];
+    return sessionOffset ? { x: sessionOffset.x, y: sessionOffset.y } : null;
+  }
+  const offset = canvasPrefs.processorOffsets?.[processorId];
+  return isProcessorOffset(offset) ? { x: offset.x, y: offset.y } : undefined;
+}
+
+function processorOffsetIsSessionOnly(processorId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(sessionProcessorOffsets, processorId) &&
+    sessionProcessorOffsets[processorId] !== null;
+}
+
+function commitProcessorOffset(
+  processorId: string,
+  offset: CanvasProcessorOffset,
+): boolean {
+  if (
+    !processorId || processorId === "__proto__" ||
+    processorId === "constructor" || processorId === "prototype" ||
+    !isProcessorOffset(offset)
+  ) {
+    return false;
+  }
+  sessionProcessorOffsets[processorId] = { x: offset.x, y: offset.y };
+  const next: CanvasPrefs = {
+    ...canvasPrefs,
+    processorOffsets: {
+      ...(canvasPrefs.processorOffsets ?? {}),
+      [processorId]: { x: offset.x, y: offset.y },
+    },
+  };
+  if (!writeCanvasPrefs(next)) return false;
+  canvasPrefs = next;
+  delete sessionProcessorOffsets[processorId];
+  return true;
+}
+
+function removeProcessorOffset(processorId: string): boolean {
+  const offsets = canvasPrefs.processorOffsets;
+  sessionProcessorOffsets[processorId] = null;
+  const nextOffsets = { ...(offsets ?? {}) };
+  delete nextOffsets[processorId];
+  const next: CanvasPrefs = {
+    ...canvasPrefs,
+    processorOffsets: Object.keys(nextOffsets).length > 0 ? nextOffsets : undefined,
+  };
+  if (!writeCanvasPrefs(next)) return false;
+  canvasPrefs = next;
+  delete sessionProcessorOffsets[processorId];
+  return true;
 }
 
 function loadDs4Variants(): void {
@@ -3753,6 +3854,7 @@ function persistCanvas(): void {
     widgets,
     mapHidden: canvasPrefs.mapHidden,
     mappingPaths: canvasPrefs.mappingPaths,
+    processorOffsets: canvasPrefs.processorOffsets,
   };
   saveCanvasPrefs();
 }
@@ -6767,7 +6869,20 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
       flowLines,
       flowPorts,
       flowNodes,
-      paintMappingFlowCount,
+      {
+        onLayout: paintMappingFlowCount,
+        getProcessorOffset,
+        processorOffsetIsSessionOnly,
+        onProcessorOffsetCommit: (processorId, offset) => {
+          return offset
+            ? commitProcessorOffset(processorId, offset)
+            : removeProcessorOffset(processorId);
+        },
+        announce: (message) => {
+          const sr = (learnRoot ?? scope).querySelector<HTMLElement>(".n-live-sr");
+          if (sr) sr.textContent = message;
+        },
+      },
     );
     syncMappingFlow();
   }

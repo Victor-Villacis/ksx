@@ -116,6 +116,23 @@ The replacement has four parts:
    escape hatch.** Native forms and consequence text survive there (and on
    `/map`); they no longer reserve a quarter of the main canvas.
 
+### Canvas processor placement contract (2026-08-23)
+
+The committed player-harness route model remains the canvas presentation
+contract. Macro and transformation processors auto-place between their live
+source and destination groups. Dragging a processor, or nudging its move
+control with the keyboard, stores a manual offset from that automatic position;
+the relationship can therefore move with its widgets without discarding the
+user's adjustment. The processor exposes an explicit **Auto** action which
+removes that offset and returns it to automatic placement.
+If browser storage refuses either write, the card stays useful for the current
+session, labels that state visibly, and keeps a keyboard-reachable retry rather
+than claiming the change was saved.
+
+Processor offsets are canvas presentation state only. Canonical keys,
+functions, macro topology and mapping writes remain backend-owned; moving a
+processor never changes a binding.
+
 Bulk connection grammar is explicit:
 
 - one key + many controls = fan-out;

@@ -1460,6 +1460,681 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("a macro processor can be pinned, moved accessibly, restored, and reloaded", async () => {
+    const page = await openCanvas();
+    try {
+      const select = '[data-nx="mapping-paths"]';
+      const shellSelector = '#n-mapping-processors .n-flow-processor-shell[data-flow-macro-id*="hadouken"]';
+      const anchorSelector = `${shellSelector} > a.n-flow-processor`;
+      const gripSelector = `${shellSelector} > .n-flow-processor-grip`;
+      const autoSelector = `${shellSelector} > .n-flow-processor-auto`;
+      const triggerSelector = '#n-mapping-paths [data-flow-kind="macro-trigger"] .n-flow-core';
+      const storageKey = "ksx-nocturne-canvas";
+      const storedOffset = (processorId) => page.evaluate(({ storageKey, processorId }) => {
+        const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        return saved.processorOffsets?.[processorId] ?? null;
+      }, { storageKey, processorId });
+
+      await page.selectOption(select, "selected");
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      const processorId = await page.locator(anchorSelector).getAttribute("data-flow-macro-id");
+      assert.ok(processorId, "the macro keeps one stable persistence identity");
+      const processorSlot = await page.locator(anchorSelector).getAttribute("data-flow-slot");
+      assert.ok(processorSlot, "the movable processor keeps its player identity");
+      assert.deepEqual(
+        await page.locator(shellSelector).evaluate((shell) => ({
+          placement: shell.dataset.flowPlacement,
+          saveState: shell.dataset.flowSaveState,
+          buttonInsideLink: shell.querySelector("a button") !== null,
+          children: Array.from(shell.children).map((child) => child.tagName),
+        })),
+        {
+          placement: "auto",
+          saveState: "saved",
+          buttonInsideLink: false,
+          children: ["A", "BUTTON", "BUTTON"],
+        },
+        "move and Auto are sibling controls around the unchanged editor link",
+      );
+      assert.deepEqual(
+        await page.locator(shellSelector).evaluate((shell) => {
+          const grip = shell.querySelector(".n-flow-processor-grip");
+          const auto = shell.querySelector(".n-flow-processor-auto");
+          return {
+            gripLabel: grip?.getAttribute("aria-label"),
+            gripShortcuts: grip?.getAttribute("aria-keyshortcuts"),
+            autoLabel: auto?.getAttribute("aria-label"),
+          };
+        }),
+        {
+          gripLabel:
+            `Move hadouken for Player ${processorSlot}. Drag, or use Arrow keys; Shift plus Arrow moves farther. Moving pins the processor.`,
+          gripShortcuts:
+            "ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Home Delete",
+          autoLabel: `Return hadouken for Player ${processorSlot} to automatic placement`,
+        },
+        "the sibling controls expose their complete move and reset contracts",
+      );
+      assert.equal(await page.locator(autoSelector).isHidden(), true);
+
+      const cameraBefore = await page.getAttribute(".forma-canvas-stage", "style");
+      const routeBefore = await page.getAttribute(triggerSelector, "d");
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ shellSelector, storageKey, processorId }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return document.querySelector(shellSelector)?.dataset.flowPlacement === "manual" &&
+            Number.isFinite(offset?.x) && Number.isFinite(offset?.y);
+        },
+        { shellSelector, storageKey, processorId },
+      );
+      const afterSmallNudge = await storedOffset(processorId);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ storageKey, processorId, before }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.x) && Number.isFinite(offset?.y) &&
+            Math.abs(offset.x - before.x - 16) < 0.01 &&
+            Math.abs(offset.y - before.y) < 0.01;
+        },
+        { storageKey, processorId, before: afterSmallNudge },
+      );
+      const afterRegularNudge = await storedOffset(processorId);
+      await page.keyboard.press("Shift+ArrowDown");
+      await page.waitForFunction(
+        ({ storageKey, processorId, beforeY }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.y) && Math.abs(offset.y - beforeY - 64) < 0.01;
+        },
+        { storageKey, processorId, beforeY: afterRegularNudge.y },
+      );
+      const nudgedOffset = await storedOffset(processorId);
+      assert.equal(afterRegularNudge.x - afterSmallNudge.x, 16);
+      assert.equal(afterRegularNudge.y - afterSmallNudge.y, 0);
+      assert.equal(nudgedOffset.x - afterRegularNudge.x, 0);
+      assert.equal(nudgedOffset.y - afterRegularNudge.y, 64);
+      assert.equal(await page.locator(autoSelector).isVisible(), true);
+      assert.equal(
+        await page.getAttribute(".forma-canvas-stage", "style"),
+        cameraBefore,
+        "processor arrows never move the canvas camera",
+      );
+      await page.waitForFunction(
+        ({ triggerSelector, routeBefore }) =>
+          document.querySelector(triggerSelector)?.getAttribute("d") !== routeBefore,
+        { triggerSelector, routeBefore },
+      );
+      assert.equal(new URL(page.url()).searchParams.has("macro"), false, "Move never opens the editor");
+      assert.equal((await page.textContent(".n-live-sr")).trim(), "hadouken moved and pinned.");
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        ({ shellSelector, processorId, storageKey }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return document.querySelector(shellSelector)?.dataset.flowPlacement === "manual" &&
+            Number.isFinite(offset?.x) && Number.isFinite(offset?.y);
+        },
+        { shellSelector, processorId, storageKey },
+      );
+      await settle(page);
+      assert.deepEqual(await storedOffset(processorId), nudgedOffset, "manual offset survives hydration");
+      const manualBeforeReset = await page.evaluate(
+        ({ shellSelector, triggerSelector }) => {
+          const shell = document.querySelector(shellSelector);
+          const rect = shell?.getBoundingClientRect();
+          return {
+            center: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null,
+            route: document.querySelector(triggerSelector)?.getAttribute("d") ?? "",
+          };
+        },
+        { shellSelector, triggerSelector },
+      );
+      assert.ok(manualBeforeReset.center && manualBeforeReset.route, "the pinned card has rendered geometry");
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("Home");
+      await page.waitForFunction(
+        ({ shellSelector, triggerSelector, storageKey, processorId, manualBeforeReset }) => {
+          const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+          const shell = document.querySelector(shellSelector);
+          const rect = shell?.getBoundingClientRect();
+          const centerMoved = rect && manualBeforeReset.center &&
+            Math.hypot(
+              rect.left + rect.width / 2 - manualBeforeReset.center.x,
+              rect.top + rect.height / 2 - manualBeforeReset.center.y,
+            ) > 1;
+          const routeReset =
+            document.querySelector(triggerSelector)?.getAttribute("d") !== manualBeforeReset.route;
+          return shell?.dataset.flowPlacement === "auto" &&
+            !saved.processorOffsets?.[processorId] && centerMoved && routeReset;
+        },
+        { shellSelector, triggerSelector, storageKey, processorId, manualBeforeReset },
+      );
+      assert.equal(await page.locator(autoSelector).isHidden(), true);
+      assert.equal(await page.locator(gripSelector).evaluate((grip) => document.activeElement === grip), true);
+
+      await page.click('[data-nx="canvas-zoom-in"]');
+      await settle(page);
+      assert.notEqual((await page.textContent(".n-zoomval")).trim(), "100%", "drag QA runs off 1× zoom");
+      const dragBaseline = await page.evaluate(
+        ({ shellSelector, gripSelector, triggerSelector }) => {
+          const shell = document.querySelector(shellSelector);
+          const grip = document.querySelector(gripSelector);
+          const viewport = document.querySelector(".forma-canvas-viewport");
+          if (!shell || !grip || !viewport) return null;
+          const shellRect = shell.getBoundingClientRect();
+          const gripRect = grip.getBoundingClientRect();
+          const viewportRect = viewport.getBoundingClientRect();
+          const visibleRects = (selector) =>
+            [...document.querySelectorAll(selector)].filter((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width >= 2 && rect.height >= 2 &&
+              style.display !== "none" && style.visibility !== "hidden";
+            }).map((element) => element.getBoundingClientRect());
+          const widgetObstacles = visibleRects(
+            ".forma-canvas-stage .widget-instance:not([hidden])",
+          );
+          const navigatorObstacles = visibleRects(
+            ".forma-canvas-navigator:not([hidden])",
+          );
+          const halfWidth = shellRect.width / 2;
+          const halfHeight = shellRect.height / 2;
+          const margin = 12;
+          const center = {
+            x: shellRect.left + halfWidth,
+            y: shellRect.top + halfHeight,
+          };
+          // Ask for the nearest clear point rather than assuming one fixed
+          // diagonal is open. The card planner may legitimately place Auto in
+          // a narrow lane between real widgets; this scan keeps the assertion
+          // exact while avoiding a false failure caused by its safety clamp.
+          const candidates = [];
+          for (let dx = -Math.ceil(viewportRect.width); dx <= viewportRect.width; dx += 16) {
+            for (let dy = -Math.ceil(viewportRect.height); dy <= viewportRect.height; dy += 16) {
+              if (Math.hypot(dx, dy) >= 48) candidates.push({ x: dx, y: dy });
+            }
+          }
+          candidates.sort((left, right) =>
+            Math.hypot(left.x, left.y) - Math.hypot(right.x, right.y) ||
+            right.x - left.x || right.y - left.y
+          );
+          const insideAndClear = (candidate, obstacles) => {
+            const x = center.x + candidate.x;
+            const y = center.y + candidate.y;
+            const inside =
+              x - halfWidth >= viewportRect.left + margin &&
+              x + halfWidth <= viewportRect.right - margin &&
+              y - halfHeight >= viewportRect.top + margin &&
+              y + halfHeight <= viewportRect.bottom - margin;
+            const clear = obstacles.every((rect) =>
+              x + halfWidth + margin <= rect.left ||
+              x - halfWidth - margin >= rect.right ||
+              y + halfHeight + margin <= rect.top ||
+              y - halfHeight - margin >= rect.bottom
+            );
+            return inside && clear;
+          };
+          // Match the product's deliberate fallback tiers: protect widgets
+          // and navigator when space exists, then keep the processor reachable
+          // even when the visible widgets consume the whole viewport.
+          const obstacleTiers = [
+            [...widgetObstacles, ...navigatorObstacles],
+            widgetObstacles,
+            navigatorObstacles,
+            [],
+          ];
+          const activeObstacles = obstacleTiers.find((obstacles) =>
+            candidates.some((candidate) => insideAndClear(candidate, obstacles))
+          ) ?? [];
+          const requested = candidates.find((candidate) =>
+            insideAndClear(candidate, activeObstacles)
+          );
+          return {
+            center,
+            grip: {
+              x: gripRect.left + gripRect.width / 2,
+              y: gripRect.top + gripRect.height / 2,
+            },
+            requested: requested ?? null,
+            route: document.querySelector(triggerSelector)?.getAttribute("d") ?? "",
+            camera: document.querySelector(".forma-canvas-stage")?.getAttribute("style") ?? "",
+            activeWidget:
+              document.querySelector(".forma-canvas-stage .widget-instance.is-active")
+                ?.getAttribute("data-instance-id") ?? "",
+          };
+        },
+        { shellSelector, gripSelector, triggerSelector },
+      );
+      assert.ok(dragBaseline?.requested, "the zoomed canvas offers one unclamped drag direction");
+      assert.ok(dragBaseline.route, "the zoomed macro route has rendered before dragging");
+      const requestedDrag = dragBaseline.requested;
+      await page.mouse.move(dragBaseline.grip.x, dragBaseline.grip.y);
+      await page.mouse.down();
+      await page.mouse.move(dragBaseline.grip.x + requestedDrag.x, dragBaseline.grip.y + requestedDrag.y, {
+        steps: 6,
+      });
+      await page.mouse.up();
+      await page.waitForFunction(
+        ({ shellSelector, storageKey, processorId }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return document.querySelector(shellSelector)?.dataset.flowPlacement === "manual" &&
+            Number.isFinite(offset?.x) && Number.isFinite(offset?.y);
+        },
+        { shellSelector, storageKey, processorId },
+      );
+      await page.waitForFunction(
+        ({ shellSelector, triggerSelector, dragBaseline, requestedDrag }) => {
+          const shell = document.querySelector(shellSelector);
+          const rect = shell?.getBoundingClientRect();
+          if (!rect) return false;
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          return document.querySelector(triggerSelector)?.getAttribute("d") !== dragBaseline.route &&
+            Math.abs(x - dragBaseline.center.x - requestedDrag.x) <= 2 &&
+            Math.abs(y - dragBaseline.center.y - requestedDrag.y) <= 2;
+        },
+        { shellSelector, triggerSelector, dragBaseline, requestedDrag },
+      );
+      const dragResult = await page.locator(shellSelector).evaluate((shell) => {
+        const rect = shell.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      });
+      assert.ok(
+        Math.sign(dragResult.x - dragBaseline.center.x) === Math.sign(requestedDrag.x) &&
+          Math.sign(dragResult.y - dragBaseline.center.y) === Math.sign(requestedDrag.y),
+        "the zoomed processor follows the requested drag direction",
+      );
+      assert.equal(
+        await page.getAttribute(".forma-canvas-stage", "style"),
+        dragBaseline.camera,
+        "dragging a processor never pans or zooms the canvas",
+      );
+      assert.equal(
+        await page.evaluate(() =>
+          document.querySelector(".forma-canvas-stage .widget-instance.is-active")
+            ?.getAttribute("data-instance-id") ?? ""),
+        dragBaseline.activeWidget,
+        "dragging a processor never changes the active widget",
+      );
+      assert.equal(new URL(page.url()).searchParams.has("macro"), false, "dragging the sibling grip stays on canvas");
+
+      await page.locator(autoSelector).click();
+      await page.waitForFunction(
+        ({ shellSelector, storageKey, processorId }) => {
+          const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+          return document.querySelector(shellSelector)?.dataset.flowPlacement === "auto" &&
+            !saved.processorOffsets?.[processorId];
+        },
+        { shellSelector, storageKey, processorId },
+      );
+      assert.equal((await page.textContent(".n-live-sr")).trim(), "hadouken returned to automatic placement.");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("macro movement cancels stale gestures and reports a refused save truthfully", async () => {
+    const page = await openCanvas();
+    try {
+      const select = '[data-nx="mapping-paths"]';
+      const shellSelector =
+        '#n-mapping-processors .n-flow-processor-shell[data-flow-macro-id*="hadouken"]';
+      const anchorSelector = `${shellSelector} > a.n-flow-processor`;
+      const gripSelector = `${shellSelector} > .n-flow-processor-grip`;
+      const autoSelector = `${shellSelector} > .n-flow-processor-auto`;
+      const storageKey = "ksx-nocturne-canvas";
+
+      await page.selectOption(select, "selected");
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      const processorId = await page.locator(anchorSelector).getAttribute("data-flow-macro-id");
+      assert.ok(processorId, "the cancellation test has a stable processor identity");
+      const refuseCanvasStorage = () => page.evaluate((storageKey) => {
+        const original = Storage.prototype.setItem;
+        window.__ksxRestoreCanvasStorage = () => {
+          Storage.prototype.setItem = original;
+          delete window.__ksxRestoreCanvasStorage;
+        };
+        Storage.prototype.setItem = function setItem(key, value) {
+          if (key === storageKey) throw new DOMException("storage refused", "QuotaExceededError");
+          return original.call(this, key, value);
+        };
+      }, storageKey);
+
+      const beginDrag = async () => {
+        const box = await page.locator(gripSelector).boundingBox();
+        assert.ok(box, "the macro move grip has browser geometry");
+        const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        await page.mouse.move(point.x + 52, point.y + 34, { steps: 4 });
+        await page.waitForFunction(
+          ({ shellSelector }) =>
+            document.querySelector(".forma-canvas-viewport")
+              ?.classList.contains("is-dragging-flow-processor") === true &&
+            document.querySelector(shellSelector)?.classList.contains("is-dragging") === true,
+          { shellSelector },
+        );
+      };
+      const assertCancelled = async (reason) => {
+        await page.waitForFunction(
+          ({ shellSelector, storageKey, processorId }) => {
+            const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+            return document.querySelector(".forma-canvas-viewport")
+              ?.classList.contains("is-dragging-flow-processor") === false &&
+              document.querySelector(shellSelector)?.classList.contains("is-dragging") === false &&
+              document.querySelector(shellSelector)?.dataset.flowPlacement === "auto" &&
+              !saved.processorOffsets?.[processorId];
+          },
+          { shellSelector, storageKey, processorId },
+        );
+        assert.equal(
+          await page.locator(shellSelector).getAttribute("data-flow-placement"),
+          "auto",
+          reason,
+        );
+      };
+
+      await beginDrag();
+      await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      await assertCancelled("losing the window abandons the preview instead of pinning it");
+      await page.mouse.up();
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+
+      const cameraBefore = await page.getAttribute(".forma-canvas-stage", "style");
+      await beginDrag();
+      await page.evaluate(() =>
+        document.querySelector('[data-nx="canvas-zoom-in"]')?.click()
+      );
+      await page.waitForFunction(
+        (cameraBefore) =>
+          document.querySelector(".forma-canvas-stage")?.getAttribute("style") !== cameraBefore,
+        cameraBefore,
+      );
+      await assertCancelled("a camera change abandons a drag whose captured matrix is stale");
+      await page.mouse.up();
+      await settle(page);
+
+      await beginDrag();
+      await page.setViewportSize({ width: 1500, height: 1000 });
+      await assertCancelled("a viewport resize abandons a drag whose captured matrix is stale");
+      await page.mouse.up();
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+
+      await refuseCanvasStorage();
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ shellSelector }) =>
+          document.querySelector(shellSelector)?.dataset.flowPlacement === "manual" &&
+          document.querySelector(shellSelector)?.dataset.flowSaveState === "session-only" &&
+          document.querySelector(".n-live-sr")?.textContent
+            ?.includes("moved for this session") === true,
+        { shellSelector },
+      );
+      assert.equal(
+        (await page.textContent(".n-live-sr")).trim(),
+        "hadouken moved for this session, but its canvas position could not be saved.",
+      );
+      assert.equal(
+        await page.locator(shellSelector).evaluate((shell) =>
+          getComputedStyle(shell, "::after").content.replaceAll('"', "")
+        ),
+        "Session only",
+        "a sighted user can see that the manual placement is not durable",
+      );
+      assert.equal(
+        await page.evaluate(
+          ({ storageKey, processorId }) =>
+            JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId] ?? null,
+          { storageKey, processorId },
+        ),
+        null,
+        "a refused save is never presented as persisted state",
+      );
+      await page.evaluate(() => window.__ksxRestoreCanvasStorage?.());
+
+      // A later, unrelated successful preference write must not smuggle the
+      // refused processor offset into storage. The session-only override does
+      // survive rebuilding the route lens until this document is reloaded.
+      await page.selectOption(select, "off");
+      await page.selectOption(select, "selected");
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      assert.equal(
+        await page.locator(shellSelector).getAttribute("data-flow-placement"),
+        "manual",
+        "the refused position remains useful for this document",
+      );
+      assert.equal(
+        await page.locator(shellSelector).getAttribute("data-flow-save-state"),
+        "session-only",
+        "the session-only warning survives rebuilding the route lens",
+      );
+      assert.equal(
+        await page.evaluate(
+          ({ storageKey, processorId }) =>
+            JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId] ?? null,
+          { storageKey, processorId },
+        ),
+        null,
+        "later preference saves do not accidentally persist a refused position",
+      );
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      await settle(page);
+      assert.equal(
+        await page.locator(shellSelector).getAttribute("data-flow-placement"),
+        "auto",
+        "the session-only move does not reappear after hydration",
+      );
+
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ storageKey, processorId, shellSelector }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.x) && Number.isFinite(offset?.y) &&
+            document.querySelector(shellSelector)?.dataset.flowSaveState === "saved";
+        },
+        { storageKey, processorId, shellSelector },
+      );
+      const persistedOffset = await page.evaluate(
+        ({ storageKey, processorId }) =>
+          JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets[processorId],
+        { storageKey, processorId },
+      );
+      await refuseCanvasStorage();
+      await page.locator(autoSelector).focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        ({ shellSelector }) =>
+          document.querySelector(shellSelector)?.dataset.flowPlacement === "auto" &&
+          document.querySelector(shellSelector)?.dataset.flowSaveState === "retry-reset",
+        { shellSelector },
+      );
+      assert.equal(await page.locator(autoSelector).isVisible(), true);
+      assert.equal((await page.locator(autoSelector).textContent()).trim(), "Retry Auto");
+      assert.equal(
+        await page.locator(autoSelector).evaluate((button) => document.activeElement === button),
+        true,
+        "a failed keyboard-accessible reset keeps focus on its visible retry action",
+      );
+      assert.equal(
+        (await page.textContent(".n-live-sr")).trim(),
+        "hadouken returned to automatic placement for this session, but that reset could not be saved.",
+      );
+      assert.deepEqual(
+        await page.evaluate(
+          ({ storageKey, processorId }) =>
+            JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets[processorId],
+          { storageKey, processorId },
+        ),
+        persistedOffset,
+        "a refused Auto reset leaves the last durable offset intact",
+      );
+      await page.evaluate(() => window.__ksxRestoreCanvasStorage?.());
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        ({ storageKey, processorId, autoSelector }) =>
+          document.querySelector(autoSelector)?.hidden === true &&
+          !JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId],
+        { storageKey, processorId, autoSelector },
+      );
+      assert.equal(
+        await page.locator(gripSelector).evaluate((grip) => document.activeElement === grip),
+        true,
+        "a successful retry returns focus to Move when Auto disappears",
+      );
+      assert.equal(
+        (await page.textContent(".n-live-sr")).trim(),
+        "hadouken returned to automatic placement.",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a clamped macro saves its visible position and moves inward immediately", async () => {
+    const page = await openCanvas();
+    try {
+      const select = '[data-nx="mapping-paths"]';
+      const shellSelector =
+        '#n-mapping-processors .n-flow-processor-shell[data-flow-macro-id*="hadouken"]';
+      const anchorSelector = `${shellSelector} > a.n-flow-processor`;
+      const gripSelector = `${shellSelector} > .n-flow-processor-grip`;
+      const autoSelector = `${shellSelector} > .n-flow-processor-auto`;
+      const storageKey = "ksx-nocturne-canvas";
+
+      await page.setViewportSize({ width: 2400, height: 1000 });
+      await settle(page);
+      await page.selectOption(select, "selected");
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      const processorId = await page.locator(anchorSelector).getAttribute("data-flow-macro-id");
+      assert.ok(processorId, "the clamp test has a stable processor identity");
+      const snapshot = () => page.evaluate(
+        ({ shellSelector, storageKey, processorId }) => {
+          const shell = document.querySelector(shellSelector);
+          const rect = shell?.getBoundingClientRect();
+          const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+          const matrix = document.querySelector("#n-mapping-paths")?.getScreenCTM();
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          if (!rect || !viewport || !matrix || !Number.isFinite(offset?.x) || !Number.isFinite(offset?.y)) {
+            return null;
+          }
+          return {
+            center: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+            offset: { x: offset.x, y: offset.y },
+            scale: Math.hypot(matrix.a, matrix.b),
+            rightGap: viewport.right - rect.right,
+            bottomGap: viewport.bottom - rect.bottom,
+          };
+        },
+        { shellSelector, storageKey, processorId },
+      );
+
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(
+        ({ storageKey, processorId }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.x) && Number.isFinite(offset?.y);
+        },
+        { storageKey, processorId },
+      );
+      const first = await snapshot();
+      assert.ok(first, "the first manual placement is measurable");
+
+      const gripBox = await page.locator(gripSelector).boundingBox();
+      const viewportSize = page.viewportSize();
+      assert.ok(gripBox && viewportSize, "the clamp drag has browser geometry");
+      const gripPoint = {
+        x: gripBox.x + gripBox.width / 2,
+        y: gripBox.y + gripBox.height / 2,
+      };
+      await page.mouse.move(gripPoint.x, gripPoint.y);
+      await page.mouse.down();
+      await page.mouse.move(gripPoint.x, viewportSize.height - 2, { steps: 8 });
+      await page.mouse.up();
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+      const clamped = await snapshot();
+      assert.ok(clamped, "the clamped placement remains measurable");
+      assert.ok(
+        Math.abs(clamped.bottomGap - 12) <= 1,
+        `the saturated card is clamped at the reachable bottom-edge margin: ${JSON.stringify(clamped)}`,
+      );
+      assert.ok(
+        Math.abs(
+          (clamped.offset.x - first.offset.x) * clamped.scale -
+            (clamped.center.x - first.center.x),
+        ) <= 2.5 &&
+          Math.abs(
+            (clamped.offset.y - first.offset.y) * clamped.scale -
+              (clamped.center.y - first.center.y),
+          ) <= 2.5,
+        "the persisted world offset describes the card the user can actually see",
+      );
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.locator(anchorSelector).waitFor({ state: "visible" });
+      await settle(page);
+      const reloaded = await snapshot();
+      assert.ok(reloaded, "the clamped placement survives hydration");
+      assert.deepEqual(reloaded.offset, clamped.offset, "hydration keeps the effective offset");
+      assert.ok(
+        Math.abs(reloaded.bottomGap - 12) <= 1,
+        "hydration keeps the clamped card reachable after recomputing Auto placement",
+      );
+
+      await page.locator(gripSelector).focus();
+      await page.keyboard.press("ArrowUp");
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+      const inward = await snapshot();
+      assert.ok(inward, "the inward nudge remains measurable");
+      const inwardScreenDelta = {
+        x: inward.center.x - reloaded.center.x,
+        y: inward.center.y - reloaded.center.y,
+      };
+      const inwardWorldDelta = {
+        x: inward.offset.x - reloaded.offset.x,
+        y: inward.offset.y - reloaded.offset.y,
+      };
+      assert.ok(
+        Math.hypot(inwardScreenDelta.x, inwardScreenDelta.y) > 1 &&
+          Math.abs(inwardWorldDelta.x * inward.scale - inwardScreenDelta.x) <= 2.5 &&
+          Math.abs(inwardWorldDelta.y * inward.scale - inwardScreenDelta.y) <= 2.5,
+        "the first inward nudge moves the visible card instead of catching up with a hidden offset",
+      );
+      await page.locator(autoSelector).click();
+      await page.waitForFunction(
+        ({ storageKey, processorId }) =>
+          !JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId],
+        { storageKey, processorId },
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a processor removed before its confirming read settles without a dead dialog URL", async () => {
     let removed = false;
     const page = await openCanvas({}, async (candidate) => {

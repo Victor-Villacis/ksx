@@ -8012,6 +8012,24 @@ a.wsrow-title:hover {
   display: none;
 }
 
+/* A processor is graph chrome, not a WidgetCanvas item. The shell supplies
+   widget-grade move controls without putting buttons inside the editor link.
+   It owns the fixed-screen-size inverse transform; the anchor remains the
+   exact geometry used by the two adjoining cords. */
+.n-flow-processor-shell {
+  --n-flow-node-inverse: 1;
+  position: absolute;
+  width: 176px;
+  min-height: 72px;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(var(--n-flow-node-inverse));
+  transform-origin: center;
+}
+
+.n-flow-processor-shell[hidden] {
+  display: none;
+}
+
 .n-flow-processor {
   --n-flow-node-inverse: 1;
   position: absolute;
@@ -8044,6 +8062,90 @@ a.wsrow-title:hover {
   transform: translate(-50%, -50%) scale(var(--n-flow-node-inverse));
   transition: opacity 120ms ease, box-shadow 120ms ease;
   transform-origin: center;
+}
+
+.n-flow-processor-shell > .n-flow-processor {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  padding-right: 50px;
+  transform: none;
+}
+
+.n-flow-processor-grip,
+.n-flow-processor-auto {
+  position: absolute;
+  right: 6px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--n-flow-color) 44%, white);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--n-flow-color) 18%, rgb(17 20 31 / 98%));
+  color: color-mix(in srgb, var(--n-flow-color) 42%, white);
+  font: 800 8px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.02em;
+  pointer-events: auto;
+}
+
+.n-flow-processor-grip {
+  top: 6px;
+  height: 25px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.n-flow-processor-auto {
+  right: 6px;
+  bottom: 6px;
+  height: 23px;
+  cursor: pointer;
+}
+
+.n-flow-processor-auto[hidden] {
+  display: none;
+}
+
+.n-flow-processor-grip:is(:hover, :focus-visible),
+.n-flow-processor-auto:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--n-flow-color) 24%, white);
+  background: color-mix(in srgb, var(--n-flow-color) 34%, rgb(17 20 31 / 98%));
+  color: white;
+  outline: 2px solid color-mix(in srgb, var(--n-flow-color) 52%, white);
+  outline-offset: 2px;
+}
+
+.n-flow-processor-shell.is-dragging .n-flow-processor-grip {
+  cursor: grabbing;
+}
+
+.n-flow-processor-shell[data-flow-placement="manual"] > .n-flow-processor {
+  box-shadow:
+    0 12px 28px rgb(0 0 0 / 44%),
+    inset 3px 0 color-mix(in srgb, var(--n-flow-color) 66%, white),
+    inset 0 1px rgb(255 255 255 / 8%),
+    0 0 0 1px rgb(0 0 0 / 45%);
+}
+
+.n-flow-processor-shell[data-flow-save-state="session-only"]::after {
+  content: "Session only";
+  position: absolute;
+  top: -16px;
+  left: 8px;
+  z-index: 3;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--n-flow-color) 50%, white);
+  border-radius: 999px;
+  background: rgb(17 20 31 / 96%);
+  color: color-mix(in srgb, var(--n-flow-color) 42%, white);
+  font: 800 7px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .n-flow-processor::before,
@@ -8221,8 +8323,14 @@ a.wsrow-title:hover {
   opacity: 0.16;
 }
 
-.forma-canvas-viewport:is(.is-pan-ready, .is-panning, .is-navigating, .is-dragging-widget)
-  .n-flow-processor {
+.n-flow-node-layer.is-inspecting
+  .n-flow-processor-shell:not(:has(> .n-flow-processor.is-related))
+  :is(.n-flow-processor-grip, .n-flow-processor-auto) {
+  opacity: 0.16;
+}
+
+.forma-canvas-viewport:is(.is-pan-ready, .is-panning, .is-navigating, .is-dragging-widget, .is-camera-animating)
+  :is(.n-flow-processor, .n-flow-processor-grip, .n-flow-processor-auto) {
   pointer-events: none;
 }
 
@@ -8435,6 +8543,34 @@ a.wsrow-title:hover {
   .n-pathsel {
     min-height: 40px;
   }
+
+  .n-flow-processor-shell {
+    padding-bottom: 0;
+  }
+
+  /* Keep the 44px touch controls inside the editor anchor's measured box.
+     The restored harness planner already treats that anchor as a soft cord
+     obstacle, so its original algorithm now protects the whole touch card. */
+  .n-flow-processor-shell > .n-flow-processor {
+    padding-bottom: 58px;
+  }
+
+  .n-flow-processor-grip,
+  .n-flow-processor-auto {
+    top: auto;
+    bottom: 0;
+    width: calc(50% - 3px);
+    height: 44px;
+  }
+
+  .n-flow-processor-grip {
+    right: auto;
+    left: 0;
+  }
+
+  .n-flow-processor-auto {
+    right: 0;
+  }
 }
 
 @media (max-width: 600px) {
@@ -8452,6 +8588,16 @@ a.wsrow-title:hover {
     padding: 6px 8px;
   }
 
+  .n-flow-processor-shell {
+    width: 136px;
+    min-height: 58px;
+  }
+
+  .n-flow-processor-shell > .n-flow-processor {
+    width: 100%;
+    padding-right: 46px;
+  }
+
   .nocturne .n-navigator {
     width: 112px;
     height: 80px;
@@ -8461,7 +8607,10 @@ a.wsrow-title:hover {
 @media (prefers-reduced-motion: reduce) {
   .n-flow-layer,
   .n-flow-node-layer,
+  .n-flow-processor-shell,
   .n-flow-processor,
+  .n-flow-processor-grip,
+  .n-flow-processor-auto,
   .n-flow-edge,
   .n-flow-edge.is-live .n-flow-core {
     transition: none;

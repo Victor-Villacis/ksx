@@ -142,6 +142,32 @@ export interface MappingFlowLayoutSummary {
   unavailableMacros: readonly MappingFlowUnavailable[];
 }
 
+/** A processor's manual canvas adjustment. It is deliberately an OFFSET from
+ * semantic auto-placement rather than an absolute point, so moving either
+ * endpoint keeps the transformation attached to the relationship the user
+ * arranged. */
+export interface MappingFlowProcessorOffset {
+  x: number;
+  y: number;
+}
+
+/** Host-owned chrome hooks. Mapping truth remains read-only in this module;
+ * only the optional processor offsets cross this presentation boundary. */
+export interface MappingFlowLayerOptions {
+  onLayout?: (summary: MappingFlowLayoutSummary) => void;
+  /** undefined = durable Auto, null = session Auto whose durable reset needs
+   * retrying, finite coordinates = the current manual displacement. */
+  getProcessorOffset?: (
+    processorId: string,
+  ) => MappingFlowProcessorOffset | null | undefined;
+  processorOffsetIsSessionOnly?: (processorId: string) => boolean;
+  onProcessorOffsetCommit?: (
+    processorId: string,
+    offset: MappingFlowProcessorOffset | null,
+  ) => boolean;
+  announce?: (message: string) => void;
+}
+
 interface MappingFlowEntry {
   route: MappingFlowSegment;
   lineGroup: SVGGElement;
@@ -173,10 +199,19 @@ interface ResolvedMappingFlowEntry {
 
 interface MacroProcessorEntry {
   processor: MacroProcessorFlow;
+  shell: HTMLDivElement;
   element: HTMLAnchorElement;
+  moveGrip: HTMLButtonElement;
+  autoButton: HTMLButtonElement;
   sourceElements: Element[];
   targetElements: Element[];
   padElement: Element | null;
+  automaticPosition: { x: number; y: number } | null;
+  renderedPosition: { x: number; y: number } | null;
+  manualOffset: MappingFlowProcessorOffset | null;
+  previewOffset: MappingFlowProcessorOffset | null;
+  savePending: boolean;
+  resetPending: boolean;
 }
 
 interface MappingAnchorCache {
@@ -192,7 +227,16 @@ interface MappingInspection {
   macroId?: string;
 }
 
+type MacroProcessorFocusTarget = "editor" | "move" | "auto";
+
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+function finiteProcessorOffset(
+  value: MappingFlowProcessorOffset | null | undefined,
+): MappingFlowProcessorOffset | null {
+  if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y)) return null;
+  return { x: value.x, y: value.y };
+}
 
 export function mappingPathModeIsValid(value: unknown): value is MappingPathMode {
   return value === "off" || value === "selected" || value === "all";
@@ -721,6 +765,15 @@ export class MappingFlowLayer {
   readonly #ports: SVGSVGElement;
   readonly #nodes: HTMLElement;
   readonly #onLayout: (summary: MappingFlowLayoutSummary) => void;
+  readonly #getProcessorOffset: (
+    processorId: string,
+  ) => MappingFlowProcessorOffset | null | undefined;
+  readonly #processorOffsetIsSessionOnly: (processorId: string) => boolean;
+  readonly #onProcessorOffsetCommit: (
+    processorId: string,
+    offset: MappingFlowProcessorOffset | null,
+  ) => boolean;
+  readonly #announce: (message: string) => void;
   readonly #entries = new Map<string, MappingFlowEntry>();
   readonly #processorEntries = new Map<string, MacroProcessorEntry>();
   readonly #mutationObserver: MutationObserver;
@@ -746,8 +799,11 @@ export class MappingFlowLayer {
   #overflowFingerprint = "";
   #processorOverflow = 0;
   #restoreProcessorFocusId: string | null = null;
+  #restoreProcessorFocusTarget: MacroProcessorFocusTarget = "editor";
   #restoreOverflowSummaryFocus = false;
   #restoreOverflowOpen = false;
+  #processorDragPointerId: number | null = null;
+  #cancelProcessorDrag: (() => void) | null = null;
 
   constructor(
     root: HTMLElement,
@@ -756,7 +812,7 @@ export class MappingFlowLayer {
     lines: SVGSVGElement,
     ports: SVGSVGElement,
     nodes: HTMLElement,
-    onLayout: (summary: MappingFlowLayoutSummary) => void = () => undefined,
+    options: MappingFlowLayerOptions | ((summary: MappingFlowLayoutSummary) => void) = {},
   ) {
     this.#root = root;
     this.#viewport = viewport;
@@ -764,7 +820,15 @@ export class MappingFlowLayer {
     this.#lines = lines;
     this.#ports = ports;
     this.#nodes = nodes;
-    this.#onLayout = onLayout;
+    const normalizedOptions: MappingFlowLayerOptions = typeof options === "function"
+      ? { onLayout: options }
+      : options;
+    this.#onLayout = normalizedOptions.onLayout ?? (() => undefined);
+    this.#getProcessorOffset = normalizedOptions.getProcessorOffset ?? (() => undefined);
+    this.#processorOffsetIsSessionOnly =
+      normalizedOptions.processorOffsetIsSessionOnly ?? (() => false);
+    this.#onProcessorOffsetCommit = normalizedOptions.onProcessorOffsetCommit ?? (() => true);
+    this.#announce = normalizedOptions.announce ?? (() => undefined);
     this.#mutationObserver = new MutationObserver((records) => {
       let cameraChanged = false;
       let geometryChanged = false;
@@ -772,6 +836,10 @@ export class MappingFlowLayer {
         if (record.target === this.#stage) cameraChanged = true;
         else geometryChanged = true;
       }
+      // A pointer delta is converted through the camera matrix captured at
+      // gesture start. Any camera mutation invalidates that matrix, so cancel
+      // the gesture before another pointer event can apply stale coordinates.
+      if (cameraChanged) this.#cancelProcessorDrag?.();
       if (cameraChanged) this.#syncCameraTransform();
       if (cameraChanged || geometryChanged) this.scheduleLayout();
     });
@@ -780,7 +848,13 @@ export class MappingFlowLayer {
       subtree: true,
       attributeFilter: ["style"],
     });
-    this.#resizeObserver = new ResizeObserver(() => this.scheduleLayout());
+    this.#resizeObserver = new ResizeObserver(() => {
+      // Viewport resizes invalidate the gesture's captured camera matrix; an
+      // anchor resize can move its semantic Auto point. In either case an
+      // in-flight preview is no longer anchored to the geometry it began on.
+      this.#cancelProcessorDrag?.();
+      this.scheduleLayout();
+    });
     this.#resizeObserver.observe(viewport);
     root.addEventListener("pointerover", (event) => this.#inspectEvent("pointer", event), {
       signal: this.#abort.signal,
@@ -809,7 +883,17 @@ export class MappingFlowLayer {
       }
     }, { signal: this.#abort.signal });
     root.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") this.#clearInspections();
+      if (event.key === "Escape") {
+        this.#cancelProcessorDrag?.();
+        this.#clearInspections();
+      }
+    }, { signal: this.#abort.signal });
+    const window_ = root.ownerDocument.defaultView;
+    window_?.addEventListener("blur", () => this.#cancelProcessorDrag?.(), {
+      signal: this.#abort.signal,
+    });
+    root.ownerDocument.addEventListener("visibilitychange", () => {
+      if (root.ownerDocument.hidden) this.#cancelProcessorDrag?.();
     }, { signal: this.#abort.signal });
     this.#syncCameraTransform();
   }
@@ -877,7 +961,9 @@ export class MappingFlowLayer {
     }
     this.#syncCameraTransform();
     if (hidden) {
+      this.#cancelProcessorDrag?.();
       this.#restoreProcessorFocusId = null;
+      this.#restoreProcessorFocusTarget = "editor";
       if (this.#layoutFrame !== 0) cancelAnimationFrame(this.#layoutFrame);
       this.#layoutFrame = 0;
       this.#clearInspections();
@@ -905,8 +991,22 @@ export class MappingFlowLayer {
     if (this.#mode === "off" || this.#layoutFrame !== 0) return;
     this.#layoutFrame = requestAnimationFrame(() => {
       this.#layoutFrame = 0;
-      this.#layout();
+      // A direct cord already shares the stage's transform. While the camera
+      // moves, keep only fixed-screen processors and their short macro links
+      // attached; run the committed direct-harness planner once motion stops.
+      if (this.#cameraMotionActive()) this.#layoutCameraFrame();
+      else this.#layout();
     });
+  }
+
+  #cameraMotionActive(): boolean {
+    return this.#viewport.classList.contains("is-camera-animating") ||
+      this.#cameraPanActive();
+  }
+
+  #cameraPanActive(): boolean {
+    return this.#viewport.classList.contains("is-panning") ||
+      this.#viewport.classList.contains("is-navigating");
   }
 
   setLive(
@@ -963,6 +1063,7 @@ export class MappingFlowLayer {
   }
 
   dispose(): void {
+    this.#cancelProcessorDrag?.();
     if (this.#layoutFrame !== 0) cancelAnimationFrame(this.#layoutFrame);
     this.#layoutFrame = 0;
     this.#abort.abort();
@@ -976,6 +1077,7 @@ export class MappingFlowLayer {
     this.#overflowFingerprint = "";
     this.#processorOverflow = 0;
     this.#restoreProcessorFocusId = null;
+    this.#restoreProcessorFocusTarget = "editor";
     this.#restoreOverflowSummaryFocus = false;
     this.#restoreOverflowOpen = false;
     this.#lines.replaceChildren();
@@ -985,6 +1087,7 @@ export class MappingFlowLayer {
 
   #rebuild(): void {
     this.#captureProcessorFocus();
+    this.#cancelProcessorDrag?.();
     this.#clearRelatedAnchors();
     this.#entries.clear();
     this.#processorEntries.clear();
@@ -998,21 +1101,44 @@ export class MappingFlowLayer {
     this.#resizeObserver.observe(this.#viewport);
     const document_ = this.#root.ownerDocument;
     for (const processor of this.#processors) {
+      const savedPlacement = this.#savedProcessorPlacement(processor.id);
+      const shell = document_.createElement("div");
+      shell.className = "n-flow-processor-shell";
       const element = document_.createElement("a");
       element.addEventListener("pointerdown", (event) => {
         if (event.button === 0) event.stopPropagation();
       }, {
         signal: this.#abort.signal,
       });
-      const entry = {
+      const moveGrip = document_.createElement("button");
+      moveGrip.type = "button";
+      moveGrip.className = "n-flow-processor-grip";
+      moveGrip.textContent = "Move";
+      const autoButton = document_.createElement("button");
+      autoButton.type = "button";
+      autoButton.className = "n-flow-processor-auto";
+      autoButton.textContent = "Auto";
+      const entry: MacroProcessorEntry = {
         processor,
+        shell,
         element,
+        moveGrip,
+        autoButton,
         sourceElements: [],
         targetElements: [],
         padElement: null,
+        automaticPosition: null,
+        renderedPosition: null,
+        manualOffset: savedPlacement.offset,
+        previewOffset: null,
+        savePending: savedPlacement.savePending,
+        resetPending: savedPlacement.resetPending,
       };
       this.#syncProcessorElement(entry);
-      this.#nodes.append(element);
+      this.#syncProcessorPlacementChrome(entry);
+      this.#bindProcessorControls(entry);
+      shell.append(element, moveGrip, autoButton);
+      this.#nodes.append(shell);
       this.#processorEntries.set(processor.id, entry);
     }
     const overflow = document_.createElement("details");
@@ -1066,8 +1192,352 @@ export class MappingFlowLayer {
     this.#applyLive();
   }
 
+  #savedProcessorPlacement(processorId: string): {
+    offset: MappingFlowProcessorOffset | null;
+    savePending: boolean;
+    resetPending: boolean;
+  } {
+    try {
+      const saved = this.#getProcessorOffset(processorId);
+      const offset = finiteProcessorOffset(saved);
+      return {
+        offset,
+        savePending: offset !== null && this.#processorOffsetIsSessionOnly(processorId),
+        // A host can return null (distinct from absent/undefined) when Auto is
+        // active for this document but clearing an older stored offset failed.
+        resetPending: saved === null,
+      };
+    } catch {
+      return { offset: null, savePending: false, resetPending: false };
+    }
+  }
+
+  #syncProcessorPlacementChrome(entry: MacroProcessorEntry): void {
+    const manual = entry.previewOffset !== null || entry.manualOffset !== null;
+    const retryReset = !manual && entry.resetPending;
+    const state = manual ? "manual" : "auto";
+    entry.shell.dataset.flowPlacement = state;
+    entry.element.dataset.flowPlacement = state;
+    entry.moveGrip.dataset.flowPlacement = state;
+    entry.autoButton.dataset.flowPlacement = state;
+    entry.shell.dataset.flowSaveState = retryReset
+      ? "retry-reset"
+      : entry.savePending
+        ? "session-only"
+        : "saved";
+    entry.autoButton.hidden = !manual && !retryReset;
+    entry.autoButton.disabled = !manual && !retryReset;
+    entry.autoButton.textContent = retryReset ? "Retry Auto" : "Auto";
+    let moveDescription = "Auto placement. Moving this processor pins it.";
+    if (retryReset) {
+      moveDescription =
+        "Auto is active for this session, but its reset is not saved. Choose Retry Auto to try again.";
+    } else if (entry.savePending) {
+      moveDescription =
+        "This manual position is session only. Move or nudge again to retry saving it.";
+    } else if (manual) {
+      moveDescription = "Manual position. Home or Delete returns to Auto.";
+    }
+    entry.moveGrip.setAttribute("aria-description", moveDescription);
+    entry.autoButton.setAttribute(
+      "aria-label",
+      retryReset
+        ? `Retry saving automatic placement for ${entry.processor.name}, Player ${entry.processor.slot}`
+        : `Return ${entry.processor.name} for Player ${entry.processor.slot} to automatic placement`,
+    );
+    entry.autoButton.title = retryReset
+      ? "Retry saving automatic placement"
+      : "Return this macro to automatic placement";
+  }
+
+  #movementBaseOffset(entry: MacroProcessorEntry): MappingFlowProcessorOffset {
+    if (entry.automaticPosition && entry.renderedPosition) {
+      // Placement can clamp against the viewport, a widget, or the navigator.
+      // Always continue from the visible position rather than a hidden raw
+      // request, otherwise a card at an edge appears stuck until the input
+      // catches up with the off-screen offset.
+      return {
+        x: Math.round((entry.renderedPosition.x - entry.automaticPosition.x) * 100) / 100,
+        y: Math.round((entry.renderedPosition.y - entry.automaticPosition.y) * 100) / 100,
+      };
+    }
+    const explicit = entry.previewOffset ?? entry.manualOffset;
+    if (explicit) return { ...explicit };
+    return { x: 0, y: 0 };
+  }
+
+  #settleProcessorOffset(
+    entry: MacroProcessorEntry,
+    requested: MappingFlowProcessorOffset,
+  ): MappingFlowProcessorOffset | null {
+    const previous = {
+      manualOffset: entry.manualOffset ? { ...entry.manualOffset } : null,
+      savePending: entry.savePending,
+      resetPending: entry.resetPending,
+    };
+    entry.previewOffset = null;
+    entry.manualOffset = { ...requested };
+    entry.resetPending = false;
+    this.#syncProcessorPlacementChrome(entry);
+    // Resolve avoidance/clamping before persistence. The saved value must be
+    // the position the user can actually see, not an unreachable request.
+    this.#layout();
+    if (entry.shell.hidden || !entry.renderedPosition) {
+      entry.manualOffset = previous.manualOffset;
+      entry.savePending = previous.savePending;
+      entry.resetPending = previous.resetPending;
+      this.#syncProcessorPlacementChrome(entry);
+      this.#layout();
+      this.scheduleLayout();
+      this.#announce(`${entry.processor.name} stayed at its previous reachable position.`);
+      return null;
+    }
+    const effective = this.#movementBaseOffset(entry);
+    entry.manualOffset = { ...effective };
+    this.#syncProcessorPlacementChrome(entry);
+    this.scheduleLayout();
+    return effective;
+  }
+
+  #emitProcessorOffset(
+    entry: MacroProcessorEntry,
+    offset: MappingFlowProcessorOffset | null,
+  ): boolean {
+    try {
+      const saved = this.#onProcessorOffsetCommit(
+        entry.processor.id,
+        offset ? { ...offset } : null,
+      );
+      if (saved) {
+        if (offset) {
+          entry.savePending = false;
+          this.#syncProcessorPlacementChrome(entry);
+        }
+        return true;
+      }
+    } catch {
+      // The same truthful session-only announcement covers storage callbacks
+      // that either refuse explicitly or throw.
+    }
+    if (offset) {
+      entry.savePending = true;
+      this.#syncProcessorPlacementChrome(entry);
+    }
+    this.#announce(
+      offset
+        ? `${entry.processor.name} moved for this session, but its canvas position could not be saved.`
+        : `${entry.processor.name} returned to automatic placement for this session, but that reset could not be saved.`,
+    );
+    return false;
+  }
+
+  #resetProcessorOffset(entry: MacroProcessorEntry, focusGrip: boolean): void {
+    const wasManual = entry.previewOffset !== null || entry.manualOffset !== null;
+    const shouldPersist = wasManual || entry.resetPending;
+    entry.previewOffset = null;
+    entry.manualOffset = null;
+    entry.savePending = false;
+    entry.resetPending = false;
+    this.#syncProcessorPlacementChrome(entry);
+    this.scheduleLayout();
+    if (shouldPersist) {
+      if (this.#emitProcessorOffset(entry, null)) {
+        this.#announce(
+          `${entry.processor.name} returned to automatic placement.`,
+        );
+      } else {
+        entry.resetPending = true;
+        this.#syncProcessorPlacementChrome(entry);
+      }
+    } else {
+      this.#announce(`${entry.processor.name} is already using automatic placement.`);
+    }
+    if (focusGrip) {
+      if (entry.resetPending) entry.autoButton.focus();
+      else entry.moveGrip.focus();
+    }
+  }
+
+  #nudgeProcessor(
+    entry: MacroProcessorEntry,
+    deltaX: number,
+    deltaY: number,
+  ): void {
+    const base = this.#movementBaseOffset(entry);
+    const offset = {
+      x: Math.round((base.x + deltaX) * 100) / 100,
+      y: Math.round((base.y + deltaY) * 100) / 100,
+    };
+    const effective = this.#settleProcessorOffset(entry, offset);
+    if (!effective) return;
+    if (this.#emitProcessorOffset(entry, effective)) {
+      this.#announce(`${entry.processor.name} moved and pinned.`);
+    }
+  }
+
+  #bindProcessorControls(entry: MacroProcessorEntry): void {
+    const { shell, moveGrip, autoButton } = entry;
+    const signal = this.#abort.signal;
+    moveGrip.addEventListener("click", (event) => {
+      // The grip is a real button for focus and keyboard discovery, but a
+      // click is not a second state change after a completed pointer drag.
+      event.preventDefault();
+      event.stopPropagation();
+    }, { signal });
+    moveGrip.addEventListener("keydown", (event) => {
+      if (event.key === "Home" || event.key === "Delete") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#resetProcessorOffset(entry, true);
+        return;
+      }
+      const amount = event.shiftKey ? 64 : 16;
+      const delta = event.key === "ArrowLeft"
+        ? { x: -amount, y: 0 }
+        : event.key === "ArrowRight"
+          ? { x: amount, y: 0 }
+          : event.key === "ArrowUp"
+            ? { x: 0, y: -amount }
+            : event.key === "ArrowDown"
+              ? { x: 0, y: amount }
+              : null;
+      if (!delta) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.#nudgeProcessor(entry, delta.x, delta.y);
+    }, { signal });
+    autoButton.addEventListener("pointerdown", (event) => {
+      if (event.button === 0) event.stopPropagation();
+    }, { signal });
+    autoButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#resetProcessorOffset(entry, true);
+    }, { signal });
+
+    moveGrip.addEventListener("pointerdown", (event) => {
+      if (
+        event.button !== 0 ||
+        (event.pointerType !== "" && !event.isPrimary) ||
+        this.#processorDragPointerId !== null ||
+        shell.hidden ||
+        this.#viewport.classList.contains("is-pan-ready") ||
+        this.#viewport.classList.contains("is-panning") ||
+        this.#viewport.classList.contains("is-navigating") ||
+        this.#viewport.classList.contains("is-camera-animating")
+      ) return;
+      const matrix = this.#lines.getScreenCTM();
+      if (!matrix || !entry.automaticPosition || !entry.renderedPosition) return;
+      event.preventDefault();
+      event.stopPropagation();
+      moveGrip.focus();
+
+      const pointerId = event.pointerId;
+      const inverse = matrix.inverse();
+      const startWorld = this.#worldPoint({ x: event.clientX, y: event.clientY }, inverse);
+      const startingOffset = this.#movementBaseOffset(entry);
+      const originalManualOffset = entry.manualOffset ? { ...entry.manualOffset } : null;
+      const originalSavePending = entry.savePending;
+      const originalResetPending = entry.resetPending;
+      let nextOffset = { ...startingOffset };
+      let moved = false;
+      let ended = false;
+      let usesWindowFallback = false;
+      let moveFrame = 0;
+      this.#processorDragPointerId = pointerId;
+
+      const preview = (): void => {
+        moveFrame = 0;
+        if (!moved) return;
+        entry.previewOffset = { ...nextOffset };
+        this.#syncProcessorPlacementChrome(entry);
+        this.scheduleLayout();
+      };
+      const updateOffset = (moveEvent: PointerEvent): void => {
+        const world = this.#worldPoint(
+          { x: moveEvent.clientX, y: moveEvent.clientY },
+          inverse,
+        );
+        nextOffset = {
+          x: Math.round((startingOffset.x + world.x - startWorld.x) * 100) / 100,
+          y: Math.round((startingOffset.y + world.y - startWorld.y) * 100) / 100,
+        };
+      };
+      const onMove = (moveEvent: PointerEvent): void => {
+        if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
+        moveEvent.stopPropagation();
+        const deltaX = moveEvent.clientX - event.clientX;
+        const deltaY = moveEvent.clientY - event.clientY;
+        if (!moved && Math.hypot(deltaX, deltaY) <= 5) return;
+        if (!moved) {
+          moved = true;
+          shell.classList.add("is-dragging");
+          this.#viewport.classList.add("is-dragging-flow-processor");
+        }
+        updateOffset(moveEvent);
+        if (!moveFrame) moveFrame = requestAnimationFrame(preview);
+      };
+      const finish = (endEvent: PointerEvent | null): void => {
+        if ((endEvent && endEvent.pointerId !== pointerId) || ended) return;
+        ended = true;
+        this.#cancelProcessorDrag = null;
+        if (moved && endEvent?.type === "pointerup") updateOffset(endEvent);
+        if (moveFrame) cancelAnimationFrame(moveFrame);
+        moveGrip.removeEventListener("pointermove", onMove);
+        moveGrip.removeEventListener("pointerup", onEnd);
+        moveGrip.removeEventListener("pointercancel", onEnd);
+        moveGrip.removeEventListener("lostpointercapture", onEnd);
+        const window_ = this.#root.ownerDocument.defaultView;
+        if (usesWindowFallback && window_) {
+          window_.removeEventListener("pointermove", onMove);
+          window_.removeEventListener("pointerup", onEnd);
+          window_.removeEventListener("pointercancel", onEnd);
+        }
+        if (moveGrip.hasPointerCapture(pointerId)) moveGrip.releasePointerCapture(pointerId);
+        shell.classList.remove("is-dragging");
+        this.#viewport.classList.remove("is-dragging-flow-processor");
+        if (this.#processorDragPointerId === pointerId) this.#processorDragPointerId = null;
+
+        if (moved && endEvent?.type === "pointerup") {
+          const effective = this.#settleProcessorOffset(entry, nextOffset);
+          if (!effective) return;
+          if (this.#emitProcessorOffset(entry, effective)) {
+            this.#announce(`${entry.processor.name} moved and pinned.`);
+          }
+          return;
+        }
+        entry.previewOffset = null;
+        entry.manualOffset = originalManualOffset;
+        entry.savePending = originalSavePending;
+        entry.resetPending = originalResetPending;
+        this.#syncProcessorPlacementChrome(entry);
+        if (moved) this.scheduleLayout();
+      };
+      const onEnd = (endEvent: PointerEvent): void => finish(endEvent);
+      this.#cancelProcessorDrag = () => finish(null);
+      try {
+        moveGrip.setPointerCapture(pointerId);
+        moveGrip.addEventListener("pointermove", onMove);
+        moveGrip.addEventListener("pointerup", onEnd);
+        moveGrip.addEventListener("pointercancel", onEnd);
+        moveGrip.addEventListener("lostpointercapture", onEnd);
+      } catch {
+        const window_ = this.#root.ownerDocument.defaultView;
+        if (!window_) {
+          finish(null);
+          return;
+        }
+        usesWindowFallback = true;
+        window_.addEventListener("pointermove", onMove);
+        window_.addEventListener("pointerup", onEnd);
+        window_.addEventListener("pointercancel", onEnd);
+      }
+    }, { signal });
+  }
+
   #syncProcessorElement(entry: MacroProcessorEntry): void {
-    const { processor, element } = entry;
+    const { processor, shell, element, moveGrip, autoButton } = entry;
     const document_ = this.#root.ownerDocument;
     const hasNoSteps = processor.timeline.length === 0;
     const timeline = hasNoSteps ? ["no steps"] : processor.timeline;
@@ -1085,8 +1555,27 @@ export class MappingFlowLayer {
     element.dataset.flowMacroId = processor.id;
     element.dataset.flowSlot = String(processor.slot);
     element.dataset.flowDisabled = String(processor.disabled);
-    element.dataset.flowPattern = String(((processor.slot - 1) % 16 + 16) % 16 + 1);
+    const pattern = String(((processor.slot - 1) % 16 + 16) % 16 + 1);
+    element.dataset.flowPattern = pattern;
     element.style.setProperty("--n-flow-color", `var(--pcs${processor.slot})`);
+    shell.dataset.flowMacroId = processor.id;
+    shell.dataset.flowSlot = String(processor.slot);
+    shell.dataset.flowPattern = pattern;
+    shell.style.setProperty("--n-flow-color", `var(--pcs${processor.slot})`);
+    moveGrip.dataset.flowMacroId = processor.id;
+    moveGrip.dataset.flowSlot = String(processor.slot);
+    moveGrip.setAttribute(
+      "aria-label",
+      `Move ${processor.name} for Player ${processor.slot}. Drag, or use Arrow keys; Shift plus Arrow moves farther. Moving pins the processor.`,
+    );
+    moveGrip.setAttribute(
+      "aria-keyshortcuts",
+      "ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Home Delete",
+    );
+    moveGrip.title =
+      "Move macro · Arrow keys 16 · Shift+Arrow 64 · Home or Delete returns to Auto";
+    autoButton.dataset.flowMacroId = processor.id;
+    autoButton.dataset.flowSlot = String(processor.slot);
     element.href = processor.editHref;
     element.setAttribute("aria-haspopup", "dialog");
     element.setAttribute("aria-controls", "n-macro-dialog");
@@ -1226,11 +1715,15 @@ export class MappingFlowLayer {
     }
     if (!macroId) return;
     const escaped = CSS.escape(macroId);
-    const direct = this.#nodes.querySelector<HTMLAnchorElement>(
-      `a.n-flow-processor:not([hidden])[data-flow-macro-id="${escaped}"]`,
-    );
-    if (direct) {
+    const directEntry = this.#processorEntries.get(macroId);
+    if (directEntry && !directEntry.shell.hidden && !directEntry.element.hidden) {
+      const direct = this.#restoreProcessorFocusTarget === "move"
+        ? directEntry.moveGrip
+        : this.#restoreProcessorFocusTarget === "auto" && !directEntry.autoButton.hidden
+          ? directEntry.autoButton
+          : directEntry.element;
       this.#restoreProcessorFocusId = null;
+      this.#restoreProcessorFocusTarget = "editor";
       direct.focus();
       return;
     }
@@ -1239,9 +1732,11 @@ export class MappingFlowLayer {
     );
     if (!overflow || !grouped) {
       this.#restoreProcessorFocusId = null;
+      this.#restoreProcessorFocusTarget = "editor";
       return;
     }
     this.#restoreProcessorFocusId = null;
+    this.#restoreProcessorFocusTarget = "editor";
     overflow.open = true;
     grouped.focus();
   }
@@ -1252,6 +1747,11 @@ export class MappingFlowLayer {
     const focusedProcessor = active.closest<HTMLElement>("[data-flow-macro-id]");
     if (focusedProcessor?.dataset.flowMacroId) {
       this.#restoreProcessorFocusId = focusedProcessor.dataset.flowMacroId;
+      this.#restoreProcessorFocusTarget = active.classList.contains("n-flow-processor-grip")
+        ? "move"
+        : active.classList.contains("n-flow-processor-auto")
+          ? "auto"
+          : "editor";
     }
     const overflow = this.#overflowNode;
     this.#restoreOverflowSummaryFocus = active === overflow?.querySelector("summary");
@@ -1376,7 +1876,7 @@ export class MappingFlowLayer {
     // Direct routes and their endpoints share one camera transform and need no
     // per-frame work. Only fixed-screen processors (and their few adjoining
     // macro segments) follow the interpolated matrix during Fit/Center.
-    if (this.#viewport.classList.contains("is-camera-animating")) {
+    if (this.#cameraMotionActive()) {
       this.#scheduleCameraLayout();
     }
   }
@@ -1803,7 +2303,7 @@ export class MappingFlowLayer {
         ((entry.laneIndex % 5) - 2) * (4 / scale),
       );
     }
-    if (this.#viewport.classList.contains("is-camera-animating")) {
+    if (this.#cameraMotionActive()) {
       this.#scheduleCameraLayout();
     } else {
       this.scheduleLayout();
@@ -1890,14 +2390,18 @@ export class MappingFlowLayer {
     }
     let processorIndex = 0;
     for (const entry of this.#processorEntries.values()) {
-      const { processor, element } = entry;
+      const { processor, shell, element } = entry;
       if (processorIndex >= visibleProcessorLimit) {
+        shell.hidden = true;
         element.hidden = true;
+        entry.automaticPosition = null;
+        entry.renderedPosition = null;
         overflowProcessors.push(processor);
         processorIndex += 1;
         continue;
       }
       processorIndex += 1;
+      shell.hidden = false;
       element.hidden = false;
       if (refreshAnchors && anchors) {
         entry.sourceElements = processor.triggers
@@ -1929,7 +2433,10 @@ export class MappingFlowLayer {
           ? { x: source.x, y: source.y + 260 }
           : null;
       if (!source || !target) {
+        shell.hidden = true;
         element.hidden = true;
+        entry.automaticPosition = null;
+        entry.renderedPosition = null;
         overflowProcessors.push(processor);
         continue;
       }
@@ -1937,12 +2444,18 @@ export class MappingFlowLayer {
       const peerIndex = Math.max(0, slotPeers.findIndex((item) => item.id === processor.id));
       const fan = (peerIndex - (slotPeers.length - 1) / 2) * (194 / scale);
       const vertical = Math.abs(target.y - source.y) >= Math.abs(target.x - source.x);
-      element.style.setProperty("--n-flow-node-inverse", (1 / scale).toFixed(5));
+      shell.style.setProperty("--n-flow-node-inverse", (1 / scale).toFixed(5));
+      const automaticPosition = {
+        x: source.x + (target.x - source.x) * 0.52 + (vertical ? fan : 0),
+        y: source.y + (target.y - source.y) * 0.52 + (vertical ? 0 : fan),
+      };
+      entry.automaticPosition = automaticPosition;
+      const offset = entry.previewOffset ?? entry.manualOffset ?? { x: 0, y: 0 };
       const position = this.#processorPositionAvoidingOverlays(
-        element,
+        shell,
         {
-          x: source.x + (target.x - source.x) * 0.52 + (vertical ? fan : 0),
-          y: source.y + (target.y - source.y) * 0.52 + (vertical ? 0 : fan),
+          x: automaticPosition.x + offset.x,
+          y: automaticPosition.y + offset.y,
         },
         matrix,
         inverse,
@@ -1952,18 +2465,22 @@ export class MappingFlowLayer {
         viewport,
       );
       if (!position) {
+        shell.hidden = true;
         element.hidden = true;
+        entry.renderedPosition = null;
         overflowProcessors.push(processor);
         continue;
       }
-      element.style.left = `${position.x.toFixed(2)}px`;
-      element.style.top = `${position.y.toFixed(2)}px`;
+      shell.style.left = `${position.x.toFixed(2)}px`;
+      shell.style.top = `${position.y.toFixed(2)}px`;
+      entry.renderedPosition = { x: position.x, y: position.y };
+      this.#syncProcessorPlacementChrome(entry);
       const screenPosition = position.matrixTransform(matrix);
       placedProcessors.push(new DOMRect(
-        screenPosition.x - element.offsetWidth / 2,
-        screenPosition.y - element.offsetHeight / 2,
-        element.offsetWidth,
-        element.offsetHeight,
+        screenPosition.x - shell.offsetWidth / 2,
+        screenPosition.y - shell.offsetHeight / 2,
+        shell.offsetWidth,
+        shell.offsetHeight,
       ));
       placedEntries.push(entry);
       observedAnchors.add(element);
@@ -1999,7 +2516,9 @@ export class MappingFlowLayer {
       const folded = placedEntries.pop();
       placedProcessors.pop();
       if (!folded) break;
+      folded.shell.hidden = true;
       folded.element.hidden = true;
+      folded.renderedPosition = null;
       observedAnchors.delete(folded.element);
       overflowProcessors.unshift(folded.processor);
       this.#syncOverflowElement(overflowProcessors);

@@ -62,6 +62,19 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// `ksx panel status` — passive encoder identity and HID capabilities.
+    ///
+    /// This read opens HID metadata handles with desired access zero and sends
+    /// no input, output, or feature report. Exact vendor mode and EEPROM chart
+    /// reads remain explicit unsupported/unverified states in the returned
+    /// view; a surface must not infer them from USB topology.
+    fn panel_status(&self, _spec: &PanelStatusSpec) -> Result<PanelStatusView, Refusal> {
+        Err(Refusal::not_here(
+            "inspecting panel encoder capabilities",
+            "run `ksx panel status`",
+        ))
+    }
+
     /// Resolve one physical key observation from the daemon learner through
     /// the same board inventory as [`Self::device_scan`], and return the exact
     /// served values a subsequent [`Self::device_pick`] would use.
@@ -512,6 +525,122 @@ pub struct DevicesView {
     /// Anything the report has to say out loud (both backends missing, an
     /// enumeration that failed) — rendered, never swallowed.
     pub notes: Vec<String>,
+}
+
+/// One passive `ksx panel status` request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusSpec {
+    /// Optional case-insensitive exact id/name/alias, or a unique substring.
+    /// `None` lists every physical USB board; it never selects the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// `ksx panel status`, presentation-shaped for every surface.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusView {
+    pub generated_at: String,
+    /// Backend-composed headline; surfaces copy it verbatim.
+    pub summary: String,
+    /// The safety boundary stated in words: metadata-only, no reports sent.
+    pub inspection_note: String,
+    /// Backend-composed availability line; surfaces keep the booleans for
+    /// branching but never translate their combinations into user prose.
+    pub access_detail: String,
+    /// Did the ordinary USB enumeration complete?
+    pub usb_available: bool,
+    /// Did SetupAPI return a present HID collection set?
+    pub hid_available: bool,
+    /// One row per physical USB board. An optional request filters this list
+    /// only after exact/unique resolution; it never picks an arbitrary row.
+    pub panels: Vec<PanelStatusRow>,
+    /// Enumeration-level failures and conservative interpretation notes.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// One physical USB board and every interface/collection joined to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusRow {
+    pub board_id: String,
+    pub name: String,
+    /// Backend-composed VID/PID/release identity line.
+    pub identity: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// Raw USB `bcdDevice`; never presented as a parsed firmware version.
+    pub bcd_device: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    /// Protocol driver id, or `unsupported` when no driver is registered.
+    pub driver: String,
+    pub driver_supported: bool,
+    pub driver_label: String,
+    /// `keyboard-compatible` | `unknown`.
+    pub observed_mode: String,
+    pub mode_detail: String,
+    pub observed_mode_label: String,
+    /// False in v1: topology is observed, no vendor mode query is issued.
+    pub mode_read_supported: bool,
+    /// `protocol-unverified` | `unsupported-driver`.
+    pub chart_state: String,
+    /// Always false in v1. Kept explicit so absence cannot look like an empty
+    /// chart returned by hardware.
+    pub chart_attempted: bool,
+    pub chart_detail: String,
+    pub chart_label: String,
+    /// `candidate-unverified` | `not-found` | `ambiguous` | `unavailable` |
+    /// `unsupported-driver`.
+    pub configuration_collection_state: String,
+    /// The unique passive 5-byte IN/OUT candidate, when exactly one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_collection: Option<String>,
+    pub configuration_collection_detail: String,
+    /// One backend-composed next-step sentence; a surface does not interpret
+    /// protocol or topology codes to invent advice.
+    pub recommendation: String,
+    pub interfaces: Vec<PanelInterfaceRow>,
+    pub hid_collections: Vec<PanelHidCollectionRow>,
+}
+
+/// One USB interface descriptor belonging to a physical board.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelInterfaceRow {
+    pub instance_id: String,
+    pub interface_number: u8,
+    pub interface_class: u8,
+    pub interface_subclass: u8,
+    pub interface_protocol: u8,
+    pub binding: String,
+    pub boot_keyboard: bool,
+    pub description: String,
+}
+
+/// Passive metadata for one HID top-level collection.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHidCollectionRow {
+    pub instance_id: String,
+    /// `available` | `partial` | `unavailable`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<u16>,
+    /// Raw HID `VersionNumber`; not interpreted as firmware.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_number: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_page: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_report_bytes: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_report_bytes: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_report_bytes: Option<u16>,
+    #[serde(default)]
+    pub errors: Vec<String>,
 }
 
 /// One keyboard the capture layer can see.
@@ -2968,6 +3097,12 @@ mod tests {
         let checks: Vec<(&str, Refusal)> = vec![
             ("ksx devices", Nothing.devices().unwrap_err()),
             ("ksx device scan", Nothing.device_scan().unwrap_err()),
+            (
+                "ksx panel status",
+                Nothing
+                    .panel_status(&PanelStatusSpec::default())
+                    .unwrap_err(),
+            ),
             (
                 "ksx device pick",
                 Nothing.device_pick(&DevicePickSpec::default()).unwrap_err(),

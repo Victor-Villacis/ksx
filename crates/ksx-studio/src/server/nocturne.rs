@@ -492,6 +492,114 @@ pub(super) async fn api_nocturne(
         .into_response()
 }
 
+/// The Control Surface Builder's selected-encoder context.
+///
+/// The browser does not supply a selector. The daemon-held staged device is
+/// the authority, exactly as it is for Teach and Route; accepting a query here
+/// would let a stale canvas inspect one board while claiming it described
+/// another. This is intentionally outside [`collect_nocturne`], so the 2 s
+/// canvas poll never opens a HID metadata handle.
+#[derive(serde::Serialize)]
+pub(super) struct PanelStatusPayload {
+    /// Echo of the server-selected target. The island rejects a response whose
+    /// target no longer equals the live staged selector.
+    target_selector: Option<String>,
+    /// A provider refusal or task failure. Distinct from an unsupported panel
+    /// returned successfully in `view`, and from no selected device at all.
+    unavailable: Option<String>,
+    view: Option<ksx_api::PanelStatusView>,
+}
+
+fn panel_status_json(payload: PanelStatusPayload) -> Response {
+    let body = serde_json::to_string(&payload).unwrap_or_else(|_| {
+        "{\"target_selector\":null,\"unavailable\":\"panel status could not be encoded\",\"view\":null}".to_owned()
+    });
+    (
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Response {
+    let stage_state = Arc::clone(&state);
+    let staged_target = match tokio::task::spawn_blocking(move || {
+        let staged = stage_state.control.staged();
+        let target = staged
+            .device
+            .map(|device| device.selector.trim().to_owned())
+            .filter(|selector| !selector.is_empty());
+        (staged.reachable, staged.error, target)
+    })
+    .await
+    {
+        Ok(target) => target,
+        Err(_) => {
+            return panel_status_json(PanelStatusPayload {
+                target_selector: None,
+                unavailable: Some(
+                    "the selected encoder could not be resolved; nothing was changed".to_owned(),
+                ),
+                view: None,
+            });
+        }
+    };
+    let (reachable, stage_error, target_selector) = staged_target;
+    if !reachable {
+        return panel_status_json(PanelStatusPayload {
+            target_selector: None,
+            unavailable: Some(stage_error.unwrap_or_else(|| {
+                "the selected encoder is unavailable because the staged setup could not be read"
+                    .to_owned()
+            })),
+            view: None,
+        });
+    }
+    let Some(selector) = target_selector else {
+        // Absence is a real, successful reading of the staged draft. Do not
+        // call the machine provider and do not turn it into a fake empty USB
+        // inventory; the card has a dedicated no-selection state.
+        return panel_status_json(PanelStatusPayload {
+            target_selector: None,
+            unavailable: None,
+            view: None,
+        });
+    };
+
+    let target_selector = Some(selector.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        state.machine.panel_status(&ksx_api::PanelStatusSpec {
+            device: Some(selector),
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(view)) => panel_status_json(PanelStatusPayload {
+            target_selector,
+            unavailable: None,
+            view: Some(view),
+        }),
+        Ok(Err(refusal)) => panel_status_json(PanelStatusPayload {
+            target_selector,
+            unavailable: Some(refusal.message),
+            view: None,
+        }),
+        Err(_) => panel_status_json(PanelStatusPayload {
+            target_selector,
+            unavailable: Some(
+                "the selected encoder could not be inspected; nothing was changed".to_owned(),
+            ),
+            view: None,
+        }),
+    }
+}
+
 // ── The device pick (moved from /start, moment 4) ───────────────────────────
 
 #[derive(Deserialize)]

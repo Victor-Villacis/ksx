@@ -704,6 +704,12 @@ struct ScriptedMachine {
     /// How many times the ROUTE layer actually asked for a device scan —
     /// the machine-cache tests count real enumerations, not requests.
     scans: AtomicUsize,
+    /// The panel-capability probe is deliberately on-demand and outside the
+    /// Nocturne poll cache. Calls and targets are recorded independently so a
+    /// test can catch either accidental polling or browser-supplied authority.
+    panel_status_calls: AtomicUsize,
+    panel_status_devices: Mutex<Vec<Option<String>>>,
+    panel_status_refuse: bool,
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
     /// Raw daemon learner identities presented for safe inventory resolution.
@@ -757,6 +763,9 @@ impl Default for ScriptedMachine {
     fn default() -> Self {
         Self {
             scans: AtomicUsize::new(0),
+            panel_status_calls: AtomicUsize::new(0),
+            panel_status_devices: Mutex::new(Vec::new()),
+            panel_status_refuse: false,
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             identified_from: Mutex::new(Vec::new()),
@@ -810,6 +819,13 @@ impl ScriptedMachine {
     fn reads_refusing() -> Self {
         Self {
             reads_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn panel_status_refusing() -> Self {
+        Self {
+            panel_status_refuse: true,
             ..Self::default()
         }
     }
@@ -1059,6 +1075,89 @@ impl ksx_api::MachineSource for ScriptedMachine {
             }],
             Vec::new(),
         ))
+    }
+
+    fn panel_status(
+        &self,
+        spec: &ksx_api::PanelStatusSpec,
+    ) -> Result<ksx_api::PanelStatusView, Refusal> {
+        self.panel_status_calls.fetch_add(1, Ordering::SeqCst);
+        self.panel_status_devices
+            .lock()
+            .unwrap()
+            .push(spec.device.clone());
+        if self.panel_status_refuse {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the scripted HID inventory could not be read",
+            ));
+        }
+        Ok(ksx_api::PanelStatusView {
+            generated_at: "test".to_owned(),
+            summary: "One selected panel encoder was inspected.".to_owned(),
+            inspection_note:
+                "Inspection only. KSX did not program or change this encoder.".to_owned(),
+            access_detail: "USB descriptors and passive HID collection metadata were readable."
+                .to_owned(),
+            usb_available: true,
+            hid_available: true,
+            panels: vec![ksx_api::PanelStatusRow {
+                board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+                name: "Ultimarc I-PAC 4X".to_owned(),
+                identity: "USB D209:0430 · bcdDevice 0x0056".to_owned(),
+                vendor_id: 0xd209,
+                product_id: 0x0430,
+                bcd_device: 0x0056,
+                serial: None,
+                driver: "ultimarc-ipac".to_owned(),
+                driver_supported: true,
+                driver_label: "Ultimarc I-PAC family".to_owned(),
+                observed_mode: "keyboard-compatible".to_owned(),
+                mode_detail: "A boot-keyboard interface is present; no vendor mode query was sent."
+                    .to_owned(),
+                observed_mode_label: "Keyboard-compatible · Recommended".to_owned(),
+                mode_read_supported: false,
+                chart_state: "protocol-unverified".to_owned(),
+                chart_attempted: false,
+                chart_detail:
+                    "Chart read-back protocol is unverified, so no report was sent.".to_owned(),
+                chart_label: "Protocol unverified · Not attempted".to_owned(),
+                configuration_collection_state: "candidate-unverified".to_owned(),
+                configuration_collection: Some(
+                    r"HID\VID_D209&PID_0430&MI_02&COL01\TEST".to_owned(),
+                ),
+                configuration_collection_detail:
+                    "One passive 5-byte input/output candidate was observed; its protocol is unverified."
+                        .to_owned(),
+                recommendation:
+                    "Keep this encoder in keyboard mode so Teach and Route retain KSX's dynamic transforms."
+                        .to_owned(),
+                interfaces: vec![ksx_api::PanelInterfaceRow {
+                    instance_id: IPAC_KB.to_owned(),
+                    interface_number: 0,
+                    interface_class: 3,
+                    interface_subclass: 1,
+                    interface_protocol: 1,
+                    binding: "hidusb.sys (keyboard stack)".to_owned(),
+                    boot_keyboard: true,
+                    description: "USB Input Device".to_owned(),
+                }],
+                hid_collections: vec![ksx_api::PanelHidCollectionRow {
+                    instance_id: r"HID\VID_D209&PID_0430&MI_02&COL01\TEST".to_owned(),
+                    state: "available".to_owned(),
+                    vendor_id: Some(0xd209),
+                    product_id: Some(0x0430),
+                    version_number: Some(0x0056),
+                    usage_page: Some(0xff00),
+                    usage: Some(1),
+                    input_report_bytes: Some(5),
+                    output_report_bytes: Some(5),
+                    feature_report_bytes: Some(0),
+                    errors: Vec::new(),
+                }],
+            }],
+            notes: Vec::new(),
+        })
     }
 
     fn device_identify(
@@ -1916,6 +2015,12 @@ fn start_server_with_sources(
         }
         fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
             self.0.device_scan()
+        }
+        fn panel_status(
+            &self,
+            spec: &ksx_api::PanelStatusSpec,
+        ) -> Result<ksx_api::PanelStatusView, Refusal> {
+            self.0.panel_status(spec)
         }
         fn device_identify(
             &self,
@@ -9294,4 +9399,140 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
         via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
         "{via_workspace}"
     );
+}
+
+/// The Builder's hardware card is an explicit read, not another participant
+/// in `/api/nocturne`'s 2 s poll. With no staged device there is no target and
+/// therefore no license to enumerate HID collections at all.
+#[test]
+fn panel_status_is_on_demand_and_skips_the_provider_without_a_selected_encoder() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    for _ in 0..2 {
+        let response = get(addr, "/api/nocturne");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+
+    let response = get(addr, "/api/panel/status");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel status payload");
+    assert!(payload["target_selector"].is_null(), "{payload}");
+    assert!(payload["unavailable"].is_null(), "{payload}");
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(
+        machine.panel_status_calls.load(Ordering::SeqCst),
+        0,
+        "no selection must not become a whole-machine HID probe"
+    );
+}
+
+/// A selected board comes from the daemon-held draft, reaches the typed
+/// MachineSource verb once, and returns composed copy plus raw evidence. The
+/// chart's absence is an explicit unattempted state, never an empty chart.
+#[test]
+fn panel_status_uses_the_staged_selector_and_reports_metadata_without_mutation() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let selected = control.stage_edit(&ksx_api::StageEdit::ChooseDevice {
+        selector: "usb:d209:0430:00".to_owned(),
+        alias: "panel".to_owned(),
+        label: "Ultimarc I-PAC 4X".to_owned(),
+    });
+    assert!(selected.ok, "{selected:?}");
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let response = get(addr, "/api/panel/status");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel status payload");
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert!(payload["unavailable"].is_null(), "{payload}");
+    let view = &payload["view"];
+    assert_eq!(
+        view["panels"].as_array().map(Vec::len),
+        Some(1),
+        "{payload}"
+    );
+    assert_eq!(view["panels"][0]["bcd_device"], 0x0056, "{payload}");
+    assert_eq!(
+        view["panels"][0]["observed_mode"], "keyboard-compatible",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["chart_state"], "protocol-unverified",
+        "{payload}"
+    );
+    assert_eq!(view["panels"][0]["chart_attempted"], false, "{payload}");
+    assert!(
+        view["panels"][0]["identity"]
+            .as_str()
+            .is_some_and(|line| line.contains("0x0056")),
+        "raw bcdDevice disappeared from the backend-composed line: {payload}"
+    );
+    assert_eq!(
+        view["inspection_note"], "Inspection only. KSX did not program or change this encoder.",
+        "{payload}"
+    );
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *machine.panel_status_devices.lock().unwrap(),
+        vec![Some("usb:d209:0430:00".to_owned())]
+    );
+    assert!(machine.picked.lock().unwrap().is_empty());
+    assert!(machine.prepared_with.lock().unwrap().is_empty());
+    assert!(machine.released_with.lock().unwrap().is_empty());
+    assert!(control.bound_with.lock().unwrap().is_none());
+}
+
+/// A failed provider read is neither an unsupported device nor a healthy
+/// empty inventory. It stays an unavailable envelope the card can Retry.
+#[test]
+fn panel_status_preserves_provider_refusal_as_unavailable() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_status_refusing());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = get(addr, "/api/panel/status");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel refusal envelope");
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert!(
+        payload["unavailable"]
+            .as_str()
+            .is_some_and(|line| line.contains("could not be read")),
+        "{payload}"
+    );
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The endpoint is local-read-only in both directions: a rebound Host cannot
+/// reach it, and POST is not a hidden programming surface.
+#[test]
+fn panel_status_is_guarded_and_has_no_write_method() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+    let rebound = http(
+        addr,
+        "GET /api/panel/status HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+    let posted = post_json(addr, "/api/panel/status", "{}");
+    assert!(posted.starts_with("HTTP/1.1 405"), "{posted}");
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
 }

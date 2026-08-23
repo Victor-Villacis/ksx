@@ -24,6 +24,7 @@
 pub mod advice;
 pub mod app_paths;
 pub mod autostart;
+pub mod hid;
 pub mod inject;
 pub mod installer;
 pub mod local_pipe;

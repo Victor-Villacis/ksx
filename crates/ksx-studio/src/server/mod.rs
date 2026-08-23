@@ -350,6 +350,10 @@ pub fn serve(
             // the rest is still the design proof's placeholder.
             .route("/nocturne", get(nocturne_page_handler))
             .route("/api/nocturne", get(api_nocturne))
+            // On-demand hardware context for Control Surface Builder. Kept
+            // out of `/api/nocturne`'s 2 s poll: passive HID enumeration is a
+            // deliberate inspection, not background canvas state.
+            .route("/api/panel/status", get(api_panel_status))
             .route("/nocturne/device", post(nocturne_form_device))
             .route("/nocturne/device/identify", post(nocturne_form_identify))
             .route(

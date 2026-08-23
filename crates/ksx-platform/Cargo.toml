@@ -52,6 +52,10 @@ windows-sys = { workspace = true, features = [
     # `winusb`: CM_Get_Device_ID_ListW — read-only present-device enumeration.
     # Nothing here opens, claims, or configures a device.
     "Win32_Devices_DeviceAndDriverInstallation",
+    # `hid`: passive HID collection metadata only (attributes + preparsed caps).
+    # Handles are opened with desired access 0; no input/output/feature report
+    # transaction is part of the survey.
+    "Win32_Devices_HumanInterfaceDevice",
     # `xinput`: XInputGetState over indices 0..MAX_XINPUT_SLOTS — the only way
     # to learn how many of Windows' four slots are actually taken. Counting
     # ViGEmBus children answers a different question (see xinput.rs).

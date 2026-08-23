@@ -535,6 +535,15 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/profiles/preset/rename", "/profiles/preset/delete"],
     },
     Anchors {
+        capability: "Inspect panel encoder hardware / chart capability",
+        cli: &["panel status"],
+        // Deliberately absent from the 10-foot cabinet surface: hardware
+        // inventory belongs beside Studio's panel authoring context, and no
+        // cabinet screen or confirmation owns it today.
+        egui: &["Screen::PanelStatus", "Ask::InspectPanel"],
+        studio: &["/api/panel/status"],
+    },
+    Anchors {
         capability: "Edit configuration",
         cli: &["slot list", "slot assign", "config export", "config import"],
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen

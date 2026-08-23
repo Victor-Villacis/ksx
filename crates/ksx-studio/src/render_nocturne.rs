@@ -964,7 +964,7 @@ mod tests {
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 40] = [
+        const CLIENT_ONLY_SLOTS: [&str; 42] = [
             "nMacSay",
             "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
@@ -989,6 +989,10 @@ mod tests {
             "nKbtMintPressed",
             "nKbtRetroPressed",
             "nKbWorkbenchPressed",
+            // Which contextual inspector tab is open is canvas-local UI state;
+            // the server supplies both inspectors but never chooses between them.
+            "nViewCtlPressed",
+            "nViewKeysPressed",
             // The expand/collapse-all toggle's label follows which editors
             // the BROWSER is holding open — state no server request carries.
             "nExpandLbl",

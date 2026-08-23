@@ -438,3 +438,144 @@ subject + thumbprint + DER, clears only KSX's stranded one-time signing-key
 namespace, and re-reads the stores before reporting success. A certificate
 still signing an installed package is always retained. No driver package,
 binding, configuration, or receipt is changed by this verb.
+
+---
+
+## E10 — ksx reads and programs the panel encoder (discovery implemented; programming gated)
+
+**Recorded 2026-08-22 20:24 EDT; discovery updated 2026-08-22 21:09 EDT.** The
+current evidence, corrections and work log live in
+[`PANEL-PROGRAMMING-STATE.md`](PANEL-PROGRAMMING-STATE.md). This entry is the
+product decision; that file is the implementation state.
+
+**The user story.**
+
+> *I wired a new player-3 button to SW9. ksx identifies the encoder, shows the
+> firmware and mode it can actually observe, and eventually shows the board's
+> stored SW9 mapping beside the active preset. I can back up the complete board
+> configuration before changing it, preview an exact diff, and explicitly
+> approve a persistent write. After that, ksx still owns the dynamic work:
+> profiles, macros, turbo, chords, SOCD and whichever controller persona the
+> game needs.*
+
+**The decision.** Keyboard mode is the default I-PAC source substrate. Its
+persistent pin-to-key chart provides a stable, per-device input vocabulary;
+ksx remains the dynamic layer that transforms those inputs and emits virtual
+controllers. Programming the chart complements ksx. It does not replace the
+engine or move per-game behavior into EEPROM.
+
+### Mode boundary
+
+I-PAC XInput mode is an **optional hardware bypass**, not the default source
+path and not part of the first implementation. On applicable I-PAC4 firmware,
+the board can expose four gamepads, consuming the four system-wide XInput
+positions ksx otherwise uses for Xbox 360 personas. Ultimarc also documents
+important restrictions on reconfiguration while an I-PAC4/Mini-PAC4 is in its
+quad XInput mode. Those are model- and firmware-scoped facts, not a universal
+statement about every Ultimarc board.
+
+The current keyboard-capture enumerator accepts HID-class interfaces only, so
+an XUSB presentation is not a keyboard-capture candidate. A future `ksx panel`
+inventory may still identify the physical USB parent and explain how to return
+it to keyboard mode. That diagnostic is different from routing the resulting
+XInput pads back through ksx, which remains out of scope. The exact
+mid-session behavior after a hardware mode switch is **unverified**; do not
+promise `XinputBusFull`, a clean unplug or automatic recovery until the cabinet
+measures it.
+
+### The key vocabulary is per device
+
+`KeyEvent` carries both `DeviceId` and `Key`, and the engine tracks held keys
+per device. The same key on two encoders is therefore two distinct sources.
+There is no global requirement for 16 players to occupy 16 disjoint keyboard
+alphabets; `MAX_SLOTS = 16` explicitly budgets four four-player I-PAC boards.
+
+There is still a real compatibility boundary to report. The WinUSB HID usage
+translator currently maps 106 usages onto 105 distinct set-1 keys, and usages
+without a set-1 equivalent — including F13–F24 — intentionally produce no
+event. Chart key choice matters because every programmed usage must be
+representable on the selected capture backend, and because passthrough or
+direct MAME use sees the stored keys without ksx's transforms.
+
+### Version 1 is read-only discovery
+
+`ksx panel status [--device QUERY] [--json]` and the Control Surface Builder's
+on-demand Selected encoder card implement the first slice. They:
+
+1. enumerate the physical USB parent and its interfaces without changing a
+   driver binding or sending a feature/output report;
+2. report stable identity facts such as VID/PID, `bcdDevice`, interface numbers
+   and HID capabilities, while labeling inferred or unknown mode/firmware
+   values honestly;
+3. leave exact vendor mode, firmware and model-specific XInput recovery
+   unsupported until a verified query can justify them; and
+4. refuse `--yes`. A status command has no mutation switch.
+
+This slice does **not** claim chart readback, backup, programming, rebind-free
+output access or rollover behavior. Opening a HID collection and reading
+`OutputReportByteLength` can establish that an access-zero metadata handle
+opened and what capacity the descriptor declares. It proves no report access;
+sending nothing cannot prove that `HidD_SetOutputReport` succeeds.
+
+### Protocol evidence and the safety boundary
+
+The pinned open-source `Ultimarc-linux` implementation at commit
+`20b8c56a3e6f94034b8529eddd777306f5b6152b` documents an I-PAC-series write
+sequence: HID class request `0x21/9`, value `0x0203`, five-byte messages and a
+260-byte configuration image. It also declares different configuration
+interface numbers for board generations. That source proves its own USB write
+sequence. It does **not** prove Windows `HidD_SetOutputReport` behavior,
+privilege requirements, target-firmware readback, atomic commit, rollback or
+re-enumeration behavior.
+
+Persistent encoder configuration is a fourth lifetime alongside the driver
+binding, transaction receipt and signing residue in E9. It can outlive a ksx
+process, reboot or installation. Therefore any future writer must:
+
+- read and round-trip the **complete** configuration, including the shift
+  layer and EEPROM macros, or refuse;
+- take a restorable backup before mutation and verify readback afterward;
+- render a dry-run diff by default and require explicit `--yes`;
+- identify the exact physical board and packet/phase on failure; and
+- stay behind a supervised hardware gate with a written recovery procedure.
+
+Sequential packets make interrupted or partial persistence a risk, not a
+measured firmware fact. No document may call a chart half-written until an
+expendable target or authoritative firmware source proves the commit behavior.
+
+### One command family, capability-specific hardware drivers
+
+`ksx panel` should route through a small driver per hardware family/model, not
+pretend one universal encoder protocol exists. Each driver declares only what
+it can prove: `can_identify`, `can_report_mode`, `can_read_chart`,
+`can_write_chart` and whether a write is persistent. An unknown or
+non-programmable device remains useful in status output and refuses unsupported
+verbs.
+
+Mini-PAC belongs to the Ultimarc protocol family subject to model-layout
+differences. PacDrive is an LED/output controller and remains E8 work. Xin-Mo
+and “Zero Delay” boards may have no writable configuration surface at all.
+Arduino, Adafruit and RP2040 are platforms rather than one protocol; they are
+easy only when ksx owns the exact firmware and can define its contract.
+
+### Feature order
+
+1. **Status/discovery — implemented locally 2026-08-22:** the read-only v1
+   above, with stable human and JSON output, synthetic inventory tests and an
+   on-demand Studio view. Clean-runner CI still gates shipment.
+2. **Chart read:** only after a pinned protocol or captured vendor transaction
+   establishes a non-mutating read path on the target firmware.
+3. **Backup/restore format:** lossless round-trip of the complete board image;
+   restore remains a write and therefore supervised.
+4. **Program:** read-modify-write, dry-run by default, explicit `--yes`, exact
+   post-write verification and a recovery result for every failure.
+5. **Studio chart/programming editor:** after the read/write backend verbs and
+   CLI contracts are real, following `SURFACES.md`'s backend → CLI →
+   human-surface order. The read-only selected-encoder card in step 1 is
+   already the discovery surface.
+
+**Verdict: proceed, beginning with read-only discovery.** The transport is
+plausible and the support value exists even if a safe writer never ships, but
+no roadmap wording promotes source evidence into cabinet evidence. Place the
+work post-M6 beside E8, which targets related Ultimarc hardware, and keep every
+physical read/write claim gated in the living state document.

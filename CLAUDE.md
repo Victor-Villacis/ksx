@@ -229,6 +229,7 @@ that is sitting right there.
 | Studio's visual language | `docs/DESIGN-SYSTEM.md` |
 | why there is no native config UI | `docs/M9-DECISION.md` |
 | the enhancement/idea ledger | `docs/ENHANCEMENTS.md` |
+| panel encoder discovery/programming evidence and current state | `docs/PANEL-PROGRAMMING-STATE.md` |
 
 ## Working style here
 

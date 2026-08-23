@@ -507,6 +507,50 @@ export interface NocturnePayload {
   };
 }
 
+interface PanelStatusRowView {
+  board_id: string;
+  name: string;
+  identity: string;
+  vendor_id: number;
+  product_id: number;
+  bcd_device: number;
+  serial?: string | null;
+  driver: string;
+  driver_supported: boolean;
+  driver_label: string;
+  observed_mode: string;
+  mode_detail: string;
+  observed_mode_label: string;
+  mode_read_supported: boolean;
+  chart_state: string;
+  chart_attempted: boolean;
+  chart_detail: string;
+  chart_label: string;
+  configuration_collection_state: string;
+  configuration_collection?: string | null;
+  configuration_collection_detail: string;
+  recommendation: string;
+  interfaces: unknown[];
+  hid_collections: unknown[];
+}
+
+interface PanelStatusView {
+  generated_at: string;
+  usb_available: boolean;
+  hid_available: boolean;
+  summary: string;
+  access_detail: string;
+  panels: PanelStatusRowView[];
+  inspection_note: string;
+  notes: string[];
+}
+
+interface PanelStatusPayload {
+  target_selector: string | null;
+  unavailable: string | null;
+  view: PanelStatusView | null;
+}
+
 // ── SERVED signals — copiers, never derivers ───────────────────────────────
 
 const [nDevCount, setNDevCount] = createSignal("");
@@ -1267,6 +1311,12 @@ let controlSurfaceUndoAfterFingerprint = "";
 let controlSurfaceReturnFocus: HTMLElement | null = null;
 let controlSurfaceInspectorPrint = "";
 let controlSurfaceSaveFailed = false;
+let controlSurfaceHardwarePhase: "idle" | "loading" | "ready" | "error" = "idle";
+let controlSurfaceHardwarePayload: PanelStatusPayload | null = null;
+let controlSurfaceHardwareError = "";
+let controlSurfaceHardwareRequestGeneration = 0;
+let controlSurfaceHardwareAbort: AbortController | null = null;
+let controlSurfaceHardwareTargetFingerprint = "";
 let controlSurfaceDrag: {
   pointerId: number;
   controlId: string;
@@ -1570,6 +1620,201 @@ function keyboardWorkbenchAnnounce(message: string): void {
 // signals. This document owns only component geometry and those observations;
 // controller routing remains the backend-owned mapping projection above.
 
+function cancelControlSurfaceHardwareStatus(clear: boolean): void {
+  controlSurfaceHardwareRequestGeneration += 1;
+  controlSurfaceHardwareAbort?.abort();
+  controlSurfaceHardwareAbort = null;
+  if (clear) {
+    controlSurfaceHardwarePhase = "idle";
+    controlSurfaceHardwarePayload = null;
+    controlSurfaceHardwareError = "";
+  }
+  syncControlSurfaceHardwareCard();
+}
+
+function syncControlSurfaceHardwareCard(): void {
+  const card = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware");
+  if (!card) return;
+  const name = card.querySelector<HTMLElement>("[data-surface-hardware-name]");
+  const identity = card.querySelector<HTMLElement>("[data-surface-hardware-identity]");
+  const mode = card.querySelector<HTMLElement>("[data-surface-hardware-mode]");
+  const summary = card.querySelector<HTMLElement>("[data-surface-hardware-summary]");
+  const details = card.querySelector<HTMLDetailsElement>("[data-surface-hardware-details]");
+  const capabilities = card.querySelector<HTMLElement>("[data-surface-hardware-capabilities]");
+  const access = card.querySelector<HTMLElement>("[data-surface-hardware-access]");
+  const driver = card.querySelector<HTMLElement>("[data-surface-hardware-driver]");
+  const configuration = card.querySelector<HTMLElement>("[data-surface-hardware-configuration]");
+  const chart = card.querySelector<HTMLElement>("[data-surface-hardware-chart]");
+  const chartDetail = card.querySelector<HTMLElement>("[data-surface-hardware-chart-detail]");
+  const recommendation = card.querySelector<HTMLElement>("[data-surface-hardware-recommendation]");
+  const note = card.querySelector<HTMLElement>("[data-surface-hardware-note]");
+  const refresh = card.querySelector<HTMLButtonElement>('[data-nx="surface-hardware-refresh"]');
+  if (
+    !name || !identity || !mode || !summary || !details || !capabilities || !access || !driver ||
+    !configuration || !chart || !chartDetail || !recommendation || !note || !refresh
+  ) return;
+
+  const selected = nCapSelector().trim();
+  const payload = controlSurfaceHardwarePayload;
+  const target = payload?.target_selector?.trim() ?? "";
+  const view = payload?.view ?? null;
+  const board = target ? view?.panels[0] ?? null : null;
+  const unavailable = payload?.unavailable?.trim() ?? "";
+  let cardState = controlSurfaceHardwarePhase;
+  let modeTone = "neutral";
+  let titleCopy = selected ? "Status not inspected" : "No encoder selected";
+  let identityCopy = selected
+    ? "Open or refresh this inspection to identify the selected hardware."
+    : "Choose a keyboard-mode encoder in the device pane at left.";
+  let modeCopy = "Mode not inspected";
+  let summaryCopy = selected
+    ? "This read-only card has not inspected the selected encoder yet."
+    : "Teach and Route become exact-device operations after a keyboard-mode encoder is selected.";
+  let accessCopy = "Not inspected";
+  let driverCopy = "Not inspected";
+  let configurationCopy = "Not inspected";
+  let chartCopy = "Not inspected";
+  let chartDetailCopy = "No chart read-back was attempted.";
+  let recommendationCopy = "Keyboard mode keeps the physical panel available to Teach, Route, macros, and dynamic KSX output profiles.";
+  let noteCopy = "Inspection only. KSX did not program or change this encoder.";
+  let showCapabilities = false;
+  let observedMode = "unknown";
+  let chartState = "not-inspected";
+
+  if (controlSurfaceHardwarePhase === "loading") {
+    titleCopy = "Inspecting selected encoder…";
+    identityCopy = selected || "Reading the current device selection.";
+    modeCopy = "Reading mode…";
+    summaryCopy = "KSX is reading hardware status once for this Builder view.";
+  } else if (controlSurfaceHardwarePhase === "error") {
+    cardState = "error";
+    titleCopy = "Could not inspect the selected encoder";
+    identityCopy = selected || "No current encoder identity was available.";
+    modeCopy = "Mode unavailable";
+    summaryCopy = controlSurfaceHardwareError || "Hardware status is unavailable. Nothing was changed.";
+  } else if (unavailable) {
+    cardState = "unavailable";
+    titleCopy = "Encoder inspection unavailable";
+    identityCopy = selected || "No current encoder identity was available.";
+    modeCopy = "Mode unavailable";
+    summaryCopy = unavailable;
+    noteCopy = view?.inspection_note?.trim() || noteCopy;
+  } else if (controlSurfaceHardwarePhase === "ready" && !selected) {
+    cardState = "empty";
+    titleCopy = "No encoder selected";
+    identityCopy = "Choose a keyboard-mode encoder in the device pane at left.";
+    modeCopy = "No selected mode";
+    summaryCopy = view?.summary?.trim() || summaryCopy;
+    noteCopy = view?.inspection_note?.trim() || noteCopy;
+  } else if (controlSurfaceHardwarePhase === "ready" && board) {
+    cardState = board.driver_supported ? "ready" : "unsupported";
+    titleCopy = board.name.trim() || "Selected encoder";
+    identityCopy = board.identity.trim() || board.board_id;
+    modeCopy = board.observed_mode_label.trim() || "Mode unknown";
+    summaryCopy = view?.summary?.trim() || "Selected encoder inspected.";
+    accessCopy = view?.access_detail.trim() || "Inspection access was not reported.";
+    driverCopy = board.driver_label.trim() || board.driver.trim() || "Driver not reported";
+    configurationCopy = board.configuration_collection_detail.trim() ||
+      "Configuration collection was not reported.";
+    chartCopy = board.chart_label.trim() || "Chart read-back not reported";
+    chartDetailCopy = board.chart_detail.trim() || (board.chart_attempted
+      ? "Chart read-back was attempted, but no detail was reported."
+      : "Chart read-back was not attempted.");
+    recommendationCopy = board.recommendation.trim() || recommendationCopy;
+    noteCopy = view?.inspection_note?.trim() || noteCopy;
+    observedMode = board.observed_mode.trim() || "unknown";
+    chartState = board.chart_state.trim() || "unknown";
+    modeTone = (observedMode === "keyboard-compatible" || observedMode === "keyboard") &&
+        board.driver_supported
+      ? "recommended"
+      : "warning";
+    showCapabilities = true;
+  } else if (controlSurfaceHardwarePhase === "ready") {
+    cardState = "missing";
+    titleCopy = "Selected encoder was not found";
+    identityCopy = selected;
+    modeCopy = "Mode not observed";
+    summaryCopy = view?.summary?.trim() || "The inspection did not return this exact selected encoder. Refresh after the device list settles.";
+    noteCopy = view?.inspection_note?.trim() || noteCopy;
+  }
+
+  card.dataset.state = cardState;
+  card.dataset.mode = observedMode;
+  card.dataset.chartState = chartState;
+  card.setAttribute("aria-busy", String(controlSurfaceHardwarePhase === "loading"));
+  mode.dataset.tone = modeTone;
+  name.textContent = titleCopy;
+  identity.textContent = identityCopy;
+  mode.textContent = modeCopy;
+  summary.textContent = summaryCopy;
+  details.hidden = !showCapabilities;
+  capabilities.hidden = !showCapabilities;
+  access.textContent = accessCopy;
+  driver.textContent = driverCopy;
+  configuration.textContent = configurationCopy;
+  chart.textContent = chartCopy;
+  chartDetail.textContent = chartDetailCopy;
+  recommendation.textContent = recommendationCopy;
+  note.textContent = noteCopy;
+  refresh.textContent = controlSurfaceHardwarePhase === "loading"
+    ? "Inspecting…"
+    : controlSurfaceHardwarePhase === "error" || unavailable
+    ? "Retry status"
+    : "Refresh status";
+  refresh.setAttribute("aria-label", `${refresh.textContent} for the selected encoder`);
+}
+
+async function refreshControlSurfaceHardwareStatus(): Promise<void> {
+  cancelControlSurfaceHardwareStatus(false);
+  const generation = controlSurfaceHardwareRequestGeneration;
+  const selector = nCapSelector().trim();
+  const controller = new AbortController();
+  controlSurfaceHardwareAbort = controller;
+  controlSurfaceHardwarePhase = "loading";
+  controlSurfaceHardwarePayload = null;
+  controlSurfaceHardwareError = "";
+  syncControlSurfaceHardwareCard();
+
+  try {
+    const response = await fetch("/api/panel/status", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Panel status request returned HTTP ${response.status}.`);
+    }
+    const payload = await response.json() as PanelStatusPayload;
+    if (controller.signal.aborted || generation !== controlSurfaceHardwareRequestGeneration) return;
+    controlSurfaceHardwareAbort = null;
+    const currentSelector = nCapSelector().trim();
+    const targetSelector = payload.target_selector?.trim() ?? "";
+    if (currentSelector !== selector || targetSelector !== selector) {
+      if (currentSelector === selector) {
+        controlSurfaceHardwarePhase = "error";
+        controlSurfaceHardwarePayload = null;
+        controlSurfaceHardwareError =
+          "The selected encoder changed before this inspection finished. Refresh to inspect the current selection.";
+        syncControlSurfaceHardwareCard();
+      }
+      return;
+    }
+    controlSurfaceHardwarePayload = payload;
+    controlSurfaceHardwarePhase = "ready";
+    syncControlSurfaceHardwareCard();
+  } catch (error) {
+    if (controller.signal.aborted || generation !== controlSurfaceHardwareRequestGeneration) return;
+    controlSurfaceHardwareAbort = null;
+    controlSurfaceHardwarePayload = null;
+    controlSurfaceHardwarePhase = "error";
+    controlSurfaceHardwareError = error instanceof Error
+      ? `${error.message} Nothing was changed.`
+      : "Hardware status could not be read. Nothing was changed.";
+    syncControlSurfaceHardwareCard();
+  }
+}
+
 function controlSurfaceDocumentFingerprint(state: ControlSurfaceState): string {
   return JSON.stringify({
     name: state.name,
@@ -1727,13 +1972,26 @@ function loadControlSurfacePrefs(): void {
     controlSurfaceIdentity,
     keyboardWorkbenchState.theme,
   );
+  controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   maybeMigrateKeyboardWorkbenchSurface();
   applyControlSurfaceState(controlSurfaceState, false);
+  if (controlSurfaceState.open) void refreshControlSurfaceHardwareStatus();
+}
+
+function currentControlSurfaceHardwareFingerprint(): string {
+  return `${nCapSelector().trim()}\n${nCapInstance().trim().toLocaleUpperCase()}`;
 }
 
 function reconcileControlSurfaceIdentity(): void {
   const identity = currentKeyboardWorkbenchIdentity();
-  if (identity !== controlSurfaceIdentity) {
+  const changed = identity !== controlSurfaceIdentity;
+  const hardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
+  const hardwareTargetChanged = hardwareTargetFingerprint !== controlSurfaceHardwareTargetFingerprint;
+  if (changed || hardwareTargetChanged) {
+    cancelControlSurfaceHardwareStatus(true);
+    controlSurfaceHardwareTargetFingerprint = hardwareTargetFingerprint;
+  }
+  if (changed) {
     if (learnRow?.purpose === "surface") void cancelLearn();
     if (assignKey) cancelAssign();
     controlSurfaceIdentity = identity;
@@ -1751,6 +2009,9 @@ function reconcileControlSurfaceIdentity(): void {
   }
   maybeMigrateKeyboardWorkbenchSurface();
   syncControlSurfaceWidget(false);
+  if ((changed || hardwareTargetChanged) && controlSurfaceState.open) {
+    void refreshControlSurfaceHardwareStatus();
+  }
 }
 
 /** Repaint a premium controller without moving a single source-authored path
@@ -3542,6 +3803,7 @@ function syncControlSurfaceChrome(): void {
         }${controlSurfaceSaveFailed ? " · Not saved: browser storage is unavailable" : " · Browser draft saved locally"}`;
     if (status.textContent !== nextStatus) status.textContent = nextStatus;
   }
+  syncControlSurfaceHardwareCard();
   renderControlSurfaceControls();
 }
 
@@ -3567,6 +3829,108 @@ function createControlSurfaceItem(): HTMLElement {
   );
   close.classList.add("quiet");
   head.append(heading, close);
+
+  const hardware = document.createElement("section");
+  hardware.className = "n-surface-hardware";
+  hardware.setAttribute("aria-labelledby", "n-surface-hardware-title");
+  hardware.dataset.state = "idle";
+  const hardwareHead = document.createElement("div");
+  hardwareHead.className = "n-surface-hardware-head";
+  const hardwareHeading = document.createElement("div");
+  const hardwareKicker = document.createElement("span");
+  hardwareKicker.className = "n-surface-hardware-kick";
+  hardwareKicker.textContent = "Selected encoder";
+  const hardwareName = document.createElement("strong");
+  hardwareName.id = "n-surface-hardware-title";
+  hardwareName.dataset.surfaceHardwareName = "";
+  hardwareName.textContent = "Status not inspected";
+  hardwareHeading.append(hardwareKicker, hardwareName);
+  const hardwareRefresh = makeKeyboardWorkbenchButton(
+    "Refresh status",
+    "surface-hardware-refresh",
+    "Read the selected encoder's identity, mode, and read-back capabilities without changing it",
+  );
+  hardwareRefresh.classList.add("quiet", "n-surface-hardware-refresh");
+  hardwareHead.append(hardwareHeading, hardwareRefresh);
+
+  const hardwareStatus = document.createElement("div");
+  hardwareStatus.className = "n-surface-hardware-status";
+  hardwareStatus.setAttribute("role", "status");
+  hardwareStatus.setAttribute("aria-live", "polite");
+  hardwareStatus.setAttribute("aria-atomic", "true");
+  const hardwareIdentity = document.createElement("span");
+  hardwareIdentity.className = "n-surface-hardware-identity";
+  hardwareIdentity.dataset.surfaceHardwareIdentity = "";
+  const hardwareMode = document.createElement("span");
+  hardwareMode.className = "n-surface-hardware-mode";
+  hardwareMode.dataset.surfaceHardwareMode = "";
+  hardwareMode.dataset.tone = "neutral";
+  const hardwareSummary = document.createElement("p");
+  hardwareSummary.className = "n-surface-hardware-summary";
+  hardwareSummary.dataset.surfaceHardwareSummary = "";
+  const hardwareDetails = document.createElement("details");
+  hardwareDetails.className = "n-surface-hardware-details";
+  hardwareDetails.dataset.surfaceHardwareDetails = "";
+  hardwareDetails.hidden = true;
+  const hardwareDetailsSummary = document.createElement("summary");
+  hardwareDetailsSummary.textContent = "Inspection details";
+  const hardwareCapabilities = document.createElement("dl");
+  hardwareCapabilities.className = "n-surface-hardware-capabilities";
+  hardwareCapabilities.dataset.surfaceHardwareCapabilities = "";
+  hardwareCapabilities.hidden = true;
+  const hardwareAccessRow = document.createElement("div");
+  const hardwareAccessTerm = document.createElement("dt");
+  hardwareAccessTerm.textContent = "Inspection access";
+  const hardwareAccessValue = document.createElement("dd");
+  hardwareAccessValue.dataset.surfaceHardwareAccess = "";
+  hardwareAccessRow.append(hardwareAccessTerm, hardwareAccessValue);
+  const hardwareDriverRow = document.createElement("div");
+  const hardwareDriverTerm = document.createElement("dt");
+  hardwareDriverTerm.textContent = "Panel driver";
+  const hardwareDriverValue = document.createElement("dd");
+  hardwareDriverValue.dataset.surfaceHardwareDriver = "";
+  hardwareDriverRow.append(hardwareDriverTerm, hardwareDriverValue);
+  const hardwareConfigurationRow = document.createElement("div");
+  const hardwareConfigurationTerm = document.createElement("dt");
+  hardwareConfigurationTerm.textContent = "Configuration collection";
+  const hardwareConfigurationValue = document.createElement("dd");
+  hardwareConfigurationValue.dataset.surfaceHardwareConfiguration = "";
+  hardwareConfigurationRow.append(hardwareConfigurationTerm, hardwareConfigurationValue);
+  const hardwareChartRow = document.createElement("div");
+  const hardwareChartTerm = document.createElement("dt");
+  hardwareChartTerm.textContent = "Chart read-back";
+  const hardwareChartValue = document.createElement("dd");
+  const hardwareChartLabel = document.createElement("strong");
+  hardwareChartLabel.dataset.surfaceHardwareChart = "";
+  const hardwareChartDetail = document.createElement("small");
+  hardwareChartDetail.dataset.surfaceHardwareChartDetail = "";
+  hardwareChartValue.append(hardwareChartLabel, hardwareChartDetail);
+  hardwareChartRow.append(hardwareChartTerm, hardwareChartValue);
+  hardwareCapabilities.append(
+    hardwareAccessRow,
+    hardwareDriverRow,
+    hardwareConfigurationRow,
+    hardwareChartRow,
+  );
+  const hardwareRecommendation = document.createElement("p");
+  hardwareRecommendation.className = "n-surface-hardware-recommendation";
+  hardwareRecommendation.dataset.surfaceHardwareRecommendation = "";
+  const hardwareNote = document.createElement("p");
+  hardwareNote.className = "n-surface-hardware-note";
+  hardwareNote.dataset.surfaceHardwareNote = "";
+  hardwareDetails.append(
+    hardwareDetailsSummary,
+    hardwareCapabilities,
+    hardwareRecommendation,
+  );
+  hardwareStatus.append(
+    hardwareIdentity,
+    hardwareMode,
+    hardwareSummary,
+    hardwareDetails,
+    hardwareNote,
+  );
+  hardware.append(hardwareHead, hardwareStatus);
 
   const stages = document.createElement("nav");
   stages.className = "n-surface-stages";
@@ -3672,8 +4036,8 @@ function createControlSurfaceItem(): HTMLElement {
   const note = document.createElement("p");
   note.className = "n-surface-note";
   note.textContent =
-    "Teach listens to keyboard-class sources but accepts a hit only from the exact selected Windows device. It never programs an encoder or changes a KSX mapping. Route output performs the real backend mapping. XInput-source capture is future work and is not presented as a keyboard here.";
-  content.append(head, stages, status, starters, tools, workarea, note);
+    "Teach records what the exact selected keyboard-mode encoder sends. Route writes the KSX mapping. Hardware status above is inspection-only; this Builder does not program the encoder.";
+  content.append(head, hardware, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
     instanceId: "control-surface",
@@ -3801,7 +4165,9 @@ function openControlSurfaceBuilder(): void {
   cancelAssign();
   controlSurfaceChoosingTemplate = !controlSurfaceState.started;
   controlSurfacePendingTemplate = null;
+  controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, true);
+  void refreshControlSurfaceHardwareStatus();
   keyboardWorkbenchAnnounce(
     controlSurfaceState.started
       ? "Control Surface Builder opened with its saved physical panel."
@@ -3810,6 +4176,7 @@ function openControlSurfaceBuilder(): void {
 }
 
 function closeControlSurfaceBuilder(): void {
+  cancelControlSurfaceHardwareStatus(true);
   if (learnRow?.purpose === "surface") void cancelLearn();
   if (assignKey) cancelAssign();
   controlSurfaceChoosingTemplate = false;
@@ -7164,6 +7531,8 @@ export function nocturneWire(root: HTMLElement): void {
       openControlSurfaceBuilder();
     } else if (hit === "surface-close") {
       closeControlSurfaceBuilder();
+    } else if (hit === "surface-hardware-refresh") {
+      void refreshControlSurfaceHardwareStatus();
     } else if (hit === "surface-template") {
       const template = target?.closest<HTMLElement>("[data-surface-template]")
         ?.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;

@@ -137,6 +137,68 @@ function setPadControlKeys(pad, functionName, keys) {
   control.keys = [...keys];
 }
 
+const PANEL_SELECTOR = "usb:d209:0430:00";
+
+function panelStatusPayload({
+  targetSelector = PANEL_SELECTOR,
+  name = "Ultimarc I-PAC 4X",
+  identity = "USB D209:0430 · bcdDevice 0x0056",
+  driver = "ultimarc-ipac",
+  driverSupported = true,
+  driverLabel = "Ultimarc I-PAC family",
+  mode = "keyboard-compatible",
+  modeLabel = "Keyboard-compatible · Recommended",
+  modeDetail = "A boot-keyboard interface is present; no vendor mode query was sent.",
+  recommendation = "Keep this encoder in keyboard mode so Teach and Route retain KSX's dynamic transforms.",
+  chartState = "protocol-unverified",
+  chartAttempted = false,
+  chartLabel = "Protocol unverified · Not attempted",
+  chartDetail = "Chart read-back protocol is unverified, so no report was sent.",
+  configurationState = "candidate-unverified",
+  configurationDetail = "One passive 5-byte input/output candidate was observed; its protocol is unverified.",
+  unavailable = null,
+} = {}) {
+  return {
+    target_selector: targetSelector,
+    unavailable,
+    view: {
+      generated_at: "2026-08-22T19:20:00-04:00",
+      usb_available: true,
+      hid_available: true,
+      summary: "One selected panel encoder was inspected.",
+      access_detail: "USB descriptors and passive HID collection metadata were readable",
+      panels: targetSelector === null ? [] : [{
+        board_id: "USB\\VID_D209&PID_0430\\FIXTURE",
+        name,
+        identity,
+        vendor_id: 0xd209,
+        product_id: 0x0430,
+        bcd_device: 0x0056,
+        serial: null,
+        driver,
+        driver_supported: driverSupported,
+        driver_label: driverSupported ? driverLabel : "Unsupported panel protocol",
+        observed_mode: mode,
+        mode_detail: modeDetail,
+        observed_mode_label: modeLabel,
+        mode_read_supported: false,
+        chart_state: chartState,
+        chart_attempted: chartAttempted,
+        chart_detail: chartDetail,
+        chart_label: chartLabel,
+        configuration_collection_state: configurationState,
+        configuration_collection: configurationState === "candidate-unverified" ? "HID MI_02" : null,
+        configuration_collection_detail: configurationDetail,
+        recommendation,
+        interfaces: [],
+        hid_collections: [],
+      }],
+      inspection_note: "Inspection only. KSX did not program or change this encoder.",
+      notes: [],
+    },
+  };
+}
+
 const scaleOf = (page, id) =>
   page.evaluate(
     (instance) =>
@@ -3708,6 +3770,262 @@ describe("the canvas navigation controls", () => {
       assert.match(failure.status, /Not saved/i);
       assert.deepEqual(writes, [], "failed migration remains a visual, read-only operation");
       assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Control Surface inspects the selected encoder only on open, refresh, or concrete identity change", async () => {
+    let panelCalls = 0;
+    let observedMode = "keyboard-compatible";
+    let reenumerate = false;
+    let holdNextPanelRead = false;
+    let releaseHeldPanelRead = () => {};
+    let markHeldPanelRead = () => {};
+    let markReenumeratedPanelRead = () => {};
+    const heldPanelRelease = new Promise((resolve) => {
+      releaseHeldPanelRead = resolve;
+    });
+    const heldPanelStarted = new Promise((resolve) => {
+      markHeldPanelRead = resolve;
+    });
+    const reenumeratedPanelRead = new Promise((resolve) => {
+      markReenumeratedPanelRead = resolve;
+    });
+    const withinPanelRead = (promise, label) => Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label)), 10_000)),
+    ]);
+    const methods = [];
+    const panelWrites = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname === "/api/panel/status" && request.method() !== "GET") {
+          panelWrites.push(`${request.method()} ${pathname}`);
+        }
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        if (!reenumerate) {
+          const response = await route.fetch();
+          await route.fulfill({ response });
+          return;
+        }
+        // Re-enumeration is a server-state change. Strip the browser's old
+        // conditional so this fixture can return that changed body instead of
+        // faithfully forwarding a 304 based on the unchanged scripted store.
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200, "re-enumeration returns a fresh Nocturne payload");
+        const payload = await response.json();
+        payload.view.cap_instance = "HID\\VID_D209&PID_0430\\FIXTURE-REENUMERATED";
+        await route.fulfill({ response, json: payload });
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        panelCalls += 1;
+        methods.push(route.request().method());
+        if (panelCalls === 4) markReenumeratedPanelRead();
+        if (holdNextPanelRead) {
+          holdNextPanelRead = false;
+          markHeldPanelRead();
+          await heldPanelRelease;
+          try {
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(panelStatusPayload({
+                name: "Stale pre-refresh encoder",
+                mode: "keyboard-compatible",
+                modeLabel: "Keyboard-compatible · Recommended",
+              })),
+            });
+          } catch {
+            // The product aborts the superseded GET. Its late completion must
+            // not win even when the browser has already retired the request.
+          }
+          return;
+        }
+        const payload = observedMode === "unknown"
+          ? panelStatusPayload({
+              mode: "unknown",
+              modeLabel: "Keyboard compatibility not observed · Mode unknown",
+              modeDetail: "No boot-keyboard interface was observed; no vendor mode query was sent.",
+              recommendation: "Keyboard compatibility was not observed. If this I-PAC was switched to XInput, hold Start1 + P1 Button 1 for ten seconds to return to keyboard mode, then refresh.",
+            })
+          : panelStatusPayload();
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      await page.waitForTimeout(2_250);
+      assert.equal(panelCalls, 0, "the closed Builder is absent from the two-second poll payload");
+
+      await page.click('[data-nx="surface-open"]');
+      const card = page.locator(".n-widget-surface .n-surface-hardware");
+      await card.waitFor({ state: "visible" });
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      assert.equal(panelCalls, 1, "opening performs one explicit read");
+      assert.deepEqual(methods, ["GET"]);
+      assert.equal(await card.getAttribute("aria-labelledby"), "n-surface-hardware-title");
+      assert.equal(await card.locator('[role="status"][aria-live="polite"]').count(), 1);
+      let cardCopy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(cardCopy, /Ultimarc I-PAC 4X/);
+      assert.match(cardCopy, /USB D209:0430/);
+      assert.match(cardCopy, /bcdDevice 0x0056/);
+      assert.match(cardCopy, /Keyboard-compatible · Recommended/);
+      assert.match(cardCopy, /USB descriptors and passive HID collection metadata were readable/);
+      assert.match(cardCopy, /Protocol unverified · Not attempted/);
+      assert.match(cardCopy, /no report was sent/);
+      assert.match(cardCopy, /One passive 5-byte input\/output candidate/);
+      assert.match(cardCopy, /Inspection only\. KSX did not program or change this encoder\./);
+      assert.equal(await card.locator("form").count(), 0);
+      assert.equal(await card.locator("button").count(), 1, "the hardware card offers Refresh only");
+      assert.equal(await card.locator('[data-nx*="program"], [data-nx*="write"]').count(), 0);
+      const hardwareDetails = card.locator("details.n-surface-hardware-details");
+      assert.equal(await hardwareDetails.getAttribute("open"), null);
+      await hardwareDetails.locator("summary").click();
+      assert.notEqual(await hardwareDetails.getAttribute("open"), null);
+      const stageLabels = await page.locator(".n-widget-surface .n-surface-stage").evaluateAll(
+        (buttons) => buttons.map((button) =>
+          (button.textContent ?? "").replace(/^\s*\d+\s*/, "").trim()),
+      );
+      assert.deepEqual(stageLabels, ["Design", "Teach inputs", "Route outputs"]);
+
+      await page.waitForTimeout(2_250);
+      assert.equal(panelCalls, 1, "ordinary Nocturne polls do not re-inspect hardware");
+
+      holdNextPanelRead = true;
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await withinPanelRead(heldPanelStarted, "the held panel refresh never reached the endpoint");
+      observedMode = "unknown";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-mode") === "unknown");
+      assert.equal(panelCalls, 3, "an explicit retry supersedes the in-flight inspection");
+      releaseHeldPanelRead();
+      await page.waitForTimeout(200);
+      cardCopy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(cardCopy, /Keyboard compatibility not observed · Mode unknown/);
+      assert.match(cardCopy, /If this I-PAC was switched to XInput/);
+      assert.match(cardCopy, /hold Start1 \+ P1 Button 1 for ten seconds/);
+      assert.doesNotMatch(cardCopy, /XInput mode ·/);
+      assert.doesNotMatch(cardCopy, /Stale pre-refresh encoder/);
+
+      reenumerate = true;
+      await withinPanelRead(
+        reenumeratedPanelRead,
+        "a concrete encoder-instance change never triggered a fresh panel inspection",
+      );
+      assert.equal(panelCalls, 4, "a new concrete Windows instance under the same selector refreshes once");
+      await page.waitForTimeout(2_250);
+      assert.equal(panelCalls, 4, "the unchanged re-enumerated target does not refresh on every poll");
+      assert.deepEqual(methods, ["GET", "GET", "GET", "GET"]);
+      assert.deepEqual(panelWrites, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseHeldPanelRead();
+      await page.close();
+    }
+  });
+
+  test("Control Surface keeps unsupported, unavailable, stale, and failed panel reads distinct", async () => {
+    let answer = "unsupported";
+    let panelCalls = 0;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/status", async (route) => {
+        panelCalls += 1;
+        if (answer === "http-error") {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "fixture unavailable" }),
+          });
+          return;
+        }
+        const payload = answer === "mismatch"
+          ? panelStatusPayload({
+              targetSelector: "usb:ffff:0001:00",
+              name: "Wrong stale encoder",
+            })
+          : answer === "unavailable"
+          ? {
+              target_selector: PANEL_SELECTOR,
+              unavailable: "USB inventory could not be read; this is not an empty or healthy panel result.",
+              view: null,
+            }
+          : panelStatusPayload({
+              name: "Generic USB Encoder",
+              driver: "unsupported",
+              driverSupported: false,
+              modeLabel: "Keyboard-compatible HID mode",
+              recommendation: "Teach and Route still work for its keyboard-class input, but this panel protocol cannot be inspected.",
+              chartState: "unsupported-driver",
+              chartAttempted: false,
+              chartLabel: "Chart read-back unsupported",
+              chartDetail: "No registered status driver can read this encoder's chart.",
+              configurationState: "unsupported-driver",
+              configurationDetail: "No configuration collection is claimed for an unsupported driver.",
+            });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      const card = page.locator(".n-widget-surface .n-surface-hardware");
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unsupported");
+      let copy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(copy, /Generic USB Encoder/);
+      assert.match(copy, /Unsupported panel protocol/);
+      assert.match(copy, /Chart read-back unsupported/);
+      assert.match(copy, /Teach and Route still work/);
+      assert.equal(await page.locator(".n-widget-surface .n-surface-stage").count(), 3);
+
+      answer = "mismatch";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error");
+      copy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(copy, /selected encoder changed before this inspection finished/i);
+      assert.doesNotMatch(copy, /Wrong stale encoder/);
+
+      answer = "unavailable";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unavailable");
+      copy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(copy, /USB inventory could not be read/);
+      assert.match(copy, /not an empty or healthy panel result/);
+
+      answer = "http-error";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error");
+      copy = (await card.textContent()).replace(/\s+/g, " ");
+      assert.match(copy, /HTTP 503/);
+      assert.match(copy, /Nothing was changed/);
+      assert.doesNotMatch(copy, /Chart read-back unsupported/);
+      assert.equal(panelCalls, 4);
+      const unexpectedNoise = page.ksxNoise.filter((line) =>
+        !/Failed to load resource:.*503 \(Service Unavailable\)/i.test(line)
+      );
+      assert.deepEqual(unexpectedNoise, []);
+      assert.ok(
+        page.ksxNoise.some((line) => /503 \(Service Unavailable\)/i.test(line)),
+        "the intentional HTTP-failure fixture reached the browser",
+      );
     } finally {
       await page.close();
     }

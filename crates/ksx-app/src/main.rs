@@ -16,8 +16,8 @@
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, install, logging,
-    macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run, session, setup,
-    slot_cli, stage_cli, winusb,
+    macro_cli, macro_trace, map, mapping, monitor, pads, panel, play, preset_cli, run, session,
+    setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -979,6 +979,16 @@ enum Command {
         #[command(subcommand)]
         command: DeviceCommand,
     },
+    /// Inspect arcade-panel USB identity and HID capabilities
+    ///
+    /// `status` is strictly read-only. It opens HID metadata handles with
+    /// desired access zero and sends no input, output, or feature report. It
+    /// reports exact vendor mode and EEPROM chart read-back as unavailable
+    /// until those protocols are verified; an empty chart is never fabricated.
+    Panel {
+        #[command(subcommand)]
+        command: PanelCommand,
+    },
     /// Open ksx: start the daemon if needed, then show Studio in its own window
     ///
     /// The friendly double-click, and what the Start-menu "ksx" entry runs.
@@ -1404,6 +1414,19 @@ enum DeviceCommand {
         #[arg(long)]
         force: bool,
         /// What was removed, as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
+enum PanelCommand {
+    /// Show every candidate board and its passive HID metadata
+    Status {
+        /// An exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// The typed PanelStatusView as JSON
         #[arg(long)]
         json: bool,
     },
@@ -2150,6 +2173,9 @@ fn main() -> anyhow::Result<()> {
                 device_edit::remove(device_edit::RemoveSpec { alias, force }, json)
             }
         },
+        Command::Panel { command } => match command {
+            PanelCommand::Status { device, json } => panel::run(device, json),
+        },
         Command::Winusb { command } => match command {
             WinusbCommand::Status { json } => winusb::run(winusb::Options {
                 action: winusb::Action::Status,
@@ -2835,6 +2861,29 @@ mod tests {
         }
         // `status` takes no --yes: there is nothing for it to consent to.
         assert!(Cli::try_parse_from(["ksx", "winusb", "status", "--yes"]).is_err());
+    }
+
+    #[test]
+    fn panel_status_parses_selector_json_and_has_no_consent_flag() {
+        let cli = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "status",
+            "--device",
+            "usb:d209:0430:00",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Panel {
+                command: PanelCommand::Status { device, json },
+            } => {
+                assert_eq!(device.as_deref(), Some("usb:d209:0430:00"));
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+        assert!(Cli::try_parse_from(["ksx", "panel", "status", "--yes"]).is_err());
     }
 
     #[test]

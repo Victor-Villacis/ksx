@@ -931,6 +931,84 @@ fn main() {
                 ..Default::default()
             })
         }
+
+        /// The Builder's inspection card needs a believable passive answer in
+        /// this browser fixture. It mirrors the measured I-PAC topology while
+        /// keeping the production boundary explicit: raw descriptor metadata,
+        /// no chart query and no report transaction.
+        fn panel_status(
+            &self,
+            spec: &ksx_api::PanelStatusSpec,
+        ) -> Result<ksx_api::PanelStatusView, ksx_api::Refusal> {
+            let selected = spec.device.as_deref().unwrap_or_default();
+            if !selected.eq_ignore_ascii_case("usb:d209:0430:00") {
+                return Err(ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    format!("the fixture has no panel matching '{selected}'"),
+                ));
+            }
+            Ok(ksx_api::PanelStatusView {
+                generated_at: "fixture".into(),
+                summary: "1 physical USB board matched; 6 HID collections were inspected".into(),
+                inspection_note: "Read-only metadata inspection: HID handles used desired access 0; no input, output, or feature report was requested or sent.".into(),
+                access_detail:
+                    "USB descriptors and passive HID collection metadata were readable".into(),
+                usb_available: true,
+                hid_available: true,
+                panels: vec![ksx_api::PanelStatusRow {
+                    board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
+                    name: "Ultimarc I-PAC 4".into(),
+                    identity: "USB VID D209, PID 0430, raw bcdDevice 0x0056".into(),
+                    vendor_id: 0xD209,
+                    product_id: 0x0430,
+                    bcd_device: 0x0056,
+                    serial: None,
+                    driver: "ultimarc-ipac".into(),
+                    driver_supported: true,
+                    driver_label:
+                        "Ultimarc I-PAC protocol family recognised; read-back protocol unverified"
+                            .into(),
+                    observed_mode: "keyboard-compatible".into(),
+                    mode_detail: "MI_00 declares the HID boot-keyboard protocol; exact vendor mode was not queried".into(),
+                    observed_mode_label: "Keyboard-compatible input is present".into(),
+                    mode_read_supported: false,
+                    chart_state: "protocol-unverified".into(),
+                    chart_attempted: false,
+                    chart_detail: "No verified chart-query opcode or response framing exists in ksx; an empty chart was not fabricated".into(),
+                    chart_label: "Chart not read — protocol unverified".into(),
+                    configuration_collection_state: "candidate-unverified".into(),
+                    configuration_collection: Some(
+                        "HID\\VID_D209&PID_0430&MI_02&COL01\\FIXTURE".into(),
+                    ),
+                    configuration_collection_detail: "One 5-byte IN/OUT HID collection matches the unverified transport shape; ksx sent nothing".into(),
+                    recommendation: "Keep using the keyboard capture path; panel programming stays unavailable until read-back and backup are proven".into(),
+                    interfaces: vec![ksx_api::PanelInterfaceRow {
+                        instance_id: "USB\\VID_D209&PID_0430&MI_00\\FIXTURE".into(),
+                        interface_number: 0,
+                        interface_class: 3,
+                        interface_subclass: 1,
+                        interface_protocol: 1,
+                        binding: "hidusb.sys (keyboard stack)".into(),
+                        boot_keyboard: true,
+                        description: "USB Input Device".into(),
+                    }],
+                    hid_collections: vec![ksx_api::PanelHidCollectionRow {
+                        instance_id: "HID\\VID_D209&PID_0430&MI_02&COL01\\FIXTURE".into(),
+                        state: "available".into(),
+                        vendor_id: Some(0xD209),
+                        product_id: Some(0x0430),
+                        version_number: Some(0x0056),
+                        usage_page: Some(0xFF00),
+                        usage: Some(1),
+                        input_report_bytes: Some(5),
+                        output_report_bytes: Some(5),
+                        feature_report_bytes: Some(0),
+                        errors: Vec::new(),
+                    }],
+                }],
+                notes: Vec::new(),
+            })
+        }
     }
 
     if let Err(err) = ksx_studio::serve(

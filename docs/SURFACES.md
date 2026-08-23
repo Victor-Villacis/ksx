@@ -161,6 +161,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Rename / delete a controller layout | owns | — | **primary** (`/profiles`) |
 | Create / update / delete profiles | planned | view | **primary** |
 | Device pick / remove | owns | planned | **primary** |
+| Inspect panel encoder hardware / chart capability | owns (read-only status) | — | view (Control Surface Builder) |
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
 | Is it working: pads, drivers | owns | **primary** | view |

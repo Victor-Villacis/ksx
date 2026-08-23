@@ -61,6 +61,7 @@ pub mod macro_trace;
 pub mod map;
 pub mod mapping;
 pub mod monitor;
+pub mod panel;
 // The first-run state and the path-free config in/out, for the surfaces that
 // have a screen. Gated with `sources` because that is the only caller: the CLI
 // reaches this machinery through `config_io` directly.

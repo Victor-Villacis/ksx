@@ -787,6 +787,19 @@ fn refusal_of(code: &'static str, message: String, remedy: Option<String>) -> Re
 pub struct LocalMachine;
 
 impl ksx_api::MachineSource for LocalMachine {
+    /// Passive USB/HID panel inventory. The HID survey opens metadata handles
+    /// with desired access zero and sends no report transaction; exact vendor
+    /// mode and EEPROM chart state therefore remain explicit unknowns.
+    #[cfg(windows)]
+    fn panel_status(
+        &self,
+        spec: &ksx_api::PanelStatusSpec,
+    ) -> Result<ksx_api::PanelStatusView, Refusal> {
+        let report = crate::devices::collect();
+        let hid = ksx_platform::hid::survey();
+        crate::panel::view(&report, &hid, spec)
+    }
+
     /// **Change split-or-freeze on a config that is already saved.**
     ///
     /// The whole capability used to live inside first run: `stage::apply` was

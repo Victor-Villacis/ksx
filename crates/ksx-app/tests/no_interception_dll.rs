@@ -29,6 +29,48 @@ use std::path::{Path, PathBuf};
 /// The binary under test, built by cargo for this integration test.
 const KSX: &str = env!("CARGO_BIN_EXE_ksx");
 
+/// Windows' default 1 MiB initial-thread stack is too small for the complete
+/// nested Clap graph in an unoptimised developer build.  The reserve is a PE
+/// property stamped by the linker, so inspect the produced executable rather
+/// than merely checking that build.rs contains a flag.
+#[test]
+fn the_binary_reserves_enough_main_thread_stack_for_the_cli_graph() {
+    let exe = Path::new(KSX);
+    let bytes = std::fs::read(exe).expect("reading the ksx binary");
+    let u16_at = |o: usize| u16::from_le_bytes([bytes[o], bytes[o + 1]]);
+    let u32_at =
+        |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let u64_at = |o: usize| {
+        u64::from_le_bytes([
+            bytes[o],
+            bytes[o + 1],
+            bytes[o + 2],
+            bytes[o + 3],
+            bytes[o + 4],
+            bytes[o + 5],
+            bytes[o + 6],
+            bytes[o + 7],
+        ])
+    };
+
+    assert_eq!(&bytes[0..2], b"MZ", "not a PE image: {}", exe.display());
+    let pe = u32_at(0x3C) as usize;
+    assert_eq!(&bytes[pe..pe + 4], b"PE\0\0", "bad PE signature");
+    let optional_header = pe + 4 + 20;
+    // SizeOfStackReserve is at +72 in both optional-header forms; it is a
+    // DWORD in PE32 and a QWORD in PE32+.
+    let reserve = match u16_at(optional_header) {
+        0x10B => u32_at(optional_header + 72) as u64,
+        0x20B => u64_at(optional_header + 72),
+        other => panic!("unknown optional header magic {other:#x}"),
+    };
+    assert!(
+        reserve >= 4 * 1024 * 1024,
+        "ksx.exe reserves only {reserve} bytes for its initial thread; the complete Clap command \
+         graph overflows Windows' 1 MiB default before even `ksx --version` can run"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A minimal PE import-table reader
 // ---------------------------------------------------------------------------

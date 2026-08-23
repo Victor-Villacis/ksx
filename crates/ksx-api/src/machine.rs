@@ -99,6 +99,44 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// List portable, complete semantic hardware layouts saved by KSX.
+    ///
+    /// These are deliberately not raw EEPROM recovery images. A hardware
+    /// layout can be renamed, copied to another supported I-PAC and edited by
+    /// a surface; the raw transaction journal remains machine/board-bound.
+    fn panel_hardware_profiles(&self) -> Result<PanelHardwareProfilesView, Refusal> {
+        Err(Refusal::not_here(
+            "listing saved encoder layouts",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
+    /// Create or update one complete portable encoder layout. Updates carry
+    /// the revision returned by [`Self::panel_hardware_profiles`] so an older
+    /// editor cannot overwrite a newer save.
+    fn panel_hardware_profile_save(
+        &self,
+        _spec: &PanelHardwareProfileSaveSpec,
+    ) -> Result<PanelHardwareProfileMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "saving an encoder layout",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
+    /// Delete one saved portable layout. This never clears or otherwise
+    /// changes the physical encoder; hardware programming is a separate,
+    /// reviewed [`Self::panel_program`] transaction.
+    fn panel_hardware_profile_delete(
+        &self,
+        _spec: &PanelHardwareProfileDeleteSpec,
+    ) -> Result<PanelHardwareProfileMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "deleting a saved encoder layout",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
     /// Read-only `ksx panel program` planning. It explicitly reads the current
     /// chart, but sends no write report and creates no backup. The returned
     /// identity, profile, and hashes are the stale-write contract the apply
@@ -842,6 +880,87 @@ pub struct PanelBackupsView {
     pub backups: Vec<PanelBackupRow>,
 }
 
+/// One portable semantic assignment in a complete hardware layout.
+///
+/// `None` means Unassigned. Opaque vendor bytes cannot be represented here:
+/// they remain available only in the immutable raw recovery store. A profile
+/// contains exactly one row for every terminal in its `terminal_signature`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareTerminal {
+    pub terminal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shifted_key: Option<String>,
+    #[serde(default)]
+    pub is_shift: bool,
+    /// Repeated assignments are accepted only when every participant carries
+    /// this explicit acknowledgement.
+    #[serde(default)]
+    pub allow_shared_key: bool,
+}
+
+/// A complete, portable I-PAC hardware layout owned by KSX.
+///
+/// Recovery images are intentionally a different type and store. This model
+/// carries only actions KSX can both program and observe, so it is safe to
+/// edit and apply to any board admitted by the same driver/profile/signature.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfile {
+    pub schema: String,
+    pub profile_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub driver: String,
+    pub protocol_profile: String,
+    /// Hash of the ordered physical-terminal vocabulary for this driver.
+    pub terminal_signature: String,
+    /// Opaque content revision used by update/delete stale-write guards.
+    pub revision: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub terminals: Vec<PanelHardwareTerminal>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfilesView {
+    pub summary: String,
+    pub config_root: String,
+    pub terminal_signature: String,
+    pub profiles: Vec<PanelHardwareProfile>,
+}
+
+/// Create when both identity fields are absent; update when both are present.
+/// The backend owns file ids, schema/profile metadata, timestamps and revision.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileSaveSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub terminals: Vec<PanelHardwareTerminal>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileDeleteSpec {
+    pub profile_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileMutationView {
+    /// `created` | `updated` | `unchanged` | `deleted`.
+    pub state: String,
+    pub summary: String,
+    pub profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<PanelHardwareProfile>,
+}
+
 /// One semantic terminal edit. An absent field is unchanged; an empty key
 /// spelling clears that action. The backend rejects any non-canonical key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,8 +979,9 @@ pub struct PanelTerminalEdit {
     pub allow_shared_key: bool,
 }
 
-/// Pure program-plan input. `layout` is `custom` or
-/// `canonical-four-player`; the latter is allocated by the backend.
+/// Pure program-plan input. `layout` is `custom`, `blank`, or
+/// `canonical-four-player`; both complete layouts are allocated by the
+/// backend against the live baseline so opaque vendor bytes remain untouched.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelProgramSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3470,6 +3590,22 @@ mod tests {
                 "ksx panel backups",
                 Nothing
                     .panel_backups(&PanelBackupsSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing.panel_hardware_profiles().unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing
+                    .panel_hardware_profile_save(&PanelHardwareProfileSaveSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing
+                    .panel_hardware_profile_delete(&PanelHardwareProfileDeleteSpec::default())
                     .unwrap_err(),
             ),
             (

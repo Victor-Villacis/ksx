@@ -1631,7 +1631,21 @@ fn usage_for_key_name(name: &str) -> Result<Option<KeyboardUsage>, Refusal> {
         })
 }
 
-fn terminal_edits(spec: &PanelProgramSpec) -> Result<Vec<TerminalEdit>, Refusal> {
+/// Normalize a surface spelling through the exact program-and-observe key
+/// roster. Portable hardware profiles call this before they reach a board, so
+/// a saved layout cannot contain an action the programmer would later refuse.
+pub(crate) fn canonical_panel_key_name(name: &str) -> Result<Option<String>, Refusal> {
+    usage_for_key_name(name).map(|usage| {
+        usage.map(|usage| {
+            key_for_usage(usage)
+                .expect("usage_for_key_name returns only observable usages")
+                .name()
+                .to_owned()
+        })
+    })
+}
+
+pub(crate) fn terminal_edits(spec: &PanelProgramSpec) -> Result<Vec<TerminalEdit>, Refusal> {
     match spec.layout.as_str() {
         "canonical-four-player" => {
             if !spec.edits.is_empty() {
@@ -1642,11 +1656,20 @@ fn terminal_edits(spec: &PanelProgramSpec) -> Result<Vec<TerminalEdit>, Refusal>
             }
             return Ok(canonical_four_player_edits());
         }
+        "blank" => {
+            if !spec.edits.is_empty() {
+                return Err(bad_request(
+                    "the blank layout cannot be mixed with custom terminal edits",
+                    "choose Blank hardware or Customize, then review one coherent plan",
+                ));
+            }
+            return Ok(blank_edits());
+        }
         "custom" => {}
         other => {
             return Err(bad_request(
                 format!("unknown panel layout '{other}'"),
-                "choose `canonical-four-player` or `custom`",
+                "choose `blank`, `canonical-four-player`, or `custom`",
             ));
         }
     }
@@ -1697,6 +1720,40 @@ fn terminal_edits(spec: &PanelProgramSpec) -> Result<Vec<TerminalEdit>, Refusal>
     validate_shared_keys(&normal_keys, "normal")?;
     validate_shared_keys(&shifted_keys, "shifted")?;
     Ok(edits)
+}
+
+fn terminal_edits_for_image(
+    spec: &PanelProgramSpec,
+    image: &RawPanelImage,
+) -> Result<Vec<TerminalEdit>, Refusal> {
+    if spec.layout == "blank" || spec.layout == "canonical-four-player" {
+        // `terminal_edits` still validates that Blank has no custom rows and
+        // that the layout spelling is known before these baseline-sensitive
+        // layouts decide which *known-enabled* shift bytes may be reset.
+        terminal_edits(spec)?;
+        Ok(if spec.layout == "blank" {
+            blank_edits_for_image(image)
+        } else {
+            canonical_four_player_edits_for_image(image)
+        })
+    } else {
+        let mut edits = terminal_edits(spec)?;
+        let shift_states = decode_ipac4_terminals(image)
+            .into_iter()
+            .map(|state| (state.terminal.id, state.shift))
+            .collect::<BTreeMap<_, _>>();
+        edits.retain(|edit| match edit {
+            // `false` means "no active shift role", not permission to
+            // normalize an unrecognized vendor byte. Disabled is already the
+            // desired state; opaque is deliberately preserved.
+            TerminalEdit::Shift {
+                terminal,
+                enabled: false,
+            } => shift_states.get(terminal.as_str()) == Some(&SemanticValue::ShiftEnabled),
+            _ => true,
+        });
+        Ok(edits)
+    }
 }
 
 fn validate_shared_keys(
@@ -2272,7 +2329,7 @@ pub fn backups(spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
 
 pub fn program_plan(spec: &PanelProgramSpec) -> Result<PanelProgramPlanView, Refusal> {
     validate_sha256(&spec.expected_base_sha256, "expected_base_sha256")?;
-    let edits = terminal_edits(spec)?;
+    terminal_edits(spec)?;
     let selected = select_panel(spec.device.clone())?;
     let root = config_root()?;
     let _lease = acquire_programming_lease(root.dir())?;
@@ -2286,6 +2343,7 @@ pub fn program_plan(spec: &PanelProgramSpec) -> Result<PanelProgramPlanView, Ref
     }
     let image = read_stable_panel_image(&selected)?;
     check_baseline(&image, &spec.expected_base_sha256).map_err(programming_error)?;
+    let edits = terminal_edits_for_image(spec, &image)?;
     let plan = plan_program(&image, &edits).map_err(programming_error)?;
     validate_complete_desired_keys(spec, &image, &plan.desired)?;
     let qualification = PanelQualificationStore::new(&store, &selected.identity)
@@ -2320,7 +2378,7 @@ pub fn program(spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refu
     validate_sha256(&spec.program.expected_base_sha256, "expected_base_sha256")?;
     validate_sha256(&spec.expected_desired_sha256, "expected_desired_sha256")?;
     require_session_stopped("programming")?;
-    let edits = terminal_edits(&spec.program)?;
+    terminal_edits(&spec.program)?;
     let selected = select_panel(spec.program.device.clone())?;
     validate_supervised_binding(
         &selected,
@@ -2340,6 +2398,7 @@ pub fn program(spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refu
     }
     let current = read_stable_panel_image(&selected)?;
     check_baseline(&current, &spec.program.expected_base_sha256).map_err(programming_error)?;
+    let edits = terminal_edits_for_image(&spec.program, &current)?;
     let reviewed = plan_program(&current, &edits).map_err(programming_error)?;
     validate_complete_desired_keys(&spec.program, &current, &reviewed.desired)?;
     let qualification_store = PanelQualificationStore::new(&store, &selected.identity);
@@ -2913,7 +2972,7 @@ mod tests {
 
     fn image() -> RawPanelImage {
         let mut bytes = vec![0; IPAC4_IMAGE_BYTES];
-        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x0F, 0x01]);
+        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x01]);
         RawPanelImage::new(bytes).unwrap()
     }
 
@@ -3011,6 +3070,46 @@ mod tests {
         let edits = terminal_edits(&spec).unwrap();
         let plan = plan_program(&baseline, &edits).unwrap();
         assert!(validate_complete_desired_keys(&spec, &baseline, &plan.desired).is_ok());
+    }
+
+    /// Catches treating a complete profile's `is_shift=false` as authority to
+    /// normalize an opaque vendor shift byte.
+    #[test]
+    fn custom_false_disables_only_a_known_enabled_shift_role() {
+        let mut bytes = qualification_image().bytes().to_vec();
+        bytes[IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift)] = 0x41;
+        bytes[IPAC4_TERMINALS[1].image_offset(TerminalPlane::Shift)] = 0x7F;
+        let baseline = RawPanelImage::new(bytes).unwrap();
+        let spec = PanelProgramSpec {
+            layout: "custom".to_owned(),
+            edits: vec![
+                PanelTerminalEdit {
+                    terminal_id: IPAC4_TERMINALS[0].id.to_owned(),
+                    is_shift: Some(false),
+                    ..Default::default()
+                },
+                PanelTerminalEdit {
+                    terminal_id: IPAC4_TERMINALS[1].id.to_owned(),
+                    is_shift: Some(false),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let edits = terminal_edits_for_image(&spec, &baseline).unwrap();
+        assert_eq!(
+            edits,
+            vec![TerminalEdit::shift(IPAC4_TERMINALS[0].id, false)]
+        );
+        let plan = plan_program(&baseline, &edits).unwrap();
+        assert_eq!(
+            plan.desired.bytes()[IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift)],
+            0x01
+        );
+        assert_eq!(
+            plan.desired.bytes()[IPAC4_TERMINALS[1].image_offset(TerminalPlane::Shift)],
+            0x7F
+        );
     }
 
     #[test]

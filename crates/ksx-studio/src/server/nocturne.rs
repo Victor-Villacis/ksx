@@ -623,6 +623,42 @@ fn panel_mutation_refusal_json(
     )
 }
 
+/// Portable saved layouts are not tied to the currently staged encoder, so
+/// their transport deliberately has no `target_selector`. The compatibility
+/// contract travels in the backend-owned view/profile (`driver`, protocol and
+/// terminal signature) instead of being inferred by the browser.
+#[derive(serde::Serialize)]
+struct PanelHardwareProfilesPayload {
+    unavailable: Option<String>,
+    refusal_code: Option<String>,
+    remedy: Option<String>,
+    view: Option<ksx_api::PanelHardwareProfilesView>,
+}
+
+#[derive(serde::Serialize)]
+struct PanelHardwareProfileMutationPayload {
+    unavailable: Option<String>,
+    refusal_code: Option<String>,
+    remedy: Option<String>,
+    mutation: Option<ksx_api::PanelHardwareProfileMutationView>,
+}
+
+fn panel_hardware_profiles_json(payload: PanelHardwareProfilesPayload) -> Response {
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(payload),
+    )
+        .into_response()
+}
+
+fn panel_hardware_profile_mutation_json(payload: PanelHardwareProfileMutationPayload) -> Response {
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(payload),
+    )
+        .into_response()
+}
+
 /// Read the one panel target owned by the daemon-held draft. No browser value
 /// participates in selection and no USB/HID operation occurs here.
 async fn selected_panel_target(state: &Arc<AppState>) -> Result<Option<String>, String> {
@@ -867,6 +903,113 @@ pub(super) async fn api_panel_backups(State(state): State<Arc<AppState>>) -> Res
             "view",
             None,
         ),
+    }
+}
+
+/// List complete semantic layouts saved under KSX's config root. This does
+/// not inspect or select hardware: profiles are intentionally portable across
+/// boards admitted by the compatibility fields returned in the view.
+pub(super) async fn api_panel_profiles(State(state): State<Arc<AppState>>) -> Response {
+    let result = tokio::task::spawn_blocking(move || state.machine.panel_hardware_profiles()).await;
+    match result {
+        Ok(Ok(view)) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
+            unavailable: None,
+            refusal_code: None,
+            remedy: None,
+            view: Some(view),
+        }),
+        Ok(Err(refusal)) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
+            unavailable: Some(refusal.message),
+            refusal_code: Some(refusal.code),
+            remedy: refusal.remedy,
+            view: None,
+        }),
+        Err(_) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
+            unavailable: Some(
+                "the saved encoder layouts could not be read; reload Encoder setup to try again"
+                    .to_owned(),
+            ),
+            refusal_code: None,
+            remedy: None,
+            view: None,
+        }),
+    }
+}
+
+/// Create or revision-guarded update one portable hardware layout. The JSON
+/// body is the API spec itself so a surface cannot smuggle hardware identity,
+/// driver, protocol, timestamps or revision values into a newly saved file.
+pub(super) async fn api_panel_profile_save(
+    State(state): State<Arc<AppState>>,
+    axum::Json(spec): axum::Json<ksx_api::PanelHardwareProfileSaveSpec>,
+) -> Response {
+    let result =
+        tokio::task::spawn_blocking(move || state.machine.panel_hardware_profile_save(&spec)).await;
+    match result {
+        Ok(Ok(mutation)) => {
+            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+                unavailable: None,
+                refusal_code: None,
+                remedy: None,
+                mutation: Some(mutation),
+            })
+        }
+        Ok(Err(refusal)) => {
+            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+                unavailable: Some(refusal.message),
+                refusal_code: Some(refusal.code),
+                remedy: refusal.remedy,
+                mutation: None,
+            })
+        }
+        Err(_) => panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+            unavailable: Some(
+                "the saved-layout operation stopped before reporting completion; reload the saved layouts before retrying"
+                    .to_owned(),
+            ),
+            refusal_code: None,
+            remedy: None,
+            mutation: None,
+        }),
+    }
+}
+
+/// Delete a saved layout using the revision the browser actually reviewed.
+/// This never clears or writes the physical encoder; `/program/*` is the only
+/// hardware mutation surface.
+pub(super) async fn api_panel_profile_delete(
+    State(state): State<Arc<AppState>>,
+    axum::Json(spec): axum::Json<ksx_api::PanelHardwareProfileDeleteSpec>,
+) -> Response {
+    let result =
+        tokio::task::spawn_blocking(move || state.machine.panel_hardware_profile_delete(&spec))
+            .await;
+    match result {
+        Ok(Ok(mutation)) => {
+            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+                unavailable: None,
+                refusal_code: None,
+                remedy: None,
+                mutation: Some(mutation),
+            })
+        }
+        Ok(Err(refusal)) => {
+            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+                unavailable: Some(refusal.message),
+                refusal_code: Some(refusal.code),
+                remedy: refusal.remedy,
+                mutation: None,
+            })
+        }
+        Err(_) => panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
+            unavailable: Some(
+                "the saved-layout delete stopped before reporting completion; reload the saved layouts before retrying"
+                    .to_owned(),
+            ),
+            refusal_code: None,
+            remedy: None,
+            mutation: None,
+        }),
     }
 }
 

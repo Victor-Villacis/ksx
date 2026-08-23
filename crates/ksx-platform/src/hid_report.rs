@@ -19,9 +19,11 @@ pub const HID_REPORT_BYTES: usize = 5;
 /// Raw USB `bcdDevice` exposed by the only currently supported I-PAC4
 /// programming profile. `HidD_GetAttributes` calls this `VersionNumber`.
 pub const IPAC4_VERSION_NUMBER: u16 = 0x0056;
-/// Measured top-level collection discriminator for the PAC256 chart channel.
-pub const IPAC4_USAGE_PAGE: u16 = 0xFF00;
-pub const IPAC4_USAGE: u16 = 0x0001;
+/// Measured top-level collection discriminator for the connected release-0056
+/// I-PAC 4X PAC256 chart channel. Windows reports MI_02/COL01 as Generic
+/// Desktop / Undefined, not as a vendor-page collection.
+pub const IPAC4_USAGE_PAGE: u16 = 0x0001;
+pub const IPAC4_USAGE: u16 = 0x0000;
 
 const HID_REPORT_BYTES_U16: u16 = HID_REPORT_BYTES as u16;
 const OUTPUT_WORKER_ARG: &str = "__ksx-hid-output-worker-v1";
@@ -87,7 +89,7 @@ pub enum HidReportError {
         output_report_bytes: u16,
     },
     #[error(
-        "the opened HID collection usage is {actual_usage_page:04X}:{actual_usage:04X}, expected FF00:0001"
+        "the opened HID collection usage is {actual_usage_page:04X}:{actual_usage:04X}, expected 0001:0000"
     )]
     CollectionUsageMismatch {
         actual_usage_page: u16,
@@ -1086,11 +1088,11 @@ mod tests {
         assert!(verify_capabilities(exact).is_ok());
         for capabilities in [
             HidReportCapabilities {
-                usage_page: 0x0001,
+                usage_page: 0xFF00,
                 ..exact
             },
             HidReportCapabilities {
-                usage: 0x0002,
+                usage: 0x0001,
                 ..exact
             },
         ] {

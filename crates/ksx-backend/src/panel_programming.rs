@@ -22,6 +22,8 @@ use ksx_platform::sha256::{hex_upper, Sha256};
 pub(crate) const IPAC4_REPORT_ID: u8 = 0x03;
 pub(crate) const IPAC4_REPORT_BYTES: usize = 5;
 pub(crate) const IPAC4_QUERY: [u8; IPAC4_REPORT_BYTES] = [0x03, 0x59, 0xDD, 0x0F, 0x00];
+pub(crate) const IPAC4_READBACK_HEADER: [u8; 3] = [0x50, 0xDD, 0x56];
+pub(crate) const IPAC4_WRITE_HEADER: [u8; 3] = [0x50, 0xDD, 0x0F];
 pub(crate) const IPAC4_REQUIRED_FRAMES: usize = 64;
 pub(crate) const IPAC4_IMAGE_BYTES: usize = 256;
 pub(crate) const IPAC4_EXTENDED_IMAGE_BYTES: usize = 260;
@@ -361,7 +363,7 @@ impl fmt::Display for PanelProgrammingError {
             ),
             Self::InvalidImageHeader { actual } => write!(
                 f,
-                "I-PAC chart header was {:02X} {:02X} {:02X}; expected 50 DD 0F",
+                "I-PAC chart readback header was {:02X} {:02X} {:02X}; expected 50 DD 56",
                 actual[0], actual[1], actual[2]
             ),
             Self::InvalidImageLength(actual) => write!(
@@ -456,7 +458,7 @@ impl RawPanelImage {
         if !matches!(bytes.len(), IPAC4_IMAGE_BYTES | IPAC4_EXTENDED_IMAGE_BYTES) {
             return Err(PanelProgrammingError::InvalidImageLength(bytes.len()));
         }
-        if bytes[..3] != [0x50, 0xDD, 0x0F] {
+        if bytes[..3] != IPAC4_READBACK_HEADER {
             return Err(PanelProgrammingError::InvalidImageHeader {
                 actual: [bytes[0], bytes[1], bytes[2]],
             });
@@ -580,7 +582,13 @@ pub(crate) fn write_ipac4_image(
     image: &RawPanelImage,
 ) -> Result<(), PanelProgrammingError> {
     require_pac256_image(image)?;
-    for (packet, chunk) in image.bytes().chunks_exact(4).enumerate() {
+    // The persistent image is read back with firmware/release byte 0x56 in
+    // header byte three. The programming command requires 0x0F in that byte;
+    // the remaining 253 bytes are the reviewed logical image. QtPyUltimarc's
+    // I-PAC4 writer performs this same readback-to-command conversion.
+    let mut command = image.bytes().to_vec();
+    command[..3].copy_from_slice(&IPAC4_WRITE_HEADER);
+    for (packet, chunk) in command.chunks_exact(4).enumerate() {
         let report = [IPAC4_REPORT_ID, chunk[0], chunk[1], chunk[2], chunk[3]];
         io.send_report(&report)
             .map_err(|source| PanelProgrammingError::Transport {
@@ -1045,9 +1053,11 @@ fn plan_between(baseline: &RawPanelImage, desired: RawPanelImage) -> PanelProgra
 
 /// A deterministic, duplicate-free `ipac4-pac256-v1` chart.
 ///
-/// Every physical terminal receives a normal key, every alternate assignment
-/// is cleared and every shift role is disabled.  The pool deliberately avoids
-/// Escape, Enter, Backspace, Tab, Space, navigation and modifiers. It uses 56
+/// Every physical terminal receives a normal key and every alternate
+/// assignment is cleared. Known-enabled shift roles are disabled by
+/// [`canonical_four_player_edits_for_image`]; opaque shift bytes are never
+/// normalized. The pool deliberately avoids Escape, Enter, Backspace, Tab,
+/// Space, navigation and modifiers. It uses 56
 /// distinct keys KSX can actually observe: 26 letters, 10 digits, 10
 /// punctuation keys and F1-F10. HID usages 0x31 and 0x32 intentionally do not
 /// both appear because they collapse to the same KSX `BackslashPipe` key.
@@ -1059,7 +1069,7 @@ pub(crate) fn canonical_four_player_edits() -> Vec<TerminalEdit> {
     pool.extend(0x3A..=0x43);
     debug_assert_eq!(pool.len(), IPAC4_TERMINAL_COUNT);
 
-    let mut edits = Vec::with_capacity(IPAC4_TERMINAL_COUNT * 3);
+    let mut edits = Vec::with_capacity(IPAC4_TERMINAL_COUNT * 2);
     for (terminal, usage) in IPAC4_TERMINALS.iter().zip(pool) {
         edits.extend([
             TerminalEdit::normal(
@@ -1067,10 +1077,75 @@ pub(crate) fn canonical_four_player_edits() -> Vec<TerminalEdit> {
                 Some(KeyboardUsage::new(usage).expect("canonical usages are regular keys")),
             ),
             TerminalEdit::alternate(terminal.id, None),
-            TerminalEdit::shift(terminal.id, false),
         ]);
     }
     edits
+}
+
+pub(crate) fn canonical_four_player_edits_for_image(image: &RawPanelImage) -> Vec<TerminalEdit> {
+    with_known_enabled_shifts_disabled(canonical_four_player_edits(), image)
+}
+
+/// A clean semantic chart for first-time wiring and explicit Clear hardware.
+///
+/// Every modeled action plane is reset: no normal key and no shifted key.
+/// Shift bytes are baseline-sensitive and are handled by
+/// [`blank_edits_for_image`], because an opaque shift value is vendor state,
+/// not permission to normalize that byte. Header bytes, onboard macros and all
+/// other vendor-owned offsets remain byte-for-byte from the baseline image.
+pub(crate) fn blank_edits() -> Vec<TerminalEdit> {
+    let mut edits = Vec::with_capacity(IPAC4_TERMINAL_COUNT * 2);
+    for terminal in IPAC4_TERMINALS {
+        edits.extend([
+            TerminalEdit::normal(terminal.id, None),
+            TerminalEdit::alternate(terminal.id, None),
+        ]);
+    }
+    edits
+}
+
+/// Complete the blank layout against the chart being reviewed. Only a byte
+/// decoded exactly as ShiftEnabled (0x41) is changed to ShiftDisabled (0x01).
+/// Opaque shift bytes survive exactly, including values observed on live
+/// I-PAC4 terminals that WinIPAC does not expose semantically.
+pub(crate) fn blank_edits_for_image(image: &RawPanelImage) -> Vec<TerminalEdit> {
+    with_known_enabled_shifts_disabled(blank_edits(), image)
+}
+
+fn with_known_enabled_shifts_disabled(
+    mut edits: Vec<TerminalEdit>,
+    image: &RawPanelImage,
+) -> Vec<TerminalEdit> {
+    edits.extend(
+        decode_ipac4_terminals(image)
+            .into_iter()
+            .filter(|state| state.shift == SemanticValue::ShiftEnabled)
+            .map(|state| TerminalEdit::shift(state.terminal.id, false)),
+    );
+    edits
+}
+
+/// Identity of the exact ordered terminal model portable panel layouts use.
+///
+/// This is intentionally distinct from the USB/protocol profile: firmware can
+/// retain the same 256-byte transport while assigning different physical
+/// channels. A saved semantic layout is portable only when this signature is
+/// identical.
+pub(crate) fn ipac4_terminal_signature() -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"ksx.ipac4-terminals.v1\0");
+    for terminal in IPAC4_TERMINALS {
+        hasher.update(terminal.id.as_bytes());
+        hasher.update(&[0, terminal.player, terminal.base]);
+        for plane in [
+            TerminalPlane::Normal,
+            TerminalPlane::Alternate,
+            TerminalPlane::Shift,
+        ] {
+            hasher.update(&(terminal.image_offset(plane) as u16).to_le_bytes());
+        }
+    }
+    format!("ipac4-56-v1-{}", hex_upper(&hasher.finish()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2141,13 +2216,13 @@ mod tests {
         let mut bytes: Vec<u8> = (0..len)
             .map(|index| seed.wrapping_add((index % 239) as u8))
             .collect();
-        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x0F, seed]);
+        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, seed]);
         RawPanelImage::new(bytes).unwrap()
     }
 
     fn zero_image(len: usize) -> RawPanelImage {
         let mut bytes = vec![0; len];
-        bytes[..3].copy_from_slice(&[0x50, 0xDD, 0x0F]);
+        bytes[..3].copy_from_slice(&IPAC4_READBACK_HEADER);
         RawPanelImage::new(bytes).unwrap()
     }
 
@@ -2464,12 +2539,12 @@ mod tests {
     }
 
     #[test]
-    fn canonical_four_player_chart_resets_all_three_terminal_planes_only() {
+    fn canonical_four_player_chart_preserves_opaque_shift_and_vendor_bytes() {
         let edits = canonical_four_player_edits();
-        assert_eq!(edits.len(), IPAC4_TERMINAL_COUNT * 3);
+        assert_eq!(edits.len(), IPAC4_TERMINAL_COUNT * 2);
         let mut terminals = BTreeSet::new();
         let mut usages = BTreeSet::new();
-        for (terminal, edits) in IPAC4_TERMINALS.iter().zip(edits.chunks_exact(3)) {
+        for (terminal, edits) in IPAC4_TERMINALS.iter().zip(edits.chunks_exact(2)) {
             match &edits[0] {
                 TerminalEdit::Normal {
                     terminal: edited_terminal,
@@ -2487,17 +2562,19 @@ mod tests {
                 "{} alternate",
                 terminal.id
             );
-            assert_eq!(
-                edits[2],
-                TerminalEdit::shift(terminal.id, false),
-                "{} shift",
-                terminal.id
-            );
         }
         assert_eq!(terminals.len(), 56);
         assert_eq!(usages.len(), 56);
 
-        let baseline = patterned_image(IPAC4_IMAGE_BYTES, 37);
+        let patterned = patterned_image(IPAC4_IMAGE_BYTES, 37);
+        let mut bytes = patterned.bytes().to_vec();
+        for terminal in IPAC4_TERMINALS {
+            bytes[terminal.image_offset(TerminalPlane::Shift)] = 0x7F;
+        }
+        bytes[IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift)] = 0x41;
+        bytes[IPAC4_TERMINALS[1].image_offset(TerminalPlane::Shift)] = 0x01;
+        let baseline = RawPanelImage::new(bytes).unwrap();
+        let edits = canonical_four_player_edits_for_image(&baseline);
         let plan = plan_program(&baseline, &edits).unwrap();
         let rows = decode_ipac4_terminals(&plan.desired);
         let assigned: BTreeSet<_> = rows
@@ -2511,9 +2588,9 @@ mod tests {
         assert!(rows
             .iter()
             .all(|row| row.alternate == TerminalAction::Unassigned));
-        assert!(rows
-            .iter()
-            .all(|row| row.shift == SemanticValue::ShiftDisabled));
+        assert_eq!(rows[0].shift, SemanticValue::ShiftDisabled);
+        assert_eq!(rows[1].shift_raw, 0x01);
+        assert!(rows[2..].iter().all(|row| row.shift_raw == 0x7F));
 
         let addressed: BTreeSet<_> = IPAC4_TERMINALS
             .iter()
@@ -2521,9 +2598,11 @@ mod tests {
                 [
                     terminal.image_offset(TerminalPlane::Normal),
                     terminal.image_offset(TerminalPlane::Alternate),
-                    terminal.image_offset(TerminalPlane::Shift),
                 ]
             })
+            .chain(std::iter::once(
+                IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift),
+            ))
             .collect();
         for offset in 0..baseline.len() {
             if !addressed.contains(&offset) {
@@ -2534,6 +2613,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Catches the unsafe clear implementation that rewrote every shift byte
+    /// to 0x01, including opaque live-board values.
+    #[test]
+    fn blank_chart_clears_actions_and_only_known_enabled_shift_roles() {
+        let mut bytes = vec![0xA5; IPAC4_IMAGE_BYTES];
+        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x01]);
+        for terminal in IPAC4_TERMINALS {
+            bytes[terminal.image_offset(TerminalPlane::Normal)] = 0x04;
+            bytes[terminal.image_offset(TerminalPlane::Alternate)] = 0x05;
+            bytes[terminal.image_offset(TerminalPlane::Shift)] = 0x7F;
+        }
+        bytes[IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift)] = 0x41;
+        bytes[IPAC4_TERMINALS[1].image_offset(TerminalPlane::Shift)] = 0x01;
+        let baseline = RawPanelImage::new(bytes).unwrap();
+        let edits = blank_edits_for_image(&baseline);
+        assert_eq!(edits.len(), IPAC4_TERMINAL_COUNT * 2 + 1);
+        let plan = plan_program(&baseline, &edits).unwrap();
+        let rows = decode_ipac4_terminals(&plan.desired);
+        assert!(rows
+            .iter()
+            .all(|row| row.normal == TerminalAction::Unassigned));
+        assert!(rows
+            .iter()
+            .all(|row| row.alternate == TerminalAction::Unassigned));
+        assert_eq!(rows[0].shift, SemanticValue::ShiftDisabled);
+        assert_eq!(rows[1].shift_raw, 0x01);
+        assert!(rows[2..].iter().all(|row| row.shift_raw == 0x7F));
+
+        let addressed: BTreeSet<_> = IPAC4_TERMINALS
+            .iter()
+            .flat_map(|terminal| {
+                [
+                    terminal.image_offset(TerminalPlane::Normal),
+                    terminal.image_offset(TerminalPlane::Alternate),
+                ]
+            })
+            .chain(std::iter::once(
+                IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift),
+            ))
+            .collect();
+        for offset in 0..baseline.len() {
+            if !addressed.contains(&offset) {
+                assert_eq!(
+                    plan.desired.bytes()[offset],
+                    baseline.bytes()[offset],
+                    "opaque/reserved byte {offset} changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn portable_terminal_signature_is_stable_and_names_all_56_channels() {
+        let signature = ipac4_terminal_signature();
+        assert_eq!(
+            signature,
+            "ipac4-56-v1-B94D226C60D460BA5EE3E7A5C99AB6F135F91161DEF4845EF8CCC4D287B59420"
+        );
+        assert_eq!(IPAC4_TERMINALS.len(), 56);
     }
 
     static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);

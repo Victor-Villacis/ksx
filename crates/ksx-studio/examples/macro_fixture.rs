@@ -800,7 +800,7 @@ fn main() {
 
     fn fixture_panel_image() -> [u8; 256] {
         let mut bytes = [0; 256];
-        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x0F, 0x00]);
+        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x00]);
         // PAC256 encodes an explicitly disabled shifted role as 0x01; 0x00 is
         // opaque/unknown. Keep the raw preview image and the semantic fixture
         // rows below byte-for-byte consistent so the one-byte plan is real.

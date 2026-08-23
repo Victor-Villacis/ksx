@@ -816,6 +816,24 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::panel_programming::backups(spec)
     }
 
+    fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+        crate::panel_profiles::profiles()
+    }
+
+    fn panel_hardware_profile_save(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileSaveSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        crate::panel_profiles::save(spec)
+    }
+
+    fn panel_hardware_profile_delete(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        crate::panel_profiles::delete(spec)
+    }
+
     #[cfg(windows)]
     fn panel_program_plan(
         &self,

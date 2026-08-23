@@ -381,8 +381,8 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         .copied()
         .filter(|collection| {
             collection.capabilities.is_some_and(|caps| {
-                caps.usage_page == 0xFF00
-                    && caps.usage == 0x0001
+                caps.usage_page == 0x0001
+                    && caps.usage == 0x0000
                     && caps.input_report_bytes == 5
                     && caps.output_report_bytes == 5
             })
@@ -743,8 +743,8 @@ mod tests {
                 version_number: 0x0056,
             }),
             capabilities: Some(HidCapabilities {
-                usage_page: 0xFF00,
-                usage: 0x0001,
+                usage_page: 0x0001,
+                usage: 0x0000,
                 input_report_bytes: input,
                 output_report_bytes: output,
                 feature_report_bytes: 0,

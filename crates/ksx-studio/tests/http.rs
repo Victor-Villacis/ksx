@@ -738,6 +738,9 @@ struct ScriptedMachine {
     panel_status_refuse: bool,
     panel_chart_specs: Mutex<Vec<ksx_api::PanelChartSpec>>,
     panel_backup_specs: Mutex<Vec<ksx_api::PanelBackupsSpec>>,
+    panel_profile_reads: AtomicUsize,
+    panel_profile_save_specs: Mutex<Vec<ksx_api::PanelHardwareProfileSaveSpec>>,
+    panel_profile_delete_specs: Mutex<Vec<ksx_api::PanelHardwareProfileDeleteSpec>>,
     panel_program_plan_specs: Mutex<Vec<ksx_api::PanelProgramSpec>>,
     panel_program_specs: Mutex<Vec<ksx_api::PanelProgramApplySpec>>,
     panel_restore_plan_specs: Mutex<Vec<ksx_api::PanelRestoreSpec>>,
@@ -800,6 +803,9 @@ impl Default for ScriptedMachine {
             panel_status_refuse: false,
             panel_chart_specs: Mutex::new(Vec::new()),
             panel_backup_specs: Mutex::new(Vec::new()),
+            panel_profile_reads: AtomicUsize::new(0),
+            panel_profile_save_specs: Mutex::new(Vec::new()),
+            panel_profile_delete_specs: Mutex::new(Vec::new()),
             panel_program_plan_specs: Mutex::new(Vec::new()),
             panel_program_specs: Mutex::new(Vec::new()),
             panel_restore_plan_specs: Mutex::new(Vec::new()),
@@ -955,6 +961,28 @@ impl ScriptedMachine {
             preserved_byte_count: 255,
             confirmation: "Program Ultimarc I-PAC 4X".to_owned(),
             blockers: Vec::new(),
+        }
+    }
+
+    fn panel_hardware_profile() -> ksx_api::PanelHardwareProfile {
+        ksx_api::PanelHardwareProfile {
+            schema: "ksx-panel-profile-v1".to_owned(),
+            profile_id: "four-player-cabinet".to_owned(),
+            name: "Four player cabinet".to_owned(),
+            description: "The portable terminal chart, not a raw recovery image.".to_owned(),
+            driver: "ultimarc-ipac4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            terminal_signature: "terminal-signature-56".to_owned(),
+            revision: "revision-A".to_owned(),
+            created_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            updated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            terminals: vec![ksx_api::PanelHardwareTerminal {
+                terminal_id: "1sw4".to_owned(),
+                normal_key: Some("J".to_owned()),
+                shifted_key: None,
+                is_shift: false,
+                allow_shared_key: false,
+            }],
         }
     }
 
@@ -1318,6 +1346,59 @@ impl ksx_api::MachineSource for ScriptedMachine {
             summary: "1 lossless restore point.".to_owned(),
             board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
             backups: vec![Self::panel_backup()],
+        })
+    }
+
+    fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+        self.panel_profile_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(ksx_api::PanelHardwareProfilesView {
+            summary: "1 saved encoder layout.".to_owned(),
+            config_root: r"C:\cfg".to_owned(),
+            terminal_signature: "terminal-signature-56".to_owned(),
+            profiles: vec![Self::panel_hardware_profile()],
+        })
+    }
+
+    fn panel_hardware_profile_save(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileSaveSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        self.panel_profile_save_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        let mut profile = Self::panel_hardware_profile();
+        profile.name.clone_from(&spec.name);
+        profile.description.clone_from(&spec.description);
+        profile.terminals.clone_from(&spec.terminals);
+        let state = if let Some(profile_id) = &spec.profile_id {
+            profile.profile_id.clone_from(profile_id);
+            profile.revision = "revision-B".to_owned();
+            "updated"
+        } else {
+            "created"
+        };
+        Ok(ksx_api::PanelHardwareProfileMutationView {
+            state: state.to_owned(),
+            summary: format!("{} saved encoder layout.", state),
+            profile_id: profile.profile_id.clone(),
+            profile: Some(profile),
+        })
+    }
+
+    fn panel_hardware_profile_delete(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        self.panel_profile_delete_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        Ok(ksx_api::PanelHardwareProfileMutationView {
+            state: "deleted".to_owned(),
+            summary: "Deleted saved encoder layout; hardware was not changed.".to_owned(),
+            profile_id: spec.profile_id.clone(),
+            profile: None,
         })
     }
 
@@ -2250,6 +2331,21 @@ fn start_server_with_sources(
             spec: &ksx_api::PanelBackupsSpec,
         ) -> Result<ksx_api::PanelBackupsView, Refusal> {
             self.0.panel_backups(spec)
+        }
+        fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+            self.0.panel_hardware_profiles()
+        }
+        fn panel_hardware_profile_save(
+            &self,
+            spec: &ksx_api::PanelHardwareProfileSaveSpec,
+        ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+            self.0.panel_hardware_profile_save(spec)
+        }
+        fn panel_hardware_profile_delete(
+            &self,
+            spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+        ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+            self.0.panel_hardware_profile_delete(spec)
         }
         fn panel_program_plan(
             &self,
@@ -9869,6 +9965,8 @@ fn panel_report_routes_reject_foreign_origins_before_the_machine_provider() {
 
     for path in [
         "/api/panel/chart",
+        "/api/panel/profiles/save",
+        "/api/panel/profiles/delete",
         "/api/panel/program/plan",
         "/api/panel/program/apply",
         "/api/panel/restore/plan",
@@ -9888,10 +9986,145 @@ fn panel_report_routes_reject_foreign_origins_before_the_machine_provider() {
     }
 
     assert!(machine.panel_chart_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_profile_save_specs.lock().unwrap().is_empty());
+    assert!(machine
+        .panel_profile_delete_specs
+        .lock()
+        .unwrap()
+        .is_empty());
     assert!(machine.panel_program_plan_specs.lock().unwrap().is_empty());
     assert!(machine.panel_program_specs.lock().unwrap().is_empty());
     assert!(machine.panel_restore_plan_specs.lock().unwrap().is_empty());
     assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// Saved layouts are portable semantic profiles, not board-bound recovery
+/// images. They can therefore be listed and edited before an encoder is
+/// selected, while revisions still make update/delete stale-write safe. This
+/// catches the broken version where the Studio treated profile deletion as a
+/// hardware clear or trusted browser-supplied driver/protocol metadata.
+#[test]
+fn panel_profile_routes_create_update_and_delete_without_touching_hardware() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    let listed = get(addr, "/api/panel/profiles");
+    assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
+    assert!(listed.contains("cache-control: no-store"), "{listed}");
+    let listed: serde_json::Value = serde_json::from_str(body_of(&listed)).unwrap();
+    assert!(listed["unavailable"].is_null(), "{listed}");
+    assert_eq!(listed["view"]["config_root"], r"C:\cfg", "{listed}");
+    assert_eq!(
+        listed["view"]["terminal_signature"], "terminal-signature-56",
+        "{listed}"
+    );
+    assert_eq!(
+        listed["view"]["profiles"][0]["protocol_profile"], "ipac4-pac256-v1",
+        "compatibility must be served by the backend: {listed}"
+    );
+    assert_eq!(machine.panel_profile_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+
+    let create_body = serde_json::json!({
+        "name": "Tournament panel",
+        "description": "Four players, six buttons each",
+        "terminals": [{
+            "terminal_id": "1sw4",
+            "normal_key": "K",
+            "shifted_key": null,
+            "is_shift": false,
+            "allow_shared_key": true
+        }]
+    })
+    .to_string();
+    let created = post_json(addr, "/api/panel/profiles/save", &create_body);
+    assert!(created.contains("cache-control: no-store"), "{created}");
+    let created: serde_json::Value = serde_json::from_str(body_of(&created)).unwrap();
+    assert_eq!(created["mutation"]["state"], "created", "{created}");
+    assert_eq!(
+        created["mutation"]["profile"]["name"], "Tournament panel",
+        "{created}"
+    );
+    let saves = machine.panel_profile_save_specs.lock().unwrap();
+    assert_eq!(saves.len(), 1);
+    assert!(saves[0].profile_id.is_none());
+    assert!(saves[0].expected_revision.is_none());
+    assert_eq!(saves[0].terminals[0].normal_key.as_deref(), Some("K"));
+    assert!(saves[0].terminals[0].allow_shared_key);
+    drop(saves);
+
+    let update_body = serde_json::json!({
+        "profile_id": "four-player-cabinet",
+        "expected_revision": "revision-A",
+        "name": "Tournament panel v2",
+        "description": "Renamed in Studio",
+        "terminals": [{
+            "terminal_id": "1sw4",
+            "normal_key": "J",
+            "is_shift": false,
+            "allow_shared_key": false
+        }]
+    })
+    .to_string();
+    let updated = post_json(addr, "/api/panel/profiles/save", &update_body);
+    let updated: serde_json::Value = serde_json::from_str(body_of(&updated)).unwrap();
+    assert_eq!(updated["mutation"]["state"], "updated", "{updated}");
+    assert_eq!(
+        updated["mutation"]["profile"]["revision"], "revision-B",
+        "{updated}"
+    );
+    let saves = machine.panel_profile_save_specs.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    assert_eq!(saves[1].profile_id.as_deref(), Some("four-player-cabinet"));
+    assert_eq!(saves[1].expected_revision.as_deref(), Some("revision-A"));
+    drop(saves);
+
+    let deleted = post_json(
+        addr,
+        "/api/panel/profiles/delete",
+        r#"{"profile_id":"four-player-cabinet","expected_revision":"revision-B"}"#,
+    );
+    let deleted: serde_json::Value = serde_json::from_str(body_of(&deleted)).unwrap();
+    assert_eq!(deleted["mutation"]["state"], "deleted", "{deleted}");
+    assert!(deleted["mutation"]["profile"].is_null(), "{deleted}");
+    let deletes = machine.panel_profile_delete_specs.lock().unwrap();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].profile_id, "four-player-cabinet");
+    assert_eq!(deletes[0].expected_revision, "revision-B");
+
+    assert!(
+        machine.panel_program_specs.lock().unwrap().is_empty(),
+        "deleting a saved profile must never clear the physical encoder"
+    );
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// Axum must reject incomplete profile JSON before a machine verb sees it.
+/// This catches a permissive transport that defaulted an omitted complete
+/// terminal chart to an empty profile or deleted without a reviewed revision.
+#[test]
+fn panel_profile_routes_reject_incomplete_json_before_the_provider() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    let save = post_json(
+        addr,
+        "/api/panel/profiles/save",
+        r#"{"name":"Incomplete","description":"missing terminal chart"}"#,
+    );
+    assert!(save.starts_with("HTTP/1.1 422"), "{save}");
+    let delete = post_json(
+        addr,
+        "/api/panel/profiles/delete",
+        r#"{"profile_id":"four-player-cabinet"}"#,
+    );
+    assert!(delete.starts_with("HTTP/1.1 422"), "{delete}");
+    assert!(machine.panel_profile_save_specs.lock().unwrap().is_empty());
+    assert!(machine
+        .panel_profile_delete_specs
+        .lock()
+        .unwrap()
+        .is_empty());
 }
 
 /// The encoder programmer is one supervised flow over the typed machine

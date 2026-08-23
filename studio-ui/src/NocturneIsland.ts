@@ -103,6 +103,13 @@ import {
   type PanelChartPayload,
   type PanelChartTerminalView,
   type PanelChartView,
+  type PanelHardwareProfile,
+  type PanelHardwareProfileDeleteSpec,
+  type PanelHardwareProfileMutationPayload,
+  type PanelHardwareProfileSaveSpec,
+  type PanelHardwareProfilesPayload,
+  type PanelHardwareTerminal,
+  type PanelHardwareTerminalDraft,
   type PanelPlanPayload,
   type PanelPlanView,
   type PanelProgramOutcomeView,
@@ -1396,6 +1403,15 @@ let panelProgrammingReturnFocus: HTMLElement | null = null;
 let panelProgrammingConfirmed = false;
 let panelProgrammingRecoveryReady = false;
 let panelProgrammingSharedAssignmentIds = new Set<string>();
+let panelProgrammingTerminalDraft: PanelHardwareTerminalDraft[] = [];
+let panelProgrammingDraftSource: "current" | "recommended" | "blank" | "saved" | "panel-links" = "current";
+let panelProgrammingDraftBaseline = "";
+let panelProgrammingAdvancedOpen = false;
+let panelProgrammingProfiles: PanelHardwareProfile[] = [];
+let panelProgrammingProfilesSignature = "";
+let panelProgrammingSelectedProfileId = "";
+let panelProgrammingProfilesBusy = false;
+let panelProgrammingProfilesMessage = "";
 let controlSurfaceDrag: {
   pointerId: number;
   controlId: string;
@@ -2049,6 +2065,14 @@ function resetPanelProgramming(targetChanged: boolean): void {
   panelProgrammingConfirmed = false;
   panelProgrammingRecoveryReady = false;
   panelProgrammingSharedAssignmentIds = new Set();
+  panelProgrammingTerminalDraft = [];
+  panelProgrammingDraftSource = "current";
+  panelProgrammingDraftBaseline = "";
+  panelProgrammingProfiles = [];
+  panelProgrammingProfilesSignature = "";
+  panelProgrammingSelectedProfileId = "";
+  panelProgrammingProfilesBusy = false;
+  panelProgrammingProfilesMessage = "";
   if (!panelProgrammingTransactionActive()) {
     panelProgrammingCloseDialog(false);
     panelProgrammingState = createPanelProgrammingState();
@@ -2165,11 +2189,13 @@ async function reopenPanelQualificationAfterRecovery(): Promise<void> {
   panelProgrammingSetMessage(
     "The interrupted validation chart was restored exactly. Repeat the one-terminal writer check; full layouts remain locked.",
   );
-  window.requestAnimationFrame(() => controlSurfaceItem
-    ?.querySelector<HTMLElement>(
-      '[data-nx="surface-qualification-terminal"], [data-nx="surface-encoder-terminal"]',
-    )
-    ?.focus({ preventScroll: true }));
+  const picker = controlSurfaceItem?.querySelector<HTMLElement>(
+    '[data-nx="surface-qualification-terminal"], [data-nx="surface-encoder-terminal"]',
+  ) ?? null;
+  picker?.focus({ preventScroll: true });
+  if (document.activeElement !== picker) {
+    window.requestAnimationFrame(() => picker?.focus({ preventScroll: true }));
+  }
 }
 
 function samePanelKey(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -2210,7 +2236,7 @@ function reconcilePanelProgrammingChart(chart: PanelChartView, forceUnverified: 
   if (next !== controlSurfaceState) applyControlSurfaceState(next, true);
 }
 
-function panelProgrammingDraftAssignments(): PanelTerminalDraftAssignment[] {
+function panelProgrammingSurfaceAssignments(): PanelTerminalDraftAssignment[] {
   const chart = panelProgrammingState.inspection.chart;
   if (!chart) return [];
   const assignments: PanelTerminalDraftAssignment[] = [];
@@ -2237,6 +2263,112 @@ function panelProgrammingDraftAssignments(): PanelTerminalDraftAssignment[] {
   return assignments;
 }
 
+function panelProgrammingDraftFingerprint(
+  draft: readonly PanelHardwareTerminalDraft[] = panelProgrammingTerminalDraft,
+): string {
+  return JSON.stringify(draft.map((terminal) => ({
+    terminal_id: terminal.terminal_id,
+    normal_key: terminal.normal_key,
+    shifted_key: terminal.shifted_key,
+    is_shift: terminal.is_shift,
+    allow_shared_key: terminal.allow_shared_key,
+  })));
+}
+
+function panelProgrammingDraftDirty(): boolean {
+  return Boolean(panelProgrammingDraftBaseline) &&
+    panelProgrammingDraftFingerprint() !== panelProgrammingDraftBaseline;
+}
+
+function panelProgrammingDraftFromChart(chart: PanelChartView): PanelHardwareTerminalDraft[] {
+  return chart.terminals.map((terminal) => ({
+    terminal_id: terminal.terminal_id,
+    normal_key: terminal.normal.supported ? terminal.normal.key ?? "" : undefined,
+    shifted_key: terminal.shifted.supported ? terminal.shifted.key ?? "" : undefined,
+    is_shift: terminal.shift_state === "opaque" ? undefined : terminal.is_shift,
+    allow_shared_key: false,
+  }));
+}
+
+function panelProgrammingBlankDraft(chart: PanelChartView): PanelHardwareTerminalDraft[] {
+  return chart.terminals.map((terminal) => ({
+    terminal_id: terminal.terminal_id,
+    normal_key: terminal.normal.supported ? "" : undefined,
+    shifted_key: terminal.shifted.supported ? "" : undefined,
+    is_shift: terminal.shift_state === "opaque" ? undefined : false,
+    allow_shared_key: false,
+  }));
+}
+
+function panelProgrammingProfileDraft(profile: PanelHardwareProfile): PanelHardwareTerminalDraft[] {
+  const rows = new Map(profile.terminals.map((terminal) => [terminal.terminal_id, terminal]));
+  return (panelProgrammingState.inspection.chart?.terminals ?? []).map((terminal) => {
+    const saved = rows.get(terminal.terminal_id);
+    return {
+      terminal_id: terminal.terminal_id,
+      normal_key: saved?.normal_key ?? "",
+      shifted_key: saved?.shifted_key ?? "",
+      is_shift: saved?.is_shift ?? false,
+      allow_shared_key: saved?.allow_shared_key ?? false,
+    };
+  });
+}
+
+function panelProgrammingUseDraft(
+  draft: PanelHardwareTerminalDraft[],
+  source: typeof panelProgrammingDraftSource,
+  mode: PanelAssignmentMode,
+): void {
+  panelProgrammingTerminalDraft = draft;
+  panelProgrammingDraftSource = source;
+  panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint(draft);
+  panelProgrammingState.editor.assignment_mode = mode;
+  panelProgrammingDropPlan();
+}
+
+function panelProgrammingImportSurfaceDraft(): void {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart) return;
+  const draft = panelProgrammingDraftFromChart(chart);
+  const rows = new Map(draft.map((terminal) => [terminal.terminal_id, terminal]));
+  for (const assignment of panelProgrammingSurfaceAssignments()) {
+    const terminal = rows.get(assignment.terminal_id);
+    if (!terminal) continue;
+    terminal.normal_key = assignment.requested_key;
+    terminal.allow_shared_key ||= assignment.allow_shared_key;
+  }
+  panelProgrammingUseDraft(draft, "panel-links", "custom");
+}
+
+function panelProgrammingDraftAssignments(): PanelTerminalDraftAssignment[] {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart) return [];
+  const labels = new Map(chart.terminals.map((terminal) => [
+    terminal.terminal_id,
+    terminal.terminal_label,
+  ]));
+  const assignments: PanelTerminalDraftAssignment[] = [];
+  for (const terminal of panelProgrammingTerminalDraft) {
+    for (const [layer, key] of [
+      ["normal", terminal.normal_key],
+      ["shifted", terminal.shifted_key],
+    ] as const) {
+      if (!key?.trim()) continue;
+      assignments.push({
+        physical_id: `terminal:${terminal.terminal_id}`,
+        channel_id: layer,
+        component_label: `${labels.get(terminal.terminal_id) ?? terminal.terminal_id} · ${layer}`,
+        player_slot: Number.parseInt(terminal.terminal_id, 10) || null,
+        terminal_id: terminal.terminal_id,
+        layer_id: layer,
+        requested_key: key,
+        allow_shared_key: terminal.allow_shared_key,
+      });
+    }
+  }
+  return assignments;
+}
+
 function panelProgrammingConflicts(): ReturnType<typeof panelAssignmentConflicts> {
   const chart = panelProgrammingState.inspection.chart;
   return panelAssignmentConflicts(panelProgrammingDraftAssignments(), {
@@ -2245,15 +2377,17 @@ function panelProgrammingConflicts(): ReturnType<typeof panelAssignmentConflicts
 }
 
 function panelProgrammingEdits(): PanelTerminalEdit[] {
-  const edits = new Map<string, PanelTerminalEdit>();
-  for (const assignment of panelProgrammingDraftAssignments()) {
-    edits.set(assignment.terminal_id, {
-      terminal_id: assignment.terminal_id,
-      normal_key: assignment.requested_key,
-      allow_shared_key: assignment.allow_shared_key,
-    });
-  }
-  return [...edits.values()];
+  return panelProgrammingTerminalDraft.map((terminal) => ({
+    terminal_id: terminal.terminal_id,
+    ...(terminal.normal_key !== undefined
+      ? { normal_key: terminal.normal_key ?? "" }
+      : {}),
+    ...(terminal.shifted_key !== undefined
+      ? { shifted_key: terminal.shifted_key ?? "" }
+      : {}),
+    ...(terminal.is_shift !== undefined ? { is_shift: terminal.is_shift } : {}),
+    allow_shared_key: terminal.allow_shared_key,
+  }));
 }
 
 /** The first live transaction is intentionally tiny and reversible. Return
@@ -2262,10 +2396,41 @@ function panelProgrammingEdits(): PanelTerminalEdit[] {
 function panelProgrammingQualificationEdits(): PanelTerminalEdit[] {
   const terminalId = panelProgrammingState.editor.qualification_terminal_id.trim();
   const key = panelProgrammingState.editor.qualification_key.trim();
+  let changed: PanelTerminalEdit[];
   if (terminalId || key) {
-    return [{ terminal_id: terminalId, normal_key: key }];
+    changed = [{ terminal_id: terminalId, normal_key: key }];
+  } else {
+    changed = panelProgrammingSurfaceAssignments().map((assignment) => ({
+      terminal_id: assignment.terminal_id,
+      normal_key: assignment.requested_key,
+      allow_shared_key: assignment.allow_shared_key,
+    })).filter((edit) => {
+      const terminal = panelProgrammingTerminal(edit.terminal_id);
+      return terminal && !samePanelKey(edit.normal_key, terminal.normal.key);
+    });
   }
-  return panelProgrammingEdits().filter((edit) => {
+  if (changed.length !== 1) return changed;
+  const requested = changed[0].normal_key?.trim() ?? "";
+  if (!requested) return changed;
+  const owners = (panelProgrammingState.inspection.chart?.terminals ?? []).filter(
+    (terminal) => terminal.terminal_id !== changed[0].terminal_id &&
+      samePanelKey(terminal.normal.key, requested),
+  );
+  if (owners.length === 0) return changed;
+  return [
+    { ...changed[0], allow_shared_key: true },
+    ...owners.map((terminal) => ({
+      terminal_id: terminal.terminal_id,
+      normal_key: terminal.normal.key,
+      allow_shared_key: true,
+    })),
+  ];
+}
+
+function panelProgrammingQualificationChangedEdits(
+  edits: readonly PanelTerminalEdit[],
+): PanelTerminalEdit[] {
+  return edits.filter((edit) => {
     const terminal = panelProgrammingTerminal(edit.terminal_id);
     return terminal && !samePanelKey(edit.normal_key, terminal.normal.key);
   });
@@ -2305,6 +2470,273 @@ function panelProgrammingDropPlan(): void {
   };
 }
 
+function panelProgrammingProfileCompatible(profile: PanelHardwareProfile): boolean {
+  const chart = panelProgrammingState.inspection.chart;
+  const profileIds = new Set(profile.terminals.map((terminal) => terminal.terminal_id));
+  return Boolean(chart && profile.terminals.length === chart.terminals.length &&
+    chart.terminals.every((terminal) => profileIds.has(terminal.terminal_id)) &&
+    profile.driver === chart.driver &&
+    profile.protocol_profile === chart.protocol_profile &&
+    (!panelProgrammingProfilesSignature ||
+      profile.terminal_signature === panelProgrammingProfilesSignature));
+}
+
+function panelProgrammingProfileTerminals(): PanelHardwareTerminal[] | null {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart || panelProgrammingTerminalDraft.length !== chart.terminals.length) return null;
+  const rows: PanelHardwareTerminal[] = [];
+  for (const draft of panelProgrammingTerminalDraft) {
+    if (draft.normal_key === undefined || draft.shifted_key === undefined) return null;
+    rows.push({
+      terminal_id: draft.terminal_id,
+      normal_key: draft.normal_key || null,
+      shifted_key: draft.shifted_key || null,
+      // ShiftOpaque means the byte is not semantically readable, not that a
+      // portable profile is impossible. The backend preserves that opaque
+      // baseline when this semantic false is later applied.
+      is_shift: draft.is_shift ?? false,
+      allow_shared_key: draft.allow_shared_key,
+    });
+  }
+  return rows;
+}
+
+function panelProgrammingSourceLabel(): string {
+  if (panelProgrammingDraftSource === "recommended") return "Recommended KSX · generated at review";
+  if (panelProgrammingDraftSource === "blank") return "Clear-all draft";
+  if (panelProgrammingDraftSource === "panel-links") return "Imported panel links";
+  if (panelProgrammingDraftSource === "saved") {
+    return panelProgrammingProfiles.find(
+      (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
+    )?.name ?? "Saved layout";
+  }
+  return "Current board chart";
+}
+
+function makePanelProgrammingKeySelect(
+  terminalId: string,
+  field: "normal" | "shifted",
+  value: string | null | undefined,
+): HTMLSelectElement {
+  const select = document.createElement("select");
+  select.dataset.nx = "surface-terminal-key";
+  select.dataset.panelTerminal = terminalId;
+  select.dataset.panelField = field;
+  select.setAttribute("aria-label", `${terminalId} ${field} assignment`);
+  if (value === undefined) {
+    const preserve = document.createElement("option");
+    preserve.value = "__preserve__";
+    preserve.textContent = "Opaque · preserve current byte";
+    select.append(preserve);
+  }
+  const unassigned = document.createElement("option");
+  unassigned.value = "";
+  unassigned.textContent = "Unassigned";
+  select.append(unassigned);
+  for (const option of panelProgrammingState.inspection.chart?.key_options ?? []) {
+    const row = document.createElement("option");
+    row.value = option.key;
+    row.textContent = option.label;
+    select.append(row);
+  }
+  select.value = value === undefined ? "__preserve__" : value ?? "";
+  return select;
+}
+
+function renderPanelProgrammingTerminalEditor(): void {
+  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-terminal-editor");
+  const grid = section?.querySelector<HTMLElement>("[data-surface-terminal-grid]");
+  const note = section?.querySelector<HTMLElement>("[data-surface-terminal-note]");
+  const advanced = section?.querySelector<HTMLInputElement>(
+    '[data-nx="surface-terminal-advanced"]',
+  );
+  const chart = panelProgrammingState.inspection.chart;
+  if (!section || !grid || !note || !advanced) return;
+  const qualificationState = panelProgrammingQualificationState(chart);
+  section.hidden = !chart || qualificationState !== "qualified";
+  advanced.checked = panelProgrammingAdvancedOpen;
+  if (!chart || section.hidden) {
+    grid.replaceChildren();
+    return;
+  }
+  grid.dataset.advanced = String(panelProgrammingAdvancedOpen);
+  grid.replaceChildren();
+  if (panelProgrammingDraftSource === "recommended") {
+    const generated = document.createElement("div");
+    generated.className = "n-surface-terminal-generated";
+    const title = document.createElement("strong");
+    title.textContent = "Recommended is backend-generated";
+    const copy = document.createElement("p");
+    copy.textContent =
+      "Review & program asks KSX to allocate the complete deterministic four-player chart. After it verifies, the exact 56 terminal values will appear here and can be saved or edited.";
+    generated.append(title, copy);
+    grid.append(generated);
+    advanced.disabled = true;
+    return;
+  }
+  advanced.disabled = panelProgrammingBusy || panelProgrammingTransactionActive();
+  const drafts = new Map(panelProgrammingTerminalDraft.map((row) => [row.terminal_id, row]));
+  for (let player = 1; player <= 4; player += 1) {
+    const playerTerminals = chart.terminals.filter((candidate) => candidate.player === player);
+    const group = document.createElement("section");
+    group.className = `n-surface-terminal-player np${player}`;
+    const heading = document.createElement("header");
+    const playerLabel = document.createElement("strong");
+    playerLabel.textContent = `Player ${player}`;
+    const count = document.createElement("span");
+    count.textContent = `${playerTerminals.length} ${playerTerminals.length === 1 ? "terminal" : "terminals"}`;
+    heading.append(playerLabel, count);
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "n-surface-terminal-table-wrap";
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const [label, advancedColumn] of [
+      ["Terminal", false],
+      ["Normal assignment", false],
+      ["Shifted assignment", true],
+      ["Acts as Shift", true],
+      ["Shared", false],
+    ] as const) {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = label;
+      if (advancedColumn) th.className = "advanced";
+      headRow.append(th);
+    }
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    for (const terminal of playerTerminals) {
+      const draft = drafts.get(terminal.terminal_id) ?? {
+        terminal_id: terminal.terminal_id,
+        allow_shared_key: false,
+      };
+      const row = document.createElement("tr");
+      row.dataset.panelTerminalRow = terminal.terminal_id;
+      const labelCell = document.createElement("th");
+      labelCell.scope = "row";
+      const label = document.createElement("strong");
+      label.textContent = terminal.terminal_label;
+      const id = document.createElement("small");
+      id.textContent = terminal.terminal_id;
+      labelCell.append(label, id);
+      const normalCell = document.createElement("td");
+      normalCell.append(makePanelProgrammingKeySelect(
+        terminal.terminal_id,
+        "normal",
+        draft.normal_key,
+      ));
+      const shiftedCell = document.createElement("td");
+      shiftedCell.className = "advanced";
+      shiftedCell.append(makePanelProgrammingKeySelect(
+        terminal.terminal_id,
+        "shifted",
+        draft.shifted_key,
+      ));
+      const shiftCell = document.createElement("td");
+      shiftCell.className = "advanced";
+      const shiftLabel = document.createElement("label");
+      const shift = document.createElement("input");
+      shift.type = "checkbox";
+      shift.dataset.nx = "surface-terminal-shift";
+      shift.dataset.panelTerminal = terminal.terminal_id;
+      shift.checked = draft.is_shift === true;
+      shift.indeterminate = draft.is_shift === undefined;
+      const shiftText = document.createElement("span");
+      shiftText.textContent = draft.is_shift === undefined ? "Preserve" : "Shift";
+      shiftLabel.append(shift, shiftText);
+      shiftCell.append(shiftLabel);
+      const sharedCell = document.createElement("td");
+      const sharedLabel = document.createElement("label");
+      const shared = document.createElement("input");
+      shared.type = "checkbox";
+      shared.dataset.nx = "surface-terminal-shared";
+      shared.dataset.panelTerminal = terminal.terminal_id;
+      shared.checked = draft.allow_shared_key;
+      const sharedText = document.createElement("span");
+      sharedText.textContent = "Allow";
+      sharedLabel.title = "Allow this key to be deliberately shared with another physical terminal";
+      sharedLabel.append(shared, sharedText);
+      sharedCell.append(sharedLabel);
+      row.append(labelCell, normalCell, shiftedCell, shiftCell, sharedCell);
+      body.append(row);
+    }
+    table.append(head, body);
+    tableWrap.append(table);
+    group.append(heading, tableWrap);
+    grid.append(group);
+  }
+  note.textContent = panelProgrammingAdvancedOpen
+    ? "Advanced is open. Shifted assignments and Acts as Shift are persistent I-PAC behavior; leave opaque values on Preserve unless you intend to replace them."
+    : "Normal assignments are what Windows receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
+  const locked = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    panelProgrammingState.capability.kind !== "programmable";
+  for (const control of Array.from(grid.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    "input, select",
+  ))) control.disabled = locked;
+}
+
+function syncPanelHardwareProfilesUi(): void {
+  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
+  if (!section) return;
+  section.hidden = !panelProgrammingState.inspection.chart ||
+    panelProgrammingQualificationState() !== "qualified";
+  if (section.hidden) return;
+  const select = section.querySelector<HTMLSelectElement>("[data-surface-profile]");
+  const summary = section.querySelector<HTMLElement>("[data-surface-profiles-summary]");
+  const message = section.querySelector<HTMLElement>("[data-surface-profiles-message]");
+  const name = section.querySelector<HTMLInputElement>("[data-surface-profile-name]");
+  const description = section.querySelector<HTMLInputElement>(
+    "[data-surface-profile-description]",
+  );
+  if (select) {
+    const selected = panelProgrammingSelectedProfileId;
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = panelProgrammingProfiles.length > 0
+      ? "Choose a saved layout"
+      : "No saved hardware layouts";
+    select.append(placeholder);
+    for (const profile of panelProgrammingProfiles) {
+      const option = document.createElement("option");
+      option.value = profile.profile_id;
+      const compatible = panelProgrammingProfileCompatible(profile);
+      option.disabled = !compatible;
+      option.textContent = compatible ? profile.name : `${profile.name} · incompatible`;
+      select.append(option);
+    }
+    if (panelProgrammingProfiles.some((profile) => profile.profile_id === selected)) {
+      select.value = selected;
+      panelProgrammingSelectedProfileId = selected;
+    }
+    select.disabled = panelProgrammingProfilesBusy || panelProgrammingProfiles.length === 0;
+  }
+  const selectedProfile = panelProgrammingProfiles.find(
+    (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
+  );
+  if (summary) {
+    summary.textContent = panelProgrammingProfilesBusy
+      ? "Working…"
+      : `${panelProgrammingProfiles.length} saved ${panelProgrammingProfiles.length === 1 ? "layout" : "layouts"}`;
+  }
+  if (message) message.textContent = panelProgrammingProfilesMessage;
+  const complete = panelProgrammingProfileTerminals() !== null;
+  const profileName = name?.value.trim() ?? "";
+  for (const button of Array.from(section.querySelectorAll<HTMLButtonElement>("[data-nx]"))) {
+    const action = button.dataset.nx;
+    button.disabled = panelProgrammingProfilesBusy ||
+      (action === "surface-profile-use" && (!selectedProfile ||
+        !panelProgrammingProfileCompatible(selectedProfile))) ||
+      (action === "surface-profile-save" && (!complete || !profileName)) ||
+      ((action === "surface-profile-update" || action === "surface-profile-delete") &&
+        !selectedProfile) ||
+      (action === "surface-profile-update" && (!complete || !profileName));
+  }
+  if (name) name.disabled = panelProgrammingProfilesBusy;
+  if (description) description.disabled = panelProgrammingProfilesBusy;
+}
+
 function syncPanelProgrammingUi(): void {
   const item = controlSurfaceItem;
   if (!item) return;
@@ -2338,6 +2770,12 @@ function syncPanelProgrammingUi(): void {
   const programmingTitle = section?.querySelector<HTMLElement>(
     "[data-surface-programming-title]",
   );
+  const programmingDevice = section?.querySelector<HTMLElement>(
+    "[data-surface-programming-device]",
+  );
+  const terminalStatus = section?.querySelector<HTMLElement>(
+    "[data-surface-terminal-status]",
+  );
   const chart = panelProgrammingState.inspection.chart;
   const authority = currentPanelChartAuthority();
   const capability = panelProgrammingState.capability;
@@ -2349,6 +2787,9 @@ function syncPanelProgrammingUi(): void {
   const qualificationEdits = qualificationState === "required"
     ? panelProgrammingQualificationEdits()
     : [];
+  const qualificationChangedEdits = panelProgrammingQualificationChangedEdits(
+    qualificationEdits,
+  );
   const exactQualificationBackup = qualificationNeedsRestore && chart
     ? chart.qualification_restore_backup_id?.trim() ||
       (panelProgrammingState.transaction.operation === "program"
@@ -2364,13 +2805,37 @@ function syncPanelProgrammingUi(): void {
   if (programmingTitle) {
     programmingTitle.textContent = controlSurfaceEncoderSetupEntry
       ? "Initialize the keyboard chart before mapping or teaching controls"
-      : "Back up first, then choose how KSX should treat the chart";
+      : qualificationState === "qualified"
+      ? "Edit, save, clear, or program the complete 56-terminal chart"
+      : "Complete the writer check, then configure the whole board";
   }
   if (section) {
     section.hidden = !open;
     section.dataset.capability = capability.kind;
     section.dataset.qualification = qualificationState;
+    section.dataset.dirty = String(panelProgrammingDraftDirty());
+    section.dataset.draftSource = panelProgrammingDraftSource;
     section.setAttribute("aria-busy", String(panelProgrammingBusy));
+  }
+  if (programmingDevice) {
+    programmingDevice.replaceChildren();
+    const normalAssigned = chart?.terminals.filter((terminal) =>
+      Boolean(terminal.normal.key)
+    ).length ?? 0;
+    for (const [label, value] of [
+      ["On device", chart?.board_name ?? "Not read"],
+      ["Chart", chart ? panelProgrammingHash(chart.image_sha256) : "Unavailable"],
+      ["Normal assignments", chart ? `${normalAssigned} of ${chart.terminals.length}` : "—"],
+      ["Writer", qualificationState === "qualified" ? "Qualified" : "Setup check required"],
+    ] as const) {
+      const row = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      row.append(dt, dd);
+      programmingDevice.append(row);
+    }
   }
   if (qualification) {
     qualification.hidden = !chart || qualificationState === "qualified";
@@ -2455,25 +2920,35 @@ function syncPanelProgrammingUi(): void {
     const key = chart?.key_options.find(
       (candidate) => candidate.key === panelProgrammingState.editor.qualification_key,
     );
+    const sharedOwners = Math.max(0, qualificationEdits.length - 1);
     qualificationSelection.textContent = terminal && key
-      ? `${terminal.terminal_label} will temporarily change from ${terminal.normal.label} to ${key.label}. Nothing is written until you review and confirm the complete diff.`
+      ? `${terminal.terminal_label} will temporarily change from ${terminal.normal.label} to ${key.label}.${sharedOwners > 0 ? ` ${sharedOwners} existing ${key.label} ${sharedOwners === 1 ? "owner is" : "owners are"} acknowledged as deliberate sharing; only this terminal changes.` : ""} Nothing is written until you review and confirm the complete diff.`
       : "Choose both values to prepare the reversible safety review.";
   }
   for (const button of Array.from(
     section?.querySelectorAll<HTMLButtonElement>("[data-surface-programming-mode]") ?? [],
   )) {
     const mode = button.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
-    button.setAttribute("aria-pressed", String(mode === panelProgrammingState.editor.assignment_mode));
-    const qualificationLocksMode = mode === "recommended"
+    const sourceSelected = qualificationState !== "qualified"
+      ? mode === "custom" && panelProgrammingState.editor.assignment_mode === "custom"
+      : mode === "recommended"
+      ? panelProgrammingDraftSource === "recommended"
+      : mode === "blank"
+      ? panelProgrammingDraftSource === "blank"
+      : mode === "keep-current"
+      ? panelProgrammingDraftSource === "current"
+      : panelProgrammingDraftSource === "panel-links";
+    button.setAttribute("aria-pressed", String(sourceSelected));
+    const qualificationLocksMode = mode === "recommended" || mode === "blank"
       ? qualificationState !== "qualified"
       : mode === "custom" && qualificationNeedsRestore;
     button.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
-      recoveryRequired || qualificationLocksMode || (mode !== "keep-current" &&
-        (!chart || capability.kind !== "programmable"));
-    if (mode === "recommended" && qualificationState !== "qualified") {
+      recoveryRequired || !chart || qualificationLocksMode ||
+      (mode !== "keep-current" && capability.kind !== "programmable");
+    if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
       button.title = qualificationState === "validation-recovery"
-        ? "Restore the recovery backup, then repeat the one-terminal writer check. This recovery restore does not unlock Recommended."
-        : "Available after the one-terminal writer check is programmed and its exact safety backup is restored.";
+        ? `Restore the recovery image, then repeat the one-terminal writer check. This recovery restore does not unlock ${mode === "recommended" ? "Recommended" : "Clear assignments"}.`
+        : "Available after the one-terminal writer check is complete.";
     } else if (mode === "custom" && qualificationNeedsRestore) {
       button.title = qualificationState === "validation-recovery"
         ? "Restore the interrupted validation write's exact safety backup, then repeat the writer check."
@@ -2485,15 +2960,24 @@ function syncPanelProgrammingUi(): void {
   // Writer qualification is deliberately independent of any saved or
   // partially-authored surface. A stale surface conflict must never prevent
   // proving one reversible terminal write on a newly installed encoder.
-  const conflicts = panelProgrammingState.editor.assignment_mode === "custom" &&
+  const conflicts = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode) ===
+      "custom" &&
       qualificationState !== "required"
     ? panelProgrammingConflicts()
     : [];
-  const assignments = panelProgrammingDraftAssignments();
   if (summary) {
     summary.textContent = panelProgrammingMessage || (chart
-      ? `${chart.summary} ${assignments.length} physical ${assignments.length === 1 ? "channel" : "channels"} linked to encoder terminals.${conflicts.length > 0 ? ` ${conflicts.length} assignment ${conflicts.length === 1 ? "conflict needs" : "conflicts need"} attention.` : ""}`
+      ? `${chart.summary} ${panelProgrammingSourceLabel()} is open in the editor.${conflicts.length > 0 ? ` ${conflicts.length} assignment ${conflicts.length === 1 ? "conflict needs" : "conflicts need"} attention.` : ""}`
       : "Read and back up the complete encoder chart before changing terminal assignments.");
+  }
+  if (terminalStatus) {
+    terminalStatus.textContent = !chart
+      ? "No chart loaded"
+      : panelProgrammingDraftSource === "recommended"
+      ? "Generated layout · not written"
+      : panelProgrammingDraftSource === "current" && !panelProgrammingDraftDirty()
+      ? "Matches the last board read"
+      : `${panelProgrammingSourceLabel()} · draft not written`;
   }
   if (conflictList) {
     conflictList.replaceChildren();
@@ -2507,15 +2991,17 @@ function syncPanelProgrammingUi(): void {
   if (review) {
     const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
     const qualificationReady = qualificationState !== "required" ||
-      (layout === "custom" && qualificationEdits.length === 1 &&
-        panelProgrammingQualificationEditIsEligible(qualificationEdits[0]));
+      (layout === "custom" && qualificationChangedEdits.length === 1 &&
+        panelProgrammingQualificationEditIsEligible(qualificationChangedEdits[0]));
     const customReady = layout !== "custom" || qualificationState === "required"
       ? qualificationReady
-      : conflicts.length === 0 && assignments.length > 0;
+      : conflicts.length === 0 && panelProgrammingTerminalDraft.length === chart?.terminals.length;
+    const unchangedCurrent = panelProgrammingDraftSource === "current" &&
+      !panelProgrammingDraftDirty() && qualificationState === "qualified";
     review.disabled = panelProgrammingBusy || recoveryRequired ||
       capability.kind !== "programmable" || !chart || !authority ||
       qualificationNeedsRestore ||
-      !layout || !qualificationReady || !customReady;
+      !layout || !qualificationReady || !customReady || unchangedCurrent;
     review.textContent = panelProgrammingBusy
       ? "Preparing review…"
       : qualificationState === "validation-recovery"
@@ -2523,8 +3009,14 @@ function syncPanelProgrammingUi(): void {
       : qualificationState === "validation-written"
       ? "Restore safety backup to finish"
       : qualificationState === "required"
-      ? `Review one-terminal test${qualificationEdits.length > 1 ? ` (${qualificationEdits.length} changed)` : ""}`
-      : "Review hardware changes";
+      ? `Review one-terminal test${qualificationChangedEdits.length > 1
+        ? ` (${qualificationChangedEdits.length} changed)`
+        : ""}`
+      : unchangedCurrent
+      ? "No board changes"
+      : panelProgrammingDraftSource === "blank" && !panelProgrammingDraftDirty()
+      ? "Review clear assignments"
+      : "Review & program board";
   }
   if (backupSelect) {
     const selected = backupSelect.value;
@@ -2590,9 +3082,11 @@ function syncPanelProgrammingUi(): void {
       !panelProgrammingTarget();
     setupButton.textContent = open
       ? controlSurfaceEncoderSetupEntry ? "I-PAC setup open" : "Encoder setup open"
-      : chart ? "Set up encoder…" : "Read & back up…";
+      : chart ? "Configure I-PAC…" : "Set up I-PAC…";
     setupButton.setAttribute("aria-expanded", String(open));
   }
+  renderPanelProgrammingTerminalEditor();
+  syncPanelHardwareProfilesUi();
   syncControlSurfaceInspector();
 }
 
@@ -2649,10 +3143,9 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
       return;
     }
     const qualificationState = panelProgrammingQualificationState(chart);
-    const assignmentMode = qualificationState !== "qualified" &&
-        panelProgrammingState.editor.assignment_mode === "recommended"
-      ? "custom"
-      : panelProgrammingState.editor.assignment_mode;
+    const assignmentMode: PanelAssignmentMode = qualificationState === "qualified"
+      ? "keep-current"
+      : "custom";
     const qualificationTerminalId = qualificationState === "required" && chart.terminals.some(
       (terminal) => terminal.terminal_id ===
           panelProgrammingState.editor.qualification_terminal_id &&
@@ -2680,7 +3173,7 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         ...panelProgrammingState.editor,
         assignment_mode: assignmentMode,
         phase: panelProgrammingState.editor.phase === "closed" ? "closed" : "assign",
-        assignments: panelProgrammingDraftAssignments(),
+        assignments: [],
         qualification_terminal_id: qualificationTerminalId,
         qualification_key: qualificationKey,
         plan_expected_selector: "",
@@ -2690,6 +3183,11 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         ? { phase: "idle", operation: null, target_selector: "", outcome: null }
         : panelProgrammingState.transaction,
     };
+    panelProgrammingTerminalDraft = panelProgrammingDraftFromChart(chart);
+    panelProgrammingDraftSource = "current";
+    panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint();
+    panelProgrammingSelectedProfileId = "";
+    panelProgrammingState.editor.assignments = panelProgrammingDraftAssignments();
     if (chart.backup && !panelProgrammingBackups.some(
       (candidate) => candidate.backup_id === chart.backup?.backup_id,
     )) {
@@ -2701,6 +3199,7 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
     );
     panelProgrammingMessage = chart.programming_detail || chart.summary;
     void loadPanelProgrammingBackups();
+    void loadPanelHardwareProfiles();
   } catch (error) {
     if (generation !== panelProgrammingGeneration) return;
     panelProgrammingState.inspection.phase = "unavailable";
@@ -2756,6 +3255,171 @@ async function loadPanelProgrammingBackups(): Promise<void> {
   }
 }
 
+async function loadPanelHardwareProfiles(): Promise<void> {
+  if (panelProgrammingProfilesBusy) return;
+  panelProgrammingProfilesBusy = true;
+  panelProgrammingProfilesMessage = "Loading saved KSX hardware layouts…";
+  syncPanelHardwareProfilesUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelHardwareProfilesPayload>(
+      "/api/panel/profiles",
+      "GET",
+    );
+    if (payload.unavailable || !payload.view) {
+      throw new Error(payload.remedy
+        ? `${payload.unavailable || "Saved hardware layouts are unavailable."} ${payload.remedy}`
+        : payload.unavailable || "Saved hardware layouts are unavailable.");
+    }
+    panelProgrammingProfiles = payload.view.profiles;
+    panelProgrammingProfilesSignature = payload.view.terminal_signature;
+    if (panelProgrammingSelectedProfileId && !panelProgrammingProfiles.some(
+      (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
+    )) panelProgrammingSelectedProfileId = "";
+    panelProgrammingProfilesMessage = payload.view.summary;
+  } catch (error) {
+    panelProgrammingProfilesMessage = error instanceof Error
+      ? error.message
+      : "Saved hardware layouts could not be loaded.";
+  } finally {
+    panelProgrammingProfilesBusy = false;
+    syncPanelHardwareProfilesUi();
+  }
+}
+
+function selectPanelHardwareProfile(profileId: string): void {
+  panelProgrammingSelectedProfileId = profileId;
+  const profile = panelProgrammingProfiles.find((candidate) => candidate.profile_id === profileId);
+  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
+  const name = section?.querySelector<HTMLInputElement>("[data-surface-profile-name]");
+  const description = section?.querySelector<HTMLInputElement>(
+    "[data-surface-profile-description]",
+  );
+  if (name) name.value = profile?.name ?? "";
+  if (description) description.value = profile?.description ?? "";
+  panelProgrammingProfilesMessage = profile
+    ? panelProgrammingProfileCompatible(profile)
+      ? `${profile.name} is compatible. Use saved loads it as a draft; the I-PAC is unchanged.`
+      : `${profile.name} targets a different terminal vocabulary and cannot be loaded on this board.`
+    : "Choose a saved layout, or name this draft and save it as new.";
+  syncPanelHardwareProfilesUi();
+}
+
+function useSelectedPanelHardwareProfile(): void {
+  const profile = panelProgrammingProfiles.find(
+    (candidate) => candidate.profile_id === panelProgrammingSelectedProfileId,
+  );
+  if (!profile || !panelProgrammingProfileCompatible(profile) ||
+      !panelProgrammingState.inspection.chart) return;
+  panelProgrammingUseDraft(panelProgrammingProfileDraft(profile), "saved", "custom");
+  panelProgrammingMessage =
+    `${profile.name} is loaded as a 56-terminal draft. Nothing has been written to the I-PAC.`;
+  panelProgrammingProfilesMessage = "Edit, review, or update this saved layout.";
+  syncPanelProgrammingUi();
+}
+
+async function savePanelHardwareProfile(update: boolean): Promise<void> {
+  if (panelProgrammingProfilesBusy) return;
+  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
+  const name = section?.querySelector<HTMLInputElement>("[data-surface-profile-name]")
+    ?.value.trim() ?? "";
+  const description = section?.querySelector<HTMLInputElement>(
+    "[data-surface-profile-description]",
+  )?.value.trim() ?? "";
+  const terminals = panelProgrammingProfileTerminals();
+  const selected = panelProgrammingProfiles.find(
+    (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
+  );
+  if (!name || !terminals || (update && !selected)) {
+    panelProgrammingProfilesMessage = !terminals
+      ? "This chart contains a vendor action that has no portable key meaning. Preserve it in the raw board history, or replace that action deliberately before saving a semantic layout."
+      : "Enter a layout name and choose the saved layout to update.";
+    syncPanelHardwareProfilesUi();
+    return;
+  }
+  const spec: PanelHardwareProfileSaveSpec = {
+    ...(update && selected
+      ? { profile_id: selected.profile_id, expected_revision: selected.revision }
+      : {}),
+    name,
+    description,
+    terminals,
+  };
+  panelProgrammingProfilesBusy = true;
+  panelProgrammingProfilesMessage = update ? "Updating saved layout…" : "Saving new layout…";
+  syncPanelHardwareProfilesUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelHardwareProfileMutationPayload>(
+      "/api/panel/profiles/save",
+      "POST",
+      spec,
+    );
+    if (payload.unavailable || !payload.mutation) {
+      throw new Error(payload.remedy
+        ? `${payload.unavailable || "The layout was not saved."} ${payload.remedy}`
+        : payload.unavailable || "The layout was not saved.");
+    }
+    panelProgrammingSelectedProfileId = payload.mutation.profile_id;
+    panelProgrammingProfilesMessage = payload.mutation.summary;
+    panelProgrammingProfilesBusy = false;
+    await loadPanelHardwareProfiles();
+  } catch (error) {
+    panelProgrammingProfilesMessage = error instanceof Error
+      ? error.message
+      : "The layout was not saved.";
+  } finally {
+    panelProgrammingProfilesBusy = false;
+    syncPanelHardwareProfilesUi();
+  }
+}
+
+async function deleteSelectedPanelHardwareProfile(): Promise<void> {
+  if (panelProgrammingProfilesBusy) return;
+  const profile = panelProgrammingProfiles.find(
+    (candidate) => candidate.profile_id === panelProgrammingSelectedProfileId,
+  );
+  if (!profile || !window.confirm(
+    `Delete saved hardware layout “${profile.name}”? This does not change the I-PAC.`,
+  )) return;
+  const spec: PanelHardwareProfileDeleteSpec = {
+    profile_id: profile.profile_id,
+    expected_revision: profile.revision,
+  };
+  panelProgrammingProfilesBusy = true;
+  panelProgrammingProfilesMessage = `Deleting ${profile.name}…`;
+  syncPanelHardwareProfilesUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelHardwareProfileMutationPayload>(
+      "/api/panel/profiles/delete",
+      "POST",
+      spec,
+    );
+    if (payload.unavailable || !payload.mutation) {
+      throw new Error(payload.remedy
+        ? `${payload.unavailable || "The layout was not deleted."} ${payload.remedy}`
+        : payload.unavailable || "The layout was not deleted.");
+    }
+    panelProgrammingSelectedProfileId = "";
+    const name = controlSurfaceItem?.querySelector<HTMLInputElement>(
+      "[data-surface-profile-name]",
+    );
+    const description = controlSurfaceItem?.querySelector<HTMLInputElement>(
+      "[data-surface-profile-description]",
+    );
+    if (name) name.value = "";
+    if (description) description.value = "";
+    panelProgrammingProfilesMessage = payload.mutation.summary;
+    panelProgrammingProfilesBusy = false;
+    await loadPanelHardwareProfiles();
+  } catch (error) {
+    panelProgrammingProfilesMessage = error instanceof Error
+      ? error.message
+      : "The layout was not deleted.";
+  } finally {
+    panelProgrammingProfilesBusy = false;
+    syncPanelHardwareProfilesUi();
+  }
+}
+
 function openPanelProgrammingSetup(): void {
   if (panelProgrammingBusy || panelProgrammingTransactionActive()) return;
   panelProgrammingReturnFocus = document.activeElement instanceof HTMLElement
@@ -2771,6 +3435,7 @@ function openPanelProgrammingSetup(): void {
     void readPanelProgrammingChart(true);
   } else {
     void loadPanelProgrammingBackups();
+    void loadPanelHardwareProfiles();
   }
 }
 
@@ -2820,11 +3485,11 @@ function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
   if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   const qualificationState = panelProgrammingQualificationState();
-  if (mode === "recommended" && qualificationState !== "qualified") {
+  if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
     panelProgrammingSetMessage(
       qualificationState === "validation-recovery"
-        ? "Restore the recovery backup, then repeat the one-terminal writer check. This recovery restore does not unlock Recommended."
-        : "Recommended unlocks after the one-terminal writer check is verified and its exact safety backup is restored.",
+        ? "Restore the recovery image, then repeat the one-terminal writer check."
+        : `${mode === "blank" ? "Clear assignments" : "Recommended"} unlocks after the one-terminal writer check is complete.`,
     );
     return;
   }
@@ -2836,32 +3501,60 @@ function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
     );
     return;
   }
-  if (mode === "keep-current") {
-    const hasPanel = controlSurfaceState.started;
-    closePanelProgrammingSetup(false);
-    controlSurfaceEncoderSetupEntry = false;
-    if (hasPanel) {
-      chooseControlSurfaceStage("teach");
-      keyboardWorkbenchAnnounce(
-        "The encoder chart was kept unchanged. Teach inputs will record what the panel already sends.",
-      );
-      controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
-        ?.focus({ preventScroll: true });
-    } else {
-      controlSurfaceChoosingTemplate = true;
-      syncControlSurfaceChrome();
-      keyboardWorkbenchAnnounce(
-        "The encoder chart was kept unchanged. Choose a physical panel shape before teaching its existing signals.",
-      );
-      focusControlSurfacePrimary();
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart) return;
+  panelProgrammingSelectedProfileId = "";
+  if (mode === "recommended") {
+    panelProgrammingUseDraft([], "recommended", "recommended");
+    panelProgrammingMessage =
+      "KSX will allocate the deterministic four-player chart on the backend. Review the exact generated terminal and byte diff before programming.";
+  } else if (mode === "blank") {
+    panelProgrammingUseDraft(panelProgrammingBlankDraft(chart), "blank", "blank");
+    panelProgrammingMessage =
+      "All readable terminal actions are prepared as Unassigned and known Shift roles are cleared. Opaque vendor Shift bytes stay preserved. Nothing has been written.";
+  } else if (mode === "keep-current") {
+    panelProgrammingUseDraft(panelProgrammingDraftFromChart(chart), "current", "keep-current");
+    panelProgrammingMessage =
+      "The complete chart currently on this I-PAC is open for editing. Nothing changes on hardware until Review & program board is confirmed.";
+  } else {
+    panelProgrammingImportSurfaceDraft();
+    const linked = panelProgrammingSurfaceAssignments().length;
+    panelProgrammingMessage = linked > 0
+      ? `${linked} drawn panel ${linked === 1 ? "link was" : "links were"} imported over the current chart. Review all 56 terminals before programming.`
+      : "No drawn panel links target this I-PAC yet. The current 56-terminal chart is open; you can edit it directly.";
+    if (linked === 0) {
+      panelProgrammingTerminalDraft = panelProgrammingDraftFromChart(chart);
+      panelProgrammingDraftSource = "panel-links";
+      panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint();
     }
-    return;
+  }
+  syncPanelProgrammingUi();
+}
+
+function updatePanelProgrammingTerminalDraft(
+  terminalId: string,
+  field: "normal_key" | "shifted_key" | "is_shift" | "allow_shared_key",
+  value: string | boolean | undefined,
+): void {
+  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingState.capability.kind !== "programmable") return;
+  const terminal = panelProgrammingTerminalDraft.find(
+    (candidate) => candidate.terminal_id === terminalId,
+  );
+  if (!terminal) return;
+  if (field === "normal_key" || field === "shifted_key") {
+    terminal[field] = typeof value === "string" ? value : undefined;
+  } else if (field === "is_shift") {
+    terminal.is_shift = typeof value === "boolean" ? value : undefined;
+  } else {
+    terminal.allow_shared_key = value === true;
+  }
+  if (panelProgrammingState.editor.assignment_mode === "blank") {
+    panelProgrammingState.editor.assignment_mode = "custom";
   }
   panelProgrammingDropPlan();
-  panelProgrammingState.editor.assignment_mode = mode;
-  panelProgrammingMessage = mode === "recommended"
-    ? "KSX will allocate a deterministic four-player key chart and clear the encoder's alternate/shift roles so macros and transformations live in KSX. Link physical channels to their printed terminals, then review the exact diff."
-    : "Choose an encoder terminal and supported key for each physical channel, then review the exact diff.";
+  panelProgrammingMessage =
+    `${panelProgrammingTerminal(terminalId)?.terminal_label ?? terminalId} updated in the draft. The I-PAC is unchanged until you review and confirm Program board.`;
   syncPanelProgrammingUi();
 }
 
@@ -2932,6 +3625,12 @@ function assignSelectedPanelTerminal(terminalId: string): void {
     }),
     true,
   );
+  if (panelProgrammingDraftSource === "panel-links") {
+    const draft = panelProgrammingTerminalDraft.find(
+      (candidate) => candidate.terminal_id === terminal.terminal_id,
+    );
+    if (draft) draft.normal_key = currentKey;
+  }
   panelProgrammingDropPlan();
   syncPanelProgrammingUi();
 }
@@ -2955,6 +3654,12 @@ function assignSelectedPanelKey(key: string): void {
     }),
     true,
   );
+  if (panelProgrammingDraftSource === "panel-links") {
+    const draft = panelProgrammingTerminalDraft.find(
+      (candidate) => candidate.terminal_id === terminal.terminal_id,
+    );
+    if (draft) draft.normal_key = key;
+  }
   panelProgrammingDropPlan();
   syncPanelProgrammingUi();
 }
@@ -3409,6 +4114,9 @@ async function requestPanelProgrammingPlan(): Promise<void> {
   const conflicts = panelProgrammingConflicts();
   const qualificationState = panelProgrammingQualificationState(chart);
   const qualificationEdits = panelProgrammingQualificationEdits();
+  const qualificationChangedEdits = panelProgrammingQualificationChangedEdits(
+    qualificationEdits,
+  );
   if (!chart || !authority || !layout || panelProgrammingBusy || panelProgrammingTransactionActive() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   if (panelProgrammingQualificationNeedsRestore(qualificationState)) {
@@ -3420,8 +4128,8 @@ async function requestPanelProgrammingPlan(): Promise<void> {
     return;
   }
   if (qualificationState === "required" &&
-      (layout !== "custom" || qualificationEdits.length !== 1 ||
-        !panelProgrammingQualificationEditIsEligible(qualificationEdits[0]))) {
+      (layout !== "custom" || qualificationChangedEdits.length !== 1 ||
+        !panelProgrammingQualificationEditIsEligible(qualificationChangedEdits[0]))) {
     panelProgrammingSetMessage(
       "Writer qualification requires one safe letter or top-row number on one noncritical SW action button whose current normal assignment is readable and Shift state is explicitly disabled. Directions, Start, Coin, clears, command keys, opaque actions, and opaque Shift states are not eligible.",
     );
@@ -5975,9 +6683,9 @@ function createControlSurfaceItem(): HTMLElement {
   const hardwareActions = document.createElement("div");
   hardwareActions.className = "n-surface-hardware-actions";
   const encoderSetup = makeKeyboardWorkbenchButton(
-    "Read & back up…",
+    "Set up I-PAC…",
     "surface-encoder-open",
-    "Read the complete selected encoder chart, save a lossless backup, and optionally configure it",
+    "Open the complete 56-terminal hardware editor for this selected I-PAC",
   );
   encoderSetup.classList.add("n-surface-encoder-open");
   encoderSetup.setAttribute("aria-controls", "n-surface-programming");
@@ -6076,7 +6784,7 @@ function createControlSurfaceItem(): HTMLElement {
   programmingKicker.textContent = "Encoder hardware";
   const programmingTitle = document.createElement("strong");
   programmingTitle.dataset.surfaceProgrammingTitle = "";
-  programmingTitle.textContent = "Back up first, then choose how KSX should treat the chart";
+  programmingTitle.textContent = "Edit, save, clear, or program the complete 56-terminal chart";
   programmingHeading.append(programmingKicker, programmingTitle);
   const programmingClose = makeKeyboardWorkbenchButton(
     "Close setup",
@@ -6091,6 +6799,9 @@ function createControlSurfaceItem(): HTMLElement {
   programmingSummary.setAttribute("role", "status");
   programmingSummary.setAttribute("aria-live", "polite");
   programmingSummary.textContent = "Read and back up the complete encoder chart before changing terminal assignments.";
+  const programmingDevice = document.createElement("dl");
+  programmingDevice.className = "n-surface-programming-device";
+  programmingDevice.dataset.surfaceProgrammingDevice = "";
   const programmingQualification = document.createElement("aside");
   programmingQualification.className = "n-surface-programming-qualification";
   programmingQualification.dataset.surfaceProgrammingQualification = "";
@@ -6145,11 +6856,12 @@ function createControlSurfaceItem(): HTMLElement {
   const programmingModes = document.createElement("div");
   programmingModes.className = "n-surface-programming-modes";
   programmingModes.setAttribute("role", "group");
-  programmingModes.setAttribute("aria-label", "Encoder setup approach");
+  programmingModes.setAttribute("aria-label", "Start hardware layout from");
   ([
-    ["recommended", "Recommended KSX layout", "Allocate a deterministic four-player chart and clear onboard alternate/shift roles so KSX owns dynamic behavior."],
-    ["custom", "Customize terminals", "Choose the exact supported key each linked encoder terminal should emit."],
-    ["keep-current", "Keep current + Teach", "Leave EEPROM unchanged and teach KSX the signals the panel already sends."],
+    ["keep-current", "Current chart", "Start with all 56 assignments read from this I-PAC, then edit only what you want."],
+    ["recommended", "Recommended KSX", "Let the backend allocate a deterministic four-player chart with dynamic behavior owned by KSX."],
+    ["blank", "Clear assignments", "Clear readable actions and known Shift roles while preserving opaque vendor bytes."],
+    ["custom", "Import panel links", "Use the terminal and key links already drawn on the control surface as a starting shortcut."],
   ] as const).forEach(([mode, label, description]) => {
     const button = makeKeyboardWorkbenchButton(label, "surface-encoder-mode", description, mode);
     button.dataset.surfaceProgrammingMode = mode;
@@ -6159,21 +6871,111 @@ function createControlSurfaceItem(): HTMLElement {
     button.append(copy);
     programmingModes.append(button);
   });
+  const profiles = document.createElement("section");
+  profiles.className = "n-surface-hardware-profiles";
+  const profilesHead = document.createElement("div");
+  const profilesTitle = document.createElement("strong");
+  profilesTitle.textContent = "Saved hardware layouts";
+  const profilesSummary = document.createElement("span");
+  profilesSummary.dataset.surfaceProfilesSummary = "";
+  profilesSummary.textContent = "Loading KSX profiles…";
+  profilesHead.append(profilesTitle, profilesSummary);
+  const profilesPicker = document.createElement("div");
+  profilesPicker.className = "n-surface-profile-picker";
+  const profileSelect = document.createElement("select");
+  profileSelect.dataset.surfaceProfile = "";
+  profileSelect.setAttribute("aria-label", "Saved I-PAC hardware layout");
+  const profilePlaceholder = document.createElement("option");
+  profilePlaceholder.value = "";
+  profilePlaceholder.textContent = "Choose a saved layout";
+  profileSelect.append(profilePlaceholder);
+  const profileUse = makeKeyboardWorkbenchButton(
+    "Use saved",
+    "surface-profile-use",
+    "Load this saved semantic layout into the editor without programming the board",
+  );
+  profilesPicker.append(profileSelect, profileUse);
+  const profileFields = document.createElement("div");
+  profileFields.className = "n-surface-profile-fields";
+  const profileNameLabel = document.createElement("label");
+  const profileNameText = document.createElement("span");
+  profileNameText.textContent = "Layout name";
+  const profileName = document.createElement("input");
+  profileName.type = "text";
+  profileName.maxLength = 80;
+  profileName.placeholder = "My four-player cabinet";
+  profileName.dataset.surfaceProfileName = "";
+  profileNameLabel.append(profileNameText, profileName);
+  const profileDescriptionLabel = document.createElement("label");
+  const profileDescriptionText = document.createElement("span");
+  profileDescriptionText.textContent = "Description (optional)";
+  const profileDescription = document.createElement("input");
+  profileDescription.type = "text";
+  profileDescription.maxLength = 240;
+  profileDescription.placeholder = "What this panel layout is for";
+  profileDescription.dataset.surfaceProfileDescription = "";
+  profileDescriptionLabel.append(profileDescriptionText, profileDescription);
+  profileFields.append(profileNameLabel, profileDescriptionLabel);
+  const profileActions = document.createElement("div");
+  profileActions.className = "n-surface-profile-actions";
+  profileActions.append(
+    makeKeyboardWorkbenchButton("Save as new", "surface-profile-save", "Save this complete editor draft as a reusable KSX hardware layout"),
+    makeKeyboardWorkbenchButton("Update saved", "surface-profile-update", "Replace the selected saved layout with this complete editor draft"),
+    makeKeyboardWorkbenchButton("Delete saved", "surface-profile-delete", "Delete only the selected KSX layout; this never changes the I-PAC"),
+  );
+  const profileMessage = document.createElement("p");
+  profileMessage.dataset.surfaceProfilesMessage = "";
+  profileMessage.setAttribute("role", "status");
+  profiles.append(profilesHead, profilesPicker, profileFields, profileActions, profileMessage);
+  const terminalEditor = document.createElement("section");
+  terminalEditor.className = "n-surface-terminal-editor";
+  const terminalEditorHead = document.createElement("div");
+  const terminalEditorTitle = document.createElement("div");
+  const terminalEditorStrong = document.createElement("strong");
+  terminalEditorStrong.textContent = "Terminal chart";
+  const terminalEditorStatus = document.createElement("span");
+  terminalEditorStatus.dataset.surfaceTerminalStatus = "";
+  terminalEditorStatus.textContent = "No chart loaded";
+  terminalEditorTitle.append(terminalEditorStrong, terminalEditorStatus);
+  const advancedLabel = document.createElement("label");
+  advancedLabel.className = "n-surface-terminal-advanced-toggle";
+  const advancedInput = document.createElement("input");
+  advancedInput.type = "checkbox";
+  advancedInput.dataset.nx = "surface-terminal-advanced";
+  const advancedText = document.createElement("span");
+  advancedText.textContent = "Advanced shift layer";
+  advancedLabel.append(advancedInput, advancedText);
+  terminalEditorHead.append(terminalEditorTitle, advancedLabel);
+  const terminalEditorNote = document.createElement("p");
+  terminalEditorNote.dataset.surfaceTerminalNote = "";
+  terminalEditorNote.textContent =
+    "Normal assignments are what Windows receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
+  const terminalGrid = document.createElement("div");
+  terminalGrid.className = "n-surface-terminal-grid";
+  terminalGrid.dataset.surfaceTerminalGrid = "";
+  terminalEditor.append(terminalEditorHead, terminalEditorNote, terminalGrid);
   const programmingActions = document.createElement("div");
   programmingActions.className = "n-surface-programming-actions";
   const reread = makeKeyboardWorkbenchButton(
-    "Read & back up again",
+    "Read board again",
     "surface-encoder-read",
     "Read every chart byte again and create another verified backend-owned backup",
   );
   reread.classList.add("quiet");
   const review = makeKeyboardWorkbenchButton(
-    "Review hardware changes",
+    "Review & program board",
     "surface-encoder-review",
     "Compute an exact terminal and byte diff without writing anything",
   );
   review.classList.add("primary");
   programmingActions.append(reread, review);
+  const recovery = document.createElement("details");
+  recovery.className = "n-surface-programming-recovery";
+  const recoverySummary = document.createElement("summary");
+  recoverySummary.textContent = "Recovery and raw board history";
+  const recoveryCopy = document.createElement("p");
+  recoveryCopy.textContent =
+    "Raw, board-bound recovery images are transaction safeguards. Saved hardware layouts above are the reusable profiles you normally work with.";
   const restoreGroup = document.createElement("div");
   restoreGroup.className = "n-surface-programming-restore";
   const restoreLabel = document.createElement("label");
@@ -6194,14 +6996,18 @@ function createControlSurfaceItem(): HTMLElement {
     "Compare this backend-owned backup with the complete current chart before restoring",
   );
   restoreGroup.append(restoreLabel, restore);
+  recovery.append(recoverySummary, recoveryCopy, restoreGroup);
   programming.append(
     programmingHead,
     programmingSummary,
+    programmingDevice,
     programmingQualification,
     programmingConflicts,
     programmingModes,
+    profiles,
+    terminalEditor,
     programmingActions,
-    restoreGroup,
+    recovery,
   );
 
   const stages = document.createElement("nav");
@@ -9134,6 +9940,79 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
+    const terminalAdvanced = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      '[data-nx="surface-terminal-advanced"]',
+    );
+    if (terminalAdvanced) {
+      panelProgrammingAdvancedOpen = terminalAdvanced.checked;
+      renderPanelProgrammingTerminalEditor();
+      return;
+    }
+    const terminalKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="surface-terminal-key"][data-panel-terminal][data-panel-field]',
+    );
+    if (terminalKey) {
+      const terminalId = terminalKey.dataset.panelTerminal ?? "";
+      const field = terminalKey.dataset.panelField === "shifted" ? "shifted_key" : "normal_key";
+      updatePanelProgrammingTerminalDraft(
+        terminalId,
+        field,
+        terminalKey.value === "__preserve__" ? undefined : terminalKey.value,
+      );
+      window.requestAnimationFrame(() => Array.from(
+        controlSurfaceItem?.querySelectorAll<HTMLSelectElement>(
+          `[data-nx="surface-terminal-key"][data-panel-field="${terminalKey.dataset.panelField ?? "normal"}"]`,
+        ) ?? [],
+      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
+        ?.focus({ preventScroll: true }));
+      return;
+    }
+    const terminalShift = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      '[data-nx="surface-terminal-shift"][data-panel-terminal]',
+    );
+    if (terminalShift) {
+      const terminalId = terminalShift.dataset.panelTerminal ?? "";
+      updatePanelProgrammingTerminalDraft(terminalId, "is_shift", terminalShift.checked);
+      window.requestAnimationFrame(() => Array.from(
+        controlSurfaceItem?.querySelectorAll<HTMLInputElement>(
+          '[data-nx="surface-terminal-shift"]',
+        ) ?? [],
+      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
+        ?.focus({ preventScroll: true }));
+      return;
+    }
+    const terminalShared = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      '[data-nx="surface-terminal-shared"][data-panel-terminal]',
+    );
+    if (terminalShared) {
+      const terminalId = terminalShared.dataset.panelTerminal ?? "";
+      updatePanelProgrammingTerminalDraft(
+        terminalId,
+        "allow_shared_key",
+        terminalShared.checked,
+      );
+      window.requestAnimationFrame(() => Array.from(
+        controlSurfaceItem?.querySelectorAll<HTMLInputElement>(
+          '[data-nx="surface-terminal-shared"]',
+        ) ?? [],
+      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
+        ?.focus({ preventScroll: true }));
+      return;
+    }
+    const hardwareProfile = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      "[data-surface-profile]",
+    );
+    if (hardwareProfile) {
+      selectPanelHardwareProfile(hardwareProfile.value);
+      return;
+    }
+    const hardwareProfileField = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      "[data-surface-profile-name], [data-surface-profile-description]",
+    );
+    if (hardwareProfileField) {
+      syncPanelHardwareProfilesUi();
+      return;
+    }
     const qualificationTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
       '[data-nx="surface-qualification-terminal"]',
     );
@@ -9177,10 +10056,17 @@ export function nocturneWire(root: HTMLElement): void {
       const controlId = encoderShare.dataset.surfaceControlId ?? "";
       const channelId = encoderShare.dataset.surfaceChannelId ?? "";
       const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
-      if (control && control.channels.some((channel) => channel.id === channelId)) {
+      const channel = control?.channels.find((candidate) => candidate.id === channelId);
+      if (control && channel) {
         const identity = `${control.physicalId}\u0000${channelId}`;
         if (encoderShare.checked) panelProgrammingSharedAssignmentIds.add(identity);
         else panelProgrammingSharedAssignmentIds.delete(identity);
+        if (panelProgrammingDraftSource === "panel-links" && channel.encoder) {
+          const draft = panelProgrammingTerminalDraft.find(
+            (candidate) => candidate.terminal_id === channel.encoder?.terminalId,
+          );
+          if (draft) draft.allow_shared_key = encoderShare.checked;
+        }
         panelProgrammingDropPlan();
         syncPanelProgrammingUi();
       }
@@ -9558,7 +10444,11 @@ export function nocturneWire(root: HTMLElement): void {
   });
   root.addEventListener("input", (ev) => {
     const t = ev.target as HTMLElement | null;
-    if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
+    if (t instanceof HTMLInputElement &&
+        (t.matches("[data-surface-profile-name]") ||
+          t.matches("[data-surface-profile-description]"))) {
+      syncPanelHardwareProfilesUi();
+    } else if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
       if (inspectorContext.kind !== "overview") clearInspectorContext(true);
       applyNocturneFilter(root, t.value);
       // The filter is page state: it rides ?q= (debounced), so a refresh
@@ -9993,7 +10883,8 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-encoder-mode") {
       const mode = target?.closest<HTMLElement>("[data-surface-programming-mode]")
         ?.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
-      if (mode === "recommended" || mode === "custom" || mode === "keep-current") {
+      if (mode === "recommended" || mode === "custom" || mode === "keep-current" ||
+          mode === "blank") {
         choosePanelProgrammingMode(mode);
       }
     } else if (hit === "surface-encoder-review") {
@@ -10002,6 +10893,14 @@ export function nocturneWire(root: HTMLElement): void {
       const backup = controlSurfaceItem?.querySelector<HTMLSelectElement>("[data-surface-backup]")
         ?.value ?? "";
       if (backup) void requestPanelRestorePlan(backup);
+    } else if (hit === "surface-profile-use") {
+      useSelectedPanelHardwareProfile();
+    } else if (hit === "surface-profile-save") {
+      void savePanelHardwareProfile(false);
+    } else if (hit === "surface-profile-update") {
+      void savePanelHardwareProfile(true);
+    } else if (hit === "surface-profile-delete") {
+      void deleteSelectedPanelHardwareProfile();
     } else if (hit === "surface-template") {
       const template = target?.closest<HTMLElement>("[data-surface-template]")
         ?.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;

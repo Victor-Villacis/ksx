@@ -8,7 +8,7 @@
  * never evidence that a physical control emitted the expected signal.
  */
 
-export const PANEL_ASSIGNMENT_MODES = ["recommended", "custom", "keep-current"] as const;
+export const PANEL_ASSIGNMENT_MODES = ["recommended", "custom", "keep-current", "blank"] as const;
 export const PANEL_EDITOR_PHASES = ["closed", "assign", "review", "confirm"] as const;
 export const PANEL_INSPECTION_PHASES = [
   "idle",
@@ -31,7 +31,7 @@ export type PanelInspectionPhase = (typeof PANEL_INSPECTION_PHASES)[number];
 export type PanelTransactionPhase = (typeof PANEL_TRANSACTION_PHASES)[number];
 export type PanelProgrammingCapability = "unsupported" | "read-only" | "programmable";
 export type PanelProgrammingOperation = "program" | "restore";
-export type PanelProgramLayout = "canonical-four-player" | "custom";
+export type PanelProgramLayout = "canonical-four-player" | "custom" | "blank";
 export type PanelTerminalShiftState = "disabled" | "enabled" | "opaque";
 export type PanelProgrammingQualificationState =
   | "required"
@@ -149,6 +149,83 @@ export interface PanelTerminalEdit {
   shifted_key?: string | null;
   is_shift?: boolean;
   allow_shared_key?: boolean;
+}
+
+/** A complete semantic layout saved by KSX. Unlike a recovery backup it is
+ * portable between compatible boards and intentionally contains no opaque
+ * EEPROM bytes. */
+export interface PanelHardwareTerminal {
+  terminal_id: string;
+  normal_key?: string | null;
+  shifted_key?: string | null;
+  is_shift: boolean;
+  allow_shared_key: boolean;
+}
+
+/** Editable browser draft. Undefined fields preserve opaque on-device bytes;
+ * a portable saved profile is stricter and contains a semantic value for
+ * every field. */
+export interface PanelHardwareTerminalDraft {
+  terminal_id: string;
+  normal_key?: string | null;
+  shifted_key?: string | null;
+  is_shift?: boolean;
+  allow_shared_key: boolean;
+}
+
+export interface PanelHardwareProfile {
+  schema: string;
+  profile_id: string;
+  name: string;
+  description: string;
+  driver: string;
+  protocol_profile: string;
+  terminal_signature: string;
+  revision: string;
+  created_at: string;
+  updated_at: string;
+  terminals: PanelHardwareTerminal[];
+}
+
+export interface PanelHardwareProfilesView {
+  summary: string;
+  config_root: string;
+  terminal_signature: string;
+  profiles: PanelHardwareProfile[];
+}
+
+export interface PanelHardwareProfilesPayload {
+  unavailable: string | null;
+  refusal_code: string | null;
+  remedy: string | null;
+  view: PanelHardwareProfilesView | null;
+}
+
+export interface PanelHardwareProfileMutationView {
+  state: "created" | "updated" | "unchanged" | "deleted";
+  summary: string;
+  profile_id: string;
+  profile?: PanelHardwareProfile | null;
+}
+
+export interface PanelHardwareProfileMutationPayload {
+  unavailable: string | null;
+  refusal_code: string | null;
+  remedy: string | null;
+  mutation: PanelHardwareProfileMutationView | null;
+}
+
+export interface PanelHardwareProfileSaveSpec {
+  profile_id?: string;
+  expected_revision?: string;
+  name: string;
+  description: string;
+  terminals: PanelHardwareTerminal[];
+}
+
+export interface PanelHardwareProfileDeleteSpec {
+  profile_id: string;
+  expected_revision: string;
 }
 
 export interface PanelProgramRequest {
@@ -645,7 +722,7 @@ export function panelProgrammingPreferencesForStorage(
 
 export function panelProgramLayoutForMode(mode: PanelAssignmentMode): PanelProgramLayout | null {
   if (mode === "recommended") return "canonical-four-player";
-  if (mode === "keep-current") return null;
+  if (mode === "blank") return "blank";
   return "custom";
 }
 

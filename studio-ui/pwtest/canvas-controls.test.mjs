@@ -4960,7 +4960,7 @@ describe("the canvas navigation controls", () => {
       assert.match(cardCopy, /Inspection only\. KSX did not program or change this encoder\./);
       assert.equal(await card.locator("form").count(), 0);
       assert.equal(await card.locator("button").count(), 2, "the hardware card offers passive Refresh and explicit Encoder setup");
-      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Read & back up…");
+      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Set up I-PAC…");
       assert.equal(await card.locator('[data-nx*="program"], [data-nx*="write"]').count(), 0);
       const hardwareDetails = card.locator("details.n-surface-hardware-details");
       assert.equal(await hardwareDetails.getAttribute("open"), null);
@@ -5218,6 +5218,149 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("qualified I-PAC setup edits all 56 terminals and separates saved layouts from hardware writes", async () => {
+    let savedSpec = null;
+    let plannedSpec = null;
+    const terminalKinds = ["up", "down", "left", "right", "start", "coin",
+      "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8"];
+    const terminals = [];
+    for (let player = 1; player <= 4; player += 1) {
+      for (const kind of terminalKinds) {
+        const id = `${player}${kind}`;
+        terminals.push({
+          terminal_id: id,
+          terminal_label: `P${player} ${kind.toUpperCase()}`,
+          player,
+          kind: kind.startsWith("sw") ? "button" : kind,
+          normal: { code: 5, key: "B", label: "B", supported: true },
+          shifted: { code: 0, key: null, label: "Unassigned", supported: true },
+          shift_state: "disabled",
+          is_shift: false,
+        });
+      }
+    }
+    const savedProfile = {
+      schema: "ksx-panel-hardware-profile-v1",
+      profile_id: "four-player-saved",
+      name: "Four player cabinet",
+      description: "Portable semantic fixture",
+      driver: "ultimarc-ipac4",
+      protocol_profile: PANEL_PROTOCOL_PROFILE,
+      terminal_signature: "fixture-terminal-signature",
+      revision: "profile-revision-1",
+      created_at: "2026-08-23T08:00:00-04:00",
+      updated_at: "2026-08-23T08:00:00-04:00",
+      terminals: terminals.map((terminal) => ({
+        terminal_id: terminal.terminal_id,
+        normal_key: "A",
+        shifted_key: null,
+        is_shift: false,
+        allow_shared_key: true,
+      })),
+    };
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelStatusPayload()),
+      }));
+      await candidate.route("**/api/panel/chart", async (route) => {
+        const payload = panelChartPayload();
+        payload.view.terminals = terminals;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+      });
+      await candidate.route("**/api/panel/backups", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          target_selector: PANEL_SELECTOR,
+          unavailable: null,
+          view: { summary: "One raw recovery image.", board_fingerprint: PANEL_FINGERPRINT, backups: [panelBackup()] },
+        }),
+      }));
+      await candidate.route("**/api/panel/profiles", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          unavailable: null,
+          refusal_code: null,
+          remedy: null,
+          view: {
+            summary: "One portable hardware layout.",
+            config_root: "C:\\fixture\\profiles",
+            terminal_signature: "fixture-terminal-signature",
+            profiles: [savedProfile],
+          },
+        }),
+      }));
+      await candidate.route("**/api/panel/profiles/save", async (route) => {
+        savedSpec = JSON.parse(route.request().postData() ?? "{}");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            unavailable: null,
+            refusal_code: null,
+            remedy: null,
+            mutation: { state: "created", summary: "Saved Blank tournament panel.", profile_id: "new-profile", profile: null },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        plannedSpec = JSON.parse(route.request().postData() ?? "{}");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelProgramPlan({ terminals: terminals.map((terminal) => terminal.terminal_id) })),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      const setup = page.locator(".n-widget-surface .n-surface-programming");
+      await setup.locator(".n-surface-terminal-editor").waitFor({ state: "visible" });
+      assert.equal(await setup.locator("[data-panel-terminal-row]").count(), 56);
+      assert.equal(await setup.locator(".n-surface-terminal-player").count(), 4);
+      assert.match((await setup.textContent()).replace(/\s+/g, " "), /Current chart.*Recommended KSX.*Clear assignments.*Saved hardware layouts/i);
+      assert.equal(await setup.locator(".n-surface-programming-recovery").getAttribute("open"), null,
+        "raw recovery history stays collapsed during normal profile authoring");
+
+      await setup.locator("[data-surface-profile]").selectOption(savedProfile.profile_id);
+      await setup.locator('[data-nx="surface-profile-use"]').click();
+      assert.equal(await setup.locator('[data-panel-terminal="1up"][data-panel-field="normal"]').inputValue(), "A");
+      assert.match(await setup.locator("[data-surface-terminal-status]").textContent(), /Four player cabinet.*not written/i);
+
+      await setup.locator('[data-surface-programming-mode="blank"]').click();
+      assert.equal(await setup.locator('[data-panel-terminal="1up"][data-panel-field="normal"]').inputValue(), "");
+      await setup.locator("[data-surface-profile-name]").fill("Blank tournament panel");
+      await setup.locator('[data-nx="surface-profile-save"]').click();
+      await page.waitForFunction(() => window.document.querySelector(
+        '.n-widget-surface [data-surface-profiles-summary]',
+      )?.textContent?.includes("saved layout"));
+      assert.equal(savedSpec.name, "Blank tournament panel");
+      assert.equal(savedSpec.terminals.length, 56);
+      assert.equal(savedSpec.terminals.every((terminal) => terminal.normal_key === null), true);
+      assert.equal("expected_selector" in savedSpec, false,
+        "saving a portable layout never stages or writes selected hardware");
+
+      await setup.locator('[data-nx="surface-encoder-review"]').click();
+      await page.locator("dialog.n-panel-program-dialog").waitFor({ state: "visible" });
+      assert.deepEqual(plannedSpec, {
+        expected_selector: PANEL_SELECTOR,
+        expected_base_sha256: PANEL_BASE_SHA,
+        layout: "blank",
+        edits: [],
+      });
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("Encoder setup keeps three workflow stages and requires an exact reviewed consent before a mocked write", async () => {
     let chartReads = 0;
     let capturedPlan = null;
@@ -5352,8 +5495,8 @@ describe("the canvas navigation controls", () => {
       assert.equal(capturedPlan.layout, "custom");
       assert.equal(capturedPlan.expected_base_sha256, PANEL_BASE_SHA);
       assert.deepEqual(capturedPlan.edits, [
-        { terminal_id: "1sw1", normal_key: "A", allow_shared_key: true },
-        { terminal_id: "1sw2", normal_key: "A", allow_shared_key: true },
+        { terminal_id: "1sw1", normal_key: "A", shifted_key: "", is_shift: false, allow_shared_key: true },
+        { terminal_id: "1sw2", normal_key: "A", shifted_key: "", is_shift: false, allow_shared_key: true },
       ]);
       const apply = dialog.locator('[data-panel-dialog-action="apply"]');
       assert.equal(await apply.isDisabled(), true, "a backend plan alone grants no write consent");
@@ -5594,7 +5737,13 @@ describe("the canvas navigation controls", () => {
         payload.view.terminals.push(
           { ...ordinary, terminal_id: "1up", terminal_label: "Player 1 · Up", kind: "direction" },
           { ...ordinary, terminal_id: "1start", terminal_label: "Player 1 · Start", kind: "start" },
-          { ...ordinary, terminal_id: "1coin", terminal_label: "Player 1 · Coin", kind: "coin" },
+          {
+            ...ordinary,
+            terminal_id: "1coin",
+            terminal_label: "Player 1 · Coin",
+            kind: "coin",
+            normal: { code: 4, key: "A", label: "A", supported: true },
+          },
           {
             ...ordinary,
             terminal_id: "1sw3",
@@ -5812,7 +5961,8 @@ describe("the canvas navigation controls", () => {
       const qualificationDialog = page.locator("dialog.n-panel-program-dialog");
       await qualificationDialog.waitFor({ state: "visible" });
       assert.deepEqual(capturedQualificationPlan.edits, [
-        { terminal_id: "1sw1", normal_key: "A", allow_shared_key: false },
+        { terminal_id: "1sw1", normal_key: "A", allow_shared_key: true },
+        { terminal_id: "1coin", normal_key: "A", allow_shared_key: true },
       ]);
       assert.match(
         await qualificationDialog.locator(".n-panel-program-confirm").first().textContent(),
@@ -5901,6 +6051,10 @@ describe("the canvas navigation controls", () => {
         true,
         "recovery exposes only the exact-backup restore path",
       );
+      const recoveryHistory = programming.locator(".n-surface-programming-recovery");
+      assert.equal(await recoveryHistory.getAttribute("open"), null,
+        "raw recovery stays collapsed until the user needs it");
+      await recoveryHistory.locator("summary").click();
       await programming.locator('[data-nx="surface-encoder-restore"]').click();
       await qualificationDialog.getByRole("heading", { name: /Review the exact restore/i }).waitFor();
       await qualificationDialog.locator("[data-panel-program-confirm]").check();

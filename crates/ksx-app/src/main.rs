@@ -1473,6 +1473,7 @@ fn panel_terminal_edits(
     shifted: Vec<PanelKeyAssignment>,
     use_as_shift: Vec<String>,
     not_shift: Vec<String>,
+    allow_shared_key: Vec<String>,
 ) -> anyhow::Result<Vec<panel_programming::PanelTerminalEdit>> {
     use std::collections::BTreeMap;
 
@@ -1531,6 +1532,18 @@ fn panel_terminal_edits(
                 row.terminal_id
             );
         }
+    }
+    for terminal in allow_shared_key {
+        let terminal = terminal.trim().to_ascii_lowercase();
+        if terminal.is_empty() {
+            anyhow::bail!("--allow-shared-key requires a non-empty terminal id");
+        }
+        let Some(row) = edits.get_mut(&terminal) else {
+            anyhow::bail!(
+                "--allow-shared-key terminal '{terminal}' must also appear in --set or --set-shifted"
+            );
+        };
+        row.allow_shared_key = true;
     }
     Ok(edits.into_values().collect())
 }
@@ -1591,10 +1604,17 @@ enum PanelCommand {
         /// Assign a collision-free normal key to all four players' terminals
         #[arg(
             long,
-            conflicts_with_all = ["set", "set_shifted", "use_as_shift", "not_shift"],
-            required_unless_present_any = ["set", "set_shifted", "use_as_shift", "not_shift"]
+            conflicts_with_all = ["blank", "set", "set_shifted", "use_as_shift", "not_shift"],
+            required_unless_present_any = ["blank", "set", "set_shifted", "use_as_shift", "not_shift"]
         )]
         canonical_four_player: bool,
+        /// Clear every supported normal and shifted assignment while
+        /// preserving firmware-owned, macro, configuration and opaque bytes
+        #[arg(
+            long,
+            conflicts_with_all = ["set", "set_shifted", "use_as_shift", "not_shift"]
+        )]
+        blank: bool,
         /// Set a terminal's normal key: TERMINAL=KEY; use TERMINAL= to clear it
         #[arg(long, value_name = "TERMINAL=KEY")]
         set: Vec<PanelKeyAssignment>,
@@ -1607,6 +1627,14 @@ enum PanelCommand {
         /// Remove the shift-control role from a terminal
         #[arg(long, value_name = "TERMINAL")]
         not_shift: Vec<String>,
+        /// Explicitly allow this edited terminal to share its assigned key
+        /// with another terminal named in the same reviewed edit set
+        #[arg(
+            long,
+            value_name = "TERMINAL",
+            conflicts_with_all = ["canonical_four_player", "blank"]
+        )]
+        allow_shared_key: Vec<String>,
         /// Desired SHA-256 printed by the plan; accepted only with --yes
         #[arg(
             long,
@@ -2473,10 +2501,12 @@ fn main() -> anyhow::Result<()> {
                 device,
                 base_sha256,
                 canonical_four_player,
+                blank,
                 set,
                 set_shifted,
                 use_as_shift,
                 not_shift,
+                allow_shared_key,
                 expected_desired_sha256,
                 expected_board_fingerprint,
                 expected_protocol_profile,
@@ -2489,10 +2519,18 @@ fn main() -> anyhow::Result<()> {
                     expected_base_sha256: base_sha256,
                     layout: if canonical_four_player {
                         "canonical-four-player".to_owned()
+                    } else if blank {
+                        "blank".to_owned()
                     } else {
                         "custom".to_owned()
                     },
-                    edits: panel_terminal_edits(set, set_shifted, use_as_shift, not_shift)?,
+                    edits: panel_terminal_edits(
+                        set,
+                        set_shifted,
+                        use_as_shift,
+                        not_shift,
+                        allow_shared_key,
+                    )?,
                 },
                 expected_desired_sha256,
                 expected_board_fingerprint,
@@ -3307,6 +3345,8 @@ mod tests {
             "1sw4=Escape".to_owned(),
             "--use-as-shift".to_owned(),
             "1start".to_owned(),
+            "--allow-shared-key".to_owned(),
+            "1sw4".to_owned(),
             "--json".to_owned(),
         ])
         .unwrap();
@@ -3320,6 +3360,7 @@ mod tests {
                         set,
                         set_shifted,
                         use_as_shift,
+                        allow_shared_key,
                         expected_desired_sha256,
                         expected_board_fingerprint,
                         expected_protocol_profile,
@@ -3340,6 +3381,7 @@ mod tests {
                 assert_eq!(set[0].key, "J");
                 assert_eq!(set_shifted[0].key, "Escape");
                 assert_eq!(use_as_shift, ["1start"]);
+                assert_eq!(allow_shared_key, ["1sw4"]);
                 assert!(json);
             }
             _ => panic!("parsed to the wrong subcommand"),
@@ -3425,6 +3467,36 @@ mod tests {
             "1sw4=J",
         ])
         .is_err());
+        let blank = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            hash.as_str(),
+            "--blank",
+        ])
+        .unwrap();
+        assert!(matches!(
+            blank.command,
+            Command::Panel {
+                command: PanelCommand::Program {
+                    blank: true,
+                    canonical_four_player: false,
+                    ..
+                }
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            hash.as_str(),
+            "--blank",
+            "--set",
+            "1sw4=J",
+        ])
+        .is_err());
         assert!(Cli::try_parse_from([
             "ksx",
             "panel",
@@ -3443,6 +3515,7 @@ mod tests {
             vec!["1sw4=Escape".parse().unwrap()],
             vec!["1START".to_owned()],
             Vec::new(),
+            vec!["1sw4".to_owned()],
         )
         .unwrap();
         assert_eq!(edits.len(), 2);
@@ -3451,9 +3524,11 @@ mod tests {
         assert_eq!(edits[1].terminal_id, "1sw4");
         assert_eq!(edits[1].normal_key.as_deref(), Some(""));
         assert_eq!(edits[1].shifted_key.as_deref(), Some("Escape"));
+        assert!(edits[1].allow_shared_key);
 
         assert!(panel_terminal_edits(
             vec!["1sw4=J".parse().unwrap(), "1SW4=K".parse().unwrap()],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -3464,6 +3539,15 @@ mod tests {
             Vec::new(),
             vec!["1start".to_owned()],
             vec!["1START".to_owned()],
+            Vec::new(),
+        )
+        .is_err());
+        assert!(panel_terminal_edits(
+            vec!["1sw4=J".parse().unwrap()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["2sw4".to_owned()],
         )
         .is_err());
         assert!("1sw4".parse::<PanelKeyAssignment>().is_err());

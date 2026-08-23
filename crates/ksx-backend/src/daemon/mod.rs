@@ -1314,6 +1314,24 @@ fn start(
     state: &SharedState,
     out: &mut dyn Write,
 ) -> Option<LiveSession> {
+    // This is the reciprocal half of the encoder transaction lease.  The
+    // programmer holds it across read/backup/write/readback; every route into
+    // a Play start comes through this function and holds the same lease until
+    // Running (or Failed) has been published.  Whichever side wins excludes
+    // the other, closing the check-then-start race at packet zero.
+    let _programming_lease =
+        match crate::panel_programming::acquire_play_start_guard(&factory.config_dir()) {
+            Ok(lease) => lease,
+            Err(refusal) => {
+                let message = match refusal.remedy {
+                    Some(remedy) => format!("{}; recovery: {remedy}", refusal.message),
+                    None => refusal.message,
+                };
+                let _ = writeln!(out, "[FAIL] cannot start: {message}");
+                set_run(state, RunState::Failed { message });
+                return None;
+            }
+        };
     set_run(state, RunState::Starting);
     let mut runner = match factory.make() {
         Ok(runner) => runner,
@@ -2149,7 +2167,19 @@ mod tests {
         }
     }
 
+    static FACTORY_DIR_SERIAL: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    struct TestConfigDir(std::path::PathBuf);
+
+    impl Drop for TestConfigDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     struct FakeFactory {
+        config_dir: Arc<TestConfigDir>,
         summary: SessionSummary,
         slots: usize,
         ran: Arc<AtomicBool>,
@@ -2181,7 +2211,11 @@ mod tests {
 
     impl Default for FakeFactory {
         fn default() -> Self {
+            let serial = FACTORY_DIR_SERIAL.fetch_add(1, Ordering::Relaxed);
+            let config_dir = std::env::temp_dir()
+                .join(format!("ksx-daemon-test-{}-{serial}", std::process::id()));
             Self {
+                config_dir: Arc::new(TestConfigDir(config_dir)),
                 summary: SessionSummary {
                     stop_code: "ctrl-c".into(),
                     message: "stopped by Ctrl+C".into(),
@@ -2226,7 +2260,7 @@ mod tests {
         }
 
         fn config_dir(&self) -> std::path::PathBuf {
-            std::path::PathBuf::from(r"C:\cfg\ksx")
+            self.config_dir.0.clone()
         }
 
         fn game(&self) -> Option<String> {
@@ -2285,6 +2319,56 @@ mod tests {
             state.last.as_ref().map(|l| l.stop_code.as_str()),
             Some("ctrl-c")
         );
+    }
+
+    #[test]
+    fn panel_programming_lease_refuses_play_before_factory_or_panel_mutation() {
+        let mut factory = FakeFactory::default();
+        let lease = crate::panel_programming::PanelProgrammingLease::acquire(
+            &factory.config_dir().join("panel-backups"),
+        )
+        .expect("hold the encoder maintenance lease");
+
+        let (_, text) = drive(
+            &mut factory,
+            &[DaemonCommand::Start { game: None }, DaemonCommand::Quit],
+        );
+
+        assert_eq!(*factory.makes.lock().unwrap(), 0, "{text}");
+        assert!(!factory.ran.load(Ordering::SeqCst), "{text}");
+        assert!(text.contains("owns the hardware lease"), "{text}");
+        drop(lease);
+    }
+
+    /// Broken version caught: Play checked only the cross-process lease. A
+    /// process killed after packet zero released that lease, so the next Start
+    /// could capture the panel while its durable recovery marker still said
+    /// the EEPROM result was unknown.
+    #[test]
+    fn unresolved_panel_transaction_refuses_start_before_factory_or_panel_mutation() {
+        let mut factory = FakeFactory::default();
+        let pending_dir = factory
+            .config_dir()
+            .join("panel-backups")
+            .join("ultimarc-ipac4")
+            .join("IPAC4-RECOVERY-TEST");
+        std::fs::create_dir_all(&pending_dir).unwrap();
+        std::fs::write(
+            pending_dir.join("panel-transaction.pending.json"),
+            b"{ this interrupted marker is deliberately unreadable",
+        )
+        .unwrap();
+
+        let (state, text) = drive(
+            &mut factory,
+            &[DaemonCommand::Start { game: None }, DaemonCommand::Quit],
+        );
+
+        assert_eq!(*factory.makes.lock().unwrap(), 0, "{text}");
+        assert!(!factory.ran.load(Ordering::SeqCst), "{text}");
+        assert!(text.contains("durable panel transaction journal"), "{text}");
+        assert!(text.contains("ksx panel chart --backup"), "{text}");
+        assert!(matches!(state.run, RunState::Quitting));
     }
 
     /// Double-start must not plug a second set of pads: 8 virtual pads into 4

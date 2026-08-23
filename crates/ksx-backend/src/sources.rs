@@ -800,6 +800,68 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::panel::view(&report, &hid, spec)
     }
 
+    #[cfg(windows)]
+    fn panel_chart(
+        &self,
+        spec: &ksx_api::PanelChartSpec,
+    ) -> Result<ksx_api::PanelChartView, Refusal> {
+        crate::panel_programming::chart(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_backups(
+        &self,
+        spec: &ksx_api::PanelBackupsSpec,
+    ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+        crate::panel_programming::backups(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_program_plan(
+        &self,
+        spec: &ksx_api::PanelProgramSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        crate::panel_programming::program_plan(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_program(
+        &self,
+        spec: &ksx_api::PanelProgramApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        if session_is_running() {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before programming the physical encoder; nothing was changed",
+                "stop the running session, rebuild the hardware diff, then confirm Program",
+            ));
+        }
+        crate::panel_programming::program(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_restore_plan(
+        &self,
+        spec: &ksx_api::PanelRestoreSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        crate::panel_programming::restore_plan(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_restore(
+        &self,
+        spec: &ksx_api::PanelRestoreApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        if session_is_running() {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before restoring the physical encoder; nothing was changed",
+                "stop the running session, rebuild the restore diff, then confirm Restore",
+            ));
+        }
+        crate::panel_programming::restore(spec)
+    }
+
     /// **Change split-or-freeze on a config that is already saved.**
     ///
     /// The whole capability used to live inside first run: `stage::apply` was

@@ -62,6 +62,7 @@ import {
   DEFAULT_CONTROL_SURFACE_STATE,
   addControlSurfaceControl,
   applyControlSurfaceTemplate,
+  assignControlSurfaceTerminal,
   cloneControlSurfaceState,
   controlSurfaceStateForDevice,
   controlSurfaceWorkbenchMigrated,
@@ -76,6 +77,7 @@ import {
   setControlSurfacePlayerSlot,
   setControlSurfaceStage,
   teachControlSurfaceChannel,
+  invalidateControlSurfaceEncoderVerification,
   withControlSurfaceState,
   withControlSurfaceWorkbenchMigrated,
   type ControlSurfaceChannel,
@@ -87,6 +89,30 @@ import {
   type ControlSurfaceStore,
   type ControlSurfaceTemplate,
 } from "./controlSurface";
+import {
+  createPanelProgrammingState,
+  panelAssignmentConflicts,
+  panelChartAuthority,
+  panelPlanInvalidation,
+  panelProgramLayoutForMode,
+  panelProgrammingCapabilitiesFromChart,
+  panelProgrammingCapability,
+  type PanelAssignmentMode,
+  type PanelBackupView,
+  type PanelBackupsPayload,
+  type PanelChartPayload,
+  type PanelChartTerminalView,
+  type PanelChartView,
+  type PanelPlanPayload,
+  type PanelPlanView,
+  type PanelProgramOutcomeView,
+  type PanelProgramPayload,
+  type PanelProgramRequest,
+  type PanelProgrammingQualificationState,
+  type PanelRestorePayload,
+  type PanelTerminalDraftAssignment,
+  type PanelTerminalEdit,
+} from "./panelProgramming";
 import {
   MappingFlowLayer,
   mappingPathModeIsValid,
@@ -1317,6 +1343,22 @@ let controlSurfaceHardwareError = "";
 let controlSurfaceHardwareRequestGeneration = 0;
 let controlSurfaceHardwareAbort: AbortController | null = null;
 let controlSurfaceHardwareTargetFingerprint = "";
+let panelProgrammingState = createPanelProgrammingState();
+let panelProgrammingBackups: PanelBackupView[] = [];
+let panelProgrammingMessage = "";
+let panelProgrammingBusy = false;
+let panelProgrammingGeneration = 0;
+let panelProgrammingProgramRequest: PanelProgramRequest | null = null;
+let panelProgrammingRestoreRequest: {
+  expected_selector: string;
+  backup_id: string;
+  expected_current_sha256: string;
+} | null = null;
+let panelProgrammingDialog: HTMLDialogElement | null = null;
+let panelProgrammingReturnFocus: HTMLElement | null = null;
+let panelProgrammingConfirmed = false;
+let panelProgrammingRecoveryReady = false;
+let panelProgrammingSharedAssignmentIds = new Set<string>();
 let controlSurfaceDrag: {
   pointerId: number;
   controlId: string;
@@ -1762,6 +1804,24 @@ function syncControlSurfaceHardwareCard(): void {
     ? "Retry status"
     : "Refresh status";
   refresh.setAttribute("aria-label", `${refresh.textContent} for the selected encoder`);
+  refresh.disabled = panelProgrammingTransactionActive();
+  if (panelProgrammingState.transaction.phase === "recovery-required" &&
+      panelProgrammingTransactionBelongsToCurrentTarget()) {
+    card.dataset.state = "error";
+    note.textContent = "The last hardware transaction was not verified. New programming is locked; read the chart again or restore a verified backup.";
+  } else if (panelProgrammingState.transaction.phase === "recovery-required") {
+    note.textContent =
+      "A transaction for the previously selected encoder needs recovery. This currently selected encoder was not changed.";
+  } else if (panelProgrammingState.transaction.phase === "verified" &&
+      panelProgrammingTransactionBelongsToCurrentTarget()) {
+    note.textContent = "The last hardware transaction was read back byte-for-byte. Use Teach to verify the physical wiring and emitted keys.";
+  } else if (panelProgrammingState.transaction.phase === "verified") {
+    note.textContent =
+      "A transaction for the previously selected encoder verified. This currently selected encoder was not changed.";
+  } else if (panelProgrammingState.inspection.chart) {
+    note.textContent = panelProgrammingState.capability.reason;
+  }
+  syncPanelProgrammingUi();
 }
 
 async function refreshControlSurfaceHardwareStatus(): Promise<void> {
@@ -1812,6 +1872,1543 @@ async function refreshControlSurfaceHardwareStatus(): Promise<void> {
       ? `${error.message} Nothing was changed.`
       : "Hardware status could not be read. Nothing was changed.";
     syncControlSurfaceHardwareCard();
+  }
+}
+
+function panelProgrammingTransactionActive(): boolean {
+  return panelProgrammingState.transaction.phase === "writing" ||
+    panelProgrammingState.transaction.phase === "verifying";
+}
+
+function panelProgrammingTransactionBelongsToCurrentTarget(): boolean {
+  const transactionTarget = panelProgrammingState.transaction.target_selector.trim();
+  return Boolean(transactionTarget) && transactionTarget.toLocaleUpperCase() ===
+    panelProgrammingTarget().toLocaleUpperCase();
+}
+
+function panelProgrammingTarget(): string {
+  return nCapSelector().trim();
+}
+
+function panelProgrammingSetMessage(message: string): void {
+  panelProgrammingMessage = message;
+  syncPanelProgrammingUi();
+  if (message) keyboardWorkbenchAnnounce(message);
+}
+
+function panelProgrammingCloseDialog(restoreFocus = true): void {
+  if (panelProgrammingTransactionActive()) return;
+  if (panelProgrammingDialog?.open) panelProgrammingDialog.close();
+  if (restoreFocus) {
+    const target = panelProgrammingReturnFocus?.isConnected
+      ? panelProgrammingReturnFocus
+      : controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-encoder-open"]') ?? null;
+    window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+  }
+  panelProgrammingReturnFocus = null;
+  panelProgrammingConfirmed = false;
+  panelProgrammingRecoveryReady = false;
+}
+
+function resetPanelProgramming(targetChanged: boolean): void {
+  panelProgrammingGeneration += 1;
+  panelProgrammingBusy = false;
+  panelProgrammingBackups = [];
+  panelProgrammingMessage = targetChanged
+    ? "The selected encoder changed. Read its complete chart before reviewing hardware changes."
+    : "";
+  panelProgrammingProgramRequest = null;
+  panelProgrammingRestoreRequest = null;
+  panelProgrammingConfirmed = false;
+  panelProgrammingRecoveryReady = false;
+  panelProgrammingSharedAssignmentIds = new Set();
+  if (!panelProgrammingTransactionActive()) {
+    panelProgrammingCloseDialog(false);
+    panelProgrammingState = createPanelProgrammingState();
+    if (targetChanged) panelProgrammingState.inspection.phase = "changed";
+  } else {
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      inspection: {
+        ...panelProgrammingState.inspection,
+        phase: "changed",
+        target_selector: panelProgrammingTarget(),
+        chart: null,
+        error: panelProgrammingMessage,
+      },
+      capability: panelProgrammingCapability(null),
+      editor: {
+        ...panelProgrammingState.editor,
+        phase: "assign",
+        plan_expected_selector: "",
+        plan: null,
+      },
+    };
+  }
+  syncPanelProgrammingUi();
+  if (panelProgrammingDialog?.open) renderPanelProgrammingDialog();
+}
+
+async function panelProgrammingJSON<T>(
+  url: string,
+  method: "GET" | "POST",
+  body?: unknown,
+): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: method === "POST"
+      ? { Accept: "application/json", "Content-Type": "application/json" }
+      : { Accept: "application/json" },
+    cache: "no-store",
+    body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const detail = typeof payload?.unavailable === "string"
+      ? payload.unavailable
+      : typeof payload?.error === "string"
+      ? payload.error
+      : `Panel request returned HTTP ${response.status}.`;
+    throw new Error(detail);
+  }
+  if (!payload) throw new Error("Panel request returned no JSON body.");
+  return payload as T;
+}
+
+function panelProgrammingTerminal(terminalId: string): PanelChartTerminalView | null {
+  return panelProgrammingState.inspection.chart?.terminals.find(
+    (terminal) => terminal.terminal_id === terminalId,
+  ) ?? null;
+}
+
+/** Missing qualification metadata is deliberately fail-closed. A frontend
+ * served by an older backend must never make a full-chart write look ready. */
+function panelProgrammingQualificationState(
+  chart: PanelChartView | null = panelProgrammingState.inspection.chart,
+): PanelProgrammingQualificationState {
+  return chart?.qualification_state === "validation-written" ||
+      chart?.qualification_state === "validation-recovery" ||
+      chart?.qualification_state === "qualified"
+    ? chart.qualification_state
+    : "required";
+}
+
+function panelProgrammingQualificationNeedsRestore(
+  state = panelProgrammingQualificationState(),
+): boolean {
+  return state === "validation-written" || state === "validation-recovery";
+}
+
+function panelProgrammingExactQualificationBackupId(): string {
+  if (!panelProgrammingQualificationNeedsRestore()) return "";
+  return panelProgrammingState.inspection.chart?.qualification_restore_backup_id?.trim() ||
+    (panelProgrammingState.transaction.operation === "program"
+      ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
+      : "");
+}
+
+async function openPanelQualificationRestoreReview(backupId: string): Promise<void> {
+  // A verified write immediately starts a fresh complete-chart read. Keep the
+  // primary handoff deterministic if the user acts before that read settles.
+  while (panelProgrammingBusy && !panelProgrammingTransactionActive()) {
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+  if (!backupId || !panelProgrammingQualificationNeedsRestore()) {
+    panelProgrammingSetMessage(
+      "KSX could not resolve the pending qualification restore. Read the complete chart again before continuing.",
+    );
+    return;
+  }
+  panelProgrammingCloseDialog(false);
+  await requestPanelRestorePlan(backupId);
+}
+
+async function reopenPanelQualificationAfterRecovery(): Promise<void> {
+  while (panelProgrammingBusy && !panelProgrammingTransactionActive()) {
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+  if (panelProgrammingQualificationState() !== "required") {
+    panelProgrammingSetMessage(
+      "KSX restored the recovery backup, but the fresh chart has not returned to writer-check step 1. Read the complete chart again before continuing.",
+    );
+    return;
+  }
+  panelProgrammingCloseDialog(false);
+  panelProgrammingDropPlan();
+  panelProgrammingSetMessage(
+    "The interrupted validation chart was restored exactly. Repeat the one-terminal writer check; full layouts remain locked.",
+  );
+  window.requestAnimationFrame(() => controlSurfaceItem
+    ?.querySelector<HTMLElement>('[data-nx="surface-encoder-terminal"]')
+    ?.focus({ preventScroll: true }));
+}
+
+function samePanelKey(left: string | null | undefined, right: string | null | undefined): boolean {
+  return (left ?? "").trim().toLocaleUpperCase() ===
+    (right ?? "").trim().toLocaleUpperCase();
+}
+
+/** Reconcile every linked physical channel from the complete chart, including
+ * terminals whose bytes were unchanged in the most recent plan. A plan diff
+ * is intentionally sparse; using it as the assignment source caused linked
+ * canonical terminals outside the diff to retain stale expected keys. */
+function reconcilePanelProgrammingChart(chart: PanelChartView, forceUnverified: boolean): void {
+  const terminals = new Map(chart.terminals.map((terminal) => [terminal.terminal_id, terminal]));
+  const linked = controlSurfaceState.controls.flatMap((control) =>
+    control.channels
+      .filter((channel) => channel.encoder?.boardFingerprint === chart.board_fingerprint)
+      .map((channel) => ({ controlId: control.id, channel }))
+  );
+  let next = controlSurfaceState;
+  for (const { controlId, channel } of linked) {
+    const encoder = channel.encoder;
+    const terminal = encoder ? terminals.get(encoder.terminalId) : null;
+    if (!encoder || !terminal) continue;
+    next = assignControlSurfaceTerminal(next, controlId, channel.id, {
+      driver: chart.driver,
+      boardFingerprint: chart.board_fingerprint,
+      terminalId: terminal.terminal_id,
+      terminalLabel: terminal.terminal_label,
+      // An opaque/vendor action is real chart state, not permission to keep a
+      // stale previously-observed key. Clearing it makes Custom visibly
+      // incomplete until the user deliberately chooses a supported action.
+      expectedKey: terminal.normal.supported ? terminal.normal.key ?? "" : "",
+    });
+  }
+  if (forceUnverified) {
+    next = invalidateControlSurfaceEncoderVerification(next, chart.board_fingerprint);
+  }
+  if (next !== controlSurfaceState) applyControlSurfaceState(next, true);
+}
+
+function panelProgrammingDraftAssignments(): PanelTerminalDraftAssignment[] {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart) return [];
+  const assignments: PanelTerminalDraftAssignment[] = [];
+  const seen = new Set<string>();
+  for (const control of controlSurfaceState.controls) {
+    for (const channel of control.channels) {
+      const encoder = channel.encoder;
+      if (!encoder || encoder.boardFingerprint !== chart.board_fingerprint) continue;
+      const identity = `${control.physicalId}\u0000${channel.id}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      assignments.push({
+        physical_id: control.physicalId,
+        channel_id: channel.id,
+        component_label: `${control.label} · ${channel.label}`,
+        player_slot: control.playerSlot,
+        terminal_id: encoder.terminalId,
+        layer_id: "normal",
+        requested_key: encoder.expectedKey,
+        allow_shared_key: panelProgrammingSharedAssignmentIds.has(identity),
+      });
+    }
+  }
+  return assignments;
+}
+
+function panelProgrammingConflicts(): ReturnType<typeof panelAssignmentConflicts> {
+  const chart = panelProgrammingState.inspection.chart;
+  return panelAssignmentConflicts(panelProgrammingDraftAssignments(), {
+    supported_keys: chart?.key_options.map((option) => option.key) ?? [],
+  });
+}
+
+function panelProgrammingEdits(): PanelTerminalEdit[] {
+  const edits = new Map<string, PanelTerminalEdit>();
+  for (const assignment of panelProgrammingDraftAssignments()) {
+    edits.set(assignment.terminal_id, {
+      terminal_id: assignment.terminal_id,
+      normal_key: assignment.requested_key,
+      allow_shared_key: assignment.allow_shared_key,
+    });
+  }
+  return [...edits.values()];
+}
+
+/** The first live transaction is intentionally tiny and reversible. Return
+ * only semantic normal-plane changes; unchanged linked controls are useful
+ * surface documentation but are not part of the qualification write. */
+function panelProgrammingQualificationEdits(): PanelTerminalEdit[] {
+  return panelProgrammingEdits().filter((edit) => {
+    const terminal = panelProgrammingTerminal(edit.terminal_id);
+    return terminal && !samePanelKey(edit.normal_key, terminal.normal.key);
+  });
+}
+
+function panelProgrammingQualificationEditIsEligible(edit: PanelTerminalEdit | undefined): boolean {
+  const terminal = edit ? panelProgrammingTerminal(edit.terminal_id) : null;
+  const key = edit?.normal_key?.trim() ?? "";
+  const chart = panelProgrammingState.inspection.chart;
+  return Boolean(terminal && panelProgrammingQualificationTerminalIsEligible(terminal) && key &&
+    chart?.key_options.some((option) => option.safe_for_qualification === true &&
+      samePanelKey(option.key, key)));
+}
+
+function panelProgrammingQualificationTerminalIsEligible(
+  terminal: PanelChartTerminalView,
+): boolean {
+  return terminal.kind === "button" && /^\d+sw\d+$/i.test(terminal.terminal_id) &&
+    terminal.normal.supported && terminal.shift_state === "disabled";
+}
+
+function panelProgrammingDropPlan(): void {
+  panelProgrammingProgramRequest = null;
+  panelProgrammingRestoreRequest = null;
+  panelProgrammingConfirmed = false;
+  panelProgrammingRecoveryReady = false;
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    editor: {
+      ...panelProgrammingState.editor,
+      phase: "assign",
+      assignments: panelProgrammingDraftAssignments(),
+      plan_expected_selector: "",
+      plan: null,
+    },
+  };
+}
+
+function syncPanelProgrammingUi(): void {
+  const item = controlSurfaceItem;
+  if (!item) return;
+  const section = item.querySelector<HTMLElement>(".n-surface-programming");
+  const summary = section?.querySelector<HTMLElement>("[data-surface-programming-summary]");
+  const review = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-review"]');
+  const restore = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-restore"]');
+  const reread = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-read"]');
+  const close = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-close"]');
+  const backupSelect = section?.querySelector<HTMLSelectElement>("[data-surface-backup]");
+  const backupLabel = section?.querySelector<HTMLElement>("[data-surface-backup-label]");
+  const conflictList = section?.querySelector<HTMLUListElement>("[data-surface-programming-conflicts]");
+  const qualification = section?.querySelector<HTMLElement>(
+    "[data-surface-programming-qualification]",
+  );
+  const chart = panelProgrammingState.inspection.chart;
+  const authority = currentPanelChartAuthority();
+  const capability = panelProgrammingState.capability;
+  const recoveryRequired = panelProgrammingState.transaction.phase === "recovery-required";
+  const qualificationState = panelProgrammingQualificationState(chart);
+  const qualificationNeedsRestore = panelProgrammingQualificationNeedsRestore(
+    qualificationState,
+  );
+  const qualificationEdits = qualificationState === "required"
+    ? panelProgrammingQualificationEdits()
+    : [];
+  const exactQualificationBackup = qualificationNeedsRestore && chart
+    ? chart.qualification_restore_backup_id?.trim() ||
+      (panelProgrammingState.transaction.operation === "program"
+        ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
+        : "")
+    : "";
+  const open = panelProgrammingState.editor.phase !== "closed";
+  if (section) {
+    section.hidden = !open;
+    section.dataset.capability = capability.kind;
+    section.dataset.qualification = qualificationState;
+    section.setAttribute("aria-busy", String(panelProgrammingBusy));
+  }
+  if (qualification) {
+    qualification.hidden = !chart || qualificationState === "qualified";
+    qualification.dataset.state = qualificationState;
+    const title = qualification.querySelector<HTMLElement>(
+      "[data-surface-qualification-title]",
+    );
+    const detail = qualification.querySelector<HTMLElement>(
+      "[data-surface-qualification-detail]",
+    );
+    const step = qualification.querySelector<HTMLElement>(
+      "[data-surface-qualification-step]",
+    );
+    if (qualificationState === "validation-recovery") {
+      if (title) title.textContent = "Recover the validation write, then repeat the check";
+      if (detail) detail.textContent =
+        `KSX could not prove the first test write completed cleanly. Restore its exact safety backup before doing anything else. A verified restore returns this encoder to step 1—it does not unlock full layouts.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
+      if (step) step.textContent = "Writer check · recovery";
+    } else if (qualificationState === "validation-written") {
+      if (title) title.textContent = "Validation write verified — restore its safety backup";
+      if (detail) detail.textContent =
+        `Do not prepare another write. Restore the exact safety backup captured immediately before the validation write; KSX will read it back before unlocking full layouts.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
+      if (step) step.textContent = "Writer check · step 2 of 2";
+    } else {
+      if (title) title.textContent = "Verify this encoder before writing a full layout";
+      if (detail) detail.textContent =
+        `Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
+      if (step) step.textContent = "Writer check · step 1 of 2";
+    }
+  }
+  for (const button of Array.from(
+    section?.querySelectorAll<HTMLButtonElement>("[data-surface-programming-mode]") ?? [],
+  )) {
+    const mode = button.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
+    button.setAttribute("aria-pressed", String(mode === panelProgrammingState.editor.assignment_mode));
+    const qualificationLocksMode = mode === "recommended"
+      ? qualificationState !== "qualified"
+      : mode === "custom" && qualificationNeedsRestore;
+    button.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      recoveryRequired || qualificationLocksMode || (mode !== "keep-current" &&
+        (!chart || capability.kind !== "programmable"));
+    if (mode === "recommended" && qualificationState !== "qualified") {
+      button.title = qualificationState === "validation-recovery"
+        ? "Restore the recovery backup, then repeat the one-terminal writer check. This recovery restore does not unlock Recommended."
+        : "Available after the one-terminal writer check is programmed and its exact safety backup is restored.";
+    } else if (mode === "custom" && qualificationNeedsRestore) {
+      button.title = qualificationState === "validation-recovery"
+        ? "Restore the interrupted validation write's exact safety backup, then repeat the writer check."
+        : "Restore the validation write's exact safety backup before preparing another program operation.";
+    } else {
+      button.title = button.dataset.surfaceProgrammingDescription ?? "";
+    }
+  }
+  const conflicts = panelProgrammingState.editor.assignment_mode === "custom"
+    ? panelProgrammingConflicts()
+    : [];
+  const assignments = panelProgrammingDraftAssignments();
+  if (summary) {
+    summary.textContent = panelProgrammingMessage || (chart
+      ? `${chart.summary} ${assignments.length} physical ${assignments.length === 1 ? "channel" : "channels"} linked to encoder terminals.${conflicts.length > 0 ? ` ${conflicts.length} assignment ${conflicts.length === 1 ? "conflict needs" : "conflicts need"} attention.` : ""}`
+      : "Read and back up the complete encoder chart before changing terminal assignments.");
+  }
+  if (conflictList) {
+    conflictList.replaceChildren();
+    conflictList.hidden = conflicts.length === 0;
+    for (const conflict of conflicts) {
+      const item = document.createElement("li");
+      item.textContent = conflict.message;
+      conflictList.append(item);
+    }
+  }
+  if (review) {
+    const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
+    review.disabled = panelProgrammingBusy || recoveryRequired ||
+      capability.kind !== "programmable" || !chart || !authority ||
+      qualificationNeedsRestore ||
+      (qualificationState === "required" &&
+        (layout !== "custom" || qualificationEdits.length !== 1 ||
+          !panelProgrammingQualificationEditIsEligible(qualificationEdits[0]))) ||
+      !layout || (layout === "custom" && (conflicts.length > 0 || assignments.length === 0));
+    review.textContent = panelProgrammingBusy
+      ? "Preparing review…"
+      : qualificationState === "validation-recovery"
+      ? "Restore safety backup, then retry"
+      : qualificationState === "validation-written"
+      ? "Restore safety backup to finish"
+      : qualificationState === "required"
+      ? `Review one-terminal test${qualificationEdits.length > 1 ? ` (${qualificationEdits.length} changed)` : ""}`
+      : "Review hardware changes";
+  }
+  if (backupSelect) {
+    const selected = backupSelect.value;
+    backupSelect.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = panelProgrammingBackups.length > 0
+      ? "Choose a verified backup"
+      : "No verified backups yet";
+    backupSelect.append(placeholder);
+    for (const backup of panelProgrammingBackups) {
+      const option = document.createElement("option");
+      option.value = backup.backup_id;
+      option.textContent = `${backup.label} · ${backup.created_at}`;
+      backupSelect.append(option);
+    }
+    const preferred = exactQualificationBackup || selected;
+    if (panelProgrammingBackups.some((backup) => backup.backup_id === preferred)) {
+      backupSelect.value = preferred;
+    }
+    backupSelect.disabled = panelProgrammingBusy || panelProgrammingBackups.length === 0 ||
+      qualificationState === "required";
+  }
+  if (backupLabel) {
+    backupLabel.textContent = qualificationState === "validation-recovery"
+      ? "Required recovery restore"
+      : qualificationState === "validation-written"
+      ? "Required qualification restore"
+      : qualificationState === "required"
+      ? "Restore available after the writer check begins"
+      : "Restore a verified backup";
+  }
+  if (restore) {
+    const recoveryHasCurrentHash = !recoveryRequired || Boolean(
+      panelProgrammingState.transaction.outcome?.observed_sha256,
+    );
+    restore.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      capability.kind !== "programmable" || !recoveryHasCurrentHash ||
+      qualificationState === "required" || !chart || !backupSelect?.value ||
+      (Boolean(exactQualificationBackup) &&
+        backupSelect.value !== exactQualificationBackup);
+    restore.textContent = qualificationState === "validation-recovery"
+      ? "Review recovery restore…"
+      : qualificationState === "validation-written"
+      ? "Review required restore…"
+      : "Review restore…";
+  }
+  if (reread) reread.disabled = panelProgrammingBusy || panelProgrammingTransactionActive();
+  if (close) close.disabled = panelProgrammingTransactionActive();
+  const setupButton = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
+  if (setupButton) {
+    setupButton.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      !panelProgrammingTarget();
+    setupButton.textContent = open ? "Encoder setup open" : chart ? "Set up encoder…" : "Read & back up…";
+    setupButton.setAttribute("aria-expanded", String(open));
+  }
+  syncControlSurfaceInspector();
+}
+
+async function readPanelProgrammingChart(backup: boolean): Promise<void> {
+  const selector = panelProgrammingTarget();
+  if (!selector || panelProgrammingTransactionActive()) return;
+  const generation = ++panelProgrammingGeneration;
+  panelProgrammingBusy = true;
+  panelProgrammingMessage = backup
+    ? "Reading the complete encoder chart and creating a lossless backup…"
+    : "Reading the complete encoder chart…";
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    inspection: {
+      ...panelProgrammingState.inspection,
+      phase: "loading",
+      target_selector: selector,
+      chart: null,
+      error: "",
+    },
+    capability: panelProgrammingCapability(null),
+    editor: {
+      ...panelProgrammingState.editor,
+      phase: "assign",
+      plan_expected_selector: "",
+      plan: null,
+    },
+  };
+  syncPanelProgrammingUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelChartPayload>(
+      "/api/panel/chart",
+      "POST",
+      { expected_selector: selector, backup },
+    );
+    if (generation !== panelProgrammingGeneration) return;
+    const current = panelProgrammingTarget();
+    if (!payload.target_selector || payload.target_selector !== selector || current !== selector) {
+      resetPanelProgramming(true);
+      return;
+    }
+    if (payload.unavailable || !payload.view) {
+      panelProgrammingState.inspection.phase = "unavailable";
+      panelProgrammingState.inspection.error = payload.unavailable || "The complete chart was unavailable.";
+      panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
+      return;
+    }
+    const chart = payload.view;
+    if (!panelChartAuthority(payload)) {
+      panelProgrammingState.inspection.phase = "unavailable";
+      panelProgrammingState.inspection.error =
+        "The complete chart did not include stable board and image hashes.";
+      panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
+      return;
+    }
+    const qualificationState = panelProgrammingQualificationState(chart);
+    const assignmentMode = qualificationState !== "qualified" &&
+        panelProgrammingState.editor.assignment_mode === "recommended"
+      ? "custom"
+      : panelProgrammingState.editor.assignment_mode;
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      inspection: {
+        ...panelProgrammingState.inspection,
+        phase: "ready",
+        target_selector: selector,
+        chart,
+        error: "",
+      },
+      capability: panelProgrammingCapability(panelProgrammingCapabilitiesFromChart(chart)),
+      editor: {
+        ...panelProgrammingState.editor,
+        assignment_mode: assignmentMode,
+        phase: panelProgrammingState.editor.phase === "closed" ? "closed" : "assign",
+        assignments: panelProgrammingDraftAssignments(),
+        plan_expected_selector: "",
+        plan: null,
+      },
+      transaction: panelProgrammingState.transaction.phase === "recovery-required"
+        ? { phase: "idle", operation: null, target_selector: "", outcome: null }
+        : panelProgrammingState.transaction,
+    };
+    if (chart.backup && !panelProgrammingBackups.some(
+      (candidate) => candidate.backup_id === chart.backup?.backup_id,
+    )) {
+      panelProgrammingBackups.unshift(chart.backup);
+    }
+    reconcilePanelProgrammingChart(
+      chart,
+      panelProgrammingState.transaction.phase === "verified",
+    );
+    panelProgrammingMessage = chart.programming_detail || chart.summary;
+    void loadPanelProgrammingBackups();
+  } catch (error) {
+    if (generation !== panelProgrammingGeneration) return;
+    panelProgrammingState.inspection.phase = "unavailable";
+    panelProgrammingState.inspection.error = error instanceof Error ? error.message : "Chart read failed.";
+    panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
+  } finally {
+    if (generation === panelProgrammingGeneration) {
+      panelProgrammingBusy = false;
+      syncPanelProgrammingUi();
+      if (panelProgrammingDialog?.open &&
+          panelProgrammingState.transaction.phase === "verified") {
+        // Qualification is backend-owned. A recovery restore changes it back
+        // to Required; refresh the still-open result instead of leaving stale
+        // post-restore actions rendered from the pre-read chart.
+        renderPanelProgrammingDialog();
+      }
+    }
+  }
+}
+
+async function loadPanelProgrammingBackups(): Promise<void> {
+  const selector = panelProgrammingTarget();
+  if (!selector) return;
+  const generation = panelProgrammingGeneration;
+  try {
+    const payload = await panelProgrammingJSON<PanelBackupsPayload>(
+      "/api/panel/backups",
+      "GET",
+    );
+    if (generation !== panelProgrammingGeneration || panelProgrammingTarget() !== selector) return;
+    if (payload.target_selector === selector && !payload.unavailable && payload.view) {
+      panelProgrammingBackups = payload.view.backups;
+      syncPanelProgrammingUi();
+    }
+  } catch {
+    // A missing backup list does not erase a backup already returned by chart
+    // read or a verified mutation outcome. Program planning will still refuse
+    // server-side if its durable backup store is unavailable.
+  }
+}
+
+function openPanelProgrammingSetup(): void {
+  if (panelProgrammingTransactionActive()) return;
+  panelProgrammingReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    editor: { ...panelProgrammingState.editor, phase: "assign" },
+  };
+  syncPanelProgrammingUi();
+  if (!panelProgrammingState.inspection.chart ||
+      panelProgrammingState.inspection.target_selector !== panelProgrammingTarget()) {
+    void readPanelProgrammingChart(true);
+  } else {
+    void loadPanelProgrammingBackups();
+  }
+}
+
+function closePanelProgrammingSetup(restoreFocus = true): void {
+  if (panelProgrammingTransactionActive()) return;
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    editor: {
+      ...panelProgrammingState.editor,
+      phase: "closed",
+      plan_expected_selector: "",
+      plan: null,
+    },
+  };
+  panelProgrammingProgramRequest = null;
+  panelProgrammingRestoreRequest = null;
+  panelProgrammingMessage = "";
+  syncPanelProgrammingUi();
+  if (restoreFocus) {
+    const target = panelProgrammingReturnFocus?.isConnected
+      ? panelProgrammingReturnFocus
+      : controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-encoder-open"]') ?? null;
+    window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+  }
+}
+
+function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
+  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingState.transaction.phase === "recovery-required") return;
+  const qualificationState = panelProgrammingQualificationState();
+  if (mode === "recommended" && qualificationState !== "qualified") {
+    panelProgrammingSetMessage(
+      qualificationState === "validation-recovery"
+        ? "Restore the recovery backup, then repeat the one-terminal writer check. This recovery restore does not unlock Recommended."
+        : "Recommended unlocks after the one-terminal writer check is verified and its exact safety backup is restored.",
+    );
+    return;
+  }
+  if (mode === "custom" && panelProgrammingQualificationNeedsRestore(qualificationState)) {
+    panelProgrammingSetMessage(
+      qualificationState === "validation-recovery"
+        ? "Restore the interrupted validation write's exact safety backup, then repeat the one-terminal writer check. This restore will not unlock full layouts."
+        : "Restore the validation write's exact safety backup before preparing another hardware change.",
+    );
+    return;
+  }
+  if (mode === "keep-current") {
+    closePanelProgrammingSetup();
+    chooseControlSurfaceStage("teach");
+    keyboardWorkbenchAnnounce(
+      "The encoder chart was kept unchanged. Teach inputs will record what the panel already sends.",
+    );
+    return;
+  }
+  panelProgrammingDropPlan();
+  panelProgrammingState.editor.assignment_mode = mode;
+  panelProgrammingMessage = mode === "recommended"
+    ? "KSX will allocate a deterministic four-player key chart and clear the encoder's alternate/shift roles so macros and transformations live in KSX. Link physical channels to their printed terminals, then review the exact diff."
+    : "Choose an encoder terminal and supported key for each physical channel, then review the exact diff.";
+  syncPanelProgrammingUi();
+}
+
+function assignSelectedPanelTerminal(terminalId: string): void {
+  const chart = panelProgrammingState.inspection.chart;
+  const control = selectedControlSurfaceControl();
+  const channel = selectedControlSurfaceChannel();
+  if (!chart || !control || !channel || panelProgrammingBusy ||
+      panelProgrammingState.transaction.phase === "recovery-required") return;
+  panelProgrammingSharedAssignmentIds.delete(`${control.physicalId}\u0000${channel.id}`);
+  if (!terminalId) {
+    applyControlSurfaceState(
+      assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, null),
+      true,
+    );
+    panelProgrammingDropPlan();
+    syncPanelProgrammingUi();
+    return;
+  }
+  const terminal = panelProgrammingTerminal(terminalId);
+  if (!terminal) return;
+  const currentKey = channel.encoder?.terminalId === terminalId
+    ? channel.encoder.expectedKey
+    : terminal.normal.supported ? terminal.normal.key ?? "" : "";
+  applyControlSurfaceState(
+    assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, {
+      driver: chart.driver,
+      boardFingerprint: chart.board_fingerprint,
+      terminalId: terminal.terminal_id,
+      terminalLabel: terminal.terminal_label,
+      expectedKey: currentKey,
+    }),
+    true,
+  );
+  panelProgrammingDropPlan();
+  syncPanelProgrammingUi();
+}
+
+function assignSelectedPanelKey(key: string): void {
+  const chart = panelProgrammingState.inspection.chart;
+  const control = selectedControlSurfaceControl();
+  const channel = selectedControlSurfaceChannel();
+  const terminal = channel?.encoder ? panelProgrammingTerminal(channel.encoder.terminalId) : null;
+  if (!chart || !control || !channel || !terminal || panelProgrammingBusy ||
+      panelProgrammingState.transaction.phase === "recovery-required") return;
+  if (!chart.key_options.some((option) => option.key === key)) return;
+  panelProgrammingSharedAssignmentIds.delete(`${control.physicalId}\u0000${channel.id}`);
+  applyControlSurfaceState(
+    assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, {
+      driver: chart.driver,
+      boardFingerprint: chart.board_fingerprint,
+      terminalId: terminal.terminal_id,
+      terminalLabel: terminal.terminal_label,
+      expectedKey: key,
+    }),
+    true,
+  );
+  panelProgrammingDropPlan();
+  syncPanelProgrammingUi();
+}
+
+function currentPanelChartAuthority() {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart) return null;
+  return panelChartAuthority({
+    target_selector: panelProgrammingState.inspection.target_selector,
+    unavailable: null,
+    view: chart,
+  });
+}
+
+function panelProgrammingPlanIsCurrent(plan: PanelPlanView): boolean {
+  return panelPlanInvalidation(
+    plan,
+    currentPanelChartAuthority(),
+    panelProgrammingState.editor.plan_expected_selector,
+  ) === null;
+}
+
+function panelProgrammingHash(value: string): string {
+  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-8)}` : value;
+}
+
+function ensurePanelProgrammingDialog(): HTMLDialogElement {
+  if (panelProgrammingDialog?.isConnected) return panelProgrammingDialog;
+  const dialog = document.createElement("dialog");
+  dialog.className = "n-panel-program-dialog";
+  dialog.setAttribute("aria-labelledby", "n-panel-program-title");
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (!panelProgrammingTransactionActive()) panelProgrammingCloseDialog();
+  });
+  dialog.addEventListener("change", (event) => {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) return;
+    if (target.matches('[data-panel-program-confirm]')) {
+      panelProgrammingConfirmed = target.checked;
+    } else if (target.matches('[data-panel-program-supervised]')) {
+      panelProgrammingRecoveryReady = target.checked;
+    } else {
+      return;
+    }
+    const apply = dialog.querySelector<HTMLButtonElement>('[data-panel-dialog-action="apply"]');
+    const plan = panelProgrammingState.editor.plan;
+    if (apply) {
+      apply.disabled = !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
+        !plan || plan.blockers.length > 0 || plan.byte_diff.length === 0 ||
+        !panelProgrammingPlanIsCurrent(plan);
+    }
+  });
+  dialog.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+      "[data-panel-dialog-action]",
+    );
+    if (!button) return;
+    const action = button.dataset.panelDialogAction;
+    if (action === "close") {
+      panelProgrammingCloseDialog();
+    } else if (action === "apply") {
+      void applyPanelProgrammingPlan();
+    } else if (action === "restore-validation") {
+      const backupId = panelProgrammingExactQualificationBackupId();
+      if (backupId) {
+        button.disabled = true;
+        void openPanelQualificationRestoreReview(backupId);
+      } else {
+        panelProgrammingSetMessage(
+          "KSX could not resolve the exact qualification safety backup. Read the complete chart again before continuing.",
+        );
+      }
+    } else if (action === "restart-validation") {
+      button.disabled = true;
+      void reopenPanelQualificationAfterRecovery();
+    } else if (action === "teach") {
+      panelProgrammingCloseDialog(false);
+      closePanelProgrammingSetup(false);
+      chooseControlSurfaceStage("teach");
+      keyboardWorkbenchAnnounce(
+        "Encoder programming was verified. Teach each physical control to verify the signal Windows receives.",
+      );
+      controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
+        ?.focus({ preventScroll: true });
+    } else if (action === "recover-read") {
+      panelProgrammingCloseDialog(false);
+      void readPanelProgrammingChart(true);
+      window.requestAnimationFrame(() => controlSurfaceItem
+        ?.querySelector<HTMLElement>('[data-nx="surface-encoder-read"]')
+        ?.focus({ preventScroll: true }));
+    }
+  });
+  document.body.append(dialog);
+  panelProgrammingDialog = dialog;
+  return dialog;
+}
+
+function renderPanelProgrammingDialog(): void {
+  const dialog = ensurePanelProgrammingDialog();
+  const transaction = panelProgrammingState.transaction;
+  const plan = panelProgrammingState.editor.plan;
+  const detachedTransactionResult =
+    (transaction.phase === "verified" || transaction.phase === "recovery-required") &&
+    !panelProgrammingTransactionBelongsToCurrentTarget();
+  dialog.replaceChildren();
+  dialog.dataset.phase = transaction.phase;
+  dialog.setAttribute("aria-busy", String(panelProgrammingTransactionActive()));
+
+  const shell = document.createElement("div");
+  shell.className = "n-panel-program-shell";
+  const head = document.createElement("header");
+  const kicker = document.createElement("span");
+  kicker.className = "n-panel-program-kick";
+  kicker.textContent = transaction.operation === "restore" ? "Restore encoder" : "Program encoder";
+  const title = document.createElement("h2");
+  title.id = "n-panel-program-title";
+  const intro = document.createElement("p");
+  head.append(kicker, title, intro);
+  shell.append(head);
+
+  if (panelProgrammingTransactionActive()) {
+    title.textContent = "Guarded hardware transaction in progress…";
+    intro.textContent =
+      "KSX is revalidating the board and chart, preserving a durable recovery point, applying the reviewed bytes, then reading every byte back. Keep the encoder connected.";
+    const progress = document.createElement("div");
+    progress.className = "n-panel-program-progress";
+    progress.setAttribute("role", "progressbar");
+    progress.setAttribute("aria-label", title.textContent);
+    progress.append(document.createElement("span"));
+    shell.append(progress);
+  } else if (transaction.phase === "verified" && transaction.outcome) {
+    const qualificationState = panelProgrammingQualificationState();
+    const recoveryRestoreCompleted = transaction.operation === "restore" &&
+      (qualificationState === "validation-recovery" || qualificationState === "required");
+    const qualificationRestoreRequired = transaction.operation === "program" &&
+      panelProgrammingQualificationNeedsRestore(qualificationState);
+    const exactQualificationBackupId = qualificationRestoreRequired
+      ? panelProgrammingExactQualificationBackupId()
+      : "";
+    const restoredBackup = panelProgrammingRestoreRequest
+      ? panelProgrammingBackups.find((backup) =>
+          backup.backup_id === panelProgrammingRestoreRequest?.backup_id)
+      : null;
+    title.textContent = detachedTransactionResult
+      ? "Previous encoder transaction verified"
+      : recoveryRestoreCompleted
+      ? "Recovery restore verified — repeat writer check"
+      : qualificationRestoreRequired
+      ? qualificationState === "validation-recovery"
+        ? "Validation write recovered — restore still required"
+        : "Validation write verified — restore required"
+      : transaction.operation === "restore"
+      ? restoredBackup?.reason === "initial-capture"
+        ? "Earliest retained configuration restored and verified"
+        : "Selected backup restored and verified"
+      : "Encoder programmed and verified";
+    intro.textContent = detachedTransactionResult
+      ? `${transaction.outcome.summary} This result belongs to ${transaction.target_selector || "the previously selected encoder"}; the current canvas target was not changed.`
+      : recoveryRestoreCompleted
+      ? `${transaction.outcome.summary} This recovery proves the backup was restored, but it does not qualify the writer.`
+      : qualificationRestoreRequired
+      ? `${transaction.outcome.summary} The writer check is not complete until KSX restores and verifies the exact safety backup.`
+      : transaction.outcome.summary;
+    const proof = document.createElement("dl");
+    proof.className = "n-panel-program-proof";
+    const proofRows: [string, string][] = [];
+    if (detachedTransactionResult) {
+      proofRows.push(["Transaction target", transaction.target_selector || "Previously selected encoder"]);
+    }
+    proofRows.push(
+      ["Verified image", panelProgrammingHash(transaction.outcome.expected_sha256)],
+      ["Safety backup", transaction.outcome.backup.label],
+      ["Verified at", transaction.outcome.verified_at],
+    );
+    for (const [label, value] of proofRows) {
+      const row = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      row.append(dt, dd);
+      proof.append(row);
+    }
+    const next = document.createElement("p");
+    next.className = "n-panel-program-next";
+    next.textContent = detachedTransactionResult
+      ? "Close this result. Reopen Encoder setup for the currently selected hardware before teaching, restoring, or programming anything else."
+      : recoveryRestoreCompleted
+      ? "Return to step 1 and perform a fresh one-terminal validation write. Recommended and full-chart programming remain locked."
+      : qualificationRestoreRequired
+      ? qualificationState === "validation-recovery"
+        ? `Review and restore ${exactQualificationBackupId || "the exact safety backup"}. This returns the encoder to step 1 for a fresh validation; it does not unlock full layouts.`
+        : `Review and restore ${exactQualificationBackupId || "the exact safety backup"}. Only its verified restore completes writer qualification and unlocks full layouts.`
+      : transaction.outcome.next_step ||
+        "Teach the physical controls now; a verified chart does not prove the wiring.";
+    const actions = document.createElement("footer");
+    const close = document.createElement("button");
+    close.type = "button";
+    close.dataset.panelDialogAction = "close";
+    close.textContent = "Close";
+    if (detachedTransactionResult) {
+      actions.append(close);
+    } else if (recoveryRestoreCompleted) {
+      const restart = document.createElement("button");
+      restart.type = "button";
+      restart.className = "primary";
+      restart.dataset.panelDialogAction = "restart-validation";
+      restart.textContent = "Repeat writer check";
+      actions.append(close, restart);
+    } else if (qualificationRestoreRequired) {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "primary";
+      restore.dataset.panelDialogAction = "restore-validation";
+      restore.textContent = "Review required restore";
+      restore.disabled = !exactQualificationBackupId;
+      actions.append(close, restore);
+    } else {
+      const teach = document.createElement("button");
+      teach.type = "button";
+      teach.className = "primary";
+      teach.dataset.panelDialogAction = "teach";
+      teach.textContent = "Verify inputs in Teach";
+      actions.append(teach, close);
+    }
+    shell.append(proof, next, actions);
+  } else if (transaction.phase === "recovery-required") {
+    title.textContent = detachedTransactionResult
+      ? "Previous encoder transaction needs recovery"
+      : "Verification did not prove the write";
+    intro.textContent = detachedTransactionResult
+      ? `${transaction.outcome?.summary || "KSX could not prove the hardware transaction completed."} This result belongs to ${transaction.target_selector || "the previously selected encoder"}; the current canvas target was not changed.`
+      : transaction.outcome?.summary || panelProgrammingMessage ||
+        "KSX cannot prove the encoder's complete current chart. New programming is locked until the device is read again or a verified backup is restored.";
+    const alert = document.createElement("div");
+    alert.className = "n-panel-program-alert danger";
+    alert.setAttribute("role", "alert");
+    alert.textContent = detachedTransactionResult
+      ? "Reselect the transaction's encoder before reading or restoring it. Do not run recovery against the currently selected hardware."
+      : transaction.outcome?.next_step ||
+        "Keep the encoder connected and read its complete chart again. Restore remains locked until KSX knows the current hash.";
+    const actions = document.createElement("footer");
+    const reread = document.createElement("button");
+    reread.type = "button";
+    reread.className = "primary";
+    reread.dataset.panelDialogAction = "recover-read";
+    reread.textContent = "Read chart & back up again";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.dataset.panelDialogAction = "close";
+    close.textContent = transaction.outcome?.observed_sha256 ? "Choose a backup" : "Close";
+    if (detachedTransactionResult) {
+      close.textContent = "Close";
+      actions.append(close);
+    } else {
+      actions.append(close, reread);
+    }
+    shell.append(alert, actions);
+  } else if (plan) {
+    const operation = panelProgrammingRestoreRequest ? "restore" : "program";
+    const stale = !panelProgrammingPlanIsCurrent(plan);
+    title.textContent = operation === "restore"
+      ? "Review the exact restore"
+      : "Review the exact hardware changes";
+    intro.textContent = plan.summary;
+    if (panelProgrammingMessage) {
+      const reviewStatus = document.createElement("p");
+      reviewStatus.className = "n-panel-program-review-status";
+      reviewStatus.setAttribute("role", "status");
+      reviewStatus.textContent = panelProgrammingMessage;
+      shell.append(reviewStatus);
+    }
+
+    const facts = document.createElement("dl");
+    facts.className = "n-panel-program-proof";
+    const factRows: [string, string][] = [
+      ["Encoder", plan.board_name],
+      ["Protocol profile", plan.protocol_profile],
+      ["Current chart", panelProgrammingHash(plan.base_sha256)],
+      ["Planned chart", panelProgrammingHash(plan.desired_sha256)],
+      ["Changed bytes", String(plan.byte_diff.length)],
+      ["Preserved bytes", String(plan.preserved_byte_count)],
+    ];
+    for (const [label, value] of factRows) {
+      const row = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      row.append(dt, dd);
+      facts.append(row);
+    }
+    shell.append(facts);
+
+    if (stale || plan.blockers.length > 0) {
+      const blockers = document.createElement("div");
+      blockers.className = "n-panel-program-alert danger";
+      blockers.setAttribute("role", "alert");
+      const strong = document.createElement("strong");
+      strong.textContent = stale ? "This review is stale." : "This plan cannot be applied.";
+      const list = document.createElement("ul");
+      for (const blocker of stale
+        ? ["The selected device or complete chart changed. Close this review and read it again."]
+        : plan.blockers) {
+        const item = document.createElement("li");
+        item.textContent = blocker;
+        list.append(item);
+      }
+      blockers.append(strong, list);
+      shell.append(blockers);
+    }
+
+    const changes = document.createElement("section");
+    changes.className = "n-panel-program-changes";
+    const changesTitle = document.createElement("h3");
+    changesTitle.textContent = `Terminal changes (${plan.terminal_diff.length})`;
+    changes.append(changesTitle);
+    if (plan.terminal_diff.length === 0) {
+      const unchanged = document.createElement("p");
+      unchanged.textContent = "The requested terminal chart already matches this encoder.";
+      changes.append(unchanged);
+    } else {
+      const tableWrap = document.createElement("div");
+      tableWrap.className = "n-panel-program-table-wrap";
+      const table = document.createElement("table");
+      table.innerHTML = "<thead><tr><th scope=\"col\">Terminal</th><th scope=\"col\">Layer</th><th scope=\"col\">Before</th><th scope=\"col\">After</th></tr></thead>";
+      const body = document.createElement("tbody");
+      for (const diff of plan.terminal_diff) {
+        const row = document.createElement("tr");
+        for (const value of [diff.terminal_label, diff.layer, diff.before || "Unassigned", diff.after || "Unassigned"]) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.append(cell);
+        }
+        body.append(row);
+      }
+      table.append(body);
+      tableWrap.append(table);
+      changes.append(tableWrap);
+    }
+    shell.append(changes);
+
+    const bytes = document.createElement("details");
+    bytes.className = "n-panel-program-bytes";
+    const bytesSummary = document.createElement("summary");
+    bytesSummary.textContent = `Inspect ${plan.byte_diff.length} changed ${plan.byte_diff.length === 1 ? "byte" : "bytes"}`;
+    const byteTableWrap = document.createElement("div");
+    byteTableWrap.className = "n-panel-program-table-wrap";
+    const byteTable = document.createElement("table");
+    byteTable.innerHTML = "<thead><tr><th scope=\"col\">Offset</th><th scope=\"col\">Before</th><th scope=\"col\">After</th><th scope=\"col\">Meaning</th></tr></thead>";
+    const byteBody = document.createElement("tbody");
+    for (const diff of plan.byte_diff) {
+      const row = document.createElement("tr");
+      for (const value of [String(diff.offset), String(diff.before), String(diff.after), diff.meaning]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      }
+      byteBody.append(row);
+    }
+    byteTable.append(byteBody);
+    byteTableWrap.append(byteTable);
+    bytes.append(bytesSummary, byteTableWrap);
+    shell.append(bytes);
+
+    const confirmation = document.createElement("label");
+    confirmation.className = "n-panel-program-confirm";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.panelProgramConfirm = "";
+    checkbox.checked = panelProgrammingConfirmed;
+    checkbox.disabled = stale || plan.blockers.length > 0 || plan.byte_diff.length === 0;
+    const confirmationCopy = document.createElement("span");
+    confirmationCopy.textContent = plan.confirmation;
+    confirmation.append(checkbox, confirmationCopy);
+    shell.append(confirmation);
+
+    const supervised = document.createElement("label");
+    supervised.className = "n-panel-program-confirm";
+    const supervisedCheckbox = document.createElement("input");
+    supervisedCheckbox.type = "checkbox";
+    supervisedCheckbox.dataset.panelProgramSupervised = "";
+    supervisedCheckbox.checked = panelProgrammingRecoveryReady;
+    supervisedCheckbox.disabled = stale || plan.blockers.length > 0 || plan.byte_diff.length === 0;
+    const supervisedCopy = document.createElement("span");
+    supervisedCopy.textContent =
+      "I am at this cabinet, WinIPAC is closed, and I have a separate keyboard or recovery path if the encoder stops responding.";
+    supervised.append(supervisedCheckbox, supervisedCopy);
+    shell.append(supervised);
+
+    const actions = document.createElement("footer");
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.dataset.panelDialogAction = "close";
+    cancel.textContent = "Back to assignments";
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "primary danger";
+    apply.dataset.panelDialogAction = "apply";
+    apply.textContent = operation === "restore" ? "Restore and verify" : "Program and verify";
+    apply.disabled = !panelProgrammingConfirmed || !panelProgrammingRecoveryReady || stale ||
+      plan.blockers.length > 0 || plan.byte_diff.length === 0;
+    actions.append(cancel, apply);
+    shell.append(actions);
+  } else {
+    title.textContent = "No hardware plan to review";
+    intro.textContent = "Return to Encoder setup and generate a fresh plan from the complete current chart.";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.dataset.panelDialogAction = "close";
+    close.textContent = "Close";
+    shell.append(close);
+  }
+
+  dialog.append(shell);
+}
+
+function openPanelProgrammingDialog(): void {
+  const dialog = ensurePanelProgrammingDialog();
+  if (document.activeElement instanceof HTMLElement && !dialog.contains(document.activeElement)) {
+    panelProgrammingReturnFocus = document.activeElement;
+  }
+  panelProgrammingConfirmed = false;
+  panelProgrammingRecoveryReady = false;
+  renderPanelProgrammingDialog();
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => {
+    dialog.querySelector<HTMLElement>(
+      '[data-panel-program-confirm], [data-panel-dialog-action="teach"], [data-panel-dialog-action="recover-read"], [data-panel-dialog-action="close"]',
+    )?.focus({ preventScroll: true });
+  });
+}
+
+async function requestPanelProgrammingPlan(): Promise<void> {
+  const chart = panelProgrammingState.inspection.chart;
+  const authority = currentPanelChartAuthority();
+  const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
+  const conflicts = panelProgrammingConflicts();
+  const qualificationState = panelProgrammingQualificationState(chart);
+  const qualificationEdits = panelProgrammingQualificationEdits();
+  if (!chart || !authority || !layout || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingState.transaction.phase === "recovery-required") return;
+  if (panelProgrammingQualificationNeedsRestore(qualificationState)) {
+    panelProgrammingSetMessage(
+      qualificationState === "validation-recovery"
+        ? "Restore the interrupted validation write's exact safety backup, then repeat the one-terminal writer check. This restore will not unlock full layouts."
+        : "Restore the validation write's exact safety backup before preparing another hardware change.",
+    );
+    return;
+  }
+  if (qualificationState === "required" &&
+      (layout !== "custom" || qualificationEdits.length !== 1 ||
+        !panelProgrammingQualificationEditIsEligible(qualificationEdits[0]))) {
+    panelProgrammingSetMessage(
+      "Writer qualification requires one safe letter or top-row number on one noncritical SW action button whose current normal assignment is readable and Shift state is explicitly disabled. Directions, Start, Coin, clears, command keys, opaque actions, and opaque Shift states are not eligible.",
+    );
+    return;
+  }
+  if (layout === "custom" && conflicts.length > 0) {
+    panelProgrammingSetMessage(conflicts[0].message);
+    return;
+  }
+  const request: PanelProgramRequest = {
+    expected_selector: authority.target_selector,
+    expected_base_sha256: authority.base_sha256,
+    layout,
+    edits: layout === "custom"
+      ? qualificationState === "required"
+        ? qualificationEdits
+        : panelProgrammingEdits()
+      : [],
+  };
+  panelProgrammingBusy = true;
+  panelProgrammingMessage = "Asking the backend to compute the exact hardware diff…";
+  panelProgrammingDropPlan();
+  syncPanelProgrammingUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelPlanPayload>(
+      "/api/panel/program/plan",
+      "POST",
+      request,
+    );
+    if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
+      throw new Error(payload.unavailable || "A complete program plan was unavailable.");
+    }
+    if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
+      throw new Error("The encoder or its chart changed while the plan was prepared. Read it again.");
+    }
+    panelProgrammingProgramRequest = request;
+    panelProgrammingRestoreRequest = null;
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      editor: {
+        ...panelProgrammingState.editor,
+        phase: "review",
+        assignments: panelProgrammingDraftAssignments(),
+        plan_expected_selector: authority.target_selector,
+        plan: payload.plan,
+      },
+      transaction: {
+        phase: "idle",
+        operation: "program",
+        target_selector: authority.target_selector,
+        outcome: null,
+      },
+    };
+    panelProgrammingMessage = "Review every terminal and changed byte before confirming.";
+    openPanelProgrammingDialog();
+  } catch (error) {
+    panelProgrammingMessage = `${error instanceof Error ? error.message : "The hardware plan failed."} Nothing was written.`;
+  } finally {
+    panelProgrammingBusy = false;
+    syncPanelProgrammingUi();
+  }
+}
+
+async function requestPanelRestorePlan(backupId: string): Promise<void> {
+  const authority = currentPanelChartAuthority();
+  if (!authority || !backupId || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingState.capability.kind !== "programmable") return;
+  const qualificationState = panelProgrammingQualificationState();
+  if (qualificationState === "required") {
+    panelProgrammingSetMessage(
+      "This encoder has not begun its writer check, so there is no validation write to restore. Complete the one-terminal test first.",
+    );
+    return;
+  }
+  const exactQualificationBackup = panelProgrammingQualificationNeedsRestore(
+    qualificationState,
+  ) && panelProgrammingState.inspection.chart
+    ? panelProgrammingState.inspection.chart.qualification_restore_backup_id?.trim() ||
+      (panelProgrammingState.transaction.operation === "program"
+        ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
+        : "")
+    : "";
+  if (exactQualificationBackup && backupId !== exactQualificationBackup) {
+    panelProgrammingSetMessage(
+      qualificationState === "validation-recovery"
+        ? "Recover the interrupted writer check with its exact safety backup. After restore, repeat the one-terminal test; full layouts remain locked."
+        : "Finish writer qualification by restoring the exact safety backup captured immediately before the validation write.",
+    );
+    return;
+  }
+  const request = {
+    expected_selector: authority.target_selector,
+    backup_id: backupId,
+    expected_current_sha256: authority.base_sha256,
+  };
+  panelProgrammingBusy = true;
+  panelProgrammingMessage = "Comparing the verified backup with the encoder's complete current chart…";
+  panelProgrammingDropPlan();
+  syncPanelProgrammingUi();
+  try {
+    const payload = await panelProgrammingJSON<PanelPlanPayload>(
+      "/api/panel/restore/plan",
+      "POST",
+      request,
+    );
+    if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
+      throw new Error(payload.unavailable || "A complete restore plan was unavailable.");
+    }
+    if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
+      throw new Error("The encoder or its chart changed while the restore was prepared. Read it again.");
+    }
+    panelProgrammingProgramRequest = null;
+    panelProgrammingRestoreRequest = request;
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      editor: {
+        ...panelProgrammingState.editor,
+        phase: "review",
+        plan_expected_selector: authority.target_selector,
+        plan: payload.plan,
+      },
+      transaction: {
+        phase: "idle",
+        operation: "restore",
+        target_selector: authority.target_selector,
+        outcome: null,
+      },
+    };
+    panelProgrammingMessage = "Review the exact restore diff before confirming.";
+    openPanelProgrammingDialog();
+  } catch (error) {
+    panelProgrammingMessage = `${error instanceof Error ? error.message : "The restore plan failed."} Nothing was written.`;
+  } finally {
+    panelProgrammingBusy = false;
+    syncPanelProgrammingUi();
+  }
+}
+
+function reconcilePanelProgrammingOutcome(
+  plan: PanelPlanView,
+  outcome: PanelProgramOutcomeView,
+): void {
+  const chart = panelProgrammingState.inspection.chart;
+  const normalByTerminal = new Map(
+    plan.terminal_diff
+      .filter((diff) => diff.layer.toLocaleLowerCase() === "normal")
+      .map((diff) => [diff.terminal_id, diff.after] as const),
+  );
+  const linked = controlSurfaceState.controls.flatMap((control) =>
+    control.channels
+      .filter((channel) => channel.encoder?.boardFingerprint === outcome.board_fingerprint)
+      .map((channel) => ({ controlId: control.id, channel }))
+  );
+  let next = controlSurfaceState;
+  for (const { controlId, channel } of linked) {
+    const encoder = channel.encoder;
+    if (!encoder || !normalByTerminal.has(encoder.terminalId)) continue;
+    const after = normalByTerminal.get(encoder.terminalId) ?? "";
+    const option = chart?.key_options.find((candidate) =>
+      candidate.key === after || candidate.label === after
+    );
+    next = assignControlSurfaceTerminal(next, controlId, channel.id, {
+      driver: chart?.driver ?? encoder.driver,
+      boardFingerprint: outcome.board_fingerprint,
+      terminalId: encoder.terminalId,
+      terminalLabel: encoder.terminalLabel,
+      expectedKey: option?.key ?? after,
+    });
+  }
+  next = invalidateControlSurfaceEncoderVerification(next, outcome.board_fingerprint);
+  applyControlSurfaceState(next, true);
+}
+
+async function applyPanelProgrammingPlan(): Promise<void> {
+  const plan = panelProgrammingState.editor.plan;
+  if (!plan || !panelProgrammingConfirmed || !panelProgrammingRecoveryReady || panelProgrammingBusy ||
+      panelProgrammingTransactionActive() || plan.blockers.length > 0 ||
+      !panelProgrammingPlanIsCurrent(plan)) return;
+  const operation = panelProgrammingRestoreRequest ? "restore" : "program";
+  if (operation === "program" && !panelProgrammingProgramRequest) return;
+  const expectedSelector = panelProgrammingState.editor.plan_expected_selector;
+  let refreshVerifiedTarget = false;
+  panelProgrammingBusy = true;
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    transaction: { phase: "writing", operation, target_selector: expectedSelector, outcome: null },
+  };
+  panelProgrammingMessage = operation === "restore"
+    ? "Restoring the reviewed backup…"
+    : "Writing the reviewed chart…";
+  renderPanelProgrammingDialog();
+  syncPanelProgrammingUi();
+  try {
+    const payload = operation === "restore"
+      ? await panelProgrammingJSON<PanelRestorePayload>(
+          "/api/panel/restore/apply",
+          "POST",
+          {
+            expected_selector: panelProgrammingRestoreRequest!.expected_selector,
+            restore: {
+              backup_id: panelProgrammingRestoreRequest!.backup_id,
+              expected_current_sha256: panelProgrammingRestoreRequest!.expected_current_sha256,
+            },
+            expected_board_fingerprint: plan.board_fingerprint,
+            expected_protocol_profile: plan.protocol_profile,
+            expected_desired_sha256: plan.desired_sha256,
+            confirm: true,
+            supervised: true,
+          },
+        )
+      : await panelProgrammingJSON<PanelProgramPayload>(
+          "/api/panel/program/apply",
+          "POST",
+          {
+            expected_selector: panelProgrammingProgramRequest!.expected_selector,
+            program: {
+              expected_base_sha256: panelProgrammingProgramRequest!.expected_base_sha256,
+              layout: panelProgrammingProgramRequest!.layout,
+              edits: panelProgrammingProgramRequest!.edits,
+            },
+            expected_board_fingerprint: plan.board_fingerprint,
+            expected_protocol_profile: plan.protocol_profile,
+            expected_desired_sha256: plan.desired_sha256,
+            confirm: true,
+            supervised: true,
+          },
+        );
+    if (payload.target_selector !== expectedSelector) {
+      if (payload.mutation_disposition === "not-started") {
+        panelProgrammingState.transaction = {
+          phase: "idle",
+          operation,
+          target_selector: expectedSelector,
+          outcome: null,
+        };
+        panelProgrammingConfirmed = false;
+        panelProgrammingRecoveryReady = false;
+        panelProgrammingMessage = payload.unavailable ||
+          "The selected encoder changed before programming began. Nothing was written; prepare a fresh review.";
+        return;
+      }
+      throw new Error(payload.unavailable ||
+        "The response did not identify the reviewed encoder after the hardware transaction began.");
+    }
+    if (payload.unavailable && payload.mutation_disposition === "not-started") {
+      panelProgrammingState.transaction = {
+        phase: "idle",
+        operation,
+        target_selector: expectedSelector,
+        outcome: null,
+      };
+      panelProgrammingConfirmed = false;
+      panelProgrammingRecoveryReady = false;
+      panelProgrammingMessage = payload.remedy
+        ? `${payload.unavailable} ${payload.remedy}`
+        : payload.unavailable;
+      return;
+    }
+    if (payload.unavailable || !payload.outcome) {
+      throw new Error(payload.unavailable || "The backend did not return a verified hardware outcome.");
+    }
+    const outcome = payload.outcome;
+    if ((outcome.state !== "verified" && outcome.state !== "recovery-required") ||
+        payload.mutation_disposition !== outcome.state ||
+        outcome.board_fingerprint.toLocaleUpperCase() !== plan.board_fingerprint.toLocaleUpperCase() ||
+        outcome.expected_sha256.toLocaleUpperCase() !== plan.desired_sha256.toLocaleUpperCase() ||
+        (outcome.state === "verified" && (!outcome.observed_sha256 ||
+          outcome.observed_sha256.toLocaleUpperCase() !== plan.desired_sha256.toLocaleUpperCase()))) {
+      throw new Error("The hardware outcome did not match the reviewed board and target hashes.");
+    }
+    const detachedFromCurrentTarget = panelProgrammingTarget() !== expectedSelector;
+    if (!detachedFromCurrentTarget && outcome.backup && !panelProgrammingBackups.some(
+      (candidate) => candidate.backup_id === outcome.backup.backup_id,
+    )) panelProgrammingBackups.unshift(outcome.backup);
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      transaction: {
+        phase: outcome.state,
+        operation,
+        target_selector: expectedSelector,
+        outcome,
+      },
+    };
+    panelProgrammingMessage = detachedFromCurrentTarget
+      ? `${outcome.summary} This result belongs to the previously selected encoder; the current canvas target was not changed.`
+      : outcome.summary;
+    if (outcome.state === "verified" && !detachedFromCurrentTarget) {
+      reconcilePanelProgrammingOutcome(plan, outcome);
+      refreshVerifiedTarget = true;
+      if (panelProgrammingState.inspection.chart) {
+        const beginsQualificationRestore = operation === "program" &&
+          panelProgrammingQualificationState(panelProgrammingState.inspection.chart) === "required";
+        panelProgrammingState.inspection.chart = {
+          ...panelProgrammingState.inspection.chart,
+          image_sha256: outcome.observed_sha256!,
+          ...(beginsQualificationRestore
+            ? {
+                qualification_state: "validation-written" as const,
+                qualification_detail:
+                  `The one-terminal validation write was verified. Restore exact safety backup ${outcome.backup.backup_id} before another program operation.`,
+                qualification_restore_backup_id: outcome.backup.backup_id,
+              }
+            : {}),
+        };
+      }
+    } else if (!detachedFromCurrentTarget) {
+      if (outcome.observed_sha256 && panelProgrammingState.inspection.chart) {
+        panelProgrammingState.inspection.chart = {
+          ...panelProgrammingState.inspection.chart,
+          image_sha256: outcome.observed_sha256,
+        };
+      }
+      applyControlSurfaceState(
+        invalidateControlSurfaceEncoderVerification(controlSurfaceState, outcome.board_fingerprint),
+        true,
+      );
+    }
+  } catch (error) {
+    panelProgrammingState = {
+      ...panelProgrammingState,
+      transaction: {
+        phase: "recovery-required",
+        operation,
+        target_selector: expectedSelector,
+        outcome: null,
+      },
+    };
+    panelProgrammingMessage = `${error instanceof Error ? error.message : "The hardware transaction was interrupted."} KSX cannot prove the current chart; restore a verified backup before programming again.`;
+  } finally {
+    panelProgrammingBusy = false;
+    renderPanelProgrammingDialog();
+    syncPanelProgrammingUi();
+    if (panelProgrammingState.transaction.phase === "verified" && refreshVerifiedTarget) {
+      void readPanelProgrammingChart(false);
+    } else if (panelProgrammingState.transaction.phase !== "verified") {
+      void loadPanelProgrammingBackups();
+    }
   }
 }
 
@@ -1990,6 +3587,7 @@ function reconcileControlSurfaceIdentity(): void {
   if (changed || hardwareTargetChanged) {
     cancelControlSurfaceHardwareStatus(true);
     controlSurfaceHardwareTargetFingerprint = hardwareTargetFingerprint;
+    resetPanelProgramming(true);
   }
   if (changed) {
     if (learnRow?.purpose === "surface") void cancelLearn();
@@ -3415,6 +5013,18 @@ function syncControlSurfaceInspector(): void {
     routeRows,
     stage: controlSurfaceState.stage,
     selectedDevice: nCapInstance(),
+    encoderSetup: {
+      phase: panelProgrammingState.editor.phase,
+      mode: panelProgrammingState.editor.assignment_mode,
+      chart: panelProgrammingState.inspection.chart?.image_sha256 ?? "",
+      capability: panelProgrammingState.capability.kind,
+      message: panelProgrammingMessage,
+      busy: panelProgrammingBusy,
+      transaction: panelProgrammingState.transaction.phase,
+      deliberateSharedKey: control && channel
+        ? panelProgrammingSharedAssignmentIds.has(`${control.physicalId}\u0000${channel.id}`)
+        : false,
+    },
   });
   if (print === controlSurfaceInspectorPrint && inspector.childElementCount > 0) return;
   controlSurfaceInspectorPrint = print;
@@ -3504,6 +5114,149 @@ function syncControlSurfaceInspector(): void {
     channels.append(button);
   }
 
+  const encoderAssignment = document.createElement("section");
+  encoderAssignment.className = "n-surface-encoder-assignment";
+  const encoderAssignmentTitle = document.createElement("strong");
+  encoderAssignmentTitle.textContent = "Physical encoder channel";
+  const chart = panelProgrammingState.inspection.chart;
+  const setupOpen = panelProgrammingState.editor.phase !== "closed";
+  if (setupOpen && chart) {
+    const qualificationState = panelProgrammingQualificationState(chart);
+    const qualificationAwaitingRestore = panelProgrammingQualificationNeedsRestore(
+      qualificationState,
+    );
+    const encoderCopy = document.createElement("p");
+    encoderCopy.textContent = qualificationAwaitingRestore
+      ? qualificationState === "validation-recovery"
+        ? "The first test write was interrupted or could not be proven. Restore its exact safety backup, then repeat the one-terminal check; this restore will not unlock full layouts."
+        : "The one-terminal validation write is complete. Restore its exact safety backup before editing terminal assignments; verified restore unlocks full layouts."
+      : qualificationState === "required"
+      ? "For the writer check, choose one noncritical SW action button—not a direction, Start, or Coin—whose normal assignment is readable and Shift state is explicitly disabled; then choose one safe letter or top-row number."
+      : panelProgrammingState.editor.assignment_mode === "recommended"
+      ? "Match this physical control to the terminal printed on the I-PAC. KSX allocates the key in the reviewed four-player chart."
+      : "Match this physical control to its printed terminal, then choose the key that terminal should emit.";
+    const terminalLabel = document.createElement("label");
+    terminalLabel.textContent = "Encoder terminal";
+    const terminalSelect = document.createElement("select");
+    terminalSelect.dataset.nx = "surface-encoder-terminal";
+    terminalSelect.dataset.surfaceControlId = control.id;
+    terminalSelect.dataset.surfaceChannelId = channel.id;
+    terminalSelect.setAttribute("aria-label", `${control.label} encoder terminal`);
+    const terminalPlaceholder = document.createElement("option");
+    terminalPlaceholder.value = "";
+    terminalPlaceholder.textContent = "Not linked to a terminal";
+    terminalSelect.append(terminalPlaceholder);
+    for (const terminal of chart.terminals) {
+      const option = document.createElement("option");
+      option.value = terminal.terminal_id;
+      const unavailableForQualification = qualificationState === "required" &&
+        !panelProgrammingQualificationTerminalIsEligible(terminal);
+      const qualificationReason = !unavailableForQualification
+        ? ""
+        : terminal.shift_state === "opaque"
+        ? "opaque Shift state preserved"
+        : terminal.shift_state === "enabled"
+        ? "Shift enabled"
+        : !terminal.normal.supported
+        ? "normal action opaque"
+        : "not an SW action button";
+      option.textContent = `${terminal.terminal_label} · P${terminal.player} ${terminal.kind}${qualificationReason ? ` · ${qualificationReason}` : ""}`;
+      option.disabled = unavailableForQualification;
+      terminalSelect.append(option);
+    }
+    terminalSelect.value = channel.encoder?.boardFingerprint === chart.board_fingerprint
+      ? channel.encoder.terminalId
+      : "";
+    const selectedTerminal = chart.terminals.find(
+      (terminal) => terminal.terminal_id === terminalSelect.value,
+    );
+    const qualificationTerminalIneligible = qualificationState === "required" &&
+      Boolean(selectedTerminal &&
+        !panelProgrammingQualificationTerminalIsEligible(selectedTerminal));
+    terminalSelect.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      qualificationAwaitingRestore;
+    terminalLabel.append(terminalSelect);
+
+    const keyLabel = document.createElement("label");
+    keyLabel.textContent = "Key emitted in keyboard mode";
+    const keySelect = document.createElement("select");
+    keySelect.dataset.nx = "surface-encoder-key";
+    keySelect.dataset.surfaceControlId = control.id;
+    keySelect.dataset.surfaceChannelId = channel.id;
+    keySelect.setAttribute("aria-label", `${control.label} emitted key`);
+    const keyPlaceholder = document.createElement("option");
+    keyPlaceholder.value = "";
+    keyPlaceholder.textContent = panelProgrammingState.editor.assignment_mode === "recommended"
+      ? "Allocated by the recommended plan"
+      : "Choose a supported key";
+    keySelect.append(keyPlaceholder);
+    for (const optionView of chart.key_options) {
+      const option = document.createElement("option");
+      option.value = optionView.key;
+      const unavailableForQualification = qualificationState === "required" &&
+        optionView.safe_for_qualification !== true;
+      option.textContent = unavailableForQualification
+        ? `${optionView.label} · available after writer check`
+        : optionView.label;
+      option.disabled = unavailableForQualification;
+      keySelect.append(option);
+    }
+    const encoderMatchesChart = channel.encoder?.boardFingerprint === chart.board_fingerprint;
+    keySelect.value = encoderMatchesChart && chart.key_options.some(
+      (option) => option.key === channel.encoder?.expectedKey,
+    ) ? channel.encoder?.expectedKey ?? "" : "";
+    keySelect.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      qualificationAwaitingRestore || qualificationTerminalIneligible ||
+      panelProgrammingState.editor.assignment_mode !== "custom" || !terminalSelect.value;
+    keyLabel.append(keySelect);
+
+    const sharedKey = document.createElement("label");
+    sharedKey.className = "n-surface-encoder-share";
+    const sharedKeyCheckbox = document.createElement("input");
+    sharedKeyCheckbox.type = "checkbox";
+    sharedKeyCheckbox.dataset.nx = "surface-encoder-share";
+    sharedKeyCheckbox.dataset.surfaceControlId = control.id;
+    sharedKeyCheckbox.dataset.surfaceChannelId = channel.id;
+    sharedKeyCheckbox.checked = panelProgrammingSharedAssignmentIds.has(
+      `${control.physicalId}\u0000${channel.id}`,
+    );
+    sharedKeyCheckbox.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      qualificationAwaitingRestore || qualificationTerminalIneligible ||
+      panelProgrammingState.editor.assignment_mode !== "custom" || !keySelect.value;
+    const sharedKeyCopy = document.createElement("span");
+    sharedKeyCopy.textContent = "Allow this separate physical control to deliberately emit the same key as another terminal";
+    sharedKey.append(sharedKeyCheckbox, sharedKeyCopy);
+
+    const verification = document.createElement("div");
+    verification.className = "n-surface-encoder-verification";
+    const verificationTone = encoderMatchesChart
+      ? channel.encoder?.verification ?? "unverified"
+      : "unverified";
+    verification.dataset.state = verificationTone;
+    const expected = encoderMatchesChart ? channel.encoder?.expectedKey.trim() ?? "" : "";
+    verification.textContent = !terminalSelect.value
+      ? "Link a terminal before preparing a custom chart."
+      : qualificationTerminalIneligible
+      ? "This terminal stays visible as part of the complete chart, but it cannot be the first writer check. Choose an ordinary SW action button whose Shift state is explicitly disabled."
+      : verificationTone === "matched"
+      ? `Teach verified ${expected || "the programmed signal"} on this physical channel.`
+      : verificationTone === "mismatch"
+      ? `Teach observed a different key than ${expected || "the programmed chart"}. Check the wiring or restore the chart.`
+      : `Expected ${expected || "key will be shown after review"} · verify it in Teach after programming.`;
+    encoderAssignment.append(
+      encoderAssignmentTitle,
+      encoderCopy,
+      terminalLabel,
+      keyLabel,
+      sharedKey,
+      verification,
+    );
+  } else {
+    const encoderCopy = document.createElement("p");
+    encoderCopy.textContent = "Open Encoder setup above to link this physical channel to an I-PAC terminal. This is optional; Teach works with the current chart.";
+    encoderAssignment.append(encoderAssignmentTitle, encoderCopy);
+  }
+
   const signal = document.createElement("div");
   signal.className = "n-surface-signal";
   const signalLabel = document.createElement("span");
@@ -3580,9 +5333,9 @@ function syncControlSurfaceInspector(): void {
         "Confirm that each unresolved view carrying this signal is independently wired",
       ),
     );
-    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, resolution, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, resolution, copies);
   } else {
-    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, copies);
   }
   if (relationship !== "shared-signal") {
     copies.append(
@@ -3851,7 +5604,18 @@ function createControlSurfaceItem(): HTMLElement {
     "Read the selected encoder's identity, mode, and read-back capabilities without changing it",
   );
   hardwareRefresh.classList.add("quiet", "n-surface-hardware-refresh");
-  hardwareHead.append(hardwareHeading, hardwareRefresh);
+  const hardwareActions = document.createElement("div");
+  hardwareActions.className = "n-surface-hardware-actions";
+  const encoderSetup = makeKeyboardWorkbenchButton(
+    "Read & back up…",
+    "surface-encoder-open",
+    "Read the complete selected encoder chart, save a lossless backup, and optionally configure it",
+  );
+  encoderSetup.classList.add("n-surface-encoder-open");
+  encoderSetup.setAttribute("aria-controls", "n-surface-programming");
+  encoderSetup.setAttribute("aria-expanded", "false");
+  hardwareActions.append(hardwareRefresh, encoderSetup);
+  hardwareHead.append(hardwareHeading, hardwareActions);
 
   const hardwareStatus = document.createElement("div");
   hardwareStatus.className = "n-surface-hardware-status";
@@ -3931,6 +5695,114 @@ function createControlSurfaceItem(): HTMLElement {
     hardwareNote,
   );
   hardware.append(hardwareHead, hardwareStatus);
+
+  const programming = document.createElement("section");
+  programming.id = "n-surface-programming";
+  programming.className = "n-surface-programming";
+  programming.hidden = true;
+  const programmingHead = document.createElement("div");
+  programmingHead.className = "n-surface-programming-head";
+  const programmingHeading = document.createElement("div");
+  const programmingKicker = document.createElement("span");
+  programmingKicker.textContent = "Optional encoder setup";
+  const programmingTitle = document.createElement("strong");
+  programmingTitle.textContent = "Back up first, then choose how KSX should treat the chart";
+  programmingHeading.append(programmingKicker, programmingTitle);
+  const programmingClose = makeKeyboardWorkbenchButton(
+    "Close setup",
+    "surface-encoder-close",
+    "Close encoder setup without changing the hardware",
+  );
+  programmingClose.classList.add("quiet");
+  programmingHead.append(programmingHeading, programmingClose);
+  const programmingSummary = document.createElement("p");
+  programmingSummary.className = "n-surface-programming-summary";
+  programmingSummary.dataset.surfaceProgrammingSummary = "";
+  programmingSummary.setAttribute("role", "status");
+  programmingSummary.setAttribute("aria-live", "polite");
+  programmingSummary.textContent = "Read and back up the complete encoder chart before changing terminal assignments.";
+  const programmingQualification = document.createElement("aside");
+  programmingQualification.className = "n-surface-programming-qualification";
+  programmingQualification.dataset.surfaceProgrammingQualification = "";
+  programmingQualification.setAttribute("aria-live", "polite");
+  programmingQualification.hidden = true;
+  const qualificationStep = document.createElement("span");
+  qualificationStep.dataset.surfaceQualificationStep = "";
+  qualificationStep.textContent = "Writer check · step 1 of 2";
+  const qualificationTitle = document.createElement("strong");
+  qualificationTitle.dataset.surfaceQualificationTitle = "";
+  qualificationTitle.textContent = "Verify this encoder before writing a full layout";
+  const qualificationDetail = document.createElement("p");
+  qualificationDetail.dataset.surfaceQualificationDetail = "";
+  qualificationDetail.textContent =
+    "Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.";
+  programmingQualification.append(qualificationStep, qualificationTitle, qualificationDetail);
+  const programmingConflicts = document.createElement("ul");
+  programmingConflicts.className = "n-surface-programming-conflicts";
+  programmingConflicts.dataset.surfaceProgrammingConflicts = "";
+  programmingConflicts.setAttribute("role", "alert");
+  programmingConflicts.hidden = true;
+  const programmingModes = document.createElement("div");
+  programmingModes.className = "n-surface-programming-modes";
+  programmingModes.setAttribute("role", "group");
+  programmingModes.setAttribute("aria-label", "Encoder setup approach");
+  ([
+    ["recommended", "Recommended KSX layout", "Allocate a deterministic four-player chart and clear onboard alternate/shift roles so KSX owns dynamic behavior."],
+    ["custom", "Customize terminals", "Choose the exact supported key each linked encoder terminal should emit."],
+    ["keep-current", "Keep current + Teach", "Leave EEPROM unchanged and teach KSX the signals the panel already sends."],
+  ] as const).forEach(([mode, label, description]) => {
+    const button = makeKeyboardWorkbenchButton(label, "surface-encoder-mode", description, mode);
+    button.dataset.surfaceProgrammingMode = mode;
+    button.dataset.surfaceProgrammingDescription = description;
+    const copy = document.createElement("small");
+    copy.textContent = description;
+    button.append(copy);
+    programmingModes.append(button);
+  });
+  const programmingActions = document.createElement("div");
+  programmingActions.className = "n-surface-programming-actions";
+  const reread = makeKeyboardWorkbenchButton(
+    "Read & back up again",
+    "surface-encoder-read",
+    "Read every chart byte again and create another verified backend-owned backup",
+  );
+  reread.classList.add("quiet");
+  const review = makeKeyboardWorkbenchButton(
+    "Review hardware changes",
+    "surface-encoder-review",
+    "Compute an exact terminal and byte diff without writing anything",
+  );
+  review.classList.add("primary");
+  programmingActions.append(reread, review);
+  const restoreGroup = document.createElement("div");
+  restoreGroup.className = "n-surface-programming-restore";
+  const restoreLabel = document.createElement("label");
+  const restoreLabelText = document.createElement("span");
+  restoreLabelText.dataset.surfaceBackupLabel = "";
+  restoreLabelText.textContent = "Restore a verified backup";
+  const backupSelect = document.createElement("select");
+  backupSelect.dataset.surfaceBackup = "";
+  backupSelect.setAttribute("aria-label", "Verified encoder backup");
+  const backupPlaceholder = document.createElement("option");
+  backupPlaceholder.value = "";
+  backupPlaceholder.textContent = "No verified backups yet";
+  backupSelect.append(backupPlaceholder);
+  restoreLabel.append(restoreLabelText, backupSelect);
+  const restore = makeKeyboardWorkbenchButton(
+    "Review restore…",
+    "surface-encoder-restore",
+    "Compare this backend-owned backup with the complete current chart before restoring",
+  );
+  restoreGroup.append(restoreLabel, restore);
+  programming.append(
+    programmingHead,
+    programmingSummary,
+    programmingQualification,
+    programmingConflicts,
+    programmingModes,
+    programmingActions,
+    restoreGroup,
+  );
 
   const stages = document.createElement("nav");
   stages.className = "n-surface-stages";
@@ -4036,8 +5908,8 @@ function createControlSurfaceItem(): HTMLElement {
   const note = document.createElement("p");
   note.className = "n-surface-note";
   note.textContent =
-    "Teach records what the exact selected keyboard-mode encoder sends. Route writes the KSX mapping. Hardware status above is inspection-only; this Builder does not program the encoder.";
-  content.append(head, hardware, stages, status, starters, tools, workarea, note);
+    "Encoder setup is optional and supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
+  content.append(head, hardware, programming, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
     instanceId: "control-surface",
@@ -4151,7 +6023,27 @@ function syncControlSurfaceWidget(reveal: boolean): void {
   syncControlSurfaceChrome();
   labelCanvasMarkers();
   if (reveal) {
-    canvas.focusItem(controlSurfaceItem);
+    const viewport = controlSurfaceItem.closest<HTMLElement>(".forma-canvas-viewport");
+    const map = viewport?.querySelector<HTMLElement>(".forma-canvas-navigator");
+    let right = 0;
+    if (viewport && map && !map.hidden) {
+      const style = window.getComputedStyle(map);
+      const viewportRect = viewport.getBoundingClientRect();
+      const mapRect = map.getBoundingClientRect();
+      const intersectsViewport = style.display !== "none" && style.visibility !== "hidden" &&
+        mapRect.width > 0 && mapRect.height > 0 &&
+        mapRect.left < viewportRect.right && mapRect.right > viewportRect.left &&
+        mapRect.top < viewportRect.bottom && mapRect.bottom > viewportRect.top;
+      if (intersectsViewport) {
+        right = Math.max(
+          0,
+          viewportRect.right - Math.max(viewportRect.left, mapRect.left) + 12,
+        );
+      }
+    }
+    canvas.focusItem(controlSurfaceItem, {
+      viewportInsets: right > 0 ? { right } : undefined,
+    });
     focusControlSurfacePrimary();
   }
 }
@@ -4176,7 +6068,12 @@ function openControlSurfaceBuilder(): void {
 }
 
 function closeControlSurfaceBuilder(): void {
+  if (panelProgrammingTransactionActive()) {
+    keyboardWorkbenchAnnounce("The encoder write and verification must finish before the Builder can close.");
+    return;
+  }
   cancelControlSurfaceHardwareStatus(true);
+  resetPanelProgramming(false);
   if (learnRow?.purpose === "surface") void cancelLearn();
   if (assignKey) cancelAssign();
   controlSurfaceChoosingTemplate = false;
@@ -6779,6 +8676,51 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
+    const encoderTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="surface-encoder-terminal"][data-surface-control-id][data-surface-channel-id]',
+    );
+    if (encoderTerminal) {
+      selectControlSurfaceChannel(
+        encoderTerminal.dataset.surfaceControlId ?? "",
+        encoderTerminal.dataset.surfaceChannelId ?? "",
+      );
+      assignSelectedPanelTerminal(encoderTerminal.value);
+      return;
+    }
+    const encoderKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="surface-encoder-key"][data-surface-control-id][data-surface-channel-id]',
+    );
+    if (encoderKey) {
+      selectControlSurfaceChannel(
+        encoderKey.dataset.surfaceControlId ?? "",
+        encoderKey.dataset.surfaceChannelId ?? "",
+      );
+      assignSelectedPanelKey(encoderKey.value);
+      return;
+    }
+    const encoderShare = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
+      '[data-nx="surface-encoder-share"][data-surface-control-id][data-surface-channel-id]',
+    );
+    if (encoderShare) {
+      const controlId = encoderShare.dataset.surfaceControlId ?? "";
+      const channelId = encoderShare.dataset.surfaceChannelId ?? "";
+      const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
+      if (control && control.channels.some((channel) => channel.id === channelId)) {
+        const identity = `${control.physicalId}\u0000${channelId}`;
+        if (encoderShare.checked) panelProgrammingSharedAssignmentIds.add(identity);
+        else panelProgrammingSharedAssignmentIds.delete(identity);
+        panelProgrammingDropPlan();
+        syncPanelProgrammingUi();
+      }
+      return;
+    }
+    const backup = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      "[data-surface-backup]",
+    );
+    if (backup) {
+      syncPanelProgrammingUi();
+      return;
+    }
     const surfaceLabel = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
       '[data-nx="surface-label"][data-surface-control-id]',
     );
@@ -7533,6 +9475,24 @@ export function nocturneWire(root: HTMLElement): void {
       closeControlSurfaceBuilder();
     } else if (hit === "surface-hardware-refresh") {
       void refreshControlSurfaceHardwareStatus();
+    } else if (hit === "surface-encoder-open") {
+      openPanelProgrammingSetup();
+    } else if (hit === "surface-encoder-close") {
+      closePanelProgrammingSetup();
+    } else if (hit === "surface-encoder-read") {
+      void readPanelProgrammingChart(true);
+    } else if (hit === "surface-encoder-mode") {
+      const mode = target?.closest<HTMLElement>("[data-surface-programming-mode]")
+        ?.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
+      if (mode === "recommended" || mode === "custom" || mode === "keep-current") {
+        choosePanelProgrammingMode(mode);
+      }
+    } else if (hit === "surface-encoder-review") {
+      void requestPanelProgrammingPlan();
+    } else if (hit === "surface-encoder-restore") {
+      const backup = controlSurfaceItem?.querySelector<HTMLSelectElement>("[data-surface-backup]")
+        ?.value ?? "";
+      if (backup) void requestPanelRestorePlan(backup);
     } else if (hit === "surface-template") {
       const template = target?.closest<HTMLElement>("[data-surface-template]")
         ?.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;

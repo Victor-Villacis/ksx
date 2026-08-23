@@ -40,6 +40,10 @@ pub mod codes {
     pub const MACRO_INVALID: &str = "macro-invalid";
     /// A restore mode / verb argument this build does not know.
     pub const BAD_REQUEST: &str = "bad-request";
+    /// A persistent hardware transaction may have started, but KSX could not
+    /// return a fully verified recovery outcome. Callers must not classify
+    /// this by matching human-readable prose.
+    pub const RECOVERY_REQUIRED: &str = "recovery-required";
     /// A press was heard but could not be joined to exactly one selectable board.
     pub const IDENTIFY_UNMATCHED: &str = "identify-unmatched";
     /// The operation exists, but not on this surface — the remedy names the

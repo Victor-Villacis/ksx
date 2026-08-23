@@ -16,7 +16,7 @@ import {
 } from "./keyboardWorkbench";
 
 export const CONTROL_SURFACE_STORAGE_KEY = "ksx-nocturne-control-surfaces1";
-export const CONTROL_SURFACE_STORE_VERSION = 1 as const;
+export const CONTROL_SURFACE_STORE_VERSION = 2 as const;
 export const CONTROL_SURFACE_BOUNDS = { width: 1200, height: 720 } as const;
 
 export const CONTROL_SURFACE_TEMPLATE_SLUGS = [
@@ -46,10 +46,23 @@ export interface ControlSurfaceInput {
   device: string;
 }
 
+/** What the physical encoder is expected to emit after a reviewed hardware
+ *  program. This is deliberately separate from `input`, which remains the
+ *  signal Teach actually observed from Windows. */
+export interface ControlSurfaceEncoderAssignment {
+  driver: string;
+  boardFingerprint: string;
+  terminalId: string;
+  terminalLabel: string;
+  expectedKey: string;
+  verification: "unverified" | "matched" | "mismatch";
+}
+
 export interface ControlSurfaceChannel {
   id: string;
   label: string;
   input: ControlSurfaceInput;
+  encoder?: ControlSurfaceEncoderAssignment;
 }
 
 export interface ControlSurfaceControl {
@@ -190,6 +203,27 @@ function cleanInput(value: unknown): ControlSurfaceInput {
   return { kind: "keyboard", key, device: cleanString(value.device, 240) };
 }
 
+function cleanEncoderAssignment(value: unknown): ControlSurfaceEncoderAssignment | undefined {
+  if (!isRecord(value)) return undefined;
+  const driver = cleanString(value.driver, 64);
+  const boardFingerprint = cleanString(value.boardFingerprint, 160);
+  const terminalId = cleanString(value.terminalId, 32);
+  const terminalLabel = cleanString(value.terminalLabel, 64);
+  const expectedKey = cleanString(value.expectedKey, 64);
+  const verification = value.verification === "matched" || value.verification === "mismatch"
+    ? value.verification
+    : "unverified";
+  if (!driver || !boardFingerprint || !terminalId) return undefined;
+  return {
+    driver,
+    boardFingerprint,
+    terminalId,
+    terminalLabel: terminalLabel || terminalId,
+    expectedKey,
+    verification,
+  };
+}
+
 function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): ControlSurfaceChannel[] {
   const fallback = channelsForKind(kind);
   if (!Array.isArray(value)) return fallback;
@@ -204,6 +238,7 @@ function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): Control
       id,
       label: cleanString(raw.label, 40) || id,
       input: cleanInput(raw.input),
+      encoder: cleanEncoderAssignment(raw.encoder),
     });
     if (channels.length >= MAX_CHANNELS) break;
   }
@@ -271,6 +306,7 @@ export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSur
       channels: control.channels.map((channel) => ({
         ...channel,
         input: { ...channel.input },
+        encoder: channel.encoder ? { ...channel.encoder } : undefined,
       })),
     })),
   };
@@ -368,7 +404,10 @@ export function sanitizeControlSurfaceStore(value: unknown): ControlSurfaceStore
       return emptyStore();
     }
   }
-  if (!isRecord(candidate) || candidate.version !== CONTROL_SURFACE_STORE_VERSION) return emptyStore();
+  if (
+    !isRecord(candidate) ||
+    (candidate.version !== 1 && candidate.version !== CONTROL_SURFACE_STORE_VERSION)
+  ) return emptyStore();
   const devices: Record<string, ControlSurfaceState> = {};
   if (isRecord(candidate.devices)) {
     for (const [rawIdentity, rawState] of Object.entries(candidate.devices)) {
@@ -879,7 +918,13 @@ export function copyControlSurfaceControl(
     origin: "manual",
     x: clamp(source.x + 28, 0, CONTROL_SURFACE_BOUNDS.width - source.width),
     y: clamp(source.y + 28, 0, CONTROL_SURFACE_BOUNDS.height - source.height),
-    channels: source.channels.map((channel) => ({ ...channel, input: { ...channel.input } })),
+    channels: source.channels.map((channel) => ({
+      ...channel,
+      input: { ...channel.input },
+      // A duplicate is a different physical switch and therefore starts with
+      // no claimed terminal. A mirror is another view of the same switch.
+      encoder: mode === "mirror" && channel.encoder ? { ...channel.encoder } : undefined,
+    })),
   };
   return sanitizeControlSurfaceState({
     ...safe,
@@ -962,7 +1007,16 @@ export function teachControlSurfaceChannel(
           ...control,
           channels: control.channels.map((channel) =>
             channel.id === channelId
-              ? { ...channel, input: { kind: "keyboard" as const, key, device } }
+              ? {
+                  ...channel,
+                  input: { kind: "keyboard" as const, key, device },
+                  encoder: channel.encoder
+                    ? {
+                        ...channel.encoder,
+                        verification: channel.encoder.expectedKey === key ? "matched" as const : "mismatch" as const,
+                      }
+                    : undefined,
+                }
               : channel
           ),
         }
@@ -973,6 +1027,68 @@ export function teachControlSurfaceChannel(
     controls,
     selectedControlId: controlId,
     selectedChannelId: channelId,
+  });
+}
+
+/** Attach a backend-decoded encoder terminal to one physical channel.
+ * Mirrors share the assignment through `physicalId`; duplicates do not. The
+ * observed input remains untouched until Teach proves what Windows receives. */
+export function assignControlSurfaceTerminal(
+  state: ControlSurfaceState,
+  controlId: string,
+  channelId: string,
+  assignment: Omit<ControlSurfaceEncoderAssignment, "verification"> | null,
+): ControlSurfaceState {
+  const safe = sanitizeControlSurfaceState(state);
+  const selected = safe.controls.find((control) => control.id === controlId);
+  if (!selected || !selected.channels.some((channel) => channel.id === channelId)) return safe;
+  const controls = safe.controls.map((control) =>
+    control.physicalId === selected.physicalId
+      ? {
+          ...control,
+          channels: control.channels.map((channel) =>
+            channel.id === channelId
+              ? {
+                  ...channel,
+                  encoder: assignment
+                    ? {
+                        ...assignment,
+                        verification: channel.input.kind === "keyboard"
+                          ? channel.input.key === assignment.expectedKey ? "matched" as const : "mismatch" as const
+                          : "unverified" as const,
+                      }
+                    : undefined,
+                }
+              : channel
+          ),
+        }
+      : control
+  );
+  return sanitizeControlSurfaceState({
+    ...safe,
+    controls,
+    selectedControlId: controlId,
+    selectedChannelId: channelId,
+  });
+}
+
+/** A successful hardware write changes the expectation, not the observation.
+ * Mark every assignment for that board unverified until Teach walks it. */
+export function invalidateControlSurfaceEncoderVerification(
+  state: ControlSurfaceState,
+  boardFingerprint: string,
+): ControlSurfaceState {
+  const safe = sanitizeControlSurfaceState(state);
+  return sanitizeControlSurfaceState({
+    ...safe,
+    controls: safe.controls.map((control) => ({
+      ...control,
+      channels: control.channels.map((channel) =>
+        channel.encoder?.boardFingerprint === boardFingerprint
+          ? { ...channel, encoder: { ...channel.encoder, verification: "unverified" as const } }
+          : channel
+      ),
+    })),
   });
 }
 

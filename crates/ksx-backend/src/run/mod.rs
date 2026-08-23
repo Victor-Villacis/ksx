@@ -128,7 +128,14 @@ pub fn run(
         return Ok(());
     }
 
-    run_live(plan, launch, root.games_path(), live_latency, json)
+    run_live(
+        plan,
+        launch,
+        root.games_path(),
+        root.dir().to_path_buf(),
+        live_latency,
+        json,
+    )
 }
 
 /// Find the profile again and turn it into a launch spec, refusing anything
@@ -188,6 +195,7 @@ fn run_live(
     plan: RunPlan,
     launch: Option<ksx_games::LaunchSpec>,
     games_toml: std::path::PathBuf,
+    config_dir: std::path::PathBuf,
     live_latency: bool,
     json: bool,
 ) -> anyhow::Result<()> {
@@ -202,7 +210,14 @@ fn run_live(
     // Backend selection is per device (`[[device]] backend = ...`). This claims
     // any WinUSB interfaces the plan names, and only creates an Interception
     // context if something still needs one — see `crate::capture`.
-    live_session(&plan, crate::capture::build, hook, live_latency, json)
+    live_session(
+        &plan,
+        crate::capture::build,
+        hook,
+        &config_dir,
+        live_latency,
+        json,
+    )
 }
 
 /// One live session, from "is the bus there" to the final report.
@@ -223,10 +238,22 @@ pub(crate) fn live_session(
     )
         -> Result<Box<dyn ksx_capture::CaptureBackend>, crate::capture::SetupError>,
     hook: Box<dyn supervisor::SessionHook>,
+    config_dir: &std::path::Path,
     live_latency: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     use ksx_output::{RoutedBackend, VigemBackend};
+
+    // Standalone `ksx run` / `ksx play` has no daemon state for Studio to
+    // query. Hold the same machine-session named lease as persistent encoder
+    // maintenance for the entire live session. The daemon uses this lease for
+    // its start transition and remains visible through its control pipe once
+    // running; standalone sessions must keep it until teardown.
+    let _panel_programming_lease =
+        match crate::panel_programming::acquire_play_start_guard(config_dir) {
+            Ok(lease) => lease,
+            Err(refusal) => refuse_api(json, &refusal),
+        };
 
     // Each output stack is opened only if a selected persona needs it. This is
     // load-bearing for a DualSense-only session: ViGEmBus is a compatibility
@@ -320,6 +347,7 @@ fn run_live(
     _plan: RunPlan,
     _launch: Option<ksx_games::LaunchSpec>,
     _games_toml: std::path::PathBuf,
+    _config_dir: std::path::PathBuf,
     _live_latency: bool,
     _json: bool,
 ) -> anyhow::Result<()> {
@@ -335,6 +363,23 @@ fn refuse(json: bool, code: &str, message: &str) -> ! {
         println!("{}", crate::pads::error_json(code, message));
     } else {
         eprintln!("error: {message}");
+    }
+    std::process::exit(EXIT_CANNOT_START);
+}
+
+#[cfg(windows)]
+fn refuse_api(json: bool, refusal: &ksx_api::Refusal) -> ! {
+    if json {
+        let mut value = crate::pads::error_json(&refusal.code, &refusal.message);
+        if let Some(remedy) = &refusal.remedy {
+            value["error"]["remedy"] = serde_json::Value::String(remedy.clone());
+        }
+        println!("{value}");
+    } else {
+        eprintln!("error: {}", refusal.message);
+        if let Some(remedy) = &refusal.remedy {
+            eprintln!("recovery: {remedy}");
+        }
     }
     std::process::exit(EXIT_CANNOT_START);
 }

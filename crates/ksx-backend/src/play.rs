@@ -766,6 +766,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         looping: options.looping,
         launch,
         games_toml: root.games_path(),
+        config_dir: root.dir().to_path_buf(),
         latency: options.latency,
         json: options.json,
     })
@@ -781,6 +782,7 @@ struct PlayRequest {
     looping: bool,
     launch: Option<ksx_games::LaunchSpec>,
     games_toml: PathBuf,
+    config_dir: PathBuf,
     latency: bool,
     json: bool,
 }
@@ -797,6 +799,7 @@ fn play_live(request: PlayRequest) -> anyhow::Result<()> {
         looping,
         launch,
         games_toml,
+        config_dir,
         latency,
         json,
     } = request;
@@ -844,6 +847,7 @@ fn play_live(request: PlayRequest) -> anyhow::Result<()> {
             Ok(Box::new(CompositeBackend::new(children, handles)) as Box<dyn CaptureBackend>)
         },
         hook,
+        &config_dir,
         latency,
         json,
     )

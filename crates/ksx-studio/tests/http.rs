@@ -4,9 +4,9 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Refusals are typed now (docs/M9-DECISION.md §6): a fake daemon refuses with
 /// the same `Refusal` a real one does, so what the page renders here is what it
@@ -32,10 +32,36 @@ struct FixedStatus;
 const BACKUP_LABEL: &str = "2026-08-05 14:32:07 UTC";
 
 /// Remember every address handed to a test server for this process. The tests
-/// run in parallel and a port-0 probe is released before `serve` binds; without
-/// this reservation two probes can briefly choose the same address and make
-/// one test talk to another test's fixture.
+/// run in parallel and `serve` owns its bind internally, so the port-0 probe
+/// must be released first. The reservation keeps two in-process probes apart;
+/// the nonce handshake below proves which provider won the remaining bind race.
 static SERVER_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
+static SERVER_NONCE: AtomicU64 = AtomicU64::new(1);
+
+/// Decorate the ordinary status provider with a one-use startup marker. The
+/// marker travels through the real `/api/status` handler, so observing it
+/// proves much more than "something accepted TCP": this exact fixture's
+/// provider, router and listener own the address returned to the test.
+struct FixtureStatus {
+    inner: Box<dyn StatusSource>,
+    marker: String,
+}
+
+impl StatusSource for FixtureStatus {
+    fn snapshot(&self) -> StatusSnapshot {
+        let mut snapshot = self.inner.snapshot();
+        snapshot.generated_at.clone_from(&self.marker);
+        snapshot
+    }
+
+    fn mapper(&self) -> MapperSnapshot {
+        self.inner.mapper()
+    }
+
+    fn macros(&self, preset: &str) -> MacroSnapshot {
+        self.inner.macros(preset)
+    }
+}
 
 impl StatusSource for FixedStatus {
     fn snapshot(&self) -> StatusSnapshot {
@@ -710,6 +736,12 @@ struct ScriptedMachine {
     panel_status_calls: AtomicUsize,
     panel_status_devices: Mutex<Vec<Option<String>>>,
     panel_status_refuse: bool,
+    panel_chart_specs: Mutex<Vec<ksx_api::PanelChartSpec>>,
+    panel_backup_specs: Mutex<Vec<ksx_api::PanelBackupsSpec>>,
+    panel_program_plan_specs: Mutex<Vec<ksx_api::PanelProgramSpec>>,
+    panel_program_specs: Mutex<Vec<ksx_api::PanelProgramApplySpec>>,
+    panel_restore_plan_specs: Mutex<Vec<ksx_api::PanelRestoreSpec>>,
+    panel_restore_specs: Mutex<Vec<ksx_api::PanelRestoreApplySpec>>,
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
     /// Raw daemon learner identities presented for safe inventory resolution.
@@ -766,6 +798,12 @@ impl Default for ScriptedMachine {
             panel_status_calls: AtomicUsize::new(0),
             panel_status_devices: Mutex::new(Vec::new()),
             panel_status_refuse: false,
+            panel_chart_specs: Mutex::new(Vec::new()),
+            panel_backup_specs: Mutex::new(Vec::new()),
+            panel_program_plan_specs: Mutex::new(Vec::new()),
+            panel_program_specs: Mutex::new(Vec::new()),
+            panel_restore_plan_specs: Mutex::new(Vec::new()),
+            panel_restore_specs: Mutex::new(Vec::new()),
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             identified_from: Mutex::new(Vec::new()),
@@ -827,6 +865,109 @@ impl ScriptedMachine {
         Self {
             panel_status_refuse: true,
             ..Self::default()
+        }
+    }
+
+    fn panel_backup() -> ksx_api::PanelBackupRow {
+        ksx_api::PanelBackupRow {
+            backup_id: "20260823-120000-A1B2C3D4E5F6".to_owned(),
+            label: "Original chart · Aug 23, 2026".to_owned(),
+            created_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            image_sha256: "A".repeat(64),
+            image_bytes: 256,
+            reason: "chart-read".to_owned(),
+        }
+    }
+
+    fn panel_chart_view() -> ksx_api::PanelChartView {
+        ksx_api::PanelChartView {
+            generated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            summary: "Complete 256-byte I-PAC chart read and backed up.".to_owned(),
+            board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+            board_name: "Ultimarc I-PAC 4X".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            driver: "ultimarc-ipac4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            image_sha256: "A".repeat(64),
+            image_bytes: 256,
+            programming_state: "supervised".to_owned(),
+            programming_detail:
+                "Lossless backup, exact write, full readback, verification, and restore are available."
+                    .to_owned(),
+            qualification_state: "qualified".to_owned(),
+            qualification_detail: "Writer qualification passed.".to_owned(),
+            qualification_restore_backup_id: None,
+            terminals: vec![ksx_api::PanelTerminalRow {
+                terminal_id: "1sw4".to_owned(),
+                terminal_label: "Player 1 · Button 4".to_owned(),
+                player: 1,
+                kind: "button".to_owned(),
+                normal: ksx_api::PanelKeyValue {
+                    code: 13,
+                    key: Some("J".to_owned()),
+                    label: "J".to_owned(),
+                    supported: true,
+                },
+                shifted: ksx_api::PanelKeyValue {
+                    code: 0,
+                    key: None,
+                    label: "Unassigned".to_owned(),
+                    supported: true,
+                },
+                shift_state: ksx_api::PanelShiftState::Disabled,
+                is_shift: false,
+            }],
+            key_options: vec![ksx_api::PanelKeyOption {
+                key: "J".to_owned(),
+                label: "J".to_owned(),
+                code: 13,
+                safe_for_qualification: true,
+            }],
+            backup: Some(Self::panel_backup()),
+            notes: Vec::new(),
+        }
+    }
+
+    fn panel_plan_view() -> ksx_api::PanelProgramPlanView {
+        ksx_api::PanelProgramPlanView {
+            summary: "1 terminal assignment changes 1 byte; 255 bytes are preserved.".to_owned(),
+            board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+            board_name: "Ultimarc I-PAC 4X".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            base_sha256: "A".repeat(64),
+            desired_sha256: "B".repeat(64),
+            image_bytes: 256,
+            terminal_diff: vec![ksx_api::PanelTerminalDiffRow {
+                terminal_id: "1sw4".to_owned(),
+                terminal_label: "Player 1 · Button 4".to_owned(),
+                layer: "normal".to_owned(),
+                before: "J".to_owned(),
+                after: "K".to_owned(),
+            }],
+            byte_diff: vec![ksx_api::PanelByteDiffRow {
+                offset: 33,
+                before: 13,
+                after: 14,
+                meaning: "1sw4 normal".to_owned(),
+            }],
+            preserved_byte_count: 255,
+            confirmation: "Program Ultimarc I-PAC 4X".to_owned(),
+            blockers: Vec::new(),
+        }
+    }
+
+    fn panel_program_outcome() -> ksx_api::PanelProgramOutcome {
+        ksx_api::PanelProgramOutcome {
+            state: "verified".to_owned(),
+            summary: "The I-PAC chart was programmed and every byte verified.".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            expected_sha256: "B".repeat(64),
+            observed_sha256: Some("B".repeat(64)),
+            backup: Self::panel_backup(),
+            verified_at: "2026-08-23 12:00:02 UTC".to_owned(),
+            next_step: "Teach each physical control to verify its Windows signal.".to_owned(),
         }
     }
 
@@ -1158,6 +1299,68 @@ impl ksx_api::MachineSource for ScriptedMachine {
             }],
             notes: Vec::new(),
         })
+    }
+
+    fn panel_chart(
+        &self,
+        spec: &ksx_api::PanelChartSpec,
+    ) -> Result<ksx_api::PanelChartView, Refusal> {
+        self.panel_chart_specs.lock().unwrap().push(spec.clone());
+        Ok(Self::panel_chart_view())
+    }
+
+    fn panel_backups(
+        &self,
+        spec: &ksx_api::PanelBackupsSpec,
+    ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+        self.panel_backup_specs.lock().unwrap().push(spec.clone());
+        Ok(ksx_api::PanelBackupsView {
+            summary: "1 lossless restore point.".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            backups: vec![Self::panel_backup()],
+        })
+    }
+
+    fn panel_program_plan(
+        &self,
+        spec: &ksx_api::PanelProgramSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        self.panel_program_plan_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        Ok(Self::panel_plan_view())
+    }
+
+    fn panel_program(
+        &self,
+        spec: &ksx_api::PanelProgramApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_program_specs.lock().unwrap().push(spec.clone());
+        Ok(Self::panel_program_outcome())
+    }
+
+    fn panel_restore_plan(
+        &self,
+        spec: &ksx_api::PanelRestoreSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        self.panel_restore_plan_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        let mut plan = Self::panel_plan_view();
+        plan.summary = "Restore 1 terminal assignment from the selected backup.".to_owned();
+        Ok(plan)
+    }
+
+    fn panel_restore(
+        &self,
+        spec: &ksx_api::PanelRestoreApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_restore_specs.lock().unwrap().push(spec.clone());
+        let mut outcome = Self::panel_program_outcome();
+        outcome.summary = "The backup was restored and every byte verified.".to_owned();
+        Ok(outcome)
     }
 
     fn device_identify(
@@ -1890,8 +2093,9 @@ impl ksx_api::MachineSource for CertificateMachine {
     }
 }
 
-/// Bind port 0 to learn a free port, release it, and serve there. The tiny
-/// race is acceptable in a local test.
+/// Bind port 0 to learn a free port, release it, and serve there. Because the
+/// production server owns its bind internally, startup is not considered
+/// complete until the exact fixture provider answers a unique handshake.
 fn start_server(control: Arc<ScriptedControl>) -> SocketAddr {
     start_server_with_machine(control, Arc::new(ScriptedMachine::default()))
 }
@@ -1942,6 +2146,19 @@ fn start_server_with_sources(
         break candidate;
     };
     drop(addresses);
+    let marker = format!(
+        "ksx-http-fixture-{}-{}-{}",
+        std::process::id(),
+        SERVER_NONCE.fetch_add(1, Ordering::Relaxed),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let status: Box<dyn StatusSource> = Box::new(FixtureStatus {
+        inner: status,
+        marker: marker.clone(),
+    });
     struct SharedControl(Arc<ScriptedControl>);
     impl ControlSource for SharedControl {
         fn session(&self) -> SessionView {
@@ -2021,6 +2238,42 @@ fn start_server_with_sources(
             spec: &ksx_api::PanelStatusSpec,
         ) -> Result<ksx_api::PanelStatusView, Refusal> {
             self.0.panel_status(spec)
+        }
+        fn panel_chart(
+            &self,
+            spec: &ksx_api::PanelChartSpec,
+        ) -> Result<ksx_api::PanelChartView, Refusal> {
+            self.0.panel_chart(spec)
+        }
+        fn panel_backups(
+            &self,
+            spec: &ksx_api::PanelBackupsSpec,
+        ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+            self.0.panel_backups(spec)
+        }
+        fn panel_program_plan(
+            &self,
+            spec: &ksx_api::PanelProgramSpec,
+        ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+            self.0.panel_program_plan(spec)
+        }
+        fn panel_program(
+            &self,
+            spec: &ksx_api::PanelProgramApplySpec,
+        ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+            self.0.panel_program(spec)
+        }
+        fn panel_restore_plan(
+            &self,
+            spec: &ksx_api::PanelRestoreSpec,
+        ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+            self.0.panel_restore_plan(spec)
+        }
+        fn panel_restore(
+            &self,
+            spec: &ksx_api::PanelRestoreApplySpec,
+        ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+            self.0.panel_restore(spec)
         }
         fn device_identify(
             &self,
@@ -2120,8 +2373,9 @@ fn start_server_with_sources(
             self.0.pads_prune(confirm)
         }
     }
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let _ = ksx_studio::serve(
+        let result = ksx_studio::serve(
             addr,
             status,
             Box::new(SharedControl(control)),
@@ -2134,16 +2388,84 @@ fn start_server_with_sources(
                     .with_remedy("start the daemon"),
             ),
         );
+        let _ = startup_tx.send(result);
     });
-    // Wait until it accepts.
+    // A TCP connect alone is not proof of ownership: another process can win
+    // the bind between the port-0 probe and `serve`. Wait for this fixture's
+    // nonce through the real router, while also surfacing `serve`'s bind error
+    // instead of discarding it on the spawned thread.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if TcpStream::connect(addr).is_ok() {
+        match startup_rx.try_recv() {
+            Ok(Ok(())) => panic!("test server exited before startup on {addr}"),
+            Ok(Err(error)) => panic!("test server could not start on {addr}: {error}"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("test server thread ended before startup on {addr}")
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if fixture_owns_endpoint(addr, &marker) {
             return addr;
         }
-        assert!(Instant::now() < deadline, "server never came up on {addr}");
+        assert!(
+            Instant::now() < deadline,
+            "server never proved fixture ownership on {addr} (wanted {marker})"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn fixture_owns_endpoint(addr: SocketAddr, marker: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(250));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    if stream
+        .write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() || !response.starts_with("HTTP/1.1 200") {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(body_of(&response))
+        .ok()
+        .and_then(|payload| {
+            payload["snapshot"]["generated_at"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .is_some_and(|observed| observed == marker)
+}
+
+/// Regression for the old readiness probe, which accepted any TCP listener
+/// on the released port and could send a later test request to another fixture
+/// (or an unrelated local process). HTTP 200 is still not ownership without
+/// the nonce supplied by this invocation of `start_server_with_sources`.
+#[test]
+fn fixture_startup_handshake_rejects_a_foreign_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let foreign = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 256];
+        let _ = stream.read(&mut request).unwrap();
+        let body = r#"{"snapshot":{"generated_at":"some-other-fixture"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
+
+    assert!(!fixture_owns_endpoint(addr, "the-fixture-we-started"));
+    foreign.join().unwrap();
 }
 
 fn http(addr: SocketAddr, request: &str) -> String {
@@ -9535,4 +9857,218 @@ fn panel_status_is_guarded_and_has_no_write_method() {
     let posted = post_json(addr, "/api/panel/status", "{}");
     assert!(posted.starts_with("HTTP/1.1 405"), "{posted}");
     assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+}
+
+/// Every panel POST can cause the machine provider to exchange HID reports,
+/// including the nominally read-only chart and plan steps. A foreign page must
+/// be stopped by the shared Origin guard before any of those typed verbs run.
+#[test]
+fn panel_report_routes_reject_foreign_origins_before_the_machine_provider() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    for path in [
+        "/api/panel/chart",
+        "/api/panel/program/plan",
+        "/api/panel/program/apply",
+        "/api/panel/restore/plan",
+        "/api/panel/restore/apply",
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\n\
+                 Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
+            "{path} reached a report-sending handler from a foreign origin: {response}"
+        );
+    }
+
+    assert!(machine.panel_chart_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_program_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// The encoder programmer is one supervised flow over the typed machine
+/// verbs: read + immutable backup, exact diff, explicit write, readback result,
+/// and a separately reviewed restore. The staged selector remains the server's
+/// authority in every request.
+#[test]
+fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let chart = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0430:00","backup":true}"#,
+    );
+    assert!(chart.starts_with("HTTP/1.1 200"), "{chart}");
+    assert!(chart.contains("cache-control: no-store"), "{chart}");
+    let chart: serde_json::Value = serde_json::from_str(body_of(&chart)).unwrap();
+    assert_eq!(chart["target_selector"], "usb:d209:0430:00", "{chart}");
+    assert_eq!(chart["view"]["programming_state"], "supervised", "{chart}");
+    assert_eq!(
+        chart["view"]["protocol_profile"], "ipac4-pac256-v1",
+        "{chart}"
+    );
+    assert_eq!(chart["view"]["image_bytes"], 256, "{chart}");
+    assert_eq!(
+        chart["view"]["terminals"][0]["shift_state"], "disabled",
+        "an is_shift=false compatibility bit must not hide an opaque shift byte: {chart}"
+    );
+    assert_eq!(chart["view"]["terminals"][0]["is_shift"], false);
+    assert_eq!(
+        chart["view"]["key_options"][0]["safe_for_qualification"], true,
+        "Studio must receive the backend-owned first-write key policy: {chart}"
+    );
+    let chart_calls = machine.panel_chart_specs.lock().unwrap();
+    assert_eq!(chart_calls.len(), 1);
+    assert_eq!(chart_calls[0].device.as_deref(), Some("usb:d209:0430:00"));
+    assert!(chart_calls[0].backup);
+    drop(chart_calls);
+
+    let backups = get(addr, "/api/panel/backups");
+    let backups: serde_json::Value = serde_json::from_str(body_of(&backups)).unwrap();
+    assert_eq!(backups["view"]["backups"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        machine.panel_backup_specs.lock().unwrap()[0]
+            .device
+            .as_deref(),
+        Some("usb:d209:0430:00")
+    );
+
+    let plan = post_json(
+        addr,
+        "/api/panel/program/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}}"#,
+            "A".repeat(64)
+        ),
+    );
+    let plan: serde_json::Value = serde_json::from_str(body_of(&plan)).unwrap();
+    assert!(plan["unavailable"].is_null(), "{plan}");
+    assert_eq!(plan["plan"]["desired_sha256"], "B".repeat(64), "{plan}");
+    let planned = machine.panel_program_plan_specs.lock().unwrap();
+    assert_eq!(planned.len(), 1);
+    assert_eq!(planned[0].device.as_deref(), Some("usb:d209:0430:00"));
+    assert_eq!(planned[0].edits[0].terminal_id, "1sw4");
+    drop(planned);
+
+    let applied = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let applied: serde_json::Value = serde_json::from_str(body_of(&applied)).unwrap();
+    assert_eq!(applied["outcome"]["state"], "verified", "{applied}");
+    assert_eq!(applied["mutation_disposition"], "verified", "{applied}");
+    let writes = machine.panel_program_specs.lock().unwrap();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].confirm);
+    assert!(writes[0].supervised);
+    assert_eq!(
+        writes[0].expected_board_fingerprint,
+        "ultimarc-ipac:D209:0430:board-4"
+    );
+    assert_eq!(writes[0].expected_protocol_profile, "ipac4-pac256-v1");
+    assert_eq!(
+        writes[0].program.device.as_deref(),
+        Some("usb:d209:0430:00")
+    );
+    drop(writes);
+
+    let restore_plan = post_json(
+        addr,
+        "/api/panel/restore/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}}"#,
+            "B".repeat(64)
+        ),
+    );
+    let restore_plan: serde_json::Value = serde_json::from_str(body_of(&restore_plan)).unwrap();
+    assert!(restore_plan["plan"]["summary"]
+        .as_str()
+        .is_some_and(|line| line.starts_with("Restore")));
+
+    let restored = post_json(
+        addr,
+        "/api/panel/restore/apply",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "B".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let restored: serde_json::Value = serde_json::from_str(body_of(&restored)).unwrap();
+    assert_eq!(restored["mutation_disposition"], "verified", "{restored}");
+    assert!(restored["outcome"]["summary"]
+        .as_str()
+        .is_some_and(|line| line.contains("restored")));
+    assert_eq!(machine.panel_restore_specs.lock().unwrap().len(), 1);
+}
+
+/// A browser selector is a stale-screen assertion, never authority, and a
+/// live Play session is a hard stop before the provider can see a write.
+#[test]
+fn panel_programming_rejects_stale_targets_and_live_session_writes() {
+    let running = Arc::new(ScriptedControl::new(false));
+    running.running.store(true, Ordering::SeqCst);
+    assert!(
+        running
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(running, machine.clone());
+
+    let stale = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0431:00","backup":true}"#,
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).unwrap();
+    assert!(stale["unavailable"]
+        .as_str()
+        .is_some_and(|line| line.contains("changed")));
+    assert!(machine.panel_chart_specs.lock().unwrap().is_empty());
+
+    let blocked = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&blocked)).unwrap();
+    assert_eq!(blocked["mutation_disposition"], "not-started", "{blocked}");
+    assert!(blocked["unavailable"]
+        .as_str()
+        .is_some_and(|line| line.contains("stop Play")));
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
 }

@@ -38,6 +38,19 @@ export interface WidgetCanvasItemState {
   manualScale: number;
 }
 
+/** Screen-pixel space a focus operation must leave clear for fixed canvas
+ * chrome. Insets are relative to the viewport's inner box, not world units. */
+export interface WidgetCanvasViewportInsets {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+
+export interface WidgetCanvasFocusOptions {
+  viewportInsets?: WidgetCanvasViewportInsets;
+}
+
 export interface WidgetCanvasElements {
   viewport: HTMLElement;
   stage: HTMLElement;
@@ -140,6 +153,7 @@ interface CameraFramingTarget {
   itemId: string;
   mode: CameraFramingMode;
   direction?: WidgetNavigationDirection;
+  viewportInsets?: WidgetCanvasViewportInsets;
 }
 
 interface RuntimeAdmissionCandidate {
@@ -238,6 +252,48 @@ const KEYBOARD_NAVIGATION_DIRECTIONS: Readonly<
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizedViewportInsets(
+  insets?: WidgetCanvasViewportInsets,
+): WidgetCanvasViewportInsets | undefined {
+  if (!insets) return undefined;
+  const finiteInset = (value: number | undefined): number =>
+    Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+  const normalized = {
+    top: finiteInset(insets.top),
+    right: finiteInset(insets.right),
+    bottom: finiteInset(insets.bottom),
+    left: finiteInset(insets.left),
+  };
+  return normalized.top || normalized.right || normalized.bottom || normalized.left
+    ? normalized
+    : undefined;
+}
+
+function insetViewportFrame(
+  viewport: DOMRectReadOnly,
+  insets?: WidgetCanvasViewportInsets,
+): WorldRect {
+  const normalized = normalizedViewportInsets(insets);
+  const left = clamp(normalized?.left ?? 0, 0, Math.max(0, viewport.width - 1));
+  const right = clamp(
+    normalized?.right ?? 0,
+    0,
+    Math.max(0, viewport.width - left - 1),
+  );
+  const top = clamp(normalized?.top ?? 0, 0, Math.max(0, viewport.height - 1));
+  const bottom = clamp(
+    normalized?.bottom ?? 0,
+    0,
+    Math.max(0, viewport.height - top - 1),
+  );
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, viewport.width - left - right),
+    height: Math.max(1, viewport.height - top - bottom),
+  };
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -860,16 +916,21 @@ export class WidgetCanvas {
     }
   }
 
-  focusItem(item: HTMLElement): void {
+  focusItem(item: HTMLElement, options: WidgetCanvasFocusOptions = {}): void {
+    const viewportInsets = normalizedViewportInsets(options.viewportInsets);
     if (this.#focusSession) {
       const alreadyFocused = this.#focusSession.itemId === this.#itemId(item);
       this.setActive(item);
-      if (alreadyFocused) this.#frameFocusModeItem(item);
+      if (alreadyFocused) this.#frameFocusModeItem(item, viewportInsets);
       return;
     }
     this.setActive(item);
-    this.#applyOneShotFocusCamera(item);
-    this.#animateCamera({ itemId: this.#itemId(item), mode: "focus-item" });
+    this.#applyOneShotFocusCamera(item, viewportInsets);
+    this.#animateCamera({
+      itemId: this.#itemId(item),
+      mode: "focus-item",
+      viewportInsets,
+    });
   }
 
   centerItem(item: HTMLElement): void {
@@ -915,11 +976,18 @@ export class WidgetCanvas {
     return !item || item.dataset.instanceId === this.#focusSession.itemId;
   }
 
-  #frameFocusModeItem(item: HTMLElement): void {
+  #frameFocusModeItem(
+    item: HTMLElement,
+    viewportInsets?: WidgetCanvasViewportInsets,
+  ): void {
     const session = this.#focusSession;
     if (!session || session.itemId !== item.dataset.instanceId) return;
-    this.#applyFocusModeCamera(item, session);
-    this.#animateCamera({ itemId: session.itemId, mode: "focus-mode" });
+    this.#applyFocusModeCamera(item, session, viewportInsets);
+    this.#animateCamera({
+      itemId: session.itemId,
+      mode: "focus-mode",
+      viewportInsets,
+    });
   }
 
   #applyCenterCamera(item: HTMLElement): void {
@@ -932,32 +1000,43 @@ export class WidgetCanvas {
     this.#camera.panY = viewport.height / 2 - (visual.y + visual.height / 2) * zoom;
   }
 
-  #applyOneShotFocusCamera(item: HTMLElement): void {
+  #applyOneShotFocusCamera(
+    item: HTMLElement,
+    viewportInsets?: WidgetCanvasViewportInsets,
+  ): void {
     item.dataset.widgetCommandResetEdge = "true";
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
-    const focusGutter = clamp(Math.min(viewport.width, viewport.height) * 0.06, 24, 72);
-    const availableWidth = Math.max(240, viewport.width - focusGutter * 2);
-    const availableHeight = Math.max(220, viewport.height - focusGutter * 2);
+    const frame = insetViewportFrame(viewport, viewportInsets);
+    const focusGutter = clamp(Math.min(frame.width, frame.height) * 0.06, 24, 72);
+    const availableWidth = Math.max(viewportInsets ? 1 : 240, frame.width - focusGutter * 2);
+    const availableHeight = Math.max(viewportInsets ? 1 : 220, frame.height - focusGutter * 2);
     const targetZoom = clamp(
       Math.min(availableWidth / visual.width, availableHeight / visual.height, 1.1),
       MIN_ZOOM,
       MAX_ZOOM,
     );
     this.#camera.zoom = targetZoom;
-    this.#camera.panX = viewport.width / 2 - (visual.x + visual.width / 2) * targetZoom;
-    this.#camera.panY = viewport.height / 2 - (visual.y + visual.height / 2) * targetZoom;
+    this.#camera.panX = frame.x + frame.width / 2 -
+      (visual.x + visual.width / 2) * targetZoom;
+    this.#camera.panY = frame.y + frame.height / 2 -
+      (visual.y + visual.height / 2) * targetZoom;
   }
 
-  #applyFocusModeCamera(item: HTMLElement, session: WidgetFocusSession): void {
+  #applyFocusModeCamera(
+    item: HTMLElement,
+    session: WidgetFocusSession,
+    viewportInsets?: WidgetCanvasViewportInsets,
+  ): void {
     item.dataset.widgetCommandResetEdge = "true";
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
-    const gutter = clamp(Math.min(viewport.width, viewport.height) * 0.08, 32, 72);
-    const availableWidth = Math.max(1, viewport.width - gutter * 2);
-    const availableHeight = Math.max(1, viewport.height - gutter * 2);
+    const frame = insetViewportFrame(viewport, viewportInsets);
+    const gutter = clamp(Math.min(frame.width, frame.height) * 0.08, 32, 72);
+    const availableWidth = Math.max(1, frame.width - gutter * 2);
+    const availableHeight = Math.max(1, frame.height - gutter * 2);
     const desiredZoom = Math.min(
       availableWidth / Math.max(1, visual.width),
       availableHeight / Math.max(1, visual.height),
@@ -969,8 +1048,10 @@ export class WidgetCanvas {
       MAX_ZOOM,
     );
     this.#camera.zoom = targetZoom;
-    this.#camera.panX = viewport.width / 2 - (visual.x + visual.width / 2) * targetZoom;
-    this.#camera.panY = viewport.height / 2 - (visual.y + visual.height / 2) * targetZoom;
+    this.#camera.panX = frame.x + frame.width / 2 -
+      (visual.x + visual.width / 2) * targetZoom;
+    this.#camera.panY = frame.y + frame.height / 2 -
+      (visual.y + visual.height / 2) * targetZoom;
   }
 
   #retargetCameraFraming(): void {
@@ -979,12 +1060,14 @@ export class WidgetCanvas {
     const item = this.#items.get(target.itemId);
     if (!item) return;
     if (target.mode === "center") this.#applyCenterCamera(item);
-    else if (target.mode === "focus-item") this.#applyOneShotFocusCamera(item);
+    else if (target.mode === "focus-item") {
+      this.#applyOneShotFocusCamera(item, target.viewportInsets);
+    }
     else if (target.mode === "navigate") this.#applyNavigationReveal(item, target.direction);
     else {
       const session = this.#focusSession;
       if (!session || session.itemId !== target.itemId) return;
-      this.#applyFocusModeCamera(item, session);
+      this.#applyFocusModeCamera(item, session, target.viewportInsets);
     }
     this.#renderCameraNow();
   }

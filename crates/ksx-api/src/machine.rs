@@ -75,6 +75,74 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// `ksx panel chart` — explicitly read one supported encoder's complete
+    /// configuration image and decode the terminal assignments KSX knows.
+    ///
+    /// This is deliberately separate from [`Self::panel_status`]. Status is a
+    /// desired-access-zero inventory read; chart inspection performs the
+    /// vendor report transaction the user requested and therefore remains an
+    /// on-demand action on every surface.
+    fn panel_chart(&self, _spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
+        Err(Refusal::not_here(
+            "reading the panel encoder chart",
+            "run `ksx panel chart`",
+        ))
+    }
+
+    /// `ksx panel backups` — immutable, lossless hardware restore points for
+    /// the selected physical encoder. Raw images stay in the backend store;
+    /// this view exposes identity and hashes, never EEPROM bytes.
+    fn panel_backups(&self, _spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
+        Err(Refusal::not_here(
+            "listing panel encoder backups",
+            "run `ksx panel backups`",
+        ))
+    }
+
+    /// Read-only `ksx panel program` planning. It explicitly reads the current
+    /// chart, but sends no write report and creates no backup. The returned
+    /// identity, profile, and hashes are the stale-write contract the apply
+    /// call must prove again immediately before packet zero.
+    fn panel_program_plan(
+        &self,
+        _spec: &PanelProgramSpec,
+    ) -> Result<PanelProgramPlanView, Refusal> {
+        Err(Refusal::not_here(
+            "planning a panel encoder change",
+            "run `ksx panel program` without `--yes`",
+        ))
+    }
+
+    /// Confirmed `ksx panel program --yes` transaction: re-read, stale-hash
+    /// guard, durable lossless backup, write, complete readback, byte verify.
+    fn panel_program(&self, _spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refusal> {
+        Err(Refusal::not_here(
+            "programming the panel encoder",
+            "run `ksx panel program --yes`",
+        ))
+    }
+
+    /// Read-only reverse diff for one immutable hardware backup. Planning
+    /// explicitly reads the current chart but sends no write report.
+    fn panel_restore_plan(
+        &self,
+        _spec: &PanelRestoreSpec,
+    ) -> Result<PanelProgramPlanView, Refusal> {
+        Err(Refusal::not_here(
+            "planning a panel encoder restore",
+            "run `ksx panel restore` without `--yes`",
+        ))
+    }
+
+    /// Confirmed restore. The current chart is itself backed up before the
+    /// older image is written, and success still requires full readback.
+    fn panel_restore(&self, _spec: &PanelRestoreApplySpec) -> Result<PanelProgramOutcome, Refusal> {
+        Err(Refusal::not_here(
+            "restoring the panel encoder",
+            "run `ksx panel restore --yes`",
+        ))
+    }
+
     /// Resolve one physical key observation from the daemon learner through
     /// the same board inventory as [`Self::device_scan`], and return the exact
     /// served values a subsequent [`Self::device_pick`] would use.
@@ -641,6 +709,263 @@ pub struct PanelHidCollectionRow {
     pub feature_report_bytes: Option<u16>,
     #[serde(default)]
     pub errors: Vec<String>,
+}
+
+/// An explicit complete-chart read request. `backup` is a local, immutable
+/// restore point; it never alters the encoder.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelChartSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub backup: bool,
+}
+
+/// One key/action value decoded from the board image.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelKeyValue {
+    /// Raw vendor action byte. Keeping it visible makes unknown values honest.
+    pub code: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub label: String,
+    pub supported: bool,
+}
+
+/// Decoded state of a terminal's shift-control byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelShiftState {
+    Disabled,
+    Enabled,
+    /// The raw byte is preserved but is not a known enabled/disabled value.
+    #[default]
+    Opaque,
+}
+
+/// One physical screw terminal in the supported encoder's chart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalRow {
+    /// Stable hardware spelling, for example `1sw4`.
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub player: u8,
+    /// `direction` | `button` | `start` | `coin`.
+    pub kind: String,
+    pub normal: PanelKeyValue,
+    pub shifted: PanelKeyValue,
+    /// Lossless semantic state of the terminal's shift-control byte.
+    /// `is_shift == false` alone does not mean disabled: opaque values are
+    /// also false for that compatibility/display convenience field.
+    #[serde(default)]
+    pub shift_state: PanelShiftState,
+    /// Compatibility/display convenience. Mutation safety must use
+    /// `shift_state` and require `disabled` explicitly.
+    pub is_shift: bool,
+}
+
+/// One keyboard action KSX can both program and observe through its capture
+/// vocabulary. The backend owns this list; Studio must not invent key bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelKeyOption {
+    pub key: String,
+    pub label: String,
+    pub code: u16,
+    /// True only for the deliberately inert first-write test vocabulary.
+    /// Full-chart programming may use every served option after qualification.
+    #[serde(default)]
+    pub safe_for_qualification: bool,
+}
+
+/// Metadata for a durable raw-image backup. The bytes and filesystem path are
+/// intentionally absent from the surface contract.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupRow {
+    pub backup_id: String,
+    pub label: String,
+    pub created_at: String,
+    pub board_fingerprint: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub reason: String,
+}
+
+/// A complete successful chart read, decoded without surrendering the raw
+/// image's authority. `programming_state` is `supervised`, `write-locked`, or
+/// `recovery-required`; a surface presents that state and never guesses around
+/// it. Writer qualification is separate from physical Teach: it proves this
+/// pinned EEPROM transport can write, read back and restore one harmless test
+/// assignment before a full chart is admitted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelChartView {
+    pub generated_at: String,
+    pub summary: String,
+    pub board_id: String,
+    pub board_name: String,
+    pub board_fingerprint: String,
+    pub driver: String,
+    /// Versioned transport/image contract that admitted this exact board.
+    /// Apply and restore must echo it instead of trusting a stale selector.
+    pub protocol_profile: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub programming_state: String,
+    pub programming_detail: String,
+    /// First-live-write safety gate: `required`, `validation-written`,
+    /// `validation-recovery`, or `qualified`. A board is qualified only after
+    /// one normal-terminal write and a verified restore of that transaction's
+    /// exact safety backup. An interrupted test restore returns to `required`;
+    /// full-chart layouts remain blocked until a clean round trip completes.
+    pub qualification_state: String,
+    pub qualification_detail: String,
+    /// Exact restore point that completes `validation-written`, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_restore_backup_id: Option<String>,
+    pub terminals: Vec<PanelTerminalRow>,
+    pub key_options: Vec<PanelKeyOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<PanelBackupRow>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupsSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupsView {
+    pub summary: String,
+    pub board_fingerprint: String,
+    pub backups: Vec<PanelBackupRow>,
+}
+
+/// One semantic terminal edit. An absent field is unchanged; an empty key
+/// spelling clears that action. The backend rejects any non-canonical key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalEdit {
+    pub terminal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shifted_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_shift: Option<bool>,
+    /// A repeated key on separate physical terminals is rejected unless every
+    /// participating edit marks that fan-in as deliberate. Mirrors collapse
+    /// to one terminal edit and never need this flag.
+    #[serde(default)]
+    pub allow_shared_key: bool,
+}
+
+/// Pure program-plan input. `layout` is `custom` or
+/// `canonical-four-player`; the latter is allocated by the backend.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub expected_base_sha256: String,
+    pub layout: String,
+    #[serde(default)]
+    pub edits: Vec<PanelTerminalEdit>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalDiffRow {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub layer: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelByteDiffRow {
+    pub offset: usize,
+    pub before: u16,
+    pub after: u16,
+    pub meaning: String,
+}
+
+/// Exact review model for program and restore. It contains changed bytes, not
+/// an arbitrary raw image a browser could replay.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramPlanView {
+    pub summary: String,
+    pub board_id: String,
+    pub board_name: String,
+    pub board_fingerprint: String,
+    /// Versioned transport/image contract used to read and plan this image.
+    pub protocol_profile: String,
+    pub base_sha256: String,
+    pub desired_sha256: String,
+    pub image_bytes: usize,
+    pub terminal_diff: Vec<PanelTerminalDiffRow>,
+    pub byte_diff: Vec<PanelByteDiffRow>,
+    pub preserved_byte_count: usize,
+    pub confirmation: String,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+}
+
+/// Confirmed apply request. The backend recomputes the desired image from the
+/// semantic plan and proves both hashes; it never accepts raw report bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramApplySpec {
+    pub program: PanelProgramSpec,
+    pub expected_desired_sha256: String,
+    /// Exact physical-board identity printed by the reviewed plan.
+    pub expected_board_fingerprint: String,
+    /// Exact protocol/image profile printed by the reviewed plan.
+    pub expected_protocol_profile: String,
+    #[serde(default)]
+    pub confirm: bool,
+    /// Explicit acknowledgement that this remains a supervised persistent
+    /// hardware write even after identity, profile, and hash checks pass.
+    #[serde(default)]
+    pub supervised: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRestoreSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub backup_id: String,
+    pub expected_current_sha256: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRestoreApplySpec {
+    pub restore: PanelRestoreSpec,
+    pub expected_desired_sha256: String,
+    /// Exact physical-board identity printed by the reviewed restore plan.
+    pub expected_board_fingerprint: String,
+    /// Exact protocol/image profile printed by the reviewed restore plan.
+    pub expected_protocol_profile: String,
+    #[serde(default)]
+    pub confirm: bool,
+    /// Explicit acknowledgement that this remains a supervised persistent
+    /// hardware write even when restoring a known-good backup.
+    #[serde(default)]
+    pub supervised: bool,
+}
+
+/// The only successful mutation result is `verified`. If packet delivery
+/// completed but readback did not match, state is `recovery-required` and the
+/// durable backup remains the road home.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramOutcome {
+    pub state: String,
+    pub summary: String,
+    pub board_fingerprint: String,
+    pub expected_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_sha256: Option<String>,
+    pub backup: PanelBackupRow,
+    pub verified_at: String,
+    pub next_step: String,
 }
 
 /// One keyboard the capture layer can see.
@@ -3104,6 +3429,40 @@ mod tests {
                     .unwrap_err(),
             ),
             (
+                "ksx panel chart",
+                Nothing.panel_chart(&PanelChartSpec::default()).unwrap_err(),
+            ),
+            (
+                "ksx panel backups",
+                Nothing
+                    .panel_backups(&PanelBackupsSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel program",
+                Nothing
+                    .panel_program_plan(&PanelProgramSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel program",
+                Nothing
+                    .panel_program(&PanelProgramApplySpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel restore",
+                Nothing
+                    .panel_restore_plan(&PanelRestoreSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel restore",
+                Nothing
+                    .panel_restore(&PanelRestoreApplySpec::default())
+                    .unwrap_err(),
+            ),
+            (
                 "ksx device pick",
                 Nothing.device_pick(&DevicePickSpec::default()).unwrap_err(),
             ),
@@ -3187,6 +3546,111 @@ mod tests {
                 "the refusal for {command} must name it: {refusal}"
             );
         }
+    }
+
+    #[test]
+    fn panel_apply_contract_requires_reviewed_identity_and_profile_and_defaults_unsupervised() {
+        let obsolete_program = serde_json::json!({
+            "program": {
+                "expected_base_sha256": "A".repeat(64),
+                "layout": "canonical-four-player",
+                "edits": []
+            },
+            "expected_desired_sha256": "B".repeat(64),
+            "confirm": true
+        });
+        assert!(
+            serde_json::from_value::<PanelProgramApplySpec>(obsolete_program).is_err(),
+            "an older apply request without its reviewed board/profile must fail closed"
+        );
+
+        let program: PanelProgramApplySpec = serde_json::from_value(serde_json::json!({
+            "program": {
+                "expected_base_sha256": "A".repeat(64),
+                "layout": "canonical-four-player",
+                "edits": []
+            },
+            "expected_desired_sha256": "B".repeat(64),
+            "expected_board_fingerprint": "D209:0430:bcd0056:MI_02:fixture",
+            "expected_protocol_profile": "ipac4-pac256-v1",
+            "confirm": true
+        }))
+        .unwrap();
+        assert_eq!(
+            program.expected_board_fingerprint,
+            "D209:0430:bcd0056:MI_02:fixture"
+        );
+        assert_eq!(program.expected_protocol_profile, "ipac4-pac256-v1");
+        assert!(program.confirm);
+        assert!(
+            !program.supervised,
+            "omitting the acknowledgement must never imply supervision"
+        );
+
+        let restore: PanelRestoreApplySpec = serde_json::from_value(serde_json::json!({
+            "restore": {
+                "backup_id": "backup-20260823",
+                "expected_current_sha256": "C".repeat(64)
+            },
+            "expected_desired_sha256": "D".repeat(64),
+            "expected_board_fingerprint": "D209:0430:bcd0056:MI_02:fixture",
+            "expected_protocol_profile": "ipac4-pac256-v1",
+            "confirm": true,
+            "supervised": true
+        }))
+        .unwrap();
+        assert!(restore.confirm && restore.supervised);
+    }
+
+    #[test]
+    fn panel_terminal_shift_state_never_collapses_opaque_into_disabled() {
+        let disabled = PanelTerminalRow {
+            shift_state: PanelShiftState::Disabled,
+            is_shift: false,
+            ..Default::default()
+        };
+        let opaque = PanelTerminalRow {
+            // The compatibility boolean is deliberately identical. The
+            // explicit state is the mutation-safety contract.
+            shift_state: PanelShiftState::Opaque,
+            is_shift: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap()["shift_state"],
+            "disabled"
+        );
+        assert_eq!(
+            serde_json::to_value(opaque).unwrap()["shift_state"],
+            "opaque"
+        );
+        assert_eq!(PanelShiftState::default(), PanelShiftState::Opaque);
+        let older: PanelTerminalRow = serde_json::from_value(serde_json::json!({
+            "terminal_id": "1sw4",
+            "terminal_label": "Player 1 · Button 4",
+            "player": 1,
+            "kind": "button",
+            "normal": { "code": 13, "key": "J", "label": "J", "supported": true },
+            "shifted": { "code": 0, "label": "Unassigned", "supported": true },
+            "is_shift": false
+        }))
+        .unwrap();
+        assert_eq!(
+            older.shift_state,
+            PanelShiftState::Opaque,
+            "an older false-only row must fail closed rather than imply disabled"
+        );
+
+        let older_key: PanelKeyOption = serde_json::from_value(serde_json::json!({
+            "key": "Escape",
+            "label": "Escape",
+            "code": 41
+        }))
+        .unwrap();
+        assert!(
+            !older_key.safe_for_qualification,
+            "missing first-write policy metadata must fail closed"
+        );
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //! This is a read, not a programming transport. USB descriptors come from the
 //! same enumeration as `ksx devices`; HID top-level collection metadata comes
 //! from handles opened with desired access zero. No input, output, or feature
-//! report is requested or sent, and the EEPROM chart remains an explicit
-//! unattempted state until a read protocol is verified.
+//! report is requested or sent, and the persistent chart remains an explicit
+//! unattempted state until the user opens Encoder setup.
 
 use std::fmt::Write as _;
 
@@ -26,13 +26,14 @@ struct PanelDriver {
 }
 
 /// Protocol drivers are intentionally separate from `ksx_core::vendors`, which
-/// is display-only. Registering a board here means only that ksx recognises the
-/// protocol family; v1 still declares chart/mode reads unsupported.
-fn driver_for(vendor_id: u16, product_id: u16) -> Option<PanelDriver> {
-    match (vendor_id, product_id) {
-        (0xD209, 0x0430) => Some(PanelDriver {
+/// is display-only. Registering a board here means KSX has a guarded chart
+/// driver; passive status still sends no protocol report and never implies a
+/// chart read.
+fn driver_for(vendor_id: u16, product_id: u16, bcd_device: u16) -> Option<PanelDriver> {
+    match (vendor_id, product_id, bcd_device) {
+        (0xD209, 0x0430, 0x0056) => Some(PanelDriver {
             id: "ultimarc-ipac",
-            label: "Ultimarc I-PAC protocol family recognised; read-back protocol unverified",
+            label: "Ultimarc I-PAC 4 lossless chart driver",
         }),
         _ => None,
     }
@@ -312,7 +313,8 @@ fn unknown_refusal(query: &str, groups: &[BoardGroup<'_>]) -> Refusal {
 
 fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
     let first = &group.interfaces[0].candidate;
-    let driver = driver_for(first.vendor_id, first.product_id);
+    let driver = driver_for(first.vendor_id, first.product_id, first.bcd_device);
+    let recognized_ipac4_family = first.vendor_id == 0xD209 && first.product_id == 0x0430;
     let mut collections: Vec<&HidCollection> = hid
         .collections
         .iter()
@@ -364,9 +366,12 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         .iter()
         .copied()
         .filter(|collection| {
-            collection
-                .capabilities
-                .is_some_and(|caps| caps.input_report_bytes == 5 && caps.output_report_bytes == 5)
+            collection.capabilities.is_some_and(|caps| {
+                caps.usage_page == 0xFF00
+                    && caps.usage == 0x0001
+                    && caps.input_report_bytes == 5
+                    && caps.output_report_bytes == 5
+            })
         })
         .collect();
     let uncertain_unjoined_collection = hid.collections.iter().any(|collection| {
@@ -386,10 +391,21 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
     let (configuration_collection_state, configuration_collection, configuration_collection_detail) =
         if driver.is_none() {
             (
-            "unsupported-driver",
-            None,
-            "No panel protocol driver is registered, so no configuration collection was selected".to_owned(),
-        )
+                if recognized_ipac4_family {
+                    "unsupported-release"
+                } else {
+                    "unsupported-driver"
+                },
+                None,
+                if recognized_ipac4_family {
+                    format!(
+                    "The I-PAC 4 family is recognized, but raw release 0x{:04X} has no measured programming profile; no configuration collection was selected",
+                    first.bcd_device
+                )
+                } else {
+                    "No panel protocol driver is registered, so no configuration collection was selected".to_owned()
+                },
+            )
         } else if board_hid_incomplete {
             (
             "unavailable",
@@ -399,9 +415,9 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         } else {
             match config_candidates.as_slice() {
             [candidate] => (
-                "candidate-unverified",
+                "available-unopened",
                 Some(candidate.instance_id.clone()),
-                "One 5-byte IN/OUT HID collection matches the unverified transport shape; ksx sent nothing".to_owned(),
+                "One exact 5-byte input/output HID collection is available for explicit chart setup; passive status sent nothing".to_owned(),
             ),
             [] => (
                 "not-found",
@@ -421,16 +437,22 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
 
     let (chart_state, chart_label, chart_detail, recommendation) = match (driver, observed_mode) {
         (Some(_), "keyboard-compatible") => (
-            "protocol-unverified",
-            "Chart not read — protocol unverified",
-            "No verified chart-query opcode or response framing exists in ksx; an empty chart was not fabricated",
-            "Keep using the keyboard capture path; panel programming stays unavailable until read-back and backup are proven",
+            "not-read",
+            "Chart not read — explicit action required",
+            "Passive status never sends the chart query; choose Read & back up to admit the exact configuration collection and preserve a lossless restore point",
+            "Keep keyboard mode, then open Encoder setup to inspect, review and program this board under KSX",
         ),
         (Some(_), _) => (
-            "protocol-unverified",
-            "Chart not read — protocol unverified",
-            "No verified chart-query opcode or response framing exists in ksx; an empty chart was not fabricated",
-            "Restore a documented keyboard-compatible mode before relying on ksx input; this survey did not guess the current vendor mode",
+            "not-read",
+            "Chart not read — exact mode remains unknown",
+            "Passive status never sends the chart query; an absent keyboard-compatible interface is kept explicit rather than guessed",
+            "Use the documented hardware recovery gesture to restore keyboard mode, then open Encoder setup",
+        ),
+        (None, _) if recognized_ipac4_family => (
+            "unsupported-release",
+            "Chart not read — this I-PAC release is not profiled",
+            "ksx recognized the I-PAC 4 family but will not reuse release-0056 protocol assumptions for another raw bcdDevice",
+            "Keep using Teach and Route; capture a separate measured protocol profile before enabling persistent programming for this release",
         ),
         (None, _) => (
             "unsupported-driver",
@@ -474,9 +496,19 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         serial: first.serial.clone(),
         driver: driver.map_or("unsupported", |driver| driver.id).to_owned(),
         driver_supported: driver.is_some(),
-        driver_label: driver.map_or("No panel protocol driver registered".to_owned(), |driver| {
-            driver.label.to_owned()
-        }),
+        driver_label: driver.map_or_else(
+            || {
+                if recognized_ipac4_family {
+                    format!(
+                        "I-PAC 4 recognized; release 0x{:04X} is not supported for programming",
+                        first.bcd_device
+                    )
+                } else {
+                    "No panel protocol driver registered".to_owned()
+                }
+            },
+            |driver| driver.label.to_owned(),
+        ),
         observed_mode: observed_mode.to_owned(),
         mode_detail,
         observed_mode_label: observed_mode_label.to_owned(),
@@ -697,8 +729,8 @@ mod tests {
                 version_number: 0x0056,
             }),
             capabilities: Some(HidCapabilities {
-                usage_page: 1,
-                usage: 0,
+                usage_page: 0xFF00,
+                usage: 0x0001,
                 input_report_bytes: input,
                 output_report_bytes: output,
                 feature_report_bytes: 0,
@@ -740,22 +772,22 @@ mod tests {
         assert_eq!(panel.bcd_device, 0x0056);
         assert!(panel.identity.contains("raw bcdDevice 0x0056"));
         assert_eq!(panel.driver, "ultimarc-ipac");
-        assert_eq!(
-            panel.driver_label,
-            "Ultimarc I-PAC protocol family recognised; read-back protocol unverified"
-        );
+        assert_eq!(panel.driver_label, "Ultimarc I-PAC 4 lossless chart driver");
         assert_eq!(panel.observed_mode, "keyboard-compatible");
         assert_eq!(
             panel.observed_mode_label,
             "Keyboard-compatible input is present"
         );
-        assert_eq!(panel.chart_state, "protocol-unverified");
-        assert_eq!(panel.chart_label, "Chart not read — protocol unverified");
+        assert_eq!(panel.chart_state, "not-read");
+        assert_eq!(
+            panel.chart_label,
+            "Chart not read — explicit action required"
+        );
         assert!(!panel.chart_attempted);
-        assert_eq!(panel.configuration_collection_state, "candidate-unverified");
+        assert_eq!(panel.configuration_collection_state, "available-unopened");
         assert_eq!(
             panel.configuration_collection_detail,
-            "One 5-byte IN/OUT HID collection matches the unverified transport shape; ksx sent nothing"
+            "One exact 5-byte input/output HID collection is available for explicit chart setup; passive status sent nothing"
         );
         assert_eq!(
             panel.configuration_collection.as_deref(),
@@ -763,7 +795,7 @@ mod tests {
         );
         assert_eq!(
             panel.recommendation,
-            "Keep using the keyboard capture path; panel programming stays unavailable until read-back and backup are proven"
+            "Keep keyboard mode, then open Encoder setup to inspect, review and program this board under KSX"
         );
     }
 
@@ -939,6 +971,25 @@ mod tests {
         assert_eq!(panel.observed_mode, "unknown");
         assert_eq!(panel.chart_state, "unsupported-driver");
         assert_eq!(panel.configuration_collection_state, "unsupported-driver");
+    }
+
+    #[test]
+    fn recognized_ipac4_with_an_unmeasured_release_never_inherits_the_0056_driver() {
+        let board = r"USB\VID_D209&PID_0430\4";
+        let mut other_release = usb(board, 0, 3, 1, 1);
+        other_release.candidate.bcd_device = 0x0057;
+        let status = view(
+            &report(vec![other_release]),
+            &HidSurvey::default(),
+            &PanelStatusSpec::default(),
+        )
+        .unwrap();
+        let panel = &status.panels[0];
+        assert_eq!(panel.driver, "unsupported");
+        assert!(!panel.driver_supported);
+        assert_eq!(panel.chart_state, "unsupported-release");
+        assert_eq!(panel.configuration_collection_state, "unsupported-release");
+        assert!(panel.driver_label.contains("0x0057"));
     }
 
     #[test]

@@ -441,22 +441,24 @@ binding, configuration, or receipt is changed by this verb.
 
 ---
 
-## E10 — ksx reads and programs the panel encoder (discovery implemented; programming gated)
+## E10 — ksx reads and programs the panel encoder (implementation candidate; hardware gate remains)
 
-**Recorded 2026-08-22 20:24 EDT; discovery updated 2026-08-22 21:09 EDT.** The
-current evidence, corrections and work log live in
+**Recorded 2026-08-22 20:24 EDT; implementation candidate updated 2026-08-23
+01:54 EDT.** The current evidence, corrections and work log live in
 [`PANEL-PROGRAMMING-STATE.md`](PANEL-PROGRAMMING-STATE.md). This entry is the
 product decision; that file is the implementation state.
 
 **The user story.**
 
-> *I wired a new player-3 button to SW9. ksx identifies the encoder, shows the
-> firmware and mode it can actually observe, and eventually shows the board's
-> stored SW9 mapping beside the active preset. I can back up the complete board
-> configuration before changing it, preview an exact diff, and explicitly
-> approve a persistent write. After that, ksx still owns the dynamic work:
-> profiles, macros, turbo, chords, SOCD and whichever controller persona the
-> game needs.*
+> *I wired a new player-3 button to SW9. In Control Surface Builder I select
+> the exact encoder, read and back up its complete chart, then either keep its
+> current keys, ask KSX for a safe four-player layout, or assign SW9 myself. I
+> review the terminal and byte diff before anything changes. After I confirm,
+> KSX backs up the fresh state, programs the board, reads every byte back and
+> tells me whether it verified. I then Teach the real button so the app proves
+> what Windows receives. If I change my mind, I can review and restore the
+> exact pre-program safety backup with the same verification. KSX still owns profiles, macros,
+> turbo, chords, SOCD and whichever controller persona the game needs.*
 
 **The decision.** Keyboard mode is the default I-PAC source substrate. Its
 persistent pin-to-key chart provides a stable, per-device input vocabulary;
@@ -497,51 +499,132 @@ event. Chart key choice matters because every programmed usage must be
 representable on the selected capture backend, and because passthrough or
 direct MAME use sees the stored keys without ksx's transforms.
 
-### Version 1 is read-only discovery
+### Implemented surface and end-to-end UX
 
-`ksx panel status [--device QUERY] [--json]` and the Control Surface Builder's
-on-demand Selected encoder card implement the first slice. They:
+The implementation candidate retains passive `ksx panel status`, then adds one
+explicit, supervised command family:
 
-1. enumerate the physical USB parent and its interfaces without changing a
-   driver binding or sending a feature/output report;
-2. report stable identity facts such as VID/PID, `bcdDevice`, interface numbers
-   and HID capabilities, while labeling inferred or unknown mode/firmware
-   values honestly;
-3. leave exact vendor mode, firmware and model-specific XInput recovery
-   unsupported until a verified query can justify them; and
-4. refuse `--yes`. A status command has no mutation switch.
+- `chart [--backup]` performs the complete on-demand report read and can save
+  the exact raw image;
+- `backups` lists verified, board-specific restore points;
+- `program` accepts either the deterministic four-player allocator or semantic
+  terminal/normal/shift edits; and
+- `restore` targets one verified backup.
 
-This slice does **not** claim chart readback, backup, programming, rebind-free
-output access or rollover behavior. Opening a HID collection and reading
-`OutputReportByteLength` can establish that an access-zero metadata handle
-opened and what capacity the descriptor declares. It proves no report access;
-sending nothing cannot prove that `HidD_SetOutputReport` succeeds.
+The Recommended allocator assigns all 56 normal keys and clears all 56
+alternate assignments and shift roles so KSX owns dynamic behavior; opaque
+macro/vendor bytes outside those planes remain byte-preserved.
+
+Program and restore are non-mutating plans by default: planning issues the
+chart query/read but writes no chart data or EEPROM. Apply requires the desired
+SHA-256, exact board fingerprint, `ipac4-pac256-v1` profile, `--supervised` and
+`--yes` from that review. Each apply rereads the chart, rejects a stale base
+hash, saves and reopens a complete immutable backup before packet zero, writes
+the complete image, then rereads and compares every byte. Human output and
+typed JSON share the same backend contract.
+
+The Control Surface Builder presents the same model as a short task:
+
+1. **Read & back up** the selected encoder.
+2. On an unqualified hardware/profile pair, make one reversible normal-key
+   change on a noncritical SW terminal. Exactly one desired byte differs, but
+   KSX explicitly warns that the device protocol retransmits all 64 reports /
+   the complete 256-byte chart.
+3. Program and fully reread that validation chart, then restore and verify the
+   exact safety backup. Only that round trip unlocks **Recommended KSX layout**,
+   unrestricted **Customize terminals**, and other verified backups. An
+   interrupted or partial validation instead requires the same exact restore
+   and returns to the unqualified state.
+4. Review the semantic changes, expandable byte diff, preserved-byte count,
+   blockers and base/desired hashes.
+5. Confirm both the exact reviewed change and physical recovery readiness
+   (present at the cabinet, WinIPAC closed, separate keyboard/recovery path),
+   then choose **Program and verify** or **Restore and verify**.
+6. On a verified readback, continue to **Teach inputs** to prove the physical
+   wiring and Windows signal; byte verification never impersonates that test.
+
+The staged encoder held by the daemon is authoritative. Browser selectors are
+stale-screen guards, plans are bound to selector + board fingerprint + protocol
+profile + hashes, and changing any of them invalidates confirmation. Physical
+USB bus/port topology, rather than Ultimarc's low-entropy serial, anchors the
+fingerprint; moving an encoder therefore requires a future supervised
+backup-adoption flow rather than silently sharing restore points. A global
+cross-process lease is shared by Play startup and the complete maintenance
+transaction, closing the packet-zero race. A durable pre-packet journal blocks
+replacement transactions until reread reconciliation or the named restore
+resolves it. Interrupted or unverifiable transactions enter a named
+`recovery-required` state with the backup retained. Raw images never enter the
+browser, URL or control-surface document; only UI preferences may persist in
+browser storage.
+
+The recovery store is machine authority, not portable-profile state:
+production always uses the installed per-account KSX configuration
+directory's `panel-backups` root. Play/start takes the same global lease and
+fails closed when that root contains an unresolved or unreadable journal,
+cannot be traversed, or contains a symlink/junction/wrong-kind substitute at a
+recovery level. Only an actually absent root is clean.
 
 ### Protocol evidence and the safety boundary
 
-The pinned open-source `Ultimarc-linux` implementation at commit
-`20b8c56a3e6f94034b8529eddd777306f5b6152b` documents an I-PAC-series write
-sequence: HID class request `0x21/9`, value `0x0203`, five-byte messages and a
-260-byte configuration image. It also declares different configuration
-interface numbers for board generations. That source proves its own USB write
-sequence. It does **not** prove Windows `HidD_SetOutputReport` behavior,
-privilege requirements, target-firmware readback, atomic commit, rollback or
-re-enumeration behavior.
+Ultimarc's [official I-PAC 4 product page](https://www.ultimarc.com/control-interfaces/i-pacs/i-pac4-board/)
+establishes the product behavior: 56 inputs, persistent programmable keys,
+shifted assignments, generic Windows USB operation and model/firmware-scoped
+keyboard/gamepad modes.
+
+The GPLv2 `Ultimarc-linux` implementation was inspected at immutable commit
+`20b8c56a3e6f94034b8529eddd777306f5b6152b` only for protocol facts:
+
+- [`common.h`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/common.h)
+  records HID class request `0x21/9`;
+- [`ipacseries.h`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/ipacseries.h)
+  records older generic value `0x0203`, five-byte messages, a 260-byte buffer
+  and generation-specific configuration interfaces; and
+- [`ipac.c`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/ipac.c)
+  records an older generic writer; it has no chart-read path and does not prove
+  the measured D209:0430 release-0056 MI_02 topology.
+
+The pinned QtPyUltimarc commit
+`6f1f5a285201143e6260f0a1451ca469a54ee768` supplies the direct I-PAC4 PAC256
+evidence: [`ipac4.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/ipac4.py)
+identifies interface 2 and the query/read path,
+[`_structures.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/_structures.py)
+defines exactly 256 bytes, and
+[`_device.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/_device.py)
+records four payload bytes per five-byte report for read/write loops.
+
+KSX's implementation was independently authored from those facts, official
+product behavior, Windows HID APIs and KSX's typed domain seams. No source code
+was copied; neither research project is a dependency, linked, vendored or
+shipped material. `NOTICE` therefore
+does not gain an entry under its copied/vendored/embedded/bundled-material
+policy. The pinned links and
+[`PANEL-PROGRAMMING-STATE.md`](PANEL-PROGRAMMING-STATE.md) retain the research
+attribution and GPLv2 license context.
 
 Persistent encoder configuration is a fourth lifetime alongside the driver
-binding, transaction receipt and signing residue in E9. It can outlive a ksx
-process, reboot or installation. Therefore any future writer must:
+binding, transaction receipt and signing residue in E9. The implementation now
+enforces the planned safeguards: exact D209:0430/raw-bcd0056/MI_02 path and
+five-byte admission including vendor collection usage `FF00:0001`, two
+independent matching PAC256 reads, complete raw-image authority, opaque-byte
+preservation, immutable verified backup before packet zero,
+profile/fingerprint/hash-bound consent, stale reread, a durable transaction
+journal, a two-second killable helper-process boundary around each otherwise
+uncancellable Windows output call, full write, complete reread equality and
+explicit recovery state with phase/packet context. Restore first backs up the
+current chart and is itself verified. First-use qualification proves a
+reversible one-terminal write and exact restore before general programming is
+exposed.
 
-- read and round-trip the **complete** configuration, including the shift
-  layer and EEPROM macros, or refuse;
-- take a restorable backup before mutation and verify readback afterward;
-- render a dry-run diff by default and require explicit `--yes`;
-- identify the exact physical board and packet/phase on failure; and
-- stay behind a supervised hardware gate with a written recovery procedure.
-
-Sequential packets make interrupted or partial persistence a risk, not a
-measured firmware fact. No document may call a chart half-written until an
-expendable target or authoritative firmware source proves the commit behavior.
+Those are synthetic software guarantees, not target-firmware proof. The live
+cabinet has received no chart query or output report from this work. The first
+hardware program remains a supervised, user-initiated gate: verify exact
+identity and read/backup, review a no-op plan, then change one noncritical
+terminal, require full readback plus physical Teach verification, and restore
+the exact pre-program safety backup. A no-op still issues the chart query/read
+but emits no chart-data write packet, so it cannot by itself prove the
+programming path.
+Sequential-packet atomicity,
+re-enumeration and persistence remain unverified firmware behavior.
 
 ### One command family, capability-specific hardware drivers
 
@@ -560,22 +643,26 @@ easy only when ksx owns the exact firmware and can define its contract.
 
 ### Feature order
 
-1. **Status/discovery — implemented locally 2026-08-22:** the read-only v1
-   above, with stable human and JSON output, synthetic inventory tests and an
-   on-demand Studio view. Clean-runner CI still gates shipment.
-2. **Chart read:** only after a pinned protocol or captured vendor transaction
-   establishes a non-mutating read path on the target firmware.
-3. **Backup/restore format:** lossless round-trip of the complete board image;
-   restore remains a write and therefore supervised.
-4. **Program:** read-modify-write, dry-run by default, explicit `--yes`, exact
-   post-write verification and a recovery result for every failure.
-5. **Studio chart/programming editor:** after the read/write backend verbs and
-   CLI contracts are real, following `SURFACES.md`'s backend → CLI →
-   human-surface order. The read-only selected-encoder card in step 1 is
-   already the discovery surface.
+1. **Status/discovery — implemented and passively measured 2026-08-22:** stable
+   human/JSON output and the selected-encoder Studio card.
+2. **Chart/backup/program/restore domain — implementation candidate
+   2026-08-23:** complete raw-image model, semantic edit layer, immutable
+   backup store and transaction/recovery rules, exercised with synthetic I/O.
+3. **Windows transport and typed surfaces — integration-verified candidate
+   2026-08-23:** exact five-byte HID transport, MachineSource contract, CLI and
+   Studio review/confirm/verify flow. Final local Rust, HTTP and browser gates
+   pass, including 682 backend tests (1 ignored hardware-only), 137 Studio HTTP
+   tests and 45 canvas browser tests; deterministic assets match across two
+   builds. A clean runner remains normal post-merge release evidence.
+4. **Supervised cabinet proof — required before hardware-ready:** explicit
+   read/backup, one reversible terminal write, complete reread, physical signal
+   check, verified restore, then a separate persistence measurement.
+5. **Additional encoder drivers — future:** each family declares its real
+   capabilities behind the same command/model; unsupported hardware continues
+   to refuse rather than guess.
 
-**Verdict: proceed, beginning with read-only discovery.** The transport is
-plausible and the support value exists even if a safe writer never ships, but
-no roadmap wording promotes source evidence into cabinet evidence. Place the
-work post-M6 beside E8, which targets related Ultimarc hardware, and keep every
-physical read/write claim gated in the living state document.
+**Verdict: the product and software design are implemented; hardware readiness
+remains gated.** Keep keyboard mode as the power path, keep persistent board
+configuration separate from KSX's dynamic transforms, and do not promote
+synthetic transaction coverage into a real-I-PAC write claim. The living state
+document owns the exact test evidence and supervised first-program procedure.

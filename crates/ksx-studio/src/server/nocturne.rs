@@ -494,11 +494,12 @@ pub(super) async fn api_nocturne(
 
 /// The Control Surface Builder's selected-encoder context.
 ///
-/// The browser does not supply a selector. The daemon-held staged device is
-/// the authority, exactly as it is for Teach and Route; accepting a query here
-/// would let a stale canvas inspect one board while claiming it described
-/// another. This is intentionally outside [`collect_nocturne`], so the 2 s
-/// canvas poll never opens a HID metadata handle.
+/// The daemon-held staged device is the authority, exactly as it is for Teach
+/// and Route. Programming requests echo the selector they were composed for,
+/// but that value is only a stale-screen guard: the server rejects a mismatch
+/// and always builds the machine request from the current staged target. This
+/// is intentionally outside [`collect_nocturne`], so the 2 s canvas poll never
+/// opens a HID metadata handle.
 #[derive(serde::Serialize)]
 pub(super) struct PanelStatusPayload {
     /// Echo of the server-selected target. The island rejects a response whose
@@ -527,9 +528,106 @@ fn panel_status_json(payload: PanelStatusPayload) -> Response {
         .into_response()
 }
 
-pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Response {
-    let stage_state = Arc::clone(&state);
-    let staged_target = match tokio::task::spawn_blocking(move || {
+fn panel_envelope_json<T: serde::Serialize>(
+    target_selector: Option<String>,
+    unavailable: Option<String>,
+    field: &'static str,
+    value: Option<T>,
+) -> Response {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "target_selector".to_owned(),
+        serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
+    );
+    body.insert(
+        "unavailable".to_owned(),
+        serde_json::to_value(unavailable).unwrap_or_else(|_| {
+            serde_json::Value::String("the panel response could not be encoded".to_owned())
+        }),
+    );
+    body.insert(
+        field.to_owned(),
+        serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+    );
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(serde_json::Value::Object(body)),
+    )
+        .into_response()
+}
+
+/// Mutation responses carry a machine-readable disposition. The island must
+/// never decide whether packet zero was crossed by matching refusal prose.
+fn panel_mutation_envelope_json(
+    target_selector: Option<String>,
+    unavailable: Option<String>,
+    refusal_code: Option<String>,
+    remedy: Option<String>,
+    mutation_disposition: &'static str,
+    outcome: Option<ksx_api::PanelProgramOutcome>,
+) -> Response {
+    let mut body = serde_json::Map::new();
+    for (key, value) in [
+        (
+            "target_selector",
+            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "unavailable",
+            serde_json::to_value(unavailable).unwrap_or_else(|_| {
+                serde_json::Value::String("the panel response could not be encoded".to_owned())
+            }),
+        ),
+        (
+            "refusal_code",
+            serde_json::to_value(refusal_code).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "remedy",
+            serde_json::to_value(remedy).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "mutation_disposition",
+            serde_json::Value::String(mutation_disposition.to_owned()),
+        ),
+        (
+            "outcome",
+            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
+        ),
+    ] {
+        body.insert(key.to_owned(), value);
+    }
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(serde_json::Value::Object(body)),
+    )
+        .into_response()
+}
+
+fn panel_mutation_refusal_json(
+    target_selector: Option<String>,
+    refusal: ksx_api::Refusal,
+) -> Response {
+    let disposition = if refusal.code == ksx_api::codes::RECOVERY_REQUIRED {
+        "recovery-required"
+    } else {
+        "not-started"
+    };
+    panel_mutation_envelope_json(
+        target_selector,
+        Some(refusal.message),
+        Some(refusal.code),
+        refusal.remedy,
+        disposition,
+        None,
+    )
+}
+
+/// Read the one panel target owned by the daemon-held draft. No browser value
+/// participates in selection and no USB/HID operation occurs here.
+async fn selected_panel_target(state: &Arc<AppState>) -> Result<Option<String>, String> {
+    let stage_state = Arc::clone(state);
+    let staged = tokio::task::spawn_blocking(move || {
         let staged = stage_state.control.staged();
         let target = staged
             .device
@@ -538,29 +636,41 @@ pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Resp
         (staged.reachable, staged.error, target)
     })
     .await
-    {
+    .map_err(|_| "the selected encoder could not be resolved; nothing was changed".to_owned())?;
+    if staged.0 {
+        Ok(staged.2)
+    } else {
+        Err(staged.1.unwrap_or_else(|| {
+            "the selected encoder is unavailable because the staged setup could not be read"
+                .to_owned()
+        }))
+    }
+}
+
+fn checked_panel_target(selected: Option<String>, expected: &str) -> Result<String, String> {
+    let Some(selected) = selected else {
+        return Err("select an encoder before opening its hardware setup".to_owned());
+    };
+    if expected.trim().is_empty() || !selected.eq_ignore_ascii_case(expected.trim()) {
+        return Err(
+            "the selected encoder changed after this screen was opened; refresh it before continuing"
+                .to_owned(),
+        );
+    }
+    Ok(selected)
+}
+
+pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Response {
+    let target_selector = match selected_panel_target(&state).await {
         Ok(target) => target,
-        Err(_) => {
+        Err(unavailable) => {
             return panel_status_json(PanelStatusPayload {
                 target_selector: None,
-                unavailable: Some(
-                    "the selected encoder could not be resolved; nothing was changed".to_owned(),
-                ),
+                unavailable: Some(unavailable),
                 view: None,
             });
         }
     };
-    let (reachable, stage_error, target_selector) = staged_target;
-    if !reachable {
-        return panel_status_json(PanelStatusPayload {
-            target_selector: None,
-            unavailable: Some(stage_error.unwrap_or_else(|| {
-                "the selected encoder is unavailable because the staged setup could not be read"
-                    .to_owned()
-            })),
-            view: None,
-        });
-    }
     let Some(selector) = target_selector else {
         // Absence is a real, successful reading of the staged draft. Do not
         // call the machine provider and do not turn it into a fake empty USB
@@ -597,6 +707,453 @@ pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Resp
             ),
             view: None,
         }),
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelChartRequest {
+    expected_selector: String,
+    #[serde(default)]
+    backup: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelProgramPlanRequest {
+    expected_selector: String,
+    expected_base_sha256: String,
+    layout: String,
+    #[serde(default)]
+    edits: Vec<ksx_api::PanelTerminalEdit>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelProgramApplyRequest {
+    expected_selector: String,
+    program: PanelProgramBody,
+    expected_board_fingerprint: String,
+    expected_protocol_profile: String,
+    expected_desired_sha256: String,
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    supervised: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelProgramBody {
+    expected_base_sha256: String,
+    layout: String,
+    #[serde(default)]
+    edits: Vec<ksx_api::PanelTerminalEdit>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelRestorePlanRequest {
+    expected_selector: String,
+    backup_id: String,
+    expected_current_sha256: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelRestoreApplyRequest {
+    expected_selector: String,
+    restore: PanelRestoreBody,
+    expected_board_fingerprint: String,
+    expected_protocol_profile: String,
+    expected_desired_sha256: String,
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    supervised: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PanelRestoreBody {
+    backup_id: String,
+    expected_current_sha256: String,
+}
+
+pub(super) async fn api_panel_chart(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<PanelChartRequest>,
+) -> Response {
+    let selected = match selected_panel_target(&state).await {
+        Ok(selected) => selected,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelChartView>(
+                None,
+                Some(unavailable),
+                "view",
+                None,
+            );
+        }
+    };
+    let selector = match checked_panel_target(selected, &request.expected_selector) {
+        Ok(selector) => selector,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelChartView>(
+                None,
+                Some(unavailable),
+                "view",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        state.machine.panel_chart(&ksx_api::PanelChartSpec {
+            device: Some(selector),
+            backup: request.backup,
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(view)) => panel_envelope_json(target, None, "view", Some(view)),
+        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelChartView>(
+            target,
+            Some(refusal.message),
+            "view",
+            None,
+        ),
+        Err(_) => panel_envelope_json::<ksx_api::PanelChartView>(
+            target,
+            Some(
+                "the encoder chart task stopped before completing; nothing was changed".to_owned(),
+            ),
+            "view",
+            None,
+        ),
+    }
+}
+
+pub(super) async fn api_panel_backups(State(state): State<Arc<AppState>>) -> Response {
+    let selector = match selected_panel_target(&state).await {
+        Ok(Some(selector)) => selector,
+        Ok(None) => {
+            return panel_envelope_json::<ksx_api::PanelBackupsView>(
+                None,
+                Some("select an encoder before viewing its restore points".to_owned()),
+                "view",
+                None,
+            );
+        }
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelBackupsView>(
+                None,
+                Some(unavailable),
+                "view",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        state.machine.panel_backups(&ksx_api::PanelBackupsSpec {
+            device: Some(selector),
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(view)) => panel_envelope_json(target, None, "view", Some(view)),
+        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelBackupsView>(
+            target,
+            Some(refusal.message),
+            "view",
+            None,
+        ),
+        Err(_) => panel_envelope_json::<ksx_api::PanelBackupsView>(
+            target,
+            Some("the restore-point list could not be read; nothing was changed".to_owned()),
+            "view",
+            None,
+        ),
+    }
+}
+
+pub(super) async fn api_panel_program_plan(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<PanelProgramPlanRequest>,
+) -> Response {
+    let selected = match selected_panel_target(&state).await {
+        Ok(selected) => selected,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+                None,
+                Some(unavailable),
+                "plan",
+                None,
+            );
+        }
+    };
+    let selector = match checked_panel_target(selected, &request.expected_selector) {
+        Ok(selector) => selector,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+                None,
+                Some(unavailable),
+                "plan",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let spec = ksx_api::PanelProgramSpec {
+        device: Some(selector),
+        expected_base_sha256: request.expected_base_sha256,
+        layout: request.layout,
+        edits: request.edits,
+    };
+    let result = tokio::task::spawn_blocking(move || state.machine.panel_program_plan(&spec)).await;
+    match result {
+        Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
+        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+            target,
+            Some(refusal.message),
+            "plan",
+            None,
+        ),
+        Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+            target,
+            Some("the hardware-diff plan could not be built; nothing was changed".to_owned()),
+            "plan",
+            None,
+        ),
+    }
+}
+
+pub(super) async fn api_panel_program_apply(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<PanelProgramApplyRequest>,
+) -> Response {
+    let selected = match selected_panel_target(&state).await {
+        Ok(selected) => selected,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                "not-started",
+                None,
+            );
+        }
+    };
+    let selector = match checked_panel_target(selected, &request.expected_selector) {
+        Ok(selector) => selector,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                "not-started",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let spec = ksx_api::PanelProgramApplySpec {
+        program: ksx_api::PanelProgramSpec {
+            device: Some(selector),
+            expected_base_sha256: request.program.expected_base_sha256,
+            layout: request.program.layout,
+            edits: request.program.edits,
+        },
+        expected_board_fingerprint: request.expected_board_fingerprint,
+        expected_protocol_profile: request.expected_protocol_profile,
+        expected_desired_sha256: request.expected_desired_sha256,
+        confirm: request.confirm,
+        supervised: request.supervised,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let session = state.control.session();
+        if !session.reachable {
+            return Err(ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                format!(
+                    "KSX cannot prove Play is stopped because the daemon did not answer ({}); nothing was changed",
+                    session.line
+                ),
+                "start or reconnect the KSX daemon, prove the session is stopped, then rebuild the hardware diff",
+            ));
+        }
+        if session.running {
+            return Err(ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before programming the physical encoder; nothing was changed",
+                "stop the running session, review the hardware diff again, then Program",
+            ));
+        }
+        state.machine.panel_program(&spec)
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => {
+            let disposition = if outcome.state == "verified" {
+                "verified"
+            } else {
+                "recovery-required"
+            };
+            panel_mutation_envelope_json(
+                target,
+                None,
+                None,
+                None,
+                disposition,
+                Some(outcome),
+            )
+        }
+        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal),
+        Err(_) => panel_mutation_envelope_json(
+            target,
+            Some(
+                "the programming task stopped unexpectedly; use the last backup before trying again"
+                    .to_owned(),
+            ),
+            Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
+            Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
+            "unknown",
+            None,
+        ),
+    }
+}
+
+pub(super) async fn api_panel_restore_plan(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<PanelRestorePlanRequest>,
+) -> Response {
+    let selected = match selected_panel_target(&state).await {
+        Ok(selected) => selected,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+                None,
+                Some(unavailable),
+                "plan",
+                None,
+            );
+        }
+    };
+    let selector = match checked_panel_target(selected, &request.expected_selector) {
+        Ok(selector) => selector,
+        Err(unavailable) => {
+            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+                None,
+                Some(unavailable),
+                "plan",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let spec = ksx_api::PanelRestoreSpec {
+        device: Some(selector),
+        backup_id: request.backup_id,
+        expected_current_sha256: request.expected_current_sha256,
+    };
+    let result = tokio::task::spawn_blocking(move || state.machine.panel_restore_plan(&spec)).await;
+    match result {
+        Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
+        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+            target,
+            Some(refusal.message),
+            "plan",
+            None,
+        ),
+        Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
+            target,
+            Some("the restore diff could not be built; nothing was changed".to_owned()),
+            "plan",
+            None,
+        ),
+    }
+}
+
+pub(super) async fn api_panel_restore_apply(
+    State(state): State<Arc<AppState>>,
+    axum::Json(request): axum::Json<PanelRestoreApplyRequest>,
+) -> Response {
+    let selected = match selected_panel_target(&state).await {
+        Ok(selected) => selected,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                "not-started",
+                None,
+            );
+        }
+    };
+    let selector = match checked_panel_target(selected, &request.expected_selector) {
+        Ok(selector) => selector,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                "not-started",
+                None,
+            );
+        }
+    };
+    let target = Some(selector.clone());
+    let spec = ksx_api::PanelRestoreApplySpec {
+        restore: ksx_api::PanelRestoreSpec {
+            device: Some(selector),
+            backup_id: request.restore.backup_id,
+            expected_current_sha256: request.restore.expected_current_sha256,
+        },
+        expected_board_fingerprint: request.expected_board_fingerprint,
+        expected_protocol_profile: request.expected_protocol_profile,
+        expected_desired_sha256: request.expected_desired_sha256,
+        confirm: request.confirm,
+        supervised: request.supervised,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let session = state.control.session();
+        if !session.reachable {
+            return Err(ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                format!(
+                    "KSX cannot prove Play is stopped because the daemon did not answer ({}); nothing was changed",
+                    session.line
+                ),
+                "start or reconnect the KSX daemon, prove the session is stopped, then rebuild the restore diff",
+            ));
+        }
+        if session.running {
+            return Err(ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before restoring the physical encoder; nothing was changed",
+                "stop the running session, review the restore diff again, then Restore",
+            ));
+        }
+        state.machine.panel_restore(&spec)
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => {
+            let disposition = if outcome.state == "verified" {
+                "verified"
+            } else {
+                "recovery-required"
+            };
+            panel_mutation_envelope_json(target, None, None, None, disposition, Some(outcome))
+        }
+        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal),
+        Err(_) => panel_mutation_envelope_json(
+            target,
+            Some(
+                "the restore task stopped unexpectedly; the pre-restore backup remains available"
+                    .to_owned(),
+            ),
+            Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
+            Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
+            "unknown",
+            None,
+        ),
     }
 }
 

@@ -354,6 +354,12 @@ pub fn serve(
             // out of `/api/nocturne`'s 2 s poll: passive HID enumeration is a
             // deliberate inspection, not background canvas state.
             .route("/api/panel/status", get(api_panel_status))
+            .route("/api/panel/chart", post(api_panel_chart))
+            .route("/api/panel/backups", get(api_panel_backups))
+            .route("/api/panel/program/plan", post(api_panel_program_plan))
+            .route("/api/panel/program/apply", post(api_panel_program_apply))
+            .route("/api/panel/restore/plan", post(api_panel_restore_plan))
+            .route("/api/panel/restore/apply", post(api_panel_restore_apply))
             .route("/nocturne/device", post(nocturne_form_device))
             .route("/nocturne/device/identify", post(nocturne_form_identify))
             .route(

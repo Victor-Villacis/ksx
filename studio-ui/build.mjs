@@ -290,11 +290,12 @@ try {
       "/setup": { js: ["setup"], css: ["studio"] },
     },
     outputDir,
-    // The mapping-flow lens, contextual Inspector, Keyboard Arranger, and
-    // physical Control Surface Builder live in Nocturne's one island. The
-    // latter takes the measured compressed route to ~229 KB; keep a narrow
-    // 234 KB ceiling so this deliberate feature cost is not an open-ended bump.
-    budgetThreshold: 234_000,
+    // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
+    // Control Surface Builder, and its supervised encoder backup/program/
+    // verify/restore workflow live in Nocturne's one island. The measured
+    // compressed route is ~243 KB; keep a narrow 248 KB ceiling so this
+    // deliberate hardware-safety UI cost is not an open-ended bump.
+    budgetThreshold: 248_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

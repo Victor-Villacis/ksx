@@ -893,6 +893,20 @@ describe("the canvas navigation controls", () => {
         `macro cords finish attached to their processor (${processorGeometry.attachedPorts.join(", ")})`,
       );
 
+      const selectedTrayDepth = await page.evaluate((lines) => {
+        const path = document.querySelector(
+          `${lines} [data-flow-kind="binding"] .n-flow-core`,
+        );
+        const match = path?.getAttribute("d")?.match(/^(.+?) L /);
+        if (!path || !match) throw new Error("selected-player binding did not use a portal path");
+        const branch = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        branch.setAttribute("d", match[1]);
+        const point = branch.getPointAtLength(branch.getTotalLength());
+        const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+        return screen.y - document.querySelector('[data-instance-id="keyboard"]')
+          .getBoundingClientRect().bottom;
+      }, lines);
+
       await page.selectOption(select, "all");
       await page.waitForFunction(
         (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 36,
@@ -910,6 +924,189 @@ describe("the canvas navigation controls", () => {
         2,
         "same-named macros in different slots remain separate processors",
       );
+      const harness = await page.evaluate((lines) => {
+        const sampledBranch = (path, branch) => {
+          const value = path.getAttribute("d") ?? "";
+          const branchPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          if (branch === "source") {
+            const match = value.match(/^(.+?) L /);
+            if (!match) throw new Error(`portal source branch missing from ${value}`);
+            branchPath.setAttribute("d", match[1]);
+          } else {
+            const match = value.match(/L\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(C\s+[^C]+)$/);
+            if (!match) throw new Error(`portal target branch missing from ${value}`);
+            branchPath.setAttribute("d", `M ${match[1]} ${match[2]} ${match[3]}`);
+          }
+          const length = branchPath.getTotalLength();
+          return Array.from({ length: 31 }, (_, index) => {
+            const point = branchPath.getPointAtLength(length * index / 30);
+            return { x: point.x, y: point.y };
+          });
+        };
+        const keyboardRect = document.querySelector('[data-instance-id="keyboard"]')
+          .getBoundingClientRect();
+        const widgets = Array.from(document.querySelectorAll(".forma-canvas-stage .widget-instance"));
+        const toScreen = (path, point) => {
+          const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+          return { x: screen.x, y: screen.y };
+        };
+        const fullPath = (path) => {
+          const length = path.getTotalLength();
+          return Array.from({ length: 121 }, (_, index) =>
+            toScreen(path, path.getPointAtLength(length * index / 120))
+          );
+        };
+        const inside = (point, rect) =>
+          point.x > rect.left + 2 && point.x < rect.right - 2 &&
+          point.y > rect.top + 2 && point.y < rect.bottom - 2;
+        const routes = Array.from(
+          document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
+        ).map((edge) => {
+          const path = edge.querySelector(".n-flow-core");
+          const source = sampledBranch(path, "source");
+          const target = sampledBranch(path, "target");
+          const slot = edge.dataset.flowSlot;
+          const targetRect = document.querySelector(`[data-instance-id="pad-${slot}"]`)
+            .getBoundingClientRect();
+          const points = fullPath(path);
+          const unrelatedWidgetHits = widgets.filter((widget) => {
+            const id = widget.dataset.instanceId;
+            return id !== "keyboard" && id !== `pad-${slot}` &&
+              points.some((point) => inside(point, widget.getBoundingClientRect()));
+          }).length;
+          return {
+            id: edge.dataset.flowId,
+            slot,
+            portal: (path.getAttribute("d") ?? "").includes(" Q "),
+            opacity: getComputedStyle(edge).opacity,
+            source,
+            target,
+            sourcePortal: toScreen(path, source.at(-1)),
+            sourceOutside: toScreen(path, source.at(-1)).y >= keyboardRect.bottom - 1,
+            targetOutside: toScreen(path, target[0]).y <= targetRect.top + 1,
+            sourceDepth: toScreen(path, source.at(-1)).y - keyboardRect.bottom,
+            unrelatedWidgetHits,
+          };
+        });
+        const properIntersection = (a, b, c, d) => {
+          const cross = (p, q, r) =>
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+          return cross(a, b, c) * cross(a, b, d) < -0.01 &&
+            cross(c, d, a) * cross(c, d, b) < -0.01;
+        };
+        const close = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) <= 8;
+        const segmentNear = (points, index, endpoint, radius = 18) =>
+          Math.min(
+            Math.hypot(points[index - 1].x - endpoint.x, points[index - 1].y - endpoint.y),
+            Math.hypot(points[index].x - endpoint.x, points[index].y - endpoint.y),
+          ) <= radius;
+        const countCrossings = (branch) => {
+          let crossings = 0;
+          for (let left = 0; left < routes.length; left += 1) {
+            for (let right = left + 1; right < routes.length; right += 1) {
+              const a = routes[left][branch];
+              const b = routes[right][branch];
+              const sharedStart = close(a[0], b[0]);
+              const sharedEnd = close(a.at(-1), b.at(-1));
+              let intersects = false;
+              for (let ai = 1; ai < a.length && !intersects; ai += 1) {
+                for (let bi = 1; bi < b.length; bi += 1) {
+                  if (properIntersection(a[ai - 1], a[ai], b[bi - 1], b[bi])) {
+                    if (sharedStart && segmentNear(a, ai, a[0]) && segmentNear(b, bi, b[0])) continue;
+                    if (sharedEnd &&
+                      segmentNear(a, ai, a.at(-1)) && segmentNear(b, bi, b.at(-1))) continue;
+                    intersects = true;
+                    break;
+                  }
+                }
+              }
+              if (intersects) crossings += 1;
+            }
+          }
+          return crossings;
+        };
+        return {
+          routeCount: routes.length,
+          portalCount: routes.filter((route) => route.portal).length,
+          restingOpacities: [...new Set(routes.map((route) => route.opacity))],
+          unrelatedWidgetHits: routes.reduce((sum, route) => sum + route.unrelatedWidgetHits, 0),
+          slots: [...new Set(routes.map((route) => route.slot))].map((slot) => {
+            const members = routes.filter((route) => route.slot === slot);
+            return {
+              slot,
+              allSourceOutside: members.every((route) => route.sourceOutside),
+              allTargetOutside: members.every((route) => route.targetOutside),
+              sourceDepth: members.reduce((sum, route) => sum + route.sourceDepth, 0) /
+                members.length,
+              portalOrder: [...members]
+                .sort((left, right) => left.sourcePortal.x - right.sourcePortal.x ||
+                  left.id.localeCompare(right.id))
+                .map((route) => route.id),
+            };
+          }),
+          sourceCrossings: countCrossings("source"),
+          targetCrossings: countCrossings("target"),
+        };
+      }, lines);
+      assert.equal(harness.routeCount, 28);
+      assert.equal(harness.portalCount, 28, "every direct binding uses the cable harness");
+      assert.deepEqual(harness.restingOpacities, ["0.62"], "all-player cords retain overview contrast");
+      assert.equal(
+        harness.unrelatedWidgetHits,
+        0,
+        "exterior harness trunks do not cut through another player's controller",
+      );
+      assert.deepEqual(
+        harness.slots.map(({ slot, allSourceOutside, allTargetOutside }) => ({
+          slot,
+          allSourceOutside,
+          allTargetOutside,
+        })),
+        [
+          { slot: "1", allSourceOutside: true, allTargetOutside: true },
+          { slot: "2", allSourceOutside: true, allTargetOutside: true },
+        ],
+        "cords leave the physical key and control edges before joining their harness",
+      );
+      assert.ok(
+        Math.abs(harness.slots[0].sourceDepth - harness.slots[1].sourceDepth) >= 3,
+        "players use visibly separate exterior trays",
+      );
+      const selectedHarnessSlot = harness.slots.find((slot) => slot.slot === selectedSlot);
+      assert.ok(
+        Math.abs(selectedTrayDepth - selectedHarnessSlot.sourceDepth) <= 1,
+        `Player ${selectedSlot} keeps the same tray when scope changes from Selected to All (${selectedTrayDepth} -> ${selectedHarnessSlot.sourceDepth})`,
+      );
+      assert.ok(
+        harness.sourceCrossings <= 4,
+        `ordered key branches stay readable (${harness.sourceCrossings} crossings)`,
+      );
+      assert.ok(
+        harness.targetCrossings <= 4,
+        `ordered control branches stay readable (${harness.targetCrossings} crossings)`,
+      );
+
+      await page.locator('[data-instance-id="keyboard"] [data-key="G"]').first().hover();
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '[data-instance-id="pad-2"] [data-fn~="a"].n-flow-anchor-related',
+        )
+      );
+      const relatedHookPaint = await page.evaluate(() => {
+        const hook = document.querySelector(
+          '[data-instance-id="pad-2"] [data-fn~="a"].n-flow-anchor-related',
+        );
+        const style = getComputedStyle(hook);
+        return { fill: style.fill, stroke: style.stroke };
+      });
+      assert.doesNotMatch(
+        relatedHookPaint.fill,
+        /^(?:none|rgba\(0, 0, 0, 0\))$/,
+        "the exact premium-art destination receives visible related paint",
+      );
+      assert.notEqual(relatedHookPaint.stroke, "none");
+      await page.locator(select).hover();
+
       const liveIdentity = await page.evaluate(async (lines) => {
           const first = document.querySelector(`${lines} [data-flow-slot="1"][data-flow-kind="binding"]`);
           const second = document.querySelector(`${lines} [data-flow-slot="2"][data-flow-kind="binding"]`);
@@ -921,12 +1118,13 @@ describe("the canvas navigation controls", () => {
             core ? getComputedStyle(core).strokeDasharray : "",
           );
           const offsetBefore = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
-          await new Promise((resolve) => setTimeout(resolve, 90));
+          await new Promise((resolve) => setTimeout(resolve, 180));
           const offsetAfter = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
           const animation = firstCore ? getComputedStyle(firstCore).animationName : "";
+          const opacity = first ? getComputedStyle(first).opacity : "";
           first?.classList.remove("is-live");
           second?.classList.remove("is-live");
-          return { patterns, offsetBefore, offsetAfter, animation };
+          return { patterns, offsetBefore, offsetAfter, animation, opacity };
         }, lines);
       assert.notEqual(liveIdentity.patterns[0], "none", "Player 1 has a visible travel rhythm");
       assert.notEqual(
@@ -935,12 +1133,41 @@ describe("the canvas navigation controls", () => {
         "live travel keeps each player's non-color dash identity",
       );
       assert.equal(liveIdentity.animation, "n-flow-travel");
+      assert.equal(liveIdentity.opacity, "1", "a live cord rises above all-player overview opacity");
       assert.notEqual(liveIdentity.offsetBefore, liveIdentity.offsetAfter, "Player 1's live cord travels");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         (select) => document.querySelector(select)?.value === "all",
         select,
+      );
+      await page.waitForFunction(
+        (lines) => document.querySelectorAll(`${lines} [data-flow-kind="binding"]`).length === 28,
+        lines,
+      );
+      const reloadedPortalOrder = await page.evaluate((lines) => {
+        const members = Array.from(
+          document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
+        ).map((edge) => {
+          const path = edge.querySelector(".n-flow-core");
+          const match = path.getAttribute("d")?.match(/^(.+?) L /);
+          if (!match) throw new Error("reloaded binding did not use a portal path");
+          const branch = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          branch.setAttribute("d", match[1]);
+          const point = branch.getPointAtLength(branch.getTotalLength());
+          const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+          return { id: edge.dataset.flowId, slot: edge.dataset.flowSlot, x: screen.x };
+        });
+        return [...new Set(members.map((member) => member.slot))].map((slot) =>
+          members.filter((member) => member.slot === slot)
+            .sort((left, right) => left.x - right.x || left.id.localeCompare(right.id))
+            .map((member) => member.id)
+        );
+      }, lines);
+      assert.deepEqual(
+        reloadedPortalOrder,
+        harness.slots.map((slot) => slot.portalOrder),
+        "the same bindings keep the same source-port order after hydration",
       );
       assert.equal(await page.inputValue(select), "all", "scope persists with canvas chrome");
       assert.equal(
@@ -1630,7 +1857,46 @@ describe("the canvas navigation controls", () => {
       await page.evaluate(() => {
         const samples = [];
         const live = (selector) => document.querySelector(selector)?.classList.contains("is-live") ?? false;
+        const liveAtEnd = (selector) => {
+          const order = Array.from(document.querySelectorAll(selector));
+          const liveEntries = order.filter((entry) => entry.classList.contains("is-live"));
+          return liveEntries.length > 0 && liveEntries.every((entry) =>
+            order.indexOf(entry) >= order.length - liveEntries.length
+          );
+        };
         const sample = () => {
+          const gA = live(
+            '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="a"]',
+          );
+          const gB = live(
+            '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="b"]',
+          );
+          if (gA && gB && !window.__ksxInspectionPaintAudit) {
+            const otherKey = document.querySelector(
+              '[data-instance-id="keyboard"] [data-key="J"]',
+            );
+            if (otherKey) {
+              otherKey.dispatchEvent(new PointerEvent("pointerover", {
+                bubbles: true,
+                relatedTarget: null,
+              }));
+              const during = {
+                lines: liveAtEnd("#n-mapping-paths .n-flow-edge"),
+                ports: liveAtEnd("#n-mapping-ports .n-flow-edge"),
+              };
+              otherKey.dispatchEvent(new PointerEvent("pointerout", {
+                bubbles: true,
+                relatedTarget: document.body,
+              }));
+              window.__ksxInspectionPaintAudit = {
+                during,
+                after: {
+                  lines: liveAtEnd("#n-mapping-paths .n-flow-edge"),
+                  ports: liveAtEnd("#n-mapping-ports .n-flow-edge"),
+                },
+              };
+            }
+          }
           const padA = Array.from(
             document.querySelectorAll('[data-pad-slot="1"] [data-fn].live'),
           ).some((element) =>
@@ -1639,12 +1905,8 @@ describe("the canvas navigation controls", () => {
               .some((fnName) => fnName.toLowerCase() === "a"),
           );
           samples.push({
-            gA: live(
-              '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="a"]',
-            ),
-            gB: live(
-              '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="G"][data-flow-fn="b"]',
-            ),
+            gA,
+            gB,
             jX: live(
               '#n-mapping-paths [data-flow-slot="1"][data-flow-kind="binding"][data-flow-key="J"][data-flow-fn="x"]',
             ),
@@ -1663,6 +1925,9 @@ describe("the canvas navigation controls", () => {
               document.querySelectorAll(
                 '#n-mapping-paths [data-flow-slot="2"].is-live',
               ).length,
+            liveOnTop:
+              liveAtEnd("#n-mapping-paths .n-flow-edge") &&
+              liveAtEnd("#n-mapping-ports .n-flow-edge"),
           });
           if (samples.length > 600) samples.shift();
         };
@@ -1736,11 +2001,23 @@ describe("the canvas navigation controls", () => {
           gLive,
           failClosed,
           sameFrameTap: samples.some((sample) => sample.jX),
+          liveAlwaysPromoted: samples.filter((sample) => sample.gA && sample.gB)
+            .every((sample) => sample.liveOnTop),
+          inspectionPaint: window.__ksxInspectionPaintAudit ?? null,
           macroEverLive: samples.some((sample) => sample.macroLive > 0),
           playerTwoEverLive: samples.some((sample) => sample.playerTwoLive > 0),
         };
       });
       assert.ok(audit.gLive >= 0, "G travels to both controls it directly drives");
+      assert.equal(audit.liveAlwaysPromoted, true, "live cords paint above resting bundle halos");
+      assert.deepEqual(
+        audit.inspectionPaint,
+        {
+          during: { lines: true, ports: true },
+          after: { lines: true, ports: true },
+        },
+        "hovering and leaving another binding cannot paint it over a held cable",
+      );
       assert.ok(
         audit.failClosed > audit.gLive,
         "a dropped release clears G's cords even while virtual A remains down",

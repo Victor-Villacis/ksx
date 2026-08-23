@@ -7418,6 +7418,15 @@ a.wsrow-title:hover {
   transition: opacity 120ms ease;
 }
 
+/* The all-player lens is an overview. Let shared harness spines build their
+   player color through overlap without making every individual key branch as
+   loud as a selected or live route. Inspection below still promotes the
+   exact binding to full opacity. */
+.n-flow-layer[data-flow-mode="all"]
+  .n-flow-edge[data-flow-kind="binding"]:not(.is-live):not(.is-related) {
+  opacity: 0.62;
+}
+
 .n-flow-edge.is-unresolved {
   display: none;
 }
@@ -7593,6 +7602,15 @@ a.wsrow-title:hover {
   outline: 2px solid color-mix(in srgb, var(--surface-color, var(--n-accent)) 76%, white);
   outline-offset: 4px;
   filter: brightness(1.16) drop-shadow(0 0 12px color-mix(in srgb, var(--surface-color, var(--n-accent)) 46%, transparent));
+}
+
+/* Controller hooks already receive the same semantic related class as keys.
+   SVG outlines are inconsistent, so a restrained luminance lift and glow
+   makes the exact destination zone visible without repainting premium art. */
+.n-widget-pad svg .n-flow-anchor-related {
+  filter:
+    brightness(1.24)
+    drop-shadow(0 0 5px color-mix(in srgb, var(--n-flow-color, var(--n-accent)) 62%, transparent));
 }
 
 @media (pointer: coarse) {
@@ -8223,12 +8241,6 @@ a.wsrow-title:hover {
   pointer-events: all;
 }
 
-.n-center .ds4free .ds4free-hook:hover,
-.n-center .ds4free .ds4free-hook.arm,
-.n-center .ds4free .ds4free-hook.live {
-  stroke-width: 3.4px;
-}
-
 .n-center .ds4free text.n-fnkey {
   font-size: 10.5px;
   stroke-width: 1.7px;
@@ -8459,10 +8471,9 @@ a.wsrow-title:hover {
   pointer-events: all;
 }
 
-.n-center .ds4premium .ds4premium-hook:hover,
-.n-center .ds4premium .ds4premium-hook.arm,
-.n-center .ds4premium .ds4premium-hook.live {
+.n-center :is(.ds4free-hook, .ds4premium-hook):is(:hover, .arm, .live, .n-flow-anchor-related) {
   fill: rgba(150, 138, 224, 0.15);
+  stroke: var(--n-accent-line);
   stroke-width: 3.4px;
 }
 
@@ -8946,20 +8957,16 @@ a.wsrow-title:hover {
   transform: none;
 }
 
-.n-center .dualsensepremium .dualsensepremium-hook:hover,
-.n-center .dualsensepremium .dualsensepremium-hook.arm,
-.n-center .dualsensepremium .dualsensepremium-hook.live,
-.n-center .switchpropremium .switchpro-premium-hook:hover,
-.n-center .switchpropremium .switchpro-premium-hook.arm,
-.n-center .switchpropremium .switchpro-premium-hook.live,
-.n-center .xboxseriespremium .xboxseriespremium-hook:hover,
-.n-center .xboxseriespremium .xboxseriespremium-hook.arm,
-.n-center .xboxseriespremium .xboxseriespremium-hook.live {
+.n-center :is(
+  .ps5a-hook,
+  .dualsensepremium-hook,
+  .switchpro-premium-hook,
+  .xboxseriespremium-hook
+):is(:hover, .arm, .live, .n-flow-anchor-related) {
   fill: rgba(150, 138, 224, 0.16);
   stroke: var(--n-accent-line);
   stroke-width: 2.4px;
   vector-effect: non-scaling-stroke;
-  transform: none;
 }
 
 .n-center .dualsensepremium text.n-fnkey {

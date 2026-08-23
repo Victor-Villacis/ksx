@@ -145,6 +145,7 @@ export interface MappingFlowLayoutSummary {
 interface MappingFlowEntry {
   route: MappingFlowSegment;
   lineGroup: SVGGElement;
+  halo: SVGPathElement;
   path: SVGPathElement;
   portGroup: SVGGElement;
   sourcePort: SVGCircleElement;
@@ -152,6 +153,22 @@ interface MappingFlowEntry {
   sourceElement: Element | null;
   targetElement: Element | null;
   laneIndex: number;
+}
+
+type MappingFlowSide = "top" | "right" | "bottom" | "left";
+
+interface MappingDirectRoutePlan {
+  sourceSide: MappingFlowSide;
+  sourcePortalScreen: { x: number; y: number };
+  targetPortalScreen: { x: number; y: number };
+  bridgeScreen: number;
+  cornerScreen: number;
+}
+
+interface ResolvedMappingFlowEntry {
+  entry: MappingFlowEntry;
+  sourceElement: Element;
+  targetElement: Element;
 }
 
 interface MacroProcessorEntry {
@@ -420,12 +437,122 @@ export function mappingCurve(
 ): string {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
-  if (Math.abs(dy) >= Math.abs(dx)) {
-    const middleY = source.y + dy / 2 + lane;
-    return `M ${source.x.toFixed(2)} ${source.y.toFixed(2)} C ${source.x.toFixed(2)} ${middleY.toFixed(2)}, ${target.x.toFixed(2)} ${middleY.toFixed(2)}, ${target.x.toFixed(2)} ${target.y.toFixed(2)}`;
+  const distance = Math.max(0.01, Math.hypot(dx, dy));
+  const along = Math.min(distance * 0.38, 150);
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const nx = -uy;
+  const ny = ux;
+  const first = {
+    x: source.x + ux * along + nx * lane,
+    y: source.y + uy * along + ny * lane,
+  };
+  const second = {
+    x: target.x - ux * along + nx * lane,
+    y: target.y - uy * along + ny * lane,
+  };
+  return `M ${source.x.toFixed(2)} ${source.y.toFixed(2)} C ${first.x.toFixed(2)} ${first.y.toFixed(2)}, ${second.x.toFixed(2)} ${second.y.toFixed(2)}, ${target.x.toFixed(2)} ${target.y.toFixed(2)}`;
+}
+
+/** A player's direct cords leave through ordered portals on the physical
+ * source and pad widgets. The short cubic fans keep each cord attached to its
+ * real key/control, while a rounded exterior switchyard keeps the long run
+ * out of both pieces of art. */
+export function mappingCombCurve(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  sourcePortal: { x: number; y: number },
+  targetPortal: { x: number; y: number },
+  sourceSide: MappingFlowSide,
+  corner: number,
+  bridgeCoordinate: number,
+): string {
+  const unitToward = (
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const distance = Math.max(0.01, Math.hypot(dx, dy));
+    return { x: dx / distance, y: dy / distance, distance };
+  };
+  const roundedPolyline = (points: readonly { x: number; y: number }[]): string => {
+    const commands: string[] = [];
+    for (let index = 1; index < points.length - 1; index += 1) {
+      const previous = points[index - 1];
+      const point = points[index];
+      const next = points[index + 1];
+      const incoming = unitToward(point, previous);
+      const outgoing = unitToward(point, next);
+      const radius = Math.min(corner, incoming.distance / 2, outgoing.distance / 2);
+      const before = {
+        x: point.x + incoming.x * radius,
+        y: point.y + incoming.y * radius,
+      };
+      const after = {
+        x: point.x + outgoing.x * radius,
+        y: point.y + outgoing.y * radius,
+      };
+      commands.push(
+        `L ${before.x.toFixed(2)} ${before.y.toFixed(2)}`,
+        `Q ${point.x.toFixed(2)} ${point.y.toFixed(2)} ${after.x.toFixed(2)} ${after.y.toFixed(2)}`,
+      );
+    }
+    const last = points[points.length - 1];
+    commands.push(`L ${last.x.toFixed(2)} ${last.y.toFixed(2)}`);
+    return commands.join(" ");
+  };
+
+  const sourceHorizontal = sideIsHorizontal(sourceSide);
+  const outward = sourceSide === "right" || sourceSide === "bottom" ? 1 : -1;
+  const sourceOut = sourceHorizontal ? { x: outward, y: 0 } : { x: 0, y: outward };
+  const sourceVector = unitToward(source, sourcePortal);
+  const targetVector = unitToward(targetPortal, target);
+  const sourceLead = Math.min(sourceVector.distance * 0.42, corner * 2.4);
+  const targetLead = Math.min(targetVector.distance * 0.42, corner * 2.4);
+  const sourceControl = {
+    x: source.x + sourceVector.x * sourceLead,
+    y: source.y + sourceVector.y * sourceLead,
+  };
+  const sourcePortalControl = {
+    x: sourcePortal.x - sourceOut.x * Math.min(corner, sourceVector.distance * 0.32),
+    y: sourcePortal.y - sourceOut.y * Math.min(corner, sourceVector.distance * 0.32),
+  };
+  const targetPortalControl = {
+    x: targetPortal.x + sourceOut.x * Math.min(corner, targetVector.distance * 0.32),
+    y: targetPortal.y + sourceOut.y * Math.min(corner, targetVector.distance * 0.32),
+  };
+  const targetControl = {
+    x: target.x - targetVector.x * targetLead,
+    y: target.y - targetVector.y * targetLead,
+  };
+  const sourceOuter = {
+    x: sourcePortal.x + sourceOut.x * corner,
+    y: sourcePortal.y + sourceOut.y * corner,
+  };
+  const targetOuter = {
+    x: targetPortal.x - sourceOut.x * corner,
+    y: targetPortal.y - sourceOut.y * corner,
+  };
+  const bridge: { x: number; y: number }[] = [sourcePortal, sourceOuter];
+  if (sourceHorizontal) {
+    bridge.push(
+      { x: sourceOuter.x, y: bridgeCoordinate },
+      { x: targetOuter.x, y: bridgeCoordinate },
+    );
+  } else {
+    bridge.push(
+      { x: bridgeCoordinate, y: sourceOuter.y },
+      { x: bridgeCoordinate, y: targetOuter.y },
+    );
   }
-  const middleX = source.x + dx / 2 + lane;
-  return `M ${source.x.toFixed(2)} ${source.y.toFixed(2)} C ${middleX.toFixed(2)} ${source.y.toFixed(2)}, ${middleX.toFixed(2)} ${target.y.toFixed(2)}, ${target.x.toFixed(2)} ${target.y.toFixed(2)}`;
+  bridge.push(targetOuter, targetPortal);
+  return [
+    `M ${source.x.toFixed(2)} ${source.y.toFixed(2)}`,
+    `C ${sourceControl.x.toFixed(2)} ${sourceControl.y.toFixed(2)}, ${sourcePortalControl.x.toFixed(2)} ${sourcePortalControl.y.toFixed(2)}, ${sourcePortal.x.toFixed(2)} ${sourcePortal.y.toFixed(2)}`,
+    roundedPolyline(bridge),
+    `C ${targetPortalControl.x.toFixed(2)} ${targetPortalControl.y.toFixed(2)}, ${targetControl.x.toFixed(2)} ${targetControl.y.toFixed(2)}, ${target.x.toFixed(2)} ${target.y.toFixed(2)}`,
+  ].join(" ");
 }
 
 function svgElement<K extends keyof SVGElementTagNameMap>(
@@ -470,7 +597,8 @@ function elementPerimeterPoint(
   // Arcade presentation turns the rectangular workbench hit target into a
   // round button. Intersect its ellipse rather than its bounding box so a
   // diagonal cord never appears to float outside the visible cap.
-  const roundSurface = element.matches(
+  const roundSurface = element.localName === "circle" || element.localName === "ellipse" ||
+    element.matches(
     '.n-surface-channel-anchor[data-control-kind="button30"], ' +
     '.n-surface-channel-anchor[data-control-kind="button24"]',
   );
@@ -481,6 +609,98 @@ function elementPerimeterPoint(
     ? 1 / Math.sqrt((dx * dx) / (halfWidth * halfWidth) + (dy * dy) / (halfHeight * halfHeight))
     : 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
   return { x: center.x + dx * distance, y: center.y + dy * distance };
+}
+
+function rectCenter(rect: DOMRect): { x: number; y: number } {
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+function sideBetween(source: DOMRect, target: DOMRect): MappingFlowSide {
+  const separated: [MappingFlowSide, number][] = [
+    ["top", source.top - target.bottom],
+    ["right", target.left - source.right],
+    ["bottom", target.top - source.bottom],
+    ["left", source.left - target.right],
+  ].filter((entry) => entry[1] > 0);
+  if (separated.length) {
+    separated.sort((left, right) => right[1] - left[1]);
+    return separated[0][0];
+  }
+  const from = rectCenter(source);
+  const to = rectCenter(target);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? "bottom" : "top";
+  return dx >= 0 ? "right" : "left";
+}
+
+function oppositeSide(side: MappingFlowSide): MappingFlowSide {
+  if (side === "top") return "bottom";
+  if (side === "right") return "left";
+  if (side === "bottom") return "top";
+  return "right";
+}
+
+function gapOnSide(source: DOMRect, target: DOMRect, side: MappingFlowSide): number {
+  if (side === "top") return source.top - target.bottom;
+  if (side === "right") return target.left - source.right;
+  if (side === "bottom") return target.top - source.bottom;
+  return source.left - target.right;
+}
+
+function sideIsHorizontal(side: MappingFlowSide): boolean {
+  return side === "left" || side === "right";
+}
+
+function sidePoint(
+  rect: DOMRect,
+  side: MappingFlowSide,
+  transverse: number,
+  outward = 0,
+): { x: number; y: number } {
+  if (side === "top") return { x: transverse, y: rect.top - outward };
+  if (side === "right") return { x: rect.right + outward, y: transverse };
+  if (side === "bottom") return { x: transverse, y: rect.bottom + outward };
+  return { x: rect.left - outward, y: transverse };
+}
+
+function axisValue(point: { x: number; y: number }, side: MappingFlowSide): number {
+  return sideIsHorizontal(side) ? point.y : point.x;
+}
+
+function packedAxisPositions(
+  desired: readonly number[],
+  minimum: number,
+  maximum: number,
+  preferredGap = 5,
+): number[] {
+  if (!desired.length) return [];
+  if (maximum <= minimum) return desired.map(() => (minimum + maximum) / 2);
+  if (desired.length === 1) return [Math.max(minimum, Math.min(maximum, desired[0]))];
+  const gap = Math.max(
+    0,
+    Math.min(preferredGap, (maximum - minimum) / (desired.length - 1)),
+  );
+  const positions = desired.map((value) => Math.max(minimum, Math.min(maximum, value)));
+  for (let index = 1; index < positions.length; index += 1) {
+    positions[index] = Math.max(positions[index], positions[index - 1] + gap);
+  }
+  if (positions[positions.length - 1] > maximum) {
+    positions[positions.length - 1] = maximum;
+    for (let index = positions.length - 2; index >= 0; index -= 1) {
+      positions[index] = Math.min(positions[index], positions[index + 1] - gap);
+    }
+  }
+  if (positions[0] < minimum) {
+    const shift = minimum - positions[0];
+    for (let index = 0; index < positions.length; index += 1) positions[index] += shift;
+  }
+  return positions;
+}
+
+function rectsOverlap(left: DOMRect, right: DOMRect): boolean {
+  return left.left < right.right && left.right > right.left &&
+    left.top < right.bottom && left.bottom > right.top;
 }
 
 function inspectionEqual(left: MappingInspection | null, right: MappingInspection | null): boolean {
@@ -508,6 +728,10 @@ export class MappingFlowLayer {
   readonly #abort = new AbortController();
   readonly #relatedAnchors = new Set<Element>();
   readonly #observedAnchors = new Set<Element>();
+  #liveKeysDown: ReadonlySet<string> = new Set();
+  #liveKeyHits: ReadonlySet<string> = new Set();
+  #liveSlotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>> = new Map();
+  #liveSlotFunctionHits: ReadonlyMap<number, ReadonlySet<string>> = new Map();
   #routes: MappingFlowSegment[] = [];
   #processors: MacroProcessorFlow[] = [];
   #unavailableMappings: MappingFlowUnavailable[] = [];
@@ -691,6 +915,14 @@ export class MappingFlowLayer {
     slotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>>,
     slotFunctionHits: ReadonlyMap<number, ReadonlySet<string>>,
   ): void {
+    this.#liveKeysDown = keysDown;
+    this.#liveKeyHits = keyHits;
+    this.#liveSlotFunctionsDown = slotFunctionsDown;
+    this.#liveSlotFunctionHits = slotFunctionHits;
+    this.#applyLive();
+  }
+
+  #applyLive(): void {
     for (const entry of this.#entries.values()) {
       // Runtime frames carry aggregate controller state, not macro execution
       // provenance. Only a direct relation can truthfully light from these two
@@ -698,13 +930,35 @@ export class MappingFlowLayer {
       // macro/step identity.
       const live = entry.route.kind === "binding" &&
         (
-          keysDown.has(entry.route.source.key) &&
-            (slotFunctionsDown.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false) ||
-          keyHits.has(entry.route.source.key) &&
-            (slotFunctionHits.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false)
+          this.#liveKeysDown.has(entry.route.source.key) &&
+            (this.#liveSlotFunctionsDown.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false) ||
+          this.#liveKeyHits.has(entry.route.source.key) &&
+            (this.#liveSlotFunctionHits.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false)
         );
       entry.lineGroup.classList.toggle("is-live", live);
       entry.portGroup.classList.toggle("is-live", live);
+    }
+    this.#syncPaintOrder();
+  }
+
+  #syncPaintOrder(): void {
+    const promote = (entry: MappingFlowEntry): void => {
+      this.#lines.append(entry.lineGroup);
+      this.#ports.append(entry.portGroup);
+    };
+    // SVG sibling order is its z-order. Rebuild the three paint bands every
+    // time live or inspection state changes so hover can never cover a cable
+    // that is carrying an input: resting, then related, then live.
+    for (const entry of this.#entries.values()) {
+      if (!entry.lineGroup.classList.contains("is-related") &&
+          !entry.lineGroup.classList.contains("is-live")) promote(entry);
+    }
+    for (const entry of this.#entries.values()) {
+      if (entry.lineGroup.classList.contains("is-related") &&
+          !entry.lineGroup.classList.contains("is-live")) promote(entry);
+    }
+    for (const entry of this.#entries.values()) {
+      if (entry.lineGroup.classList.contains("is-live")) promote(entry);
     }
   }
 
@@ -799,6 +1053,7 @@ export class MappingFlowLayer {
       this.#entries.set(route.id, {
         route,
         lineGroup,
+        halo,
         path,
         portGroup,
         sourcePort,
@@ -808,6 +1063,7 @@ export class MappingFlowLayer {
         laneIndex: 0,
       });
     }
+    this.#applyLive();
   }
 
   #syncProcessorElement(entry: MacroProcessorEntry): void {
@@ -1059,7 +1315,6 @@ export class MappingFlowLayer {
     let resolved = 0;
     let resolvedDirect = 0;
     let resolvedMacroConnections = 0;
-    let index = 0;
     const observedAnchors = new Set<Element>();
     const anchors: MappingAnchorCache = {
       keys: new Map(),
@@ -1067,6 +1322,7 @@ export class MappingFlowLayer {
       pads: new Map(),
     };
     this.#layoutProcessors(matrix, inverse, scale, observedAnchors, anchors, true);
+    const resolvedEntries: ResolvedMappingFlowEntry[] = [];
     for (const entry of this.#entries.values()) {
       const sourceElement = this.#resolveEndpoint(entry.route.source, entry.route.slot, anchors);
       const targetElement = this.#resolveEndpoint(entry.route.target, entry.route.slot, anchors);
@@ -1076,16 +1332,30 @@ export class MappingFlowLayer {
       entry.lineGroup.classList.toggle("is-unresolved", !visible);
       entry.portGroup.classList.toggle("is-unresolved", !visible);
       if (!visible) continue;
+      resolvedEntries.push({ entry, sourceElement, targetElement });
+      observedAnchors.add(sourceElement);
+      observedAnchors.add(targetElement);
+    }
 
-      entry.laneIndex = index;
-      const lane = ((index % 7) - 3) * (4 / scale);
-      this.#positionEntry(entry, inverse, scale, lane);
+    const directPlans = this.#planDirectRoutes(
+      resolvedEntries.filter(({ entry }) => entry.route.kind === "binding"),
+    );
+    const macroLanes = new Map<number, number>();
+    for (const resolvedEntry of resolvedEntries) {
+      const { entry } = resolvedEntry;
+      const directPlan = directPlans.get(entry);
+      if (directPlan) {
+        this.#positionDirectEntry(entry, inverse, scale, directPlan);
+      } else {
+        const laneIndex = macroLanes.get(entry.route.slot) ?? 0;
+        entry.laneIndex = laneIndex;
+        const lane = ((laneIndex % 5) - 2) * (4 / scale);
+        this.#positionEntry(entry, inverse, scale, lane);
+        macroLanes.set(entry.route.slot, laneIndex + 1);
+      }
       resolved += 1;
       if (entry.route.kind === "binding") resolvedDirect += 1;
       else resolvedMacroConnections += 1;
-      index += 1;
-      observedAnchors.add(sourceElement);
-      observedAnchors.add(targetElement);
     }
     this.#syncObservedAnchors(observedAnchors);
     const summary = {
@@ -1111,6 +1381,362 @@ export class MappingFlowLayer {
     }
   }
 
+  #planDirectRoutes(
+    entries: readonly ResolvedMappingFlowEntry[],
+  ): Map<MappingFlowEntry, MappingDirectRoutePlan> {
+    type DirectGroup = {
+      sourceHost: Element;
+      targetHost: Element;
+      slot: number;
+      sourceSide: MappingFlowSide;
+      targetSide: MappingFlowSide;
+      members: ResolvedMappingFlowEntry[];
+    };
+    const rects = new Map<Element, DOMRect>();
+    const rectFor = (element: Element): DOMRect => {
+      const known = rects.get(element);
+      if (known) return known;
+      const measured = element.getBoundingClientRect();
+      rects.set(element, measured);
+      return measured;
+    };
+    const widgetHosts = Array.from(this.#stage.querySelectorAll<Element>(".widget-instance"));
+    const padHosts = widgetHosts.filter((host) => host.querySelector("[data-pad-slot]"));
+    const processorHosts = Array.from(
+      this.#nodes.querySelectorAll<Element>(".n-flow-processor"),
+    );
+    const groups: DirectGroup[] = [];
+    for (const resolved of entries) {
+      const sourceHost = resolved.sourceElement.closest(".widget-instance") ??
+        resolved.sourceElement;
+      const targetHost = resolved.targetElement.closest(".widget-instance") ??
+        resolved.targetElement;
+      const sourceRect = rectFor(sourceHost);
+      const targetRect = rectFor(targetHost);
+      const sourceSide = sideBetween(sourceRect, targetRect);
+      const targetSide = oppositeSide(sourceSide);
+      let group = groups.find((candidate) =>
+        candidate.sourceHost === sourceHost &&
+        candidate.targetHost === targetHost &&
+        candidate.slot === resolved.entry.route.slot
+      );
+      if (!group) {
+        group = {
+          sourceHost,
+          targetHost,
+          slot: resolved.entry.route.slot,
+          sourceSide,
+          targetSide,
+          members: [],
+        };
+        groups.push(group);
+      }
+      group.members.push(resolved);
+    }
+
+    const identity = (element: Element, fallback: string): string =>
+      element instanceof HTMLElement
+        ? element.dataset.instanceId ?? element.dataset.widgetName ?? fallback
+        : fallback;
+    const inwardDepth = (
+      point: { x: number; y: number },
+      rect: DOMRect,
+      side: MappingFlowSide,
+    ): number => {
+      if (side === "top") return point.y - rect.top;
+      if (side === "right") return rect.right - point.x;
+      if (side === "bottom") return rect.bottom - point.y;
+      return point.x - rect.left;
+    };
+    const sideBounds = (rect: DOMRect, side: MappingFlowSide, inset: number): [number, number] =>
+      sideIsHorizontal(side)
+        ? [rect.top + inset, rect.bottom - inset]
+        : [rect.left + inset, rect.right - inset];
+    const projectedIntoBand = (
+      point: { x: number; y: number },
+      rect: DOMRect,
+      side: MappingFlowSide,
+      band: readonly [number, number],
+    ): number => {
+      const [hostMinimum, hostMaximum] = sideBounds(rect, side, 0);
+      const ratio = (axisValue(point, side) - hostMinimum) /
+        Math.max(1, hostMaximum - hostMinimum);
+      return band[0] + Math.max(0, Math.min(1, ratio)) * (band[1] - band[0]);
+    };
+    const segmentHitsRect = (
+      start: { x: number; y: number },
+      end: { x: number; y: number },
+      rect: DOMRect,
+      clearance = 9,
+    ): boolean => {
+      const left = rect.left - clearance;
+      const right = rect.right + clearance;
+      const top = rect.top - clearance;
+      const bottom = rect.bottom + clearance;
+      if (Math.abs(start.y - end.y) < 0.01) {
+        return start.y > top && start.y < bottom &&
+          Math.max(start.x, end.x) > left && Math.min(start.x, end.x) < right;
+      }
+      if (Math.abs(start.x - end.x) < 0.01) {
+        return start.x > left && start.x < right &&
+          Math.max(start.y, end.y) > top && Math.min(start.y, end.y) < bottom;
+      }
+      return false;
+    };
+    const plans = new Map<MappingFlowEntry, MappingDirectRoutePlan>();
+    for (const group of groups) {
+      const sourceRect = rectFor(group.sourceHost);
+      const targetRect = rectFor(group.targetHost);
+      // There is no exterior corridor while widgets overlap. The ordinary
+      // finite spline remains the honest fallback until the user separates
+      // them by dragging or Tidy up.
+      if (rectsOverlap(sourceRect, targetRect)) continue;
+      const facingGap = gapOnSide(sourceRect, targetRect, group.sourceSide);
+      if (facingGap < 18) continue;
+      const sourceCenter = rectCenter(sourceRect);
+      const targetCenter = rectCenter(targetRect);
+      const sourceVertical = !sideIsHorizontal(group.sourceSide);
+
+      // Tray identity follows every staged pad, not only the current Paths
+      // scope. P2 therefore stays on tray 2 when the user switches between
+      // Selected player and All players without moving any widgets.
+      const sourceTrayHosts = padHosts
+        .filter((host) =>
+          !rectsOverlap(sourceRect, rectFor(host)) &&
+          sideBetween(sourceRect, rectFor(host)) === group.sourceSide
+        )
+        .sort((left, right) => {
+          const leftRect = rectFor(left);
+          const rightRect = rectFor(right);
+          const leftSlot = Number(
+            left.querySelector<HTMLElement>("[data-pad-slot]")?.dataset.padSlot ?? 0,
+          );
+          const rightSlot = Number(
+            right.querySelector<HTMLElement>("[data-pad-slot]")?.dataset.padSlot ?? 0,
+          );
+          return axisValue(rectCenter(leftRect), group.sourceSide) -
+              axisValue(rectCenter(rightRect), group.sourceSide) ||
+            leftSlot - rightSlot ||
+            identity(left, `target-${leftSlot}`).localeCompare(identity(right, `target-${rightSlot}`));
+        });
+      const stableTrayHosts = sourceTrayHosts.includes(group.targetHost)
+        ? sourceTrayHosts
+        : [group.targetHost];
+      const sourceBundleOrder = Math.max(0, stableTrayHosts.indexOf(group.targetHost));
+
+      const targetSiblings = groups
+        .filter((candidate) =>
+          candidate.targetHost === group.targetHost && candidate.targetSide === group.targetSide
+        )
+        .sort((left, right) => {
+          const leftCenter = rectCenter(rectFor(left.sourceHost));
+          const rightCenter = rectCenter(rectFor(right.sourceHost));
+          return axisValue(leftCenter, group.targetSide) -
+              axisValue(rightCenter, group.targetSide) ||
+            left.slot - right.slot ||
+            identity(left.sourceHost, `source-${left.slot}`).localeCompare(
+              identity(right.sourceHost, `source-${right.slot}`),
+            );
+        });
+      const targetBundleOrder = Math.max(0, targetSiblings.indexOf(group));
+      const cornerScreen = Math.min(12, Math.max(2, (facingGap - 8) / 3));
+      const targetDepth = Math.min(
+        5 + targetBundleOrder * 5,
+        Math.max(3, (facingGap - cornerScreen * 2 - 4) * 0.35),
+      );
+      const maximumSourceDepth = facingGap - targetDepth - cornerScreen * 2 - 4;
+      if (maximumSourceDepth < 3) continue;
+      const sourceBaseDepth = Math.min(5, maximumSourceDepth);
+      const sourceSpacing = stableTrayHosts.length > 1
+        ? Math.max(
+          0,
+          Math.min(8, (maximumSourceDepth - sourceBaseDepth) / (stableTrayHosts.length - 1)),
+        )
+        : 0;
+      const sourceDepth = sourceBaseDepth + sourceBundleOrder * sourceSpacing;
+      const preferredBridge = sourceVertical
+        ? targetCenter.x + Math.sign(targetCenter.x - sourceCenter.x) * targetRect.width * 0.32
+        : targetCenter.y + Math.sign(targetCenter.y - sourceCenter.y) * targetRect.height * 0.32;
+      const hardObstacles = widgetHosts
+        .filter((host) => host !== group.sourceHost && host !== group.targetHost)
+        .map(rectFor);
+      // A fixed-size macro card can occupy the entire keyboard-to-pad gap at
+      // Fit. Prefer a trunk that misses it, but keep that opaque card a soft
+      // underpass instead of replacing every ordered harness with crossing
+      // fallback splines. Other controller widgets always remain hard walls.
+      const softObstacles = processorHosts.map(rectFor);
+      const obstacles = [...hardObstacles, ...softObstacles];
+      const sourceBand = sideBounds(sourceRect, group.sourceSide, 18);
+      const targetBand = sideBounds(targetRect, group.targetSide, 18);
+
+      const sourceOrder = [...group.members].sort((left, right) => {
+        const leftCenter = elementCenter(left.sourceElement);
+        const rightCenter = elementCenter(right.sourceElement);
+        return axisValue(leftCenter, group.sourceSide) -
+            axisValue(rightCenter, group.sourceSide) ||
+          inwardDepth(leftCenter, sourceRect, group.sourceSide) -
+            inwardDepth(rightCenter, sourceRect, group.sourceSide) ||
+          left.entry.route.id.localeCompare(right.entry.route.id);
+      });
+      const targetOrder = [...group.members].sort((left, right) => {
+        const leftCenter = elementCenter(left.targetElement);
+        const rightCenter = elementCenter(right.targetElement);
+        return axisValue(leftCenter, group.targetSide) -
+            axisValue(rightCenter, group.targetSide) ||
+          inwardDepth(leftCenter, targetRect, group.targetSide) -
+            inwardDepth(rightCenter, targetRect, group.targetSide) ||
+          left.entry.route.id.localeCompare(right.entry.route.id);
+      });
+      const sourcePositions = packedAxisPositions(
+        sourceOrder.map((member) =>
+          projectedIntoBand(
+            elementCenter(member.sourceElement),
+            sourceRect,
+            group.sourceSide,
+            sourceBand,
+          ) + (sourceBundleOrder - (stableTrayHosts.length - 1) / 2) *
+            Math.min(16, 32 / Math.max(1, stableTrayHosts.length))
+        ),
+        sourceBand[0],
+        sourceBand[1],
+      );
+      const targetPositions = packedAxisPositions(
+        targetOrder.map((member) =>
+          projectedIntoBand(
+            elementCenter(member.targetElement),
+            targetRect,
+            group.targetSide,
+            targetBand,
+          )
+        ),
+        targetBand[0],
+        targetBand[1],
+      );
+      const sourcePosition = new Map(
+        sourceOrder.map((member, index) => [member.entry, sourcePositions[index]] as const),
+      );
+      const targetPosition = new Map(
+        targetOrder.map((member, index) => [member.entry, targetPositions[index]] as const),
+      );
+      const viewportRect = this.#viewport.getBoundingClientRect();
+      const bridgeCandidates = new Set<number>([
+        preferredBridge,
+        (sourceBand[0] + sourceBand[1]) / 2,
+        (targetBand[0] + targetBand[1]) / 2,
+        sourceVertical ? viewportRect.left + 12 : viewportRect.top + 12,
+        sourceVertical ? viewportRect.right - 12 : viewportRect.bottom - 12,
+      ]);
+      for (const rect of obstacles) {
+        if (sourceVertical) {
+          bridgeCandidates.add(rect.left - 12);
+          bridgeCandidates.add(rect.right + 12);
+        } else {
+          bridgeCandidates.add(rect.top - 12);
+          bridgeCandidates.add(rect.bottom + 12);
+        }
+      }
+      let bridgeScreen = Number.NaN;
+      let bridgeScore = Number.POSITIVE_INFINITY;
+      for (const candidate of bridgeCandidates) {
+        let hardCollisions = 0;
+        let softCollisions = 0;
+        let length = 0;
+        for (const member of sourceOrder) {
+          const sourceOuter = sidePoint(
+            sourceRect,
+            group.sourceSide,
+            sourcePosition.get(member.entry)!,
+            sourceDepth + cornerScreen,
+          );
+          const targetOuter = sidePoint(
+            targetRect,
+            group.targetSide,
+            targetPosition.get(member.entry)!,
+            targetDepth + cornerScreen,
+          );
+          const bridgeStart = sourceVertical
+            ? { x: candidate, y: sourceOuter.y }
+            : { x: sourceOuter.x, y: candidate };
+          const bridgeEnd = sourceVertical
+            ? { x: candidate, y: targetOuter.y }
+            : { x: targetOuter.x, y: candidate };
+          const segments = [
+            [sourceOuter, bridgeStart],
+            [bridgeStart, bridgeEnd],
+            [bridgeEnd, targetOuter],
+          ] as const;
+          for (const [start, end] of segments) {
+            length += Math.hypot(end.x - start.x, end.y - start.y);
+            for (const obstacle of hardObstacles) {
+              if (segmentHitsRect(start, end, obstacle)) hardCollisions += 1;
+            }
+            for (const obstacle of softObstacles) {
+              if (segmentHitsRect(start, end, obstacle)) softCollisions += 1;
+            }
+          }
+        }
+        const score = softCollisions * 1_000_000 + length + Math.abs(candidate - preferredBridge) * 0.2;
+        if (hardCollisions === 0 && score < bridgeScore) {
+          bridgeScreen = candidate;
+          bridgeScore = score;
+        }
+      }
+      if (!Number.isFinite(bridgeScreen)) continue;
+      sourceOrder.forEach((member) => {
+        // A bundle shares its exterior spine. Individual identity lives in
+        // the ordered key and control branches; overlapping the long middle
+        // run is deliberate cable bundling, not discarded semantic edges.
+        // Hover/live state can still isolate and animate any one full route.
+        plans.set(member.entry, {
+          sourceSide: group.sourceSide,
+          bridgeScreen,
+          cornerScreen,
+          sourcePortalScreen: sidePoint(
+            sourceRect,
+            group.sourceSide,
+            sourcePosition.get(member.entry)!,
+            sourceDepth,
+          ),
+          targetPortalScreen: sidePoint(
+            targetRect,
+            group.targetSide,
+            targetPosition.get(member.entry)!,
+            targetDepth,
+          ),
+        });
+      });
+    }
+    return plans;
+  }
+
+  #positionDirectEntry(
+    entry: MappingFlowEntry,
+    inverse: DOMMatrix,
+    scale: number,
+    plan: MappingDirectRoutePlan,
+  ): void {
+    if (!entry.sourceElement || !entry.targetElement) return;
+    const sourceScreen = elementPerimeterPoint(entry.sourceElement, plan.sourcePortalScreen);
+    const targetScreen = elementPerimeterPoint(entry.targetElement, plan.targetPortalScreen);
+    const source = this.#worldPoint(sourceScreen, inverse);
+    const target = this.#worldPoint(targetScreen, inverse);
+    const sourcePortal = this.#worldPoint(plan.sourcePortalScreen, inverse);
+    const targetPortal = this.#worldPoint(plan.targetPortalScreen, inverse);
+    const bridgeCoordinate = sideIsHorizontal(plan.sourceSide)
+      ? this.#worldPoint({ x: plan.sourcePortalScreen.x, y: plan.bridgeScreen }, inverse).y
+      : this.#worldPoint({ x: plan.bridgeScreen, y: plan.sourcePortalScreen.y }, inverse).x;
+    const pathValue = mappingCombCurve(
+      source,
+      target,
+      sourcePortal,
+      targetPortal,
+      plan.sourceSide,
+      plan.cornerScreen / scale,
+      bridgeCoordinate,
+    );
+    this.#paintEntry(entry, pathValue, source, target, scale);
+  }
+
   #positionEntry(
     entry: MappingFlowEntry,
     inverse: DOMMatrix,
@@ -1120,16 +1746,29 @@ export class MappingFlowLayer {
     if (!entry.sourceElement || !entry.targetElement) return;
     const sourceCenter = elementCenter(entry.sourceElement);
     const targetCenter = elementCenter(entry.targetElement);
+    const targetScreen = entry.route.target.kind === "control"
+      ? elementPerimeterPoint(entry.targetElement, sourceCenter)
+      : targetCenter;
     const source = this.#worldPoint(
       entry.route.source.kind === "key"
-        ? elementPerimeterPoint(entry.sourceElement, targetCenter)
+        ? elementPerimeterPoint(entry.sourceElement, targetScreen)
         : sourceCenter,
       inverse,
     );
-    const target = this.#worldPoint(targetCenter, inverse);
+    const target = this.#worldPoint(targetScreen, inverse);
     const pathValue = mappingCurve(source, target, lane);
+    this.#paintEntry(entry, pathValue, source, target, scale);
+  }
+
+  #paintEntry(
+    entry: MappingFlowEntry,
+    pathValue: string,
+    source: { x: number; y: number },
+    target: { x: number; y: number },
+    scale: number,
+  ): void {
     entry.path.setAttribute("d", pathValue);
-    entry.lineGroup.querySelector<SVGPathElement>(".n-flow-halo")?.setAttribute("d", pathValue);
+    entry.halo.setAttribute("d", pathValue);
     const radius = 3.7 / scale;
     entry.sourcePort.setAttribute("cx", source.x.toFixed(2));
     entry.sourcePort.setAttribute("cy", source.y.toFixed(2));
@@ -1161,7 +1800,7 @@ export class MappingFlowLayer {
         entry,
         inverse,
         scale,
-        ((entry.laneIndex % 7) - 3) * (4 / scale),
+        ((entry.laneIndex % 5) - 2) * (4 / scale),
       );
     }
     if (this.#viewport.classList.contains("is-camera-animating")) {
@@ -1686,6 +2325,7 @@ export class MappingFlowLayer {
       if (entry.sourceElement) this.#relatedAnchors.add(entry.sourceElement);
       if (entry.targetElement) this.#relatedAnchors.add(entry.targetElement);
     }
+    this.#syncPaintOrder();
     for (const anchor of this.#relatedAnchors) anchor.classList.add("n-flow-anchor-related");
   }
 }

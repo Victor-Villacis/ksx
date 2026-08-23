@@ -25,6 +25,7 @@ use crate::snapshot::{
 /// How many server-injected `createShow` pairs this page has.
 const SHOW_COUNT: usize = 2;
 
+const LIST_SLOT_ENCODERS: &str = "list:nDevEncoders:array";
 const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
@@ -77,6 +78,8 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
     serde_json::json!({
         "nDevCount": payload.view.dev_count,
         "nDevNote": payload.view.dev_note,
+        "nEncoderCount": payload.view.encoder_count,
+        "nEncoderHead": payload.view.encoder_head,
         "nKbTitle": payload.view.kb_title,
         "nModeNote": payload.view.mode_note,
         "nExpHead": payload.view.exp_head,
@@ -197,6 +200,7 @@ fn device_row(row: &NocturneDeviceRow) -> SlotValue {
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
+        ("role".to_owned(), SlotValue::Text(row.role.clone())),
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
@@ -468,7 +472,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 42] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 43] {
     let view = &payload.view;
     [
         (
@@ -622,6 +626,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 42] {
         (
             LIST_SLOT_BIND_SYS,
             SlotValue::array(view.bind_system.iter().map(bind_row).collect()),
+        ),
+        (
+            LIST_SLOT_ENCODERS,
+            SlotValue::array(view.dev_encoders.iter().map(device_row).collect()),
         ),
         (
             LIST_SLOT_DEVICES,
@@ -811,7 +819,7 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 42] = [
+        const SERVED_LIST_PREFIXES: [&str; 43] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -829,6 +837,7 @@ mod tests {
             "list:nBindLs:",
             "list:nBindRs:",
             "list:nBindSys:",
+            "list:nDevEncoders:",
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
@@ -855,7 +864,7 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 105] = [
+        const SERVED_SLOTS: [&str; 107] = [
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",
@@ -888,6 +897,8 @@ mod tests {
             "nSocdNum",
             "nSocdLab",
             "nDevCount",
+            "nEncoderCount",
+            "nEncoderHead",
             "nModeNote",
             "nMacrosHead",
             "nMacrosNote",
@@ -1053,6 +1064,7 @@ mod tests {
             );
         }
         for name in [
+            LIST_SLOT_ENCODERS,
             LIST_SLOT_DEVICES,
             LIST_SLOT_EXP,
             LIST_SLOT_GAMES,
@@ -1118,6 +1130,39 @@ mod tests {
         // The roster's three answers, from BlockingOption::roster, with the
         // staged one marked.
         assert!(out.html.contains("n-radio on"));
+    }
+
+    /// Regression: the old derived view put every boot-keyboard-shaped board
+    /// into `dev_rows`, which forced the island to recognize an I-PAC by its
+    /// product copy. The backend role now survives both the derived payload and
+    /// the render-row object as its own first-run lane.
+    #[test]
+    fn nocturne_keeps_panel_encoders_out_of_the_ordinary_keyboard_list() {
+        let mut payload = keyboard_payload();
+        payload.scan.boards[0].role = ksx_api::BoardRole::PanelEncoder;
+        payload.scan.boards.push(ksx_api::BoardRow {
+            name: "Ordinary USB keyboard".to_owned(),
+            role: ksx_api::BoardRole::Keyboard,
+            transport_label: "USB".to_owned(),
+            selector: Some("usb:046d:c31c:00".to_owned()),
+            alias_hint: "desk keyboard".to_owned(),
+            keyboard: Some(r"USB\VID_046D&PID_C31C&MI_00\1".to_owned()),
+            pickable: true,
+            looks_like_a_keyboard: true,
+            can_type: true,
+            ..Default::default()
+        });
+        let derived = payload.derived().view;
+
+        assert_eq!(derived.dev_encoders.len(), 1);
+        assert_eq!(derived.dev_encoders[0].name, "Ultimarc I-PAC 4");
+        assert_eq!(derived.dev_encoders[0].role, "panel-encoder");
+        assert_eq!(derived.encoder_count, "1 found");
+        assert_eq!(derived.encoder_head, "Arcade encoders");
+        assert_eq!(derived.dev_rows.len(), 1);
+        assert_eq!(derived.dev_rows[0].name, "Ordinary USB keyboard");
+        assert_eq!(derived.dev_rows[0].role, "keyboard");
+        assert_eq!(derived.dev_count, "1 found");
     }
 
     /// The page embeds its payload for hydration seeding and the poller.

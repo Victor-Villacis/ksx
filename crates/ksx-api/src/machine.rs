@@ -1533,6 +1533,34 @@ fn device_health(device: &ConfiguredDevice) -> (String, &'static str) {
     }
 }
 
+/// Backend-owned role of one physical input board.
+///
+/// This is deliberately not inferred from a display name. A board can expose a
+/// boot-keyboard interface while physically being an arcade encoder, and the
+/// distinction decides which first-run workflow a surface offers. The backend
+/// assigns `panel-encoder` only from a registered exact hardware family; an
+/// unknown HID device remains a keyboard or other device until a driver owns
+/// that classification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BoardRole {
+    #[default]
+    Keyboard,
+    PanelEncoder,
+    Other,
+}
+
+impl BoardRole {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::PanelEncoder => "panel-encoder",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// One physical board: every interface that shares a composite parent
 /// (`crates/ksx-backend/src/device_scan.rs` `Board`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1552,6 +1580,12 @@ pub struct BoardRow {
     /// it merely HID? A mouse, an LED controller and a fan controller are all
     /// claimable; only this separates them from a panel.
     pub looks_like_a_keyboard: bool,
+    /// What this board physically is for first-run UX. An I-PAC remains a
+    /// `panel-encoder` even though keyboard mode makes MI_00 declare the boot
+    /// keyboard protocol. Surfaces render this verdict; they never match a
+    /// product label or VID/PID themselves.
+    #[serde(default)]
+    pub role: BoardRole,
     /// Is the keyboard interface bound to `winusb.sys` right now — i.e. off the
     /// Windows keyboard stack?
     pub claimed: bool,
@@ -3712,6 +3746,22 @@ mod tests {
             keyboard: Some("USB\\VID_D209&PID_0430&MI_00\\X".to_owned()),
             ..BoardRow::default()
         }
+    }
+
+    #[test]
+    fn a_board_role_has_stable_wire_words_and_an_old_row_defaults_to_keyboard() {
+        assert_eq!(
+            serde_json::to_string(&BoardRole::PanelEncoder).unwrap(),
+            r#""panel-encoder""#
+        );
+
+        let mut old_row = serde_json::to_value(BoardRow::default()).unwrap();
+        old_row
+            .as_object_mut()
+            .expect("board row object")
+            .remove("role");
+        let decoded: BoardRow = serde_json::from_value(old_row).unwrap();
+        assert_eq!(decoded.role, BoardRole::Keyboard);
     }
 
     /// **A surface picks a board by SELECTOR, and it never derives one.**

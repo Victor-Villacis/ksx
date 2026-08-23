@@ -3928,6 +3928,10 @@ pub struct NocturneDeviceRow {
     pub cls: String,
     pub name: String,
     pub meta: String,
+    /// `keyboard` | `panel-encoder` | `other`, copied from the backend-owned
+    /// [`ksx_api::BoardRole`]. The island uses this value for presentation; it
+    /// never identifies an encoder by matching the display name.
+    pub role: String,
     pub selector: String,
     pub alias: String,
     pub label: String,
@@ -4293,8 +4297,13 @@ pub struct NocturneDerived {
     /// `scan.boards_summary` or the refusal sentence — the one line that
     /// distinguishes "no keyboard-capable board" from "nothing could be read".
     pub dev_note: String,
+    /// Recognized physical panel encoders get their own first-run lane even
+    /// when keyboard mode makes their capture interface declare as a keyboard.
+    pub encoder_count: String,
+    pub encoder_head: String,
     /// The keyboard header over the key grid: the STAGED selection's identity.
     pub kb_title: String,
+    pub dev_encoders: Vec<NocturneDeviceRow>,
     pub dev_rows: Vec<NocturneDeviceRow>,
     /// Pickable HID devices that do NOT identify themselves as keyboards —
     /// the explicit experimentation playground, never mixed into the
@@ -4638,6 +4647,7 @@ impl NocturneDerived {
         let scan_read = p.scan_read();
         let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
 
+        let mut dev_encoders = Vec::new();
         let mut dev_rows = Vec::new();
         let mut dev_exp = Vec::new();
         let mut dev_other = Vec::new();
@@ -4673,11 +4683,14 @@ impl NocturneDerived {
                     },
                     name: b.name.clone(),
                     meta: format!("{} · {}", b.transport_label, verdict),
+                    role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
                 };
-                if b.looks_like_a_keyboard {
+                if b.role == ksx_api::BoardRole::PanelEncoder {
+                    dev_encoders.push(row);
+                } else if b.looks_like_a_keyboard {
                     dev_rows.push(row);
                 } else {
                     dev_exp.push(row);
@@ -4697,6 +4710,12 @@ impl NocturneDerived {
             "n-devfold".to_owned()
         };
 
+        let encoder_count = if scan_read {
+            format!("{} found", dev_encoders.len())
+        } else {
+            "unavailable".to_owned()
+        };
+        let encoder_head = "Arcade encoders".to_owned();
         let dev_count = if scan_read {
             format!("{} found", dev_rows.len())
         } else {
@@ -6041,7 +6060,10 @@ impl NocturneDerived {
             auto_form_cls,
             dev_count,
             dev_note,
+            encoder_count,
+            encoder_head,
             kb_title,
+            dev_encoders,
             dev_rows,
             dev_exp,
             dev_other,

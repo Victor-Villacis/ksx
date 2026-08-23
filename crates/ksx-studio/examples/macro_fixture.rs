@@ -731,7 +731,205 @@ fn main() {
     struct NoMachine {
         /// The sign-in task's one bit, so the menu's toggle round-trips.
         autostart: std::sync::atomic::AtomicBool,
+        /// The fixture exposes its synthetic restore point only after Studio
+        /// explicitly requested a backup with the complete chart read.
+        panel_backup_created: std::sync::atomic::AtomicBool,
     }
+
+    /// Same physical/UI order and sparse PAC256 normal-plane offsets as the
+    /// production I-PAC 4 profile. Keeping the fixture table exact makes its
+    /// one-byte review useful contract evidence instead of decorative copy.
+    const FIXTURE_IPAC_TERMINALS: [(&str, u8, u8); 56] = [
+        ("1up", 1, 15),
+        ("1down", 1, 13),
+        ("1left", 1, 17),
+        ("1right", 1, 19),
+        ("1sw1", 1, 11),
+        ("1sw2", 1, 9),
+        ("1sw3", 1, 31),
+        ("1sw4", 1, 29),
+        ("1sw5", 1, 27),
+        ("1sw6", 1, 52),
+        ("1sw7", 1, 63),
+        ("1sw8", 1, 55),
+        ("1start", 1, 61),
+        ("1coin", 1, 53),
+        ("2up", 2, 12),
+        ("2down", 2, 10),
+        ("2left", 2, 14),
+        ("2right", 2, 16),
+        ("2sw1", 2, 8),
+        ("2sw2", 2, 30),
+        ("2sw3", 2, 28),
+        ("2sw4", 2, 26),
+        ("2sw5", 2, 59),
+        ("2sw6", 2, 60),
+        ("2sw7", 2, 48),
+        ("2sw8", 2, 56),
+        ("2start", 2, 54),
+        ("2coin", 2, 62),
+        ("3up", 3, 47),
+        ("3down", 3, 37),
+        ("3left", 3, 39),
+        ("3right", 3, 46),
+        ("3sw1", 3, 35),
+        ("3sw2", 3, 33),
+        ("3sw3", 3, 7),
+        ("3sw4", 3, 5),
+        ("3sw5", 3, 3),
+        ("3sw6", 3, 1),
+        ("3sw7", 3, 49),
+        ("3sw8", 3, 57),
+        ("3start", 3, 23),
+        ("3coin", 3, 21),
+        ("4up", 4, 36),
+        ("4down", 4, 34),
+        ("4left", 4, 44),
+        ("4right", 4, 38),
+        ("4sw1", 4, 32),
+        ("4sw2", 4, 6),
+        ("4sw3", 4, 4),
+        ("4sw4", 4, 2),
+        ("4sw5", 4, 0),
+        ("4sw6", 4, 22),
+        ("4sw7", 4, 58),
+        ("4sw8", 4, 50),
+        ("4start", 4, 20),
+        ("4coin", 4, 18),
+    ];
+
+    fn fixture_panel_image() -> [u8; 256] {
+        let mut bytes = [0; 256];
+        bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x0F, 0x00]);
+        // PAC256 encodes an explicitly disabled shifted role as 0x01; 0x00 is
+        // opaque/unknown. Keep the raw preview image and the semantic fixture
+        // rows below byte-for-byte consistent so the one-byte plan is real.
+        for (_, _, base) in FIXTURE_IPAC_TERMINALS {
+            bytes[4 + usize::from(base) + 128] = 0x01;
+        }
+        bytes
+    }
+
+    fn fixture_sha256(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn fixture_terminal_label(id: &str, player: u8) -> (String, &'static str) {
+        let suffix = &id[1..];
+        let (label, kind) = match suffix {
+            "up" => ("Up".into(), "direction"),
+            "down" => ("Down".into(), "direction"),
+            "left" => ("Left".into(), "direction"),
+            "right" => ("Right".into(), "direction"),
+            "start" => ("Start".into(), "start"),
+            "coin" => ("Coin".into(), "coin"),
+            other => (other.to_ascii_uppercase(), "button"),
+        };
+        (format!("P{player} {label}"), kind)
+    }
+
+    fn fixture_panel_backup() -> ksx_api::PanelBackupRow {
+        let image = fixture_panel_image();
+        ksx_api::PanelBackupRow {
+            backup_id: "fixture-blank-ipac-original".into(),
+            label: "Fixture preview · original all-Unassigned chart".into(),
+            created_at: "fixture session".into(),
+            board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
+            image_sha256: fixture_sha256(&image),
+            image_bytes: 256,
+            reason: "first-run-chart-read".into(),
+        }
+    }
+
+    /// A safe browser-only model of the customer's first boot: the encoder is
+    /// discoverable, every terminal is wired but Unassigned, and no Windows
+    /// key event exists yet. This fixture never sends an HID report; its plan
+    /// carries a blocker so even the confirmation dialog cannot issue a write.
+    fn fixture_blank_panel_chart(backup: bool) -> ksx_api::PanelChartView {
+        let mut terminals = Vec::with_capacity(56);
+        for (id, player, _) in FIXTURE_IPAC_TERMINALS {
+            let (terminal_label, kind) = fixture_terminal_label(id, player);
+            terminals.push(ksx_api::PanelTerminalRow {
+                terminal_id: id.into(),
+                terminal_label,
+                player,
+                kind: kind.into(),
+                normal: ksx_api::PanelKeyValue {
+                    code: 0,
+                    key: None,
+                    label: "Unassigned".into(),
+                    supported: true,
+                },
+                shifted: ksx_api::PanelKeyValue {
+                    code: 0,
+                    key: None,
+                    label: "Unassigned".into(),
+                    supported: true,
+                },
+                shift_state: ksx_api::PanelShiftState::Disabled,
+                is_shift: false,
+            });
+        }
+        let mut key_options = Vec::with_capacity(36);
+        for (index, letter) in ('A'..='Z').enumerate() {
+            key_options.push(ksx_api::PanelKeyOption {
+                key: letter.to_string(),
+                label: letter.to_string(),
+                code: 4 + index as u16,
+                safe_for_qualification: true,
+            });
+        }
+        for (index, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+            .into_iter()
+            .enumerate()
+        {
+            key_options.push(ksx_api::PanelKeyOption {
+                key: digit.to_string(),
+                label: digit.to_string(),
+                code: 30 + index as u16,
+                safe_for_qualification: true,
+            });
+        }
+        let image = fixture_panel_image();
+        ksx_api::PanelChartView {
+            generated_at: "fixture session".into(),
+            summary: "Fixture preview: complete all-Unassigned I-PAC chart read safely.".into(),
+            board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
+            board_name: "Ultimarc I-PAC 4".into(),
+            board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
+            driver: "ultimarc-ipac4".into(),
+            protocol_profile: "ipac4-pac256-v1".into(),
+            image_sha256: fixture_sha256(&image),
+            image_bytes: 256,
+            programming_state: "supervised".into(),
+            programming_detail: "The fixture models the guarded workflow but sends no hardware report.".into(),
+            qualification_state: "required".into(),
+            qualification_detail: "Choose one SW terminal and temporary safe key to preview the reversible writer check.".into(),
+            qualification_restore_backup_id: None,
+            terminals,
+            key_options,
+            backup: backup.then(fixture_panel_backup),
+            notes: vec!["Fixture-only preview; no physical I-PAC was read or changed.".into()],
+        }
+    }
+
+    fn require_fixture_panel(device: Option<&str>) -> Result<(), ksx_api::Refusal> {
+        let selected = device.unwrap_or_default();
+        if selected.eq_ignore_ascii_case("usb:d209:0430:00") {
+            Ok(())
+        } else {
+            Err(ksx_api::Refusal::new(
+                ksx_api::codes::BAD_REQUEST,
+                format!("the fixture has no panel matching '{selected}'"),
+            ))
+        }
+    }
+
     impl ksx_api::MachineSource for NoMachine {
         /// The configuration menu's identity row: a config.toml with the two
         /// seeded controllers. `KSX_FIXTURE_THEME` seeds the stored theme id
@@ -867,6 +1065,7 @@ fn main() {
                 boards: vec![
                     ksx_api::BoardRow {
                         name: "Ultimarc I-PAC 4".into(),
+                        role: ksx_api::BoardRole::PanelEncoder,
                         transport_label: "USB".into(),
                         backends: "Built-in path (WinUSB) after preparing".into(),
                         selector: Some("usb:d209:0430:00".into()),
@@ -940,13 +1139,7 @@ fn main() {
             &self,
             spec: &ksx_api::PanelStatusSpec,
         ) -> Result<ksx_api::PanelStatusView, ksx_api::Refusal> {
-            let selected = spec.device.as_deref().unwrap_or_default();
-            if !selected.eq_ignore_ascii_case("usb:d209:0430:00") {
-                return Err(ksx_api::Refusal::new(
-                    ksx_api::codes::BAD_REQUEST,
-                    format!("the fixture has no panel matching '{selected}'"),
-                ));
-            }
+            require_fixture_panel(spec.device.as_deref())?;
             Ok(ksx_api::PanelStatusView {
                 generated_at: "fixture".into(),
                 summary: "1 physical USB board matched; 6 HID collections were inspected".into(),
@@ -965,23 +1158,21 @@ fn main() {
                     serial: None,
                     driver: "ultimarc-ipac".into(),
                     driver_supported: true,
-                    driver_label:
-                        "Ultimarc I-PAC protocol family recognised; read-back protocol unverified"
-                            .into(),
+                    driver_label: "Ultimarc I-PAC 4 lossless chart driver · fixture preview".into(),
                     observed_mode: "keyboard-compatible".into(),
                     mode_detail: "MI_00 declares the HID boot-keyboard protocol; exact vendor mode was not queried".into(),
                     observed_mode_label: "Keyboard-compatible input is present".into(),
                     mode_read_supported: false,
-                    chart_state: "protocol-unverified".into(),
+                    chart_state: "available-unopened".into(),
                     chart_attempted: false,
-                    chart_detail: "No verified chart-query opcode or response framing exists in ksx; an empty chart was not fabricated".into(),
-                    chart_label: "Chart not read — protocol unverified".into(),
-                    configuration_collection_state: "candidate-unverified".into(),
+                    chart_detail: "Open I-PAC Setup to load the fixture's all-Unassigned first-run chart; no physical report is sent".into(),
+                    chart_label: "All-Unassigned first-run preview available".into(),
+                    configuration_collection_state: "available-unopened".into(),
                     configuration_collection: Some(
                         "HID\\VID_D209&PID_0430&MI_02&COL01\\FIXTURE".into(),
                     ),
-                    configuration_collection_detail: "One 5-byte IN/OUT HID collection matches the unverified transport shape; ksx sent nothing".into(),
-                    recommendation: "Keep using the keyboard capture path; panel programming stays unavailable until read-back and backup are proven".into(),
+                    configuration_collection_detail: "One exact 5-byte IN/OUT configuration collection is available in this synthetic fixture".into(),
+                    recommendation: "Choose Set up to QA the blank-board read, backup, qualification, and review flow without writing hardware".into(),
                     interfaces: vec![ksx_api::PanelInterfaceRow {
                         instance_id: "USB\\VID_D209&PID_0430&MI_00\\FIXTURE".into(),
                         interface_number: 0,
@@ -1009,6 +1200,129 @@ fn main() {
                 notes: Vec::new(),
             })
         }
+
+        fn panel_chart(
+            &self,
+            spec: &ksx_api::PanelChartSpec,
+        ) -> Result<ksx_api::PanelChartView, ksx_api::Refusal> {
+            require_fixture_panel(spec.device.as_deref())?;
+            if spec.backup {
+                self.panel_backup_created
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            Ok(fixture_blank_panel_chart(spec.backup))
+        }
+
+        fn panel_backups(
+            &self,
+            spec: &ksx_api::PanelBackupsSpec,
+        ) -> Result<ksx_api::PanelBackupsView, ksx_api::Refusal> {
+            require_fixture_panel(spec.device.as_deref())?;
+            let backups = self
+                .panel_backup_created
+                .load(std::sync::atomic::Ordering::Acquire)
+                .then(fixture_panel_backup)
+                .into_iter()
+                .collect();
+            Ok(ksx_api::PanelBackupsView {
+                summary: "Fixture-only first-run restore points.".into(),
+                board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
+                backups,
+            })
+        }
+
+        fn panel_program_plan(
+            &self,
+            spec: &ksx_api::PanelProgramSpec,
+        ) -> Result<ksx_api::PanelProgramPlanView, ksx_api::Refusal> {
+            require_fixture_panel(spec.device.as_deref())?;
+            let baseline = fixture_panel_image();
+            let baseline_sha = fixture_sha256(&baseline);
+            if spec.expected_base_sha256 != baseline_sha || spec.layout != "custom" {
+                return Err(ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    "the fixture review requires its current blank-chart hash and custom layout",
+                ));
+            }
+            let [edit] = spec.edits.as_slice() else {
+                return Err(ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    "the fixture writer check requires exactly one terminal edit",
+                ));
+            };
+            if edit.shifted_key.is_some() || edit.is_shift.is_some() || edit.allow_shared_key {
+                return Err(ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    "the fixture writer check accepts one unshared normal-key edit only",
+                ));
+            }
+            let after = edit.normal_key.as_deref().ok_or_else(|| {
+                ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    "choose one temporary normal key for the fixture review",
+                )
+            })?;
+            let terminal = edit.terminal_id.to_ascii_lowercase();
+            let chart = fixture_blank_panel_chart(false);
+            let terminal_row = chart
+                .terminals
+                .iter()
+                .find(|candidate| candidate.terminal_id == terminal && candidate.kind == "button")
+                .ok_or_else(|| {
+                    ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        format!("'{terminal}' is not a fixture SW action terminal"),
+                    )
+                })?;
+            let key = chart
+                .key_options
+                .iter()
+                .find(|candidate| {
+                    candidate.safe_for_qualification && candidate.key.eq_ignore_ascii_case(after)
+                })
+                .ok_or_else(|| {
+                    ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        format!("the fixture chart cannot program key '{after}'"),
+                    )
+                })?;
+            let base = FIXTURE_IPAC_TERMINALS
+                .iter()
+                .find_map(|(id, _, base)| (*id == terminal).then_some(*base as usize))
+                .expect("terminal row and exact sparse offset table stay aligned");
+            let offset = 4 + base;
+            let mut desired = baseline;
+            desired[offset] = u8::try_from(key.code).expect("fixture key usage fits one byte");
+            Ok(ksx_api::PanelProgramPlanView {
+                summary: "Preview one reversible terminal assignment while preserving the other 255 bytes.".into(),
+                board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
+                board_name: "Ultimarc I-PAC 4".into(),
+                board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
+                protocol_profile: "ipac4-pac256-v1".into(),
+                base_sha256: baseline_sha,
+                desired_sha256: fixture_sha256(&desired),
+                image_bytes: 256,
+                terminal_diff: vec![ksx_api::PanelTerminalDiffRow {
+                    terminal_id: terminal.clone(),
+                    terminal_label: terminal_row.terminal_label.clone(),
+                    layer: "normal".into(),
+                    before: "Unassigned".into(),
+                    after: key.label.clone(),
+                }],
+                byte_diff: vec![ksx_api::PanelByteDiffRow {
+                    offset,
+                    before: 0,
+                    after: key.code,
+                    meaning: format!("{terminal} normal"),
+                }],
+                preserved_byte_count: 255,
+                confirmation: "I reviewed this exact fixture diff; no hardware write is available in the demo.".into(),
+                blockers: vec![
+                    "Fixture preview only — the demo server intentionally cannot write physical EEPROM."
+                        .into(),
+                ],
+            })
+        }
     }
 
     if let Err(err) = ksx_studio::serve(
@@ -1017,6 +1331,7 @@ fn main() {
         Box::new(store),
         Box::new(NoMachine {
             autostart: std::sync::atomic::AtomicBool::new(false),
+            panel_backup_created: std::sync::atomic::AtomicBool::new(false),
         }),
         // A SCRIPTED live source: refuses in words while the fixture session
         // is idle (the state the button check renders when nothing runs), and

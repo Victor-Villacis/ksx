@@ -144,6 +144,7 @@ export interface NocturneDeviceRowView {
   cls: string;
   name: string;
   meta: string;
+  role: "keyboard" | "panel-encoder" | "other";
   selector: string;
   alias: string;
   label: string;
@@ -357,8 +358,11 @@ export interface NocturneControlFlowView {
 export interface NocturneView {
   dev_count: string;
   dev_note: string;
+  encoder_count: string;
+  encoder_head: string;
   kb_title: string;
   mode_note: string;
+  dev_encoders: NocturneDeviceRowView[];
   dev_rows: NocturneDeviceRowView[];
   dev_exp: NocturneDeviceRowView[];
   dev_other: NocturneOtherRowView[];
@@ -580,8 +584,11 @@ interface PanelStatusPayload {
 // ── SERVED signals — copiers, never derivers ───────────────────────────────
 
 const [nDevCount, setNDevCount] = createSignal("");
+const [nEncoderCount, setNEncoderCount] = createSignal("");
+const [nEncoderHead, setNEncoderHead] = createSignal("");
 const [nModeNote, setNModeNote] = createSignal("");
 const [nDevNote, setNDevNote] = createSignal("");
+const [nDevEncoders, setNDevEncoders] = createSignal<NocturneDeviceRowView[]>([]);
 const [nDevRows, setNDevRows] = createSignal<NocturneDeviceRowView[]>([]);
 const [nDevExp, setNDevExp] = createSignal<NocturneDeviceRowView[]>([]);
 const [nDevOther, setNDevOther] = createSignal<NocturneOtherRowView[]>([]);
@@ -983,9 +990,12 @@ export function applyNocturne(p: NocturnePayload): void {
     : null;
   const v = p.view;
   setNDevCount(v.dev_count);
+  setNEncoderCount(v.encoder_count);
+  setNEncoderHead(v.encoder_head);
   setNModeNote(v.mode_note);
   setNDevNote(v.dev_note);
   setNKbTitle(v.kb_title);
+  setNDevEncoders(v.dev_encoders);
   setNDevRows(v.dev_rows);
   setNDevExp(v.dev_exp);
   setNDevOther(v.dev_other);
@@ -1177,6 +1187,15 @@ export function applyNocturne(p: NocturnePayload): void {
     );
     restoreDialogFocus();
   }
+  if (pendingPanelSetupSelector &&
+      pendingPanelSetupSelector.toLocaleUpperCase() === nCapSelector().trim().toLocaleUpperCase()) {
+    pendingPanelSetupSelector = "";
+    if (pendingPanelSetupTimeout !== undefined) {
+      window.clearTimeout(pendingPanelSetupTimeout);
+      pendingPanelSetupTimeout = undefined;
+    }
+    window.requestAnimationFrame(() => openControlSurfaceBuilder(true));
+  }
 }
 
 /** The last applied view, for the canvas dressers (`syncPadWidgets`,
@@ -1342,10 +1361,17 @@ let controlSurfaceItem: HTMLElement | null = null;
 let controlSurfaceItemIdentity = "";
 let controlSurfaceChoosingTemplate = false;
 let controlSurfacePendingTemplate: ControlSurfaceTemplate | null = null;
+/** A detected encoder can enter its guarded hardware setup before a physical
+ * surface exists. This is presentation state only; the staged selector in
+ * the daemon remains the sole hardware authority. */
+let controlSurfaceEncoderSetupEntry = false;
+let pendingPanelSetupSelector = "";
+let pendingPanelSetupTimeout: number | undefined;
 let controlSurfaceUndoState: ControlSurfaceState | null = null;
 let controlSurfaceUndoIdentity = "";
 let controlSurfaceUndoAfterFingerprint = "";
 let controlSurfaceReturnFocus: HTMLElement | null = null;
+let controlSurfaceReturnEncoderSelector = "";
 let controlSurfaceInspectorPrint = "";
 let controlSurfaceSaveFailed = false;
 let controlSurfaceHardwarePhase: "idle" | "loading" | "ready" | "error" = "idle";
@@ -2140,7 +2166,9 @@ async function reopenPanelQualificationAfterRecovery(): Promise<void> {
     "The interrupted validation chart was restored exactly. Repeat the one-terminal writer check; full layouts remain locked.",
   );
   window.requestAnimationFrame(() => controlSurfaceItem
-    ?.querySelector<HTMLElement>('[data-nx="surface-encoder-terminal"]')
+    ?.querySelector<HTMLElement>(
+      '[data-nx="surface-qualification-terminal"], [data-nx="surface-encoder-terminal"]',
+    )
     ?.focus({ preventScroll: true }));
 }
 
@@ -2232,6 +2260,11 @@ function panelProgrammingEdits(): PanelTerminalEdit[] {
  * only semantic normal-plane changes; unchanged linked controls are useful
  * surface documentation but are not part of the qualification write. */
 function panelProgrammingQualificationEdits(): PanelTerminalEdit[] {
+  const terminalId = panelProgrammingState.editor.qualification_terminal_id.trim();
+  const key = panelProgrammingState.editor.qualification_key.trim();
+  if (terminalId || key) {
+    return [{ terminal_id: terminalId, normal_key: key }];
+  }
   return panelProgrammingEdits().filter((edit) => {
     const terminal = panelProgrammingTerminal(edit.terminal_id);
     return terminal && !samePanelKey(edit.normal_key, terminal.normal.key);
@@ -2243,6 +2276,7 @@ function panelProgrammingQualificationEditIsEligible(edit: PanelTerminalEdit | u
   const key = edit?.normal_key?.trim() ?? "";
   const chart = panelProgrammingState.inspection.chart;
   return Boolean(terminal && panelProgrammingQualificationTerminalIsEligible(terminal) && key &&
+    !samePanelKey(key, terminal.normal.key) &&
     chart?.key_options.some((option) => option.safe_for_qualification === true &&
       samePanelKey(option.key, key)));
 }
@@ -2286,6 +2320,24 @@ function syncPanelProgrammingUi(): void {
   const qualification = section?.querySelector<HTMLElement>(
     "[data-surface-programming-qualification]",
   );
+  const qualificationPicker = section?.querySelector<HTMLElement>(
+    "[data-surface-qualification-picker]",
+  );
+  const qualificationTerminal = section?.querySelector<HTMLSelectElement>(
+    '[data-nx="surface-qualification-terminal"]',
+  );
+  const qualificationKey = section?.querySelector<HTMLSelectElement>(
+    '[data-nx="surface-qualification-key"]',
+  );
+  const qualificationSelection = section?.querySelector<HTMLElement>(
+    "[data-surface-qualification-selection]",
+  );
+  const programmingKicker = section?.querySelector<HTMLElement>(
+    "[data-surface-programming-kicker]",
+  );
+  const programmingTitle = section?.querySelector<HTMLElement>(
+    "[data-surface-programming-title]",
+  );
   const chart = panelProgrammingState.inspection.chart;
   const authority = currentPanelChartAuthority();
   const capability = panelProgrammingState.capability;
@@ -2304,6 +2356,16 @@ function syncPanelProgrammingUi(): void {
         : "")
     : "";
   const open = panelProgrammingState.editor.phase !== "closed";
+  if (programmingKicker) {
+    programmingKicker.textContent = controlSurfaceEncoderSetupEntry
+      ? "I-PAC first-run setup"
+      : "Encoder hardware";
+  }
+  if (programmingTitle) {
+    programmingTitle.textContent = controlSurfaceEncoderSetupEntry
+      ? "Initialize the keyboard chart before mapping or teaching controls"
+      : "Back up first, then choose how KSX should treat the chart";
+  }
   if (section) {
     section.hidden = !open;
     section.dataset.capability = capability.kind;
@@ -2333,11 +2395,69 @@ function syncPanelProgrammingUi(): void {
         `Do not prepare another write. Restore the exact safety backup captured immediately before the validation write; KSX will read it back before unlocking full layouts.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
       if (step) step.textContent = "Writer check · step 2 of 2";
     } else {
-      if (title) title.textContent = "Verify this encoder before writing a full layout";
+      if (title) title.textContent = "Prove one safe write before initializing the board";
       if (detail) detail.textContent =
-        `Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
+        `No emitted key and no drawn panel are required. Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable or Unassigned current value and Shift state explicitly disabled. Choose one temporary safe key so exactly one desired byte differs. KSX first captures the lossless backup; programming then retransmits the complete 256-byte chart as all 64 HID reports, reads every byte back, and requires an exact restore before full-board layouts unlock.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
       if (step) step.textContent = "Writer check · step 1 of 2";
     }
+  }
+  if (qualificationPicker) {
+    qualificationPicker.hidden = !chart || qualificationState !== "required";
+  }
+  if (qualificationTerminal) {
+    const selected = panelProgrammingState.editor.qualification_terminal_id;
+    qualificationTerminal.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose a wired noncritical SW terminal";
+    qualificationTerminal.append(placeholder);
+    for (const terminal of chart?.terminals ?? []) {
+      if (!panelProgrammingQualificationTerminalIsEligible(terminal)) continue;
+      const option = document.createElement("option");
+      option.value = terminal.terminal_id;
+      option.textContent = `${terminal.terminal_label} · P${terminal.player} action · currently ${terminal.normal.label}`;
+      qualificationTerminal.append(option);
+    }
+    qualificationTerminal.value = [...qualificationTerminal.options].some(
+      (option) => option.value === selected,
+    ) ? selected : "";
+    qualificationTerminal.disabled = panelProgrammingBusy ||
+      panelProgrammingTransactionActive() || recoveryRequired || !chart;
+  }
+  if (qualificationKey) {
+    const selected = panelProgrammingState.editor.qualification_key;
+    const selectedTerminal = panelProgrammingTerminal(
+      panelProgrammingState.editor.qualification_terminal_id,
+    );
+    qualificationKey.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose a temporary safe key";
+    qualificationKey.append(placeholder);
+    for (const key of chart?.key_options ?? []) {
+      if (key.safe_for_qualification !== true ||
+          samePanelKey(key.key, selectedTerminal?.normal.key)) continue;
+      const option = document.createElement("option");
+      option.value = key.key;
+      option.textContent = key.label;
+      qualificationKey.append(option);
+    }
+    qualificationKey.value = [...qualificationKey.options].some(
+      (option) => option.value === selected,
+    ) ? selected : "";
+    qualificationKey.disabled = panelProgrammingBusy ||
+      panelProgrammingTransactionActive() || recoveryRequired || !chart;
+  }
+  if (qualificationSelection) {
+    const terminal = panelProgrammingTerminal(
+      panelProgrammingState.editor.qualification_terminal_id,
+    );
+    const key = chart?.key_options.find(
+      (candidate) => candidate.key === panelProgrammingState.editor.qualification_key,
+    );
+    qualificationSelection.textContent = terminal && key
+      ? `${terminal.terminal_label} will temporarily change from ${terminal.normal.label} to ${key.label}. Nothing is written until you review and confirm the complete diff.`
+      : "Choose both values to prepare the reversible safety review.";
   }
   for (const button of Array.from(
     section?.querySelectorAll<HTMLButtonElement>("[data-surface-programming-mode]") ?? [],
@@ -2362,7 +2482,11 @@ function syncPanelProgrammingUi(): void {
       button.title = button.dataset.surfaceProgrammingDescription ?? "";
     }
   }
-  const conflicts = panelProgrammingState.editor.assignment_mode === "custom"
+  // Writer qualification is deliberately independent of any saved or
+  // partially-authored surface. A stale surface conflict must never prevent
+  // proving one reversible terminal write on a newly installed encoder.
+  const conflicts = panelProgrammingState.editor.assignment_mode === "custom" &&
+      qualificationState !== "required"
     ? panelProgrammingConflicts()
     : [];
   const assignments = panelProgrammingDraftAssignments();
@@ -2382,13 +2506,16 @@ function syncPanelProgrammingUi(): void {
   }
   if (review) {
     const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
+    const qualificationReady = qualificationState !== "required" ||
+      (layout === "custom" && qualificationEdits.length === 1 &&
+        panelProgrammingQualificationEditIsEligible(qualificationEdits[0]));
+    const customReady = layout !== "custom" || qualificationState === "required"
+      ? qualificationReady
+      : conflicts.length === 0 && assignments.length > 0;
     review.disabled = panelProgrammingBusy || recoveryRequired ||
       capability.kind !== "programmable" || !chart || !authority ||
       qualificationNeedsRestore ||
-      (qualificationState === "required" &&
-        (layout !== "custom" || qualificationEdits.length !== 1 ||
-          !panelProgrammingQualificationEditIsEligible(qualificationEdits[0]))) ||
-      !layout || (layout === "custom" && (conflicts.length > 0 || assignments.length === 0));
+      !layout || !qualificationReady || !customReady;
     review.textContent = panelProgrammingBusy
       ? "Preparing review…"
       : qualificationState === "validation-recovery"
@@ -2445,13 +2572,25 @@ function syncPanelProgrammingUi(): void {
       ? "Review required restore…"
       : "Review restore…";
   }
-  if (reread) reread.disabled = panelProgrammingBusy || panelProgrammingTransactionActive();
-  if (close) close.disabled = panelProgrammingTransactionActive();
+  if (reread) {
+    // Keep the visible read action focusable while its first read is running;
+    // readPanelProgrammingChart() is the single-flight authority.
+    reread.disabled = panelProgrammingTransactionActive();
+    reread.setAttribute("aria-disabled", String(panelProgrammingBusy || reread.disabled));
+  }
+  if (close) {
+    close.disabled = panelProgrammingTransactionActive();
+    close.textContent = controlSurfaceEncoderSetupEntry
+      ? "Back to panel builder"
+      : "Close setup";
+  }
   const setupButton = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
   if (setupButton) {
     setupButton.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
       !panelProgrammingTarget();
-    setupButton.textContent = open ? "Encoder setup open" : chart ? "Set up encoder…" : "Read & back up…";
+    setupButton.textContent = open
+      ? controlSurfaceEncoderSetupEntry ? "I-PAC setup open" : "Encoder setup open"
+      : chart ? "Set up encoder…" : "Read & back up…";
     setupButton.setAttribute("aria-expanded", String(open));
   }
   syncControlSurfaceInspector();
@@ -2459,7 +2598,7 @@ function syncPanelProgrammingUi(): void {
 
 async function readPanelProgrammingChart(backup: boolean): Promise<void> {
   const selector = panelProgrammingTarget();
-  if (!selector || panelProgrammingTransactionActive()) return;
+  if (!selector || panelProgrammingBusy || panelProgrammingTransactionActive()) return;
   const generation = ++panelProgrammingGeneration;
   panelProgrammingBusy = true;
   panelProgrammingMessage = backup
@@ -2514,6 +2653,19 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         panelProgrammingState.editor.assignment_mode === "recommended"
       ? "custom"
       : panelProgrammingState.editor.assignment_mode;
+    const qualificationTerminalId = qualificationState === "required" && chart.terminals.some(
+      (terminal) => terminal.terminal_id ===
+          panelProgrammingState.editor.qualification_terminal_id &&
+        panelProgrammingQualificationTerminalIsEligible(terminal),
+    )
+      ? panelProgrammingState.editor.qualification_terminal_id
+      : "";
+    const qualificationKey = qualificationState === "required" && chart.key_options.some(
+      (option) => option.key === panelProgrammingState.editor.qualification_key &&
+        option.safe_for_qualification === true,
+    )
+      ? panelProgrammingState.editor.qualification_key
+      : "";
     panelProgrammingState = {
       ...panelProgrammingState,
       inspection: {
@@ -2529,6 +2681,8 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         assignment_mode: assignmentMode,
         phase: panelProgrammingState.editor.phase === "closed" ? "closed" : "assign",
         assignments: panelProgrammingDraftAssignments(),
+        qualification_terminal_id: qualificationTerminalId,
+        qualification_key: qualificationKey,
         plan_expected_selector: "",
         plan: null,
       },
@@ -2563,6 +2717,20 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         // post-restore actions rendered from the pre-read chart.
         renderPanelProgrammingDialog();
       }
+      if (controlSurfaceEncoderSetupEntry &&
+          panelProgrammingQualificationState() === "required") {
+        window.requestAnimationFrame(() => {
+          const current = document.activeElement;
+          const setup = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-programming");
+          if (!setup || (current instanceof HTMLElement && setup.contains(current) &&
+              !current.matches('[data-nx="surface-encoder-read"]'))) {
+            return;
+          }
+          setup.querySelector<HTMLSelectElement>(
+            '[data-nx="surface-qualification-terminal"]',
+          )?.focus({ preventScroll: true });
+        });
+      }
     }
   }
 }
@@ -2589,7 +2757,7 @@ async function loadPanelProgrammingBackups(): Promise<void> {
 }
 
 function openPanelProgrammingSetup(): void {
-  if (panelProgrammingTransactionActive()) return;
+  if (panelProgrammingBusy || panelProgrammingTransactionActive()) return;
   panelProgrammingReturnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement
     : null;
@@ -2608,6 +2776,7 @@ function openPanelProgrammingSetup(): void {
 
 function closePanelProgrammingSetup(restoreFocus = true): void {
   if (panelProgrammingTransactionActive()) return;
+  const leavingFirstRun = controlSurfaceEncoderSetupEntry;
   panelProgrammingState = {
     ...panelProgrammingState,
     editor: {
@@ -2620,12 +2789,30 @@ function closePanelProgrammingSetup(restoreFocus = true): void {
   panelProgrammingProgramRequest = null;
   panelProgrammingRestoreRequest = null;
   panelProgrammingMessage = "";
+  if (leavingFirstRun) {
+    controlSurfaceEncoderSetupEntry = false;
+    controlSurfaceChoosingTemplate = !controlSurfaceState.started;
+  }
   syncPanelProgrammingUi();
+  if (leavingFirstRun) syncControlSurfaceChrome();
   if (restoreFocus) {
-    const target = panelProgrammingReturnFocus?.isConnected
+    const target = leavingFirstRun
+      ? controlSurfaceItem?.querySelector<HTMLElement>(
+          controlSurfaceState.started
+            ? ".n-surface-control.selected, .n-surface-control"
+            : "[data-surface-template]",
+        ) ?? null
+      : panelProgrammingReturnFocus?.isConnected
       ? panelProgrammingReturnFocus
       : controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-encoder-open"]') ?? null;
     window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+  }
+  if (leavingFirstRun) {
+    keyboardWorkbenchAnnounce(
+      controlSurfaceState.started
+        ? "I-PAC Setup closed. The existing physical panel is ready for Design, Teach, or Route."
+        : "I-PAC Setup closed. Choose a physical panel only when you are ready to model the cabinet.",
+    );
   }
 }
 
@@ -2650,11 +2837,24 @@ function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
     return;
   }
   if (mode === "keep-current") {
-    closePanelProgrammingSetup();
-    chooseControlSurfaceStage("teach");
-    keyboardWorkbenchAnnounce(
-      "The encoder chart was kept unchanged. Teach inputs will record what the panel already sends.",
-    );
+    const hasPanel = controlSurfaceState.started;
+    closePanelProgrammingSetup(false);
+    controlSurfaceEncoderSetupEntry = false;
+    if (hasPanel) {
+      chooseControlSurfaceStage("teach");
+      keyboardWorkbenchAnnounce(
+        "The encoder chart was kept unchanged. Teach inputs will record what the panel already sends.",
+      );
+      controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
+        ?.focus({ preventScroll: true });
+    } else {
+      controlSurfaceChoosingTemplate = true;
+      syncControlSurfaceChrome();
+      keyboardWorkbenchAnnounce(
+        "The encoder chart was kept unchanged. Choose a physical panel shape before teaching its existing signals.",
+      );
+      focusControlSurfacePrimary();
+    }
     return;
   }
   panelProgrammingDropPlan();
@@ -2662,6 +2862,42 @@ function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
   panelProgrammingMessage = mode === "recommended"
     ? "KSX will allocate a deterministic four-player key chart and clear the encoder's alternate/shift roles so macros and transformations live in KSX. Link physical channels to their printed terminals, then review the exact diff."
     : "Choose an encoder terminal and supported key for each physical channel, then review the exact diff.";
+  syncPanelProgrammingUi();
+}
+
+function choosePanelQualificationTerminal(terminalId: string): void {
+  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingQualificationState() !== "required") return;
+  const terminal = panelProgrammingTerminal(terminalId);
+  if (terminalId && (!terminal || !panelProgrammingQualificationTerminalIsEligible(terminal))) {
+    return;
+  }
+  panelProgrammingDropPlan();
+  panelProgrammingState.editor.qualification_terminal_id = terminalId;
+  if (terminal && samePanelKey(
+    panelProgrammingState.editor.qualification_key,
+    terminal.normal.key,
+  )) {
+    panelProgrammingState.editor.qualification_key = "";
+  }
+  panelProgrammingMessage = terminalId
+    ? `Safety test terminal ${terminal?.terminal_label ?? terminalId} selected. Choose one temporary safe key; no emitted key or panel drawing is required.`
+    : "Choose one wired, noncritical SW terminal for the reversible writer check.";
+  syncPanelProgrammingUi();
+}
+
+function choosePanelQualificationKey(key: string): void {
+  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingQualificationState() !== "required") return;
+  const option = panelProgrammingState.inspection.chart?.key_options.find(
+    (candidate) => candidate.key === key && candidate.safe_for_qualification === true,
+  );
+  if (key && !option) return;
+  panelProgrammingDropPlan();
+  panelProgrammingState.editor.qualification_key = key;
+  panelProgrammingMessage = key
+    ? `Temporary test key ${option?.label ?? key} selected. Review the one-terminal diff before anything is written.`
+    : "Choose one safe letter or top-row number for the reversible writer check.";
   syncPanelProgrammingUi();
 }
 
@@ -2798,12 +3034,23 @@ function ensurePanelProgrammingDialog(): HTMLDialogElement {
     } else if (action === "teach") {
       panelProgrammingCloseDialog(false);
       closePanelProgrammingSetup(false);
-      chooseControlSurfaceStage("teach");
-      keyboardWorkbenchAnnounce(
-        "Encoder programming was verified. Teach each physical control to verify the signal Windows receives.",
-      );
-      controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
-        ?.focus({ preventScroll: true });
+      controlSurfaceEncoderSetupEntry = false;
+      if (controlSurfaceState.started) {
+        chooseControlSurfaceStage("teach");
+        keyboardWorkbenchAnnounce(
+          "Encoder programming was verified. Teach each physical control to verify the signal Windows receives.",
+        );
+        controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
+          ?.focus({ preventScroll: true });
+      } else {
+        controlSurfaceChoosingTemplate = true;
+        syncControlSurfaceChrome();
+        keyboardWorkbenchAnnounce(
+          "The I-PAC chart is verified. Now choose a physical panel shape; this does not change the hardware or create mappings.",
+        );
+        controlSurfaceItem?.querySelector<HTMLElement>("[data-surface-template]")
+          ?.focus({ preventScroll: true });
+      }
     } else if (action === "recover-read") {
       panelProgrammingCloseDialog(false);
       void readPanelProgrammingChart(true);
@@ -2942,7 +3189,9 @@ function renderPanelProgrammingDialog(): void {
       teach.type = "button";
       teach.className = "primary";
       teach.dataset.panelDialogAction = "teach";
-      teach.textContent = "Verify inputs in Teach";
+      teach.textContent = controlSurfaceState.started
+        ? "Verify inputs in Teach"
+        : "Build the physical panel";
       actions.append(teach, close);
     }
     shell.append(proof, next, actions);
@@ -3178,7 +3427,7 @@ async function requestPanelProgrammingPlan(): Promise<void> {
     );
     return;
   }
-  if (layout === "custom" && conflicts.length > 0) {
+  if (layout === "custom" && qualificationState !== "required" && conflicts.length > 0) {
     panelProgrammingSetMessage(conflicts[0].message);
     return;
   }
@@ -5587,13 +5836,27 @@ function renderControlSurfaceControls(): void {
 function syncControlSurfaceChrome(): void {
   const item = controlSurfaceItem;
   if (!item) return;
+  const encoderSetup = controlSurfaceEncoderSetupEntry;
   const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
   const starters = item.querySelector<HTMLElement>(".n-surface-starters");
   const workarea = item.querySelector<HTMLElement>(".n-surface-workarea");
   const tools = item.querySelector<HTMLElement>(".n-surface-tools");
-  if (starters) starters.hidden = !choosing;
-  if (workarea) workarea.hidden = choosing;
-  if (tools) tools.hidden = choosing;
+  const stages = item.querySelector<HTMLElement>(".n-surface-stages");
+  const heading = item.querySelector<HTMLElement>("[data-surface-widget-kicker]");
+  const sub = item.querySelector<HTMLElement>("[data-surface-widget-sub]");
+  const note = item.querySelector<HTMLElement>("[data-surface-note]");
+  item.dataset.entry = encoderSetup ? "encoder-setup" : "builder";
+  if (heading) heading.textContent = encoderSetup ? "I-PAC Setup" : "Control Surface Builder";
+  if (sub) sub.textContent = encoderSetup
+    ? "Hardware first · select exact board → back up → qualify → initialize"
+    : "Browser draft · physical hardware → observed signal → KSX route";
+  if (starters) starters.hidden = encoderSetup || !choosing;
+  if (workarea) workarea.hidden = encoderSetup || choosing;
+  if (tools) tools.hidden = encoderSetup || choosing;
+  if (stages) stages.hidden = encoderSetup;
+  if (note) note.textContent = encoderSetup
+    ? "This setup talks to the I-PAC configuration interface directly. The board does not need to emit a key, and you do not need to draw a panel first. Every write remains backup-first, explicitly reviewed, and verified byte-for-byte."
+    : "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
   const mappingRecords = controlSurfaceMappingRecords();
   const selectedSlot = Number(nSlotVal() || "1");
   for (const card of Array.from(item.querySelectorAll<HTMLButtonElement>("[data-surface-template]"))) {
@@ -5629,6 +5892,7 @@ function syncControlSurfaceChrome(): void {
   }
   const status = item.querySelector<HTMLElement>(".n-surface-status");
   if (status) {
+    status.hidden = encoderSetup;
     const physical = new Map<string, ControlSurfaceControl>();
     for (const control of controlSurfaceState.controls) {
       if (!physical.has(control.physicalId)) physical.set(control.physicalId, control);
@@ -5672,9 +5936,11 @@ function createControlSurfaceItem(): HTMLElement {
   const heading = document.createElement("div");
   const kicker = document.createElement("span");
   kicker.className = "n-kick";
+  kicker.dataset.surfaceWidgetKicker = "";
   kicker.textContent = "Control Surface Builder";
   const sub = document.createElement("span");
   sub.className = "n-surface-sub";
+  sub.dataset.surfaceWidgetSub = "";
   sub.textContent = "Browser draft · physical hardware → observed signal → KSX route";
   heading.append(kicker, sub);
   const close = makeKeyboardWorkbenchButton(
@@ -5806,8 +6072,10 @@ function createControlSurfaceItem(): HTMLElement {
   programmingHead.className = "n-surface-programming-head";
   const programmingHeading = document.createElement("div");
   const programmingKicker = document.createElement("span");
-  programmingKicker.textContent = "Optional encoder setup";
+  programmingKicker.dataset.surfaceProgrammingKicker = "";
+  programmingKicker.textContent = "Encoder hardware";
   const programmingTitle = document.createElement("strong");
+  programmingTitle.dataset.surfaceProgrammingTitle = "";
   programmingTitle.textContent = "Back up first, then choose how KSX should treat the chart";
   programmingHeading.append(programmingKicker, programmingTitle);
   const programmingClose = makeKeyboardWorkbenchButton(
@@ -5838,7 +6106,37 @@ function createControlSurfaceItem(): HTMLElement {
   qualificationDetail.dataset.surfaceQualificationDetail = "";
   qualificationDetail.textContent =
     "Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.";
-  programmingQualification.append(qualificationStep, qualificationTitle, qualificationDetail);
+  const qualificationPicker = document.createElement("div");
+  qualificationPicker.className = "n-surface-qualification-picker";
+  qualificationPicker.dataset.surfaceQualificationPicker = "";
+  const qualificationTerminalLabel = document.createElement("label");
+  const qualificationTerminalText = document.createElement("span");
+  qualificationTerminalText.textContent = "Wired test terminal";
+  const qualificationTerminalSelect = document.createElement("select");
+  qualificationTerminalSelect.dataset.nx = "surface-qualification-terminal";
+  qualificationTerminalSelect.setAttribute("aria-label", "I-PAC safety-test terminal");
+  qualificationTerminalLabel.append(qualificationTerminalText, qualificationTerminalSelect);
+  const qualificationKeyLabel = document.createElement("label");
+  const qualificationKeyText = document.createElement("span");
+  qualificationKeyText.textContent = "Temporary test key";
+  const qualificationKeySelect = document.createElement("select");
+  qualificationKeySelect.dataset.nx = "surface-qualification-key";
+  qualificationKeySelect.setAttribute("aria-label", "I-PAC safety-test key");
+  qualificationKeyLabel.append(qualificationKeyText, qualificationKeySelect);
+  const qualificationSelection = document.createElement("p");
+  qualificationSelection.dataset.surfaceQualificationSelection = "";
+  qualificationSelection.setAttribute("role", "status");
+  qualificationPicker.append(
+    qualificationTerminalLabel,
+    qualificationKeyLabel,
+    qualificationSelection,
+  );
+  programmingQualification.append(
+    qualificationStep,
+    qualificationTitle,
+    qualificationDetail,
+    qualificationPicker,
+  );
   const programmingConflicts = document.createElement("ul");
   programmingConflicts.className = "n-surface-programming-conflicts";
   programmingConflicts.dataset.surfaceProgrammingConflicts = "";
@@ -6009,8 +6307,9 @@ function createControlSurfaceItem(): HTMLElement {
 
   const note = document.createElement("p");
   note.className = "n-surface-note";
+  note.dataset.surfaceNote = "";
   note.textContent =
-    "Encoder setup is optional and supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
+    "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
   content.append(head, hardware, programming, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
@@ -6055,10 +6354,36 @@ function controlSurfaceHome(): CanvasItemGeometry {
   return { x: 130, y: 960, width: 1320, height: 940, z: 3, manualScale: 1 };
 }
 
+function controlSurfaceFocusable(selectors: readonly string[]): HTMLElement | null {
+  const item = controlSurfaceItem;
+  if (!item) return null;
+  for (const selector of selectors) {
+    for (const candidate of Array.from(item.querySelectorAll<HTMLElement>(selector))) {
+      if (candidate.closest("[hidden]") || candidate.getAttribute("aria-hidden") === "true") continue;
+      if ((candidate instanceof HTMLButtonElement || candidate instanceof HTMLSelectElement ||
+          candidate instanceof HTMLInputElement) && candidate.disabled) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function focusControlSurfacePrimary(): void {
   window.requestAnimationFrame(() => {
     const item = controlSurfaceItem;
     if (!item) return;
+    if (controlSurfaceEncoderSetupEntry) {
+      controlSurfaceFocusable([
+        '[data-nx="surface-qualification-terminal"]',
+        '[data-nx="surface-qualification-key"]',
+        '[data-nx="surface-encoder-review"]',
+        '[data-nx="surface-encoder-read"]',
+        '[data-surface-programming-mode="custom"]',
+        '[data-surface-programming-mode="keep-current"]',
+        '[data-nx="surface-encoder-close"]',
+      ])?.focus({ preventScroll: true });
+      return;
+    }
     const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
     const target = choosing
       ? item.querySelector<HTMLButtonElement>("[data-surface-template]")
@@ -6150,23 +6475,34 @@ function syncControlSurfaceWidget(reveal: boolean): void {
   }
 }
 
-function openControlSurfaceBuilder(): void {
+function openControlSurfaceBuilder(encoderSetup = false): void {
+  if (encoderSetup && (panelProgrammingBusy || panelProgrammingTransactionActive())) return;
   if (document.activeElement instanceof HTMLElement) {
     controlSurfaceReturnFocus = document.activeElement;
+  }
+  if (encoderSetup && controlSurfaceReturnEncoderSelector) {
+    controlSurfaceReturnFocus = learnRoot?.querySelector<HTMLElement>(
+      `[data-nx="encoder-select-setup"][data-encoder-selector="${CSS.escape(controlSurfaceReturnEncoderSelector)}"]`,
+    ) ?? controlSurfaceReturnFocus;
   }
   autoMap = null;
   void cancelLearn();
   cancelAssign();
-  controlSurfaceChoosingTemplate = !controlSurfaceState.started;
+  controlSurfaceEncoderSetupEntry = encoderSetup;
+  controlSurfaceChoosingTemplate = !encoderSetup && !controlSurfaceState.started;
   controlSurfacePendingTemplate = null;
   controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, true);
   void refreshControlSurfaceHardwareStatus();
+  if (encoderSetup) openPanelProgrammingSetup();
   keyboardWorkbenchAnnounce(
-    controlSurfaceState.started
+    encoderSetup
+      ? "I-PAC Setup opened. KSX is reading and backing up the selected encoder; no emitted key or panel drawing is required."
+      : controlSurfaceState.started
       ? "Control Surface Builder opened with its saved physical panel."
       : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
   );
+  if (encoderSetup) focusControlSurfacePrimary();
 }
 
 function closeControlSurfaceBuilder(): void {
@@ -6180,16 +6516,23 @@ function closeControlSurfaceBuilder(): void {
   if (assignKey) cancelAssign();
   controlSurfaceChoosingTemplate = false;
   controlSurfacePendingTemplate = null;
+  controlSurfaceEncoderSetupEntry = false;
   applyControlSurfaceState({ ...controlSurfaceState, open: false }, true);
   keyboardWorkbenchAnnounce(
     controlSurfaceSaveFailed
       ? "Control Surface Builder closed. Browser storage is unavailable, so this draft lasts only for this session."
       : "Control Surface Builder closed. Its draft is saved in this browser.",
   );
-  const restore = controlSurfaceReturnFocus?.isConnected
+  const encoderReturn = controlSurfaceReturnEncoderSelector
+    ? learnRoot?.querySelector<HTMLElement>(
+        `[data-nx="encoder-select-setup"][data-encoder-selector="${CSS.escape(controlSurfaceReturnEncoderSelector)}"]`,
+      ) ?? null
+    : null;
+  const restore = encoderReturn ?? (controlSurfaceReturnFocus?.isConnected
     ? controlSurfaceReturnFocus
-    : learnRoot?.querySelector<HTMLElement>('[data-nx="surface-open"]') ?? null;
+    : learnRoot?.querySelector<HTMLElement>('[data-nx="surface-open"]') ?? null);
   controlSurfaceReturnFocus = null;
+  controlSurfaceReturnEncoderSelector = "";
   window.requestAnimationFrame(() => restore?.focus({ preventScroll: true }));
 }
 
@@ -8791,6 +9134,20 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
+    const qualificationTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="surface-qualification-terminal"]',
+    );
+    if (qualificationTerminal) {
+      choosePanelQualificationTerminal(qualificationTerminal.value);
+      return;
+    }
+    const qualificationKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
+      '[data-nx="surface-qualification-key"]',
+    );
+    if (qualificationKey) {
+      choosePanelQualificationKey(qualificationKey.value);
+      return;
+    }
     const encoderTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
       '[data-nx="surface-encoder-terminal"][data-surface-control-id][data-surface-channel-id]',
     );
@@ -9584,6 +9941,43 @@ export function nocturneWire(root: HTMLElement): void {
       const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
         ?.dataset.keyboardTheme ?? "";
       chooseKeyboardTheme(theme);
+    } else if (hit === "encoder-select-setup") {
+      const button = target?.closest<HTMLButtonElement>("[data-encoder-selector]");
+      const selector = button?.dataset.encoderSelector?.trim() ?? "";
+      if (!selector) {
+        ev.preventDefault();
+        keyboardWorkbenchAnnounce("This encoder row did not carry a selectable hardware identity. Rescan and try again.");
+      } else if (selector.toLocaleUpperCase() === nCapSelector().trim().toLocaleUpperCase()) {
+        ev.preventDefault();
+        controlSurfaceReturnEncoderSelector = selector;
+        pendingPanelSetupSelector = "";
+        if (pendingPanelSetupTimeout !== undefined) {
+          window.clearTimeout(pendingPanelSetupTimeout);
+          pendingPanelSetupTimeout = undefined;
+        }
+        openControlSurfaceBuilder(true);
+      } else {
+        controlSurfaceReturnEncoderSelector = selector;
+        pendingPanelSetupSelector = selector;
+        if (pendingPanelSetupTimeout !== undefined) window.clearTimeout(pendingPanelSetupTimeout);
+        pendingPanelSetupTimeout = window.setTimeout(() => {
+          if (pendingPanelSetupSelector === selector) {
+            pendingPanelSetupSelector = "";
+            if (controlSurfaceReturnEncoderSelector === selector) {
+              controlSurfaceReturnEncoderSelector = "";
+            }
+            keyboardWorkbenchAnnounce(
+              "The I-PAC was not selected in time. Nothing was changed; choose Set up again after the device list settles.",
+            );
+          }
+          pendingPanelSetupTimeout = undefined;
+        }, 10_000);
+        keyboardWorkbenchAnnounce(
+          "Selecting this exact I-PAC, then opening its guarded first-run setup…",
+        );
+        // Do not prevent the row's ordinary POST. It stages the backend-owned
+        // selector; the next authoritative payload consumes this intent.
+      }
     } else if (hit === "surface-open") {
       openControlSurfaceBuilder();
     } else if (hit === "surface-close") {
@@ -10046,9 +10440,56 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-kick-row" },
-          h("span", { class: "n-kick" }, "Keyboard"),
-          h("span", { class: "n-kick-n" }, () => nDevCount()),
+          h("span", { class: "n-kick" }, "Input hardware"),
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "‹"),
+        ),
+        h(
+          "div",
+          { class: "n-kick-row n-encoder-kick" },
+          h("span", { class: "n-kick" }, () => nEncoderHead()),
+          h("span", { class: "n-kick-n" }, () => nEncoderCount()),
+        ),
+        createList(
+          () => nDevEncoders(),
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role,
+          (r) =>
+            h(
+              "form",
+              { class: "n-devform n-encoder-form", method: "post", action: "/nocturne/device" },
+              h("input", { type: "hidden", name: "selector", value: r.selector }),
+              h("input", { type: "hidden", name: "alias", value: r.alias }),
+              h("input", { type: "hidden", name: "label", value: r.label }),
+              h(
+                "button",
+                { type: "submit", class: r.cls },
+                h("span", { class: "n-dev-ico" }, "▦"),
+                h(
+                  "span",
+                  { class: "n-dev-txt" },
+                  h("span", { class: "n-dev-name" }, r.name),
+                  h("span", { class: "n-dev-meta" }, r.meta),
+                ),
+                h("span", { class: "n-dev-dot" }),
+              ),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "n-encoder-setup",
+                  "data-nx": "encoder-select-setup",
+                  title: "Select this exact encoder, then read and back up its chart before configuring keys",
+                  "data-encoder-selector": r.selector,
+                },
+                "Set up",
+                h("span", { class: "n-encoder-accessible-name" }, " ", r.name),
+              ),
+            ),
+        ),
+        h(
+          "div",
+          { class: "n-kick-row n-keyboard-kick" },
+          h("span", { class: "n-kick" }, "Keyboards"),
+          h("span", { class: "n-kick-n" }, () => nDevCount()),
         ),
         // Device rows — the row IS the /nocturne/device form's button.
         createList(

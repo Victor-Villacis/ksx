@@ -6,13 +6,18 @@ plan, an older research note, a comment or a conversation disagrees with this
 file's evidence register, correct or annotate the stale claim before relying
 on it.
 
-**Current status — 2026-08-23 03:03 EDT: END-TO-END PROGRAMMING
-IMPLEMENTED AND INTEGRATION-VERIFIED; FIRST HARDWARE WRITE GATED.** The
+**Current status — 2026-08-23 11:55 EDT: END-TO-END PROGRAMMING AND THE
+BLANK-BOARD FIRST-RUN ENTRY ARE IMPLEMENTED AND INTEGRATION-VERIFIED; FIRST
+HARDWARE WRITE GATED.** The
 worktree now contains the explicit Windows HID transport, complete-chart
 read/backup, semantic plan, persistent program, full readback verification,
 restore, CLI and Control Surface Builder flow for a supported I-PAC 4. The
 transaction ordering and failure paths are covered with fake transports and
 repositories, and the complete Rust, HTTP and browser integration suites pass.
+Studio now classifies the exact I-PAC family as a panel encoder instead of an
+ordinary keyboard and can enter setup from that physical-device row before the
+board emits a key or a control surface exists. An all-Unassigned chart can
+select its reversible qualification terminal and key directly from the chart.
 No live chart query or output report was sent while building or testing this
 slice. The only cabinet evidence remains the access-zero passive survey from
 2026-08-22.
@@ -75,6 +80,7 @@ is not the default, and v1 does not route those XInput pads back through KSX.
 | Restore / full readback verify | **implemented; hardware-unverified** | `[SOURCE crates/ksx-backend/src/panel_programming.rs]` Validates the selected backup, backs up current state, writes the target and verifies the full image. |
 | Typed machine API and CLI | **implemented; integration-verified** | `[SOURCE crates/ksx-api/src/machine.rs; crates/ksx-app/src/main.rs]` Typed chart/backups/plan/apply/restore contracts, human/JSON parity and plan-first consent. Full API, app and backend suites plus warnings-denied clippy pass. |
 | Studio editor | **implemented; synthetic HTTP/UI verified** | `[SOURCE crates/ksx-studio/src/server/mod.rs; crates/ksx-studio/src/server/nocturne.rs; studio-ui/src/panelProgramming.ts; studio-ui/src/NocturneIsland.ts]` Selected-encoder authority, backup-first setup, reversible first-use qualification, review/confirm/verify/recovery flow and post-write Teach handoff. Full Studio HTTP and canvas browser suites pass. |
+| Blank-board first-run entry | **implemented; synthetic browser verified** | `[SOURCE crates/ksx-api/src/machine.rs; crates/ksx-backend/src/device_scan.rs; crates/ksx-studio/src/snapshot.rs; studio-ui/src/NocturneIsland.ts]` Exact registered hardware is served in an **Arcade encoders** lane. **Set up** stages that exact selector and opens read/backup/qualification without a Windows key event, selected canvas component or panel template. The standalone safety picker accepts an all-Unassigned normal plane. |
 | Non-Ultimarc encoder families | **generic metadata only** | Unknown boards remain visible and refuse family-specific chart verbs. One universal writer is explicitly not inferred. |
 
 ## Exact implementation contract
@@ -229,32 +235,41 @@ is `write-locked`, never generically “ready.”
 
 The user-facing sequence is:
 
-1. In Control Surface Builder, open **Read & back up…**. A missing/currently
-   stale chart triggers an explicit complete read with an immutable backup.
-2. For an unqualified hardware/profile pair, Studio permits only one supported
+1. Under **Input hardware → Arcade encoders**, choose **Set up** on the exact
+   I-PAC. If another encoder was staged, the ordinary device-selection POST
+   completes first; only the matching authoritative payload opens setup. The
+   focused hardware task hides panel templates, Design/Teach/Route and drawn
+   components because none is a prerequisite for EEPROM initialization.
+2. Studio immediately performs the explicit complete chart read with an
+   immutable backup. A completely Unassigned board is valid: the qualification
+   terminal and temporary key are chosen directly from the backend-served
+   chart, without waiting for a key event or creating a fake surface control.
+   The older Control Surface Builder **Read & back up…** entry remains available
+   for an already-modeled cabinet.
+3. For an unqualified hardware/profile pair, Studio permits only one supported
    normal-key change on a noncritical SW action terminal whose shift role is
    explicitly disabled. It disallows directions, Start/Coin, clears, alternate
    or opaque shift states. The review says plainly that one desired byte differs
    while the protocol retransmits the complete 256-byte chart.
-3. After verified validation write, Studio pins **Restore validation backup**.
+4. After verified validation write, Studio pins **Restore validation backup**.
    Only an exact byte-verified restore unlocks full programming. A partial or
    ambiguous validation still pins that restore but returns to the unqualified
    state instead of manufacturing trust.
-4. Choose **Recommended KSX layout**, **Customize terminals**, or **Keep current
+5. Choose **Recommended KSX layout**, **Customize terminals**, or **Keep current
    + Teach**. Custom assignment detects incomplete links, unsupported keys,
    accidental terminal reuse, inconsistent mirrors and shared keys without
    deliberate fan-in.
-5. Choose **Review hardware changes**. The modal shows terminal changes, an
+6. Choose **Review hardware changes**. The modal shows terminal changes, an
    expandable byte diff, preserved-byte count, blockers, base/desired hashes
    and the backend's confirmation sentence.
-6. Check both acknowledgements: the exact reviewed change, and that the user is
+7. Check both acknowledgements: the exact reviewed change, and that the user is
    physically at the cabinet with WinIPAC closed plus a separate keyboard or
    recovery path. Only then can **Program and verify** unlock. Restore follows
    the same flow through **Review restore…** and **Restore and verify**.
-7. Studio displays `writing`, then `verifying`, and accepts only a backend
+8. Studio displays `writing`, then `verifying`, and accepts only a backend
    `verified` outcome. An ambiguous/interrupted result becomes
    `recovery-required` and blocks further programming until reread/restore.
-8. After byte verification, expected terminal keys are reconciled into the
+9. After byte verification, expected terminal keys are reconciled into the
    control-surface model, prior signal verification is invalidated, and the
    user is sent to **Teach inputs**. This deliberately separates “EEPROM bytes
    matched” from “the wired control emitted the expected Windows signal.”
@@ -350,6 +365,12 @@ Studio, platform and API targets. Formatting and `git diff --check` passed.
 The Studio asset graph built twice to 48 byte-identical files with build hash
 `66830ebfbbea084bdf78f75fb03b654059eb2a9b092e38bb906639229ec6bf04`.
 
+`[MEASURED 2026-08-23 11:55 EDT]` The blank-board entry slice passed the
+complete `ksx-studio` crate suite, API 107/107, docs 3/3 and the complete
+Nocturne canvas browser suite 49/49. Two consecutive Studio builds produced
+48 byte-identical asset files with build hash
+`4eb2dbdafc9664296f31df867b42667042a1267ebe243144ccb4fe566eba09d1`.
+
 ## First real-hardware gate
 
 `[UNVERIFIED target cabinet]` Real-hardware write verification still requires
@@ -438,11 +459,12 @@ referenced note describes an instant mode-switch button, not an NKRO addition.
 | 2026-08-23 00:17 EDT | shared implementation worktree / `5492454` baseline | Added source-complete explicit report transport, chart/backup/program/restore domain, typed API/CLI and supervised Studio workflow. | `[SOURCE implementation files named above]` QA is synthetic only; no live report or EEPROM action. Integrated validation and supervised hardware gate remain. |
 | 2026-08-23 00:26 EDT | same shared worktree | Updated E10 and this living state for the implementation candidate; no code, asset or hardware action. | `[MEASURED 2026-08-23 00:26 EDT]` `git diff --check` and the trailing-whitespace scan were clean; `cargo test -p ksx-app --test docs` passed 3/3. |
 | 2026-08-23 03:03 EDT | `codex/ipac-programmer` / `5492454` baseline | Closed final review findings: machine-pinned recovery authority, fail-closed Play gate, reparse-safe traversal, detached-result binding and inset-aware canvas framing. | `[MEASURED 2026-08-23 03:03 EDT]` Final Rust, HTTP and browser suites are green; deterministic asset rebuild passed twice; independent final review reported no remaining P0/P1/P2 findings. No live HID report was sent. |
+| 2026-08-23 11:55 EDT | `codex/ipac-first-run-config` / `aff5cc6` baseline | Added backend-owned panel-encoder roles, a separate Arcade encoders lane, exact-selector first-run entry, all-Unassigned standalone qualification, truthful fixture preview, focus/single-flight guards and blank-panel handoffs. | `[MEASURED 2026-08-23 11:55 EDT]` Complete Studio, API, docs and 49-test browser suites passed; assets rebuilt byte-identically twice; two focused reviews found no remaining P0/P1/P2 issues. No live HID report was sent. |
 
 ## Current pickup
 
 The software implementation and local integration validation are complete on
-`codex/ipac-programmer`. A post-merge clean runner remains ordinary release
+`codex/ipac-first-run-config`. A post-merge clean runner remains ordinary release
 evidence, not an implementation gap and never hardware evidence.
 
 The next hardware pickup is the supervised procedure above. Start with passive

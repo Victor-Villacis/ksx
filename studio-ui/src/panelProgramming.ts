@@ -306,6 +306,14 @@ export interface PanelEditorState {
   phase: PanelEditorPhase;
   assignment_mode: PanelAssignmentMode;
   assignments: PanelTerminalDraftAssignment[];
+  /**
+   * The reversible first-write proof belongs to the encoder workflow, not to
+   * a drawn control-surface component. Keeping this short-lived pair here
+   * lets a brand-new, all-unassigned I-PAC be qualified before the user has
+   * designed a panel or produced a single Windows key event.
+   */
+  qualification_terminal_id: string;
+  qualification_key: string;
   plan_expected_selector: string;
   plan: PanelPlanView | null;
   show_unchanged: boolean;
@@ -351,6 +359,8 @@ export function createPanelProgrammingState(): PanelProgrammingState {
       phase: "closed",
       assignment_mode: "custom",
       assignments: [],
+      qualification_terminal_id: "",
+      qualification_key: "",
       plan_expected_selector: "",
       plan: null,
       show_unchanged: false,

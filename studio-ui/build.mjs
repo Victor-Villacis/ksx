@@ -292,11 +292,11 @@ try {
     outputDir,
     // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
     // Control Surface Builder, and its supervised encoder backup/program/
-    // verify/restore workflow and movable macro processors live in Nocturne's
-    // one island. The measured compressed route is ~248.4 KB; keep a narrow
-    // 249 KB ceiling so these deliberate safety and canvas costs are not an
-    // open-ended bump.
-    budgetThreshold: 249_000,
+    // verify/restore workflow, blank-encoder first-run entry, and movable
+    // macro processors live in Nocturne's one island. The measured compressed
+    // route is ~251 KB; keep a narrow 252 KB ceiling so these deliberate
+    // safety and canvas costs are not an open-ended bump.
+    budgetThreshold: 252_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

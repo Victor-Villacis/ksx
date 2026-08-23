@@ -5009,6 +5009,215 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("a blank I-PAC enters guarded first-run setup before a panel or emitted key exists", async () => {
+    let chartReads = 0;
+    let capturedPlan = null;
+    const hardwareWrites = [];
+    const signalWrites = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname === "/api/panel/program/apply" || pathname === "/api/panel/restore/apply") {
+          hardwareWrites.push(pathname);
+        }
+        if (/\/(?:bind|learn)(?:\/|$)/.test(pathname)) signalWrites.push(pathname);
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "This installed board has not emitted a usable key yet.",
+            configurationState: "available-unopened",
+            configurationDetail: "The exact I-PAC configuration collection is ready for a guarded read.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        chartReads += 1;
+        const request = JSON.parse(route.request().postData() ?? "{}");
+        assert.deepEqual(request, {
+          expected_selector: PANEL_SELECTOR,
+          backup: true,
+        });
+        const payload = panelChartPayload({
+          qualificationState: "required",
+          qualificationDetail:
+            "This new board needs one reversible writer check before its complete layout can be initialized.",
+        });
+        payload.view.summary = "The complete all-unassigned 256-byte I-PAC chart was read.";
+        payload.view.terminals = payload.view.terminals.map((terminal) => ({
+          ...terminal,
+          normal: {
+            code: 0,
+            key: null,
+            label: "Unassigned",
+            supported: true,
+          },
+        }));
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One lossless first-run backup.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [panelBackup()],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        capturedPlan = JSON.parse(route.request().postData() ?? "{}");
+        const payload = panelProgramPlan({
+          terminals: ["1sw1"],
+          confirmation:
+            "Program one temporary key for the reversible writer check, then restore the exact safety backup.",
+        });
+        payload.plan.summary = "Temporarily assign A to P1 SW1 and preserve every other byte.";
+        payload.plan.terminal_diff[0].before = "Unassigned";
+        payload.plan.terminal_diff[0].after = "A";
+        payload.plan.byte_diff[0].before = 0;
+        payload.plan.byte_diff[0].after = 4;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.waitFor({ state: "visible" });
+      assert.equal(await encoderLane.count(), 1, "the I-PAC has one dedicated encoder row");
+      assert.match(
+        (await page.locator(".n-encoder-kick").textContent()).replace(/\s+/g, " "),
+        /Arcade encoders.*1 found/i,
+      );
+      assert.doesNotMatch(
+        (await page.locator(".n-devform:not(.n-encoder-form) .n-dev-name").allTextContents())
+          .join(" "),
+        /I-PAC/i,
+        "a boot-keyboard-shaped I-PAC is not presented as an ordinary keyboard",
+      );
+      assert.match(
+        (await page.locator(".n-devform:not(.n-encoder-form) .n-dev-name").allTextContents())
+          .join(" "),
+        /Logitech G915/i,
+        "real keyboards remain in their own lane",
+      );
+      assert.equal(await page.locator(".n-widget-surface").count(), 0);
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      assert.equal(
+        await encoderLane.locator("button.n-dev").getAttribute("class"),
+        "n-dev on",
+        "the fixture's exact I-PAC is already the daemon-staged hardware authority",
+      );
+      assert.equal(
+        await encoderLane.getByRole("button", { name: "Set up Ultimarc I-PAC 4" }).count(),
+        1,
+        "each encoder action names the exact board it will configure",
+      );
+
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() => Array.from(
+        document.querySelectorAll(".n-devform:not(.n-encoder-form)"),
+      ).some((row) => row.textContent?.includes("Logitech G915") &&
+        row.querySelector("button.n-dev")?.classList.contains("on")));
+      assert.equal(
+        (await encoderLane.locator("button.n-dev").getAttribute("class")).includes("on"),
+        false,
+        "first-run setup must also work when an ordinary keyboard was previously selected",
+      );
+
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      const setup = page.locator('.n-widget-surface[data-entry="encoder-setup"]');
+      await setup.waitFor({ state: "visible" });
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming')
+          ?.getAttribute("data-qualification") === "required");
+
+      assert.equal(chartReads, 1,
+        "Set up performs one explicit complete-chart read and backup even when clicked twice while loading");
+      assert.equal(await setup.locator(".n-surface-control").count(), 0,
+        "writer qualification does not invent a drawn physical control");
+      assert.equal(await setup.locator(".n-surface-starters").isHidden(), true,
+        "the panel-template gallery is not a prerequisite for encoder initialization");
+      assert.equal(await setup.locator(".n-surface-stages").isHidden(), true,
+        "Design, Teach, and Route do not compete with the hardware-first task");
+      assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
+      assert.match(
+        (await setup.textContent()).replace(/\s+/g, " "),
+        /I-PAC Setup.*Hardware first.*I-PAC first-run setup.*Initialize the keyboard chart.*No emitted key and no drawn panel are required/i,
+      );
+      assert.deepEqual(signalWrites, [], "first-run chart setup never asks Windows to emit or learn a key");
+
+      const terminal = setup.locator('[data-nx="surface-qualification-terminal"]');
+      const key = setup.locator('[data-nx="surface-qualification-key"]');
+      const review = setup.locator('[data-nx="surface-encoder-review"]');
+      await page.waitForFunction(() => document.activeElement?.matches(
+        '[data-nx="surface-qualification-terminal"]',
+      ));
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.matches(
+          '[data-nx="surface-qualification-terminal"]',
+        )),
+        true,
+        "focus lands on the first safe hardware decision after read-back",
+      );
+      assert.equal(await terminal.locator('option[value="1sw1"]').count(), 1);
+      assert.match(await terminal.locator('option[value="1sw1"]').textContent(), /currently Unassigned/i);
+      assert.equal(await review.isDisabled(), true);
+
+      await terminal.selectOption("1sw1");
+      await key.selectOption("A");
+      assert.match(
+        await setup.locator("[data-surface-qualification-selection]").textContent(),
+        /P1 SW1.*Unassigned.*A.*Nothing is written until you review and confirm/i,
+      );
+      assert.equal(await review.isEnabled(), true,
+        "one safe temporary assignment unlocks only the diff review");
+      assert.equal(await setup.locator(".n-surface-control").count(), 0,
+        "selecting the hardware terminal still does not create a canvas component");
+
+      await review.click();
+      const dialog = page.locator("dialog.n-panel-program-dialog");
+      await dialog.waitFor({ state: "visible" });
+      assert.deepEqual(capturedPlan, {
+        expected_selector: PANEL_SELECTOR,
+        expected_base_sha256: PANEL_BASE_SHA,
+        layout: "custom",
+        edits: [{ terminal_id: "1sw1", normal_key: "A" }],
+      });
+      assert.match(
+        (await dialog.textContent()).replace(/\s+/g, " "),
+        /P1 SW1.*Unassigned.*A/i,
+        "the first plan is exactly one reviewed terminal edit",
+      );
+      assert.deepEqual(hardwareWrites, [], "reviewing a plan does not write persistent hardware");
+      assert.deepEqual(signalWrites, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("Encoder setup keeps three workflow stages and requires an exact reviewed consent before a mocked write", async () => {
     let chartReads = 0;
     let capturedPlan = null;
@@ -5718,6 +5927,13 @@ describe("the canvas navigation controls", () => {
       assert.equal(await restartValidation.isEnabled(), true);
       await restartValidation.click();
       await qualificationDialog.waitFor({ state: "hidden" });
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.matches(
+          '[data-nx="surface-qualification-terminal"]',
+        )),
+        true,
+        "recovery returns focus to the standalone writer-check picker even without relying on a modeled panel channel",
+      );
       assert.equal(await custom.getAttribute("aria-pressed"), "true");
       assert.equal(await review.isDisabled(), true,
         "the restored baseline requires a fresh single-terminal change");

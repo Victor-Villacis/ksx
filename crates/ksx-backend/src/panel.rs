@@ -25,13 +25,27 @@ struct PanelDriver {
     label: &'static str,
 }
 
+/// Does this exact VID/PID identify a physical panel-encoder family for which
+/// KSX has a registered chart driver?
+///
+/// The release-specific admission remains in [`driver_for`]. This family
+/// verdict exists for device-picking UX: an unmeasured I-PAC release is still
+/// an arcade encoder rather than an ordinary keyboard, while status/programming
+/// correctly refuses to borrow the measured release's protocol.
+pub(crate) const fn is_registered_panel_encoder_family(vendor_id: u16, product_id: u16) -> bool {
+    matches!((vendor_id, product_id), (0xD209, 0x0430))
+}
+
 /// Protocol drivers are intentionally separate from `ksx_core::vendors`, which
 /// is display-only. Registering a board here means KSX has a guarded chart
 /// driver; passive status still sends no protocol report and never implies a
 /// chart read.
 fn driver_for(vendor_id: u16, product_id: u16, bcd_device: u16) -> Option<PanelDriver> {
-    match (vendor_id, product_id, bcd_device) {
-        (0xD209, 0x0430, 0x0056) => Some(PanelDriver {
+    match (
+        is_registered_panel_encoder_family(vendor_id, product_id),
+        bcd_device,
+    ) {
+        (true, 0x0056) => Some(PanelDriver {
             id: "ultimarc-ipac",
             label: "Ultimarc I-PAC 4 lossless chart driver",
         }),

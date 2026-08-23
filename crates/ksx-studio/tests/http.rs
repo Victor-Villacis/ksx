@@ -887,6 +887,35 @@ impl ScriptedMachine {
     }
 
     fn panel_chart_view() -> ksx_api::PanelChartView {
+        let current_terminal = ksx_api::PanelTerminalRow {
+            terminal_id: "1sw4".to_owned(),
+            terminal_label: "Player 1 · Button 4".to_owned(),
+            player: 1,
+            kind: "button".to_owned(),
+            normal: ksx_api::PanelKeyValue {
+                code: 13,
+                key: Some("J".to_owned()),
+                label: "J".to_owned(),
+                supported: true,
+            },
+            shifted: ksx_api::PanelKeyValue {
+                code: 0,
+                key: None,
+                label: "Unassigned".to_owned(),
+                supported: true,
+            },
+            shift_state: ksx_api::PanelShiftState::Disabled,
+            is_shift: false,
+        };
+        let recommended_terminal = ksx_api::PanelTerminalRow {
+            normal: ksx_api::PanelKeyValue {
+                code: 4,
+                key: Some("A".to_owned()),
+                label: "A".to_owned(),
+                supported: true,
+            },
+            ..current_terminal.clone()
+        };
         ksx_api::PanelChartView {
             generated_at: "2026-08-23 12:00:00 UTC".to_owned(),
             summary: "Complete 256-byte I-PAC chart read and backed up.".to_owned(),
@@ -904,26 +933,8 @@ impl ScriptedMachine {
             qualification_state: "qualified".to_owned(),
             qualification_detail: "Writer qualification passed.".to_owned(),
             qualification_restore_backup_id: None,
-            terminals: vec![ksx_api::PanelTerminalRow {
-                terminal_id: "1sw4".to_owned(),
-                terminal_label: "Player 1 · Button 4".to_owned(),
-                player: 1,
-                kind: "button".to_owned(),
-                normal: ksx_api::PanelKeyValue {
-                    code: 13,
-                    key: Some("J".to_owned()),
-                    label: "J".to_owned(),
-                    supported: true,
-                },
-                shifted: ksx_api::PanelKeyValue {
-                    code: 0,
-                    key: None,
-                    label: "Unassigned".to_owned(),
-                    supported: true,
-                },
-                shift_state: ksx_api::PanelShiftState::Disabled,
-                is_shift: false,
-            }],
+            terminals: vec![current_terminal],
+            recommended_terminals: vec![recommended_terminal],
             key_options: vec![ksx_api::PanelKeyOption {
                 key: "J".to_owned(),
                 label: "J".to_owned(),
@@ -10166,6 +10177,11 @@ fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
         "an is_shift=false compatibility bit must not hide an opaque shift byte: {chart}"
     );
     assert_eq!(chart["view"]["terminals"][0]["is_shift"], false);
+    assert_eq!(
+        chart["view"]["recommended_terminals"][0]["normal"]["key"],
+        "A",
+        "Studio receives a semantic backend-owned recommendation instead of recreating key bytes: {chart}"
+    );
     assert_eq!(
         chart["view"]["key_options"][0]["safe_for_qualification"], true,
         "Studio must receive the backend-owned first-write key policy: {chart}"

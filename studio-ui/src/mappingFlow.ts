@@ -692,11 +692,33 @@ export class MappingFlowLayer {
       }
     }, { signal: this.#abort.signal });
     root.addEventListener("keydown", (event) => {
+      const processor = event.target instanceof Element
+        ? event.target.closest<HTMLAnchorElement>(
+          "a.n-flow-processor, a.n-flow-overflow-link",
+        )
+        : null;
+      if (
+        event.key === "Enter" &&
+        processor &&
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        // The canvas owns nested keyboard scopes. Activate processors during
+        // capture before a widget shell can reinterpret Enter as focus mode.
+        event.preventDefault();
+        event.stopPropagation();
+        processor.click();
+        return;
+      }
       if (event.key === "Escape") {
         this.#cancelProcessorDrag?.();
         this.#clearInspections();
       }
-    }, { signal: this.#abort.signal });
+    }, { capture: true, signal: this.#abort.signal });
     const window_ = root.ownerDocument.defaultView;
     window_?.addEventListener("blur", () => this.#cancelProcessorDrag?.(), {
       signal: this.#abort.signal,
@@ -2135,6 +2157,8 @@ export class MappingFlowLayer {
       `.n-surface-channel-anchor[data-key="${key}"]:not([data-player-slot])`,
       `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
       `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
+      `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"]`,
       `.n-widget-kb:not([data-source-hidden="true"]) [data-key="${key}"]:not(.ghost):not(.extracted)`,
     ];
     for (const selector of selectors) {

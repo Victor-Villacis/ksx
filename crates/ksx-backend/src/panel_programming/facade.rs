@@ -1906,17 +1906,9 @@ fn backup_row_for(identity: &BoardIdentity, stored: &StoredBackup) -> PanelBacku
     row
 }
 
-fn chart_view(
-    selected: &SelectedPanel,
-    image: &RawPanelImage,
-    backup: Option<&StoredBackup>,
-    pending: Option<&PendingPanelTransaction>,
-    reconciled_interruption: bool,
-    qualification: &PanelQualificationState,
-) -> PanelChartView {
-    let states = decode_ipac4_terminals(image);
+fn terminal_rows(image: &RawPanelImage) -> (Vec<PanelTerminalRow>, usize) {
     let mut unknown_actions = 0usize;
-    let terminals = states
+    let terminals = decode_ipac4_terminals(image)
         .into_iter()
         .map(|state| {
             let normal = key_value(state.normal_raw, state.normal);
@@ -1943,6 +1935,26 @@ fn chart_view(
             }
         })
         .collect();
+    (terminals, unknown_actions)
+}
+
+fn recommended_terminal_rows(image: &RawPanelImage) -> Vec<PanelTerminalRow> {
+    let edits = canonical_four_player_edits_for_image(image);
+    let plan = plan_program(image, &edits)
+        .expect("the internal canonical I-PAC4 roster must always form a valid program plan");
+    terminal_rows(&plan.desired).0
+}
+
+fn chart_view(
+    selected: &SelectedPanel,
+    image: &RawPanelImage,
+    backup: Option<&StoredBackup>,
+    pending: Option<&PendingPanelTransaction>,
+    reconciled_interruption: bool,
+    qualification: &PanelQualificationState,
+) -> PanelChartView {
+    let (terminals, unknown_actions) = terminal_rows(image);
+    let recommended_terminals = recommended_terminal_rows(image);
     let mut notes = vec![format!(
         "The complete {}-byte raw chart remains authoritative; semantic edits preserve every untouched byte.",
         image.len()
@@ -2017,6 +2029,7 @@ fn chart_view(
         qualification_detail: qualification.detail(),
         qualification_restore_backup_id: qualification.restore_backup_id(),
         terminals,
+        recommended_terminals,
         key_options: key_roster()
             .into_iter()
             .map(|(key, usage)| PanelKeyOption {
@@ -3149,6 +3162,42 @@ mod tests {
         assert!(!view.terminals[1].is_shift);
         assert_eq!(view.terminals[2].shift_state, PanelShiftState::Disabled);
         assert!(!view.terminals[2].is_shift);
+        assert_eq!(
+            view.recommended_terminals.len(),
+            IPAC4_TERMINAL_COUNT,
+            "the chart response must carry a complete backend-owned recommended roster"
+        );
+        assert_eq!(
+            view.recommended_terminals[0].shift_state,
+            PanelShiftState::Disabled,
+            "the recommended plan disables a baseline shift byte only when it is known enabled"
+        );
+        assert_eq!(
+            view.recommended_terminals[1].shift_state,
+            PanelShiftState::Opaque,
+            "the recommended plan must preserve opaque baseline shift state"
+        );
+        assert_eq!(
+            view.terminals[0].shift_state,
+            PanelShiftState::Enabled,
+            "building the preview must not mutate the current semantic chart"
+        );
+        assert!(view
+            .recommended_terminals
+            .iter()
+            .all(|terminal| terminal.normal.supported
+                && terminal.normal.key.is_some()
+                && terminal.shifted.supported
+                && terminal.shifted.key.is_none()));
+        assert_eq!(
+            view.recommended_terminals
+                .iter()
+                .filter_map(|terminal| terminal.normal.key.as_deref())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            IPAC4_TERMINAL_COUNT,
+            "the served preview must retain the canonical roster's collision-free key allocation"
+        );
         assert!(view
             .key_options
             .iter()

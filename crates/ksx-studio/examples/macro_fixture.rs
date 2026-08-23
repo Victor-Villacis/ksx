@@ -798,6 +798,69 @@ fn main() {
         ("4coin", 4, 18),
     ];
 
+    /// Exact semantic key order used by the production backend's
+    /// `canonical-four-player` planner. The fixture cannot depend on the
+    /// backend crate by design, so this wire-level twin is pinned here for the
+    /// browser's backend-owned recommendation preview.
+    const FIXTURE_CANONICAL_KEYS: [(&str, u16); 56] = [
+        ("A", 0x04),
+        ("B", 0x05),
+        ("C", 0x06),
+        ("D", 0x07),
+        ("E", 0x08),
+        ("F", 0x09),
+        ("G", 0x0A),
+        ("H", 0x0B),
+        ("I", 0x0C),
+        ("J", 0x0D),
+        ("K", 0x0E),
+        ("L", 0x0F),
+        ("M", 0x10),
+        ("N", 0x11),
+        ("O", 0x12),
+        ("P", 0x13),
+        ("Q", 0x14),
+        ("R", 0x15),
+        ("S", 0x16),
+        ("T", 0x17),
+        ("U", 0x18),
+        ("V", 0x19),
+        ("W", 0x1A),
+        ("X", 0x1B),
+        ("Y", 0x1C),
+        ("Z", 0x1D),
+        ("One", 0x1E),
+        ("Two", 0x1F),
+        ("Three", 0x20),
+        ("Four", 0x21),
+        ("Five", 0x22),
+        ("Six", 0x23),
+        ("Seven", 0x24),
+        ("Eight", 0x25),
+        ("Nine", 0x26),
+        ("Zero", 0x27),
+        ("DashUnderscore", 0x2D),
+        ("PlusEquals", 0x2E),
+        ("OpenBracketBrace", 0x2F),
+        ("CloseBracketBrace", 0x30),
+        ("BackslashPipe", 0x31),
+        ("SemicolonColon", 0x33),
+        ("SingleDoubleQuote", 0x34),
+        ("Tilde", 0x35),
+        ("CommaLeftArrow", 0x36),
+        ("PeriodRightArrow", 0x37),
+        ("F1", 0x3A),
+        ("F2", 0x3B),
+        ("F3", 0x3C),
+        ("F4", 0x3D),
+        ("F5", 0x3E),
+        ("F6", 0x3F),
+        ("F7", 0x40),
+        ("F8", 0x41),
+        ("F9", 0x42),
+        ("F10", 0x43),
+    ];
+
     fn fixture_panel_image() -> [u8; 256] {
         let mut bytes = [0; 256];
         bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x00]);
@@ -875,26 +938,31 @@ fn main() {
                 is_shift: false,
             });
         }
-        let mut key_options = Vec::with_capacity(36);
-        for (index, letter) in ('A'..='Z').enumerate() {
-            key_options.push(ksx_api::PanelKeyOption {
-                key: letter.to_string(),
-                label: letter.to_string(),
-                code: 4 + index as u16,
-                safe_for_qualification: true,
-            });
-        }
-        for (index, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+        let recommended_terminals = terminals
+            .iter()
+            .zip(FIXTURE_CANONICAL_KEYS)
+            .map(|(terminal, (key, code))| ksx_api::PanelTerminalRow {
+                normal: ksx_api::PanelKeyValue {
+                    code,
+                    key: Some(key.into()),
+                    label: key.into(),
+                    supported: true,
+                },
+                ..terminal.clone()
+            })
+            .collect();
+        let key_options = FIXTURE_CANONICAL_KEYS
             .into_iter()
             .enumerate()
-        {
-            key_options.push(ksx_api::PanelKeyOption {
-                key: digit.to_string(),
-                label: digit.to_string(),
-                code: 30 + index as u16,
-                safe_for_qualification: true,
-            });
-        }
+            .map(|(index, (key, code))| ksx_api::PanelKeyOption {
+                key: key.into(),
+                label: key.into(),
+                code,
+                // Production deliberately limits the first-live-write test
+                // to letters and the top number row.
+                safe_for_qualification: index < 36,
+            })
+            .collect();
         let image = fixture_panel_image();
         ksx_api::PanelChartView {
             generated_at: "fixture session".into(),
@@ -912,6 +980,7 @@ fn main() {
             qualification_detail: "Choose one SW terminal and temporary safe key to preview the reversible writer check.".into(),
             qualification_restore_backup_id: None,
             terminals,
+            recommended_terminals,
             key_options,
             backup: backup.then(fixture_panel_backup),
             notes: vec!["Fixture-only preview; no physical I-PAC was read or changed.".into()],

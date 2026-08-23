@@ -49,6 +49,13 @@ export interface WidgetCanvasViewportInsets {
 
 export interface WidgetCanvasFocusOptions {
   viewportInsets?: WidgetCanvasViewportInsets;
+  /** Keep a long-form editor readable even when showing its whole height
+   * would otherwise shrink it to a miniature. The focus session still
+   * restores the exact entry camera when it ends. */
+  minimumZoom?: number;
+  /** When a readable minimum makes an item larger than the viewport, begin
+   * at its top/left edge instead of dropping the user into its middle. */
+  oversizedAlignment?: "center" | "start";
 }
 
 export interface WidgetCanvasElements {
@@ -143,6 +150,7 @@ interface VirtualizedWidgetHost {
 interface WidgetFocusSession {
   itemId: string;
   entryCamera: WidgetCanvasCamera;
+  focusOptions: WidgetCanvasFocusOptions;
 }
 
 type CameraFramingMode = "center" | "focus-item" | "focus-mode" | "navigate";
@@ -437,6 +445,7 @@ export class WidgetCanvas {
   #activeId: string | null = null;
   #widgetDragPointerId: number | null = null;
   #cameraGesturePointerId: number | null = null;
+  #pointerFocusRevealBlocked = false;
   #cancelWidgetDragGesture: (() => void) | null = null;
   #cancelCameraGesture: (() => void) | null = null;
   #topZ = 0;
@@ -921,7 +930,14 @@ export class WidgetCanvas {
     if (this.#focusSession) {
       const alreadyFocused = this.#focusSession.itemId === this.#itemId(item);
       this.setActive(item);
-      if (alreadyFocused) this.#frameFocusModeItem(item, viewportInsets);
+      if (alreadyFocused) {
+        this.#focusSession.focusOptions = {
+          ...this.#focusSession.focusOptions,
+          ...options,
+          viewportInsets: options.viewportInsets ?? this.#focusSession.focusOptions.viewportInsets,
+        };
+        this.#frameFocusModeItem(item);
+      }
       return;
     }
     this.setActive(item);
@@ -939,7 +955,7 @@ export class WidgetCanvas {
     this.#animateCamera({ itemId: this.#itemId(item), mode: "center" });
   }
 
-  toggleFocusMode(item: HTMLElement): boolean {
+  toggleFocusMode(item: HTMLElement, options: WidgetCanvasFocusOptions = {}): boolean {
     const id = this.#itemId(item);
     if (!this.#items.has(id)) return false;
     if (this.#focusSession?.itemId === id) {
@@ -957,6 +973,10 @@ export class WidgetCanvas {
     this.#focusSession = {
       itemId: id,
       entryCamera: { ...this.#camera },
+      focusOptions: {
+        ...options,
+        viewportInsets: options.viewportInsets ? { ...options.viewportInsets } : undefined,
+      },
     };
     this.#syncFocusPresentation();
     this.#onFocusModeChange(item, true, false);
@@ -978,15 +998,14 @@ export class WidgetCanvas {
 
   #frameFocusModeItem(
     item: HTMLElement,
-    viewportInsets?: WidgetCanvasViewportInsets,
   ): void {
     const session = this.#focusSession;
     if (!session || session.itemId !== item.dataset.instanceId) return;
-    this.#applyFocusModeCamera(item, session, viewportInsets);
+    this.#applyFocusModeCamera(item, session);
     this.#animateCamera({
       itemId: session.itemId,
       mode: "focus-mode",
-      viewportInsets,
+      viewportInsets: session.focusOptions.viewportInsets,
     });
   }
 
@@ -1027,13 +1046,12 @@ export class WidgetCanvas {
   #applyFocusModeCamera(
     item: HTMLElement,
     session: WidgetFocusSession,
-    viewportInsets?: WidgetCanvasViewportInsets,
   ): void {
     item.dataset.widgetCommandResetEdge = "true";
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
-    const frame = insetViewportFrame(viewport, viewportInsets);
+    const frame = insetViewportFrame(viewport, session.focusOptions.viewportInsets);
     const gutter = clamp(Math.min(frame.width, frame.height) * 0.08, 32, 72);
     const availableWidth = Math.max(1, frame.width - gutter * 2);
     const availableHeight = Math.max(1, frame.height - gutter * 2);
@@ -1043,15 +1061,58 @@ export class WidgetCanvas {
       FOCUS_MAX_ZOOM,
     );
     const targetZoom = clamp(
-      Math.max(session.entryCamera.zoom, desiredZoom),
+      Math.max(
+        session.entryCamera.zoom,
+        desiredZoom,
+        finiteNumber(session.focusOptions.minimumZoom, MIN_ZOOM),
+      ),
       MIN_ZOOM,
       MAX_ZOOM,
     );
     this.#camera.zoom = targetZoom;
-    this.#camera.panX = frame.x + frame.width / 2 -
-      (visual.x + visual.width / 2) * targetZoom;
-    this.#camera.panY = frame.y + frame.height / 2 -
-      (visual.y + visual.height / 2) * targetZoom;
+    const startOversized = session.focusOptions.oversizedAlignment === "start";
+    this.#camera.panX = startOversized && visual.width * targetZoom > availableWidth
+      ? frame.x + gutter - visual.x * targetZoom
+      : frame.x + frame.width / 2 - (visual.x + visual.width / 2) * targetZoom;
+    this.#camera.panY = startOversized && visual.height * targetZoom > availableHeight
+      ? frame.y + gutter - visual.y * targetZoom
+      : frame.y + frame.height / 2 - (visual.y + visual.height / 2) * targetZoom;
+  }
+
+  /** A focused long-form widget may intentionally be larger than the
+   * viewport. Keyboard focus is authoritative: whenever Tab (or script on
+   * behalf of an accessible control) moves inside that form, pan just enough
+   * to keep the focused control visible without changing zoom or the entry
+   * camera that Focus will restore. */
+  #revealFocusModeDescendant(target: HTMLElement): void {
+    const session = this.#focusSession;
+    if (!session) return;
+    const item = this.#items.get(session.itemId);
+    if (!item?.contains(target)) return;
+    const targetRect = target.getBoundingClientRect();
+    if (targetRect.width <= 0 || targetRect.height <= 0) return;
+    const viewport = this.#viewport.getBoundingClientRect();
+    const frame = insetViewportFrame(viewport, session.focusOptions.viewportInsets);
+    const margin = clamp(Math.min(frame.width, frame.height) * 0.04, 18, 32);
+    // insetViewportFrame is viewport-local; DOMRects are page-relative.
+    const safeLeft = viewport.left + frame.x + margin;
+    const safeRight = viewport.left + frame.x + frame.width - margin;
+    const safeTop = viewport.top + frame.y + margin;
+    const safeBottom = viewport.top + frame.y + frame.height - margin;
+    let deltaX = 0;
+    let deltaY = 0;
+    if (targetRect.width > safeRight - safeLeft) deltaX = safeLeft - targetRect.left;
+    else if (targetRect.left < safeLeft) deltaX = safeLeft - targetRect.left;
+    else if (targetRect.right > safeRight) deltaX = safeRight - targetRect.right;
+    if (targetRect.height > safeBottom - safeTop) deltaY = safeTop - targetRect.top;
+    else if (targetRect.top < safeTop) deltaY = safeTop - targetRect.top;
+    else if (targetRect.bottom > safeBottom) deltaY = safeBottom - targetRect.bottom;
+    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) return;
+    this.#stopCameraAnimation();
+    this.#camera.panX += deltaX;
+    this.#camera.panY += deltaY;
+    this.#renderCameraNow();
+    this.#scheduleChange();
   }
 
   #retargetCameraFraming(): void {
@@ -1067,7 +1128,7 @@ export class WidgetCanvas {
     else {
       const session = this.#focusSession;
       if (!session || session.itemId !== target.itemId) return;
-      this.#applyFocusModeCamera(item, session, target.viewportInsets);
+      this.#applyFocusModeCamera(item, session);
     }
     this.#renderCameraNow();
   }
@@ -1957,6 +2018,35 @@ export class WidgetCanvas {
   }
 
   #bindCameraInteractions(): void {
+    // Pointer focus must not move its target between pointerdown and pointerup
+    // or the browser can cancel the click. Pointer users already aim at a
+    // visible control; the focus-driven reveal is for Tab/script focus that
+    // can legitimately land beyond the clipped viewport.
+    this.#viewport.addEventListener("pointerdown", () => {
+      this.#pointerFocusRevealBlocked = true;
+    }, { capture: true, signal: this.#abort.signal });
+    const releasePointerFocusBlock = (): void => {
+      this.#pointerFocusRevealBlocked = false;
+    };
+    this.#window.addEventListener("pointerup", releasePointerFocusBlock, {
+      capture: true,
+      signal: this.#abort.signal,
+    });
+    this.#window.addEventListener("pointercancel", releasePointerFocusBlock, {
+      capture: true,
+      signal: this.#abort.signal,
+    });
+    this.#viewport.addEventListener("focusin", (event) => {
+      const target = event.target;
+      if (
+        !this.#pointerFocusRevealBlocked &&
+        target instanceof this.#window.HTMLElement &&
+        target !== this.#viewport
+      ) {
+        this.#revealFocusModeDescendant(target);
+      }
+    }, { signal: this.#abort.signal });
+
     this.#viewport.addEventListener("keydown", (event) => {
       if (
         event.composedPath()[0] !== this.#viewport ||
@@ -2095,6 +2185,7 @@ export class WidgetCanvas {
   }
 
   #cancelLostInputState(): void {
+    this.#pointerFocusRevealBlocked = false;
     this.#clearSpacePanState();
     this.#cancelWidgetDragGesture?.();
     this.#cancelCameraGesture?.();

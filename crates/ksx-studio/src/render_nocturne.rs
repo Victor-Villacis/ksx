@@ -731,6 +731,7 @@ mod tests {
             boards: vec![
                 ksx_api::BoardRow {
                     name: "Ultimarc I-PAC 4".to_owned(),
+                    role: ksx_api::BoardRole::PanelEncoder,
                     transport_label: "USB".to_owned(),
                     selector: Some("usb:ultimarc-ipac4".to_owned()),
                     alias_hint: "ipac".to_owned(),
@@ -1110,7 +1111,7 @@ mod tests {
         assert_complete_head("/nocturne", &out.html);
         for sentinel in [
             "Ultimarc I-PAC 4",
-            "USB · Ready to use",
+            "USB · Connected · outputs not checked",
             "Mystery composite",
             "No supported capture path",
             "2 keyboard-capable boards found.",

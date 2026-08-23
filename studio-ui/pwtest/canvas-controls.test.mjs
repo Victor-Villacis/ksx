@@ -142,6 +142,53 @@ const PANEL_FINGERPRINT = "panel-fixture-fingerprint";
 const PANEL_BASE_SHA = "A".repeat(64);
 const PANEL_DESIRED_SHA = "B".repeat(64);
 const PANEL_PROTOCOL_PROFILE = "ipac4-pac256-v1";
+const PANEL_TERMINAL_KINDS = [
+  "up", "down", "left", "right",
+  "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8",
+  "start", "coin",
+];
+const PANEL_CANONICAL_KEYS = [
+  ["A", 0x04], ["B", 0x05], ["C", 0x06], ["D", 0x07],
+  ["E", 0x08], ["F", 0x09], ["G", 0x0A], ["H", 0x0B],
+  ["I", 0x0C], ["J", 0x0D], ["K", 0x0E], ["L", 0x0F],
+  ["M", 0x10], ["N", 0x11], ["O", 0x12], ["P", 0x13],
+  ["Q", 0x14], ["R", 0x15], ["S", 0x16], ["T", 0x17],
+  ["U", 0x18], ["V", 0x19], ["W", 0x1A], ["X", 0x1B],
+  ["Y", 0x1C], ["Z", 0x1D], ["One", 0x1E], ["Two", 0x1F],
+  ["Three", 0x20], ["Four", 0x21], ["Five", 0x22], ["Six", 0x23],
+  ["Seven", 0x24], ["Eight", 0x25], ["Nine", 0x26], ["Zero", 0x27],
+  ["DashUnderscore", 0x2D], ["PlusEquals", 0x2E],
+  ["OpenBracketBrace", 0x2F], ["CloseBracketBrace", 0x30],
+  ["BackslashPipe", 0x31], ["SemicolonColon", 0x33],
+  ["SingleDoubleQuote", 0x34], ["Tilde", 0x35],
+  ["CommaLeftArrow", 0x36], ["PeriodRightArrow", 0x37],
+  ["F1", 0x3A], ["F2", 0x3B], ["F3", 0x3C], ["F4", 0x3D],
+  ["F5", 0x3E], ["F6", 0x3F], ["F7", 0x40], ["F8", 0x41],
+  ["F9", 0x42], ["F10", 0x43],
+];
+
+function panelCanonicalTerminalIds() {
+  const ids = [];
+  for (let player = 1; player <= 4; player += 1) {
+    for (const kind of PANEL_TERMINAL_KINDS) ids.push(`${player}${kind}`);
+  }
+  return ids;
+}
+
+function panelCanonicalRecommendedTerminals(terminals) {
+  const assignments = new Map(panelCanonicalTerminalIds().map(
+    (terminalId, index) => [terminalId, PANEL_CANONICAL_KEYS[index]],
+  ));
+  return terminals.map((terminal) => {
+    const [key, code] = assignments.get(terminal.terminal_id) ?? [null, 0];
+    return {
+      ...terminal,
+      normal: key
+        ? { code, key, label: key, supported: true }
+        : { code: 0, key: null, label: "Unassigned", supported: true },
+    };
+  });
+}
 
 function panelBackup({
   id = "20260823T003000Z-before-program-AAAAAAAAAAAA",
@@ -173,6 +220,28 @@ function panelChartPayload({
     label: key,
     supported: true,
   });
+  const terminals = [
+    {
+      terminal_id: "1sw1",
+      terminal_label: "P1 SW1",
+      player: 1,
+      kind: "button",
+      normal: keyValue(chartKey),
+      shifted: { code: 0, key: null, label: "Unassigned", supported: true },
+      shift_state: "disabled",
+      is_shift: false,
+    },
+    {
+      terminal_id: "1sw2",
+      terminal_label: "P1 SW2",
+      player: 1,
+      kind: "button",
+      normal: keyValue(chartKey),
+      shifted: { code: 0, key: null, label: "Unassigned", supported: true },
+      shift_state: "disabled",
+      is_shift: false,
+    },
+  ];
   return {
     target_selector: PANEL_SELECTOR,
     unavailable: null,
@@ -191,28 +260,8 @@ function panelChartPayload({
       qualification_state: qualificationState,
       qualification_detail: qualificationDetail,
       qualification_restore_backup_id: qualificationRestoreBackupId,
-      terminals: [
-        {
-          terminal_id: "1sw1",
-          terminal_label: "P1 SW1",
-          player: 1,
-          kind: "button",
-          normal: keyValue(chartKey),
-          shifted: { code: 0, key: null, label: "Unassigned", supported: true },
-          shift_state: "disabled",
-          is_shift: false,
-        },
-        {
-          terminal_id: "1sw2",
-          terminal_label: "P1 SW2",
-          player: 1,
-          kind: "button",
-          normal: keyValue(chartKey),
-          shifted: { code: 0, key: null, label: "Unassigned", supported: true },
-          shift_state: "disabled",
-          is_shift: false,
-        },
-      ],
+      terminals,
+      recommended_terminals: panelCanonicalRecommendedTerminals(terminals),
       key_options: [
         { key: "A", label: "A", code: 4, safe_for_qualification: true },
         { key: "B", label: "B", code: 5, safe_for_qualification: true },
@@ -369,13 +418,16 @@ describe("the canvas navigation controls", () => {
       );
       await page.click('[data-nx="learn-cancel"]');
 
-      await page.locator('.n-widget-kb [data-key="Q"]').click({ force: true });
+      const signal = page.locator(".n-widget-kb .n-ipac-signal:visible").first();
+      const signalKey = await signal.getAttribute("data-key");
+      assert.ok(signalKey, "the selected I-PAC exposes at least one concrete Windows signal");
+      await signal.click();
       await page.locator(
         '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
       ).first().click({ force: true });
       const request = await bound;
       assert.equal(request.slot, 1);
-      assert.equal(request.key, "Q");
+      assert.equal(request.key, signalKey);
       assert.equal(request.function, "A", "pad art resolves the mapper's canonical spelling");
       assert.equal(request.mode, "replace");
       assert.deepEqual(page.ksxNoise, []);
@@ -517,6 +569,12 @@ describe("the canvas navigation controls", () => {
       });
     });
     try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-kb")?.getAttribute("data-input-kind") === "keyboard"
+      );
       await page.click('[data-nx="kb-workbench"]');
       await page.click('[data-nx="keylab-pull-mapped"]');
       const keycap = page.locator('.n-deck-key[data-keylab-key="G"]');
@@ -2126,6 +2184,11 @@ describe("the canvas navigation controls", () => {
       });
     });
     try {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb[data-input-kind="panel-encoder"]') !== null
+      );
       await page.selectOption('[data-nx="mapping-paths"]', "selected");
       const node = page.locator('#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]');
       await node.waitFor({ state: "visible" });
@@ -2420,7 +2483,21 @@ describe("the canvas navigation controls", () => {
         0,
         "an unavailable controller endpoint cannot arm key listening",
       );
-      await page.locator('.n-widget-kb [data-key="Q"]').click({ force: true });
+      const macroSignal = page.locator('.n-widget-kb .n-ipac-signal[data-key="P"]:visible');
+      assert.equal(await macroSignal.count(), 1,
+        "the independently available macro trigger remains a discoverable source signal");
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal:visible').count(),
+        1,
+        "unavailable direct mapping truth cannot be recycled into extra inferred I-PAC signals",
+      );
+      assert.match(
+        (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent())
+          .replace(/\s+/g, " "),
+        /has not read the I-PAC chart yet.*has not proven which physical terminals emit them/i,
+        "the source distinguishes a macro's routed key name from a proven hardware-terminal output",
+      );
+      await macroSignal.click();
       await control.click({ force: true });
       assert.equal(bindRequests, 0, "an unavailable controller endpoint cannot write a binding");
       assert.deepEqual(page.ksxNoise, []);
@@ -2913,11 +2990,19 @@ describe("the canvas navigation controls", () => {
       await page.locator(".n-mapshow").waitFor({ state: "visible" });
       await page.click(".n-mapshow");
       await page.locator(".n-navigator").waitFor({ state: "visible" });
-      const editable = page.locator(
-        '#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]',
+      let editable = page.locator(
+        '#n-mapping-processors a.n-flow-processor:not([hidden])[data-flow-macro-id*="hadouken"]',
       );
-      await editable.focus();
-      await page.keyboard.press("Enter");
+      if (!(await editable.isVisible())) {
+        const overflow = page.locator(
+          "#n-mapping-processors details.n-flow-overflow:not([hidden])",
+        );
+        await overflow.locator("summary").press("Enter");
+        editable = overflow.locator(
+          'a.n-flow-overflow-link[data-flow-macro-id*="hadouken"]',
+        );
+      }
+      await editable.press("Enter");
       await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -3436,6 +3521,12 @@ describe("the canvas navigation controls", () => {
   test("every marker says which seat it is", async () => {
     const page = await openCanvas();
     try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb[data-input-kind="keyboard"]') !== null
+      );
       const markers = await page.evaluate(() =>
         Array.from(document.querySelectorAll(".forma-canvas-navigator .navigator-item")).map(
           (el) => ({
@@ -3448,7 +3539,8 @@ describe("the canvas navigation controls", () => {
       );
       assert.ok(markers.length >= 3, "the fixture stages a board and two controllers");
       const board = markers.find((marker) => marker.id === "keyboard");
-      assert.equal(board?.text, "KB", "the board names itself on the map");
+      assert.equal(board?.text, "KB", "an ordinary keyboard keeps its own source identity");
+      assert.match(board?.title ?? "", /Keyboard.*physical key source/i);
       for (const marker of markers.filter((m) => m.id !== "keyboard")) {
         assert.match(
           marker.text,
@@ -3465,6 +3557,20 @@ describe("the canvas navigation controls", () => {
           `${marker.id}'s tooltip carries the full name the box has no room for`,
         );
       }
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb[data-input-kind="panel-encoder"]') !== null
+      );
+      const encoderMarker = page.locator(
+        '.forma-canvas-navigator .navigator-item[data-instance-id="keyboard"]',
+      );
+      assert.equal(
+        (await encoderMarker.textContent()).trim(),
+        "I-PAC",
+        "selecting the encoder renames the source marker without pretending it is a keyboard",
+      );
+      assert.match(await encoderMarker.getAttribute("title"), /I-PAC Signals.*Windows key source/i);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -3831,6 +3937,15 @@ describe("the canvas navigation controls", () => {
     });
 
     try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() => Array.from(
+        document.querySelectorAll(".n-devform:not(.n-encoder-form)"),
+      ).some((row) => row.textContent?.includes("Logitech G915") &&
+        row.querySelector("button.n-dev")?.classList.contains("on")));
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-kb")?.getAttribute("data-input-kind") === "keyboard");
       const themeSlugs = [
         "carbon-forge",
         "lunar-shell",
@@ -4531,6 +4646,16 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(bindingPosts, []);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      if (await encoderLane.count()) {
+        await encoderLane.locator("button.n-dev").click().catch(() => {});
+        await page.waitForFunction(() => Array.from(
+          document.querySelectorAll(".n-encoder-form"),
+        ).some((row) => row.textContent?.includes("Ultimarc I-PAC 4") &&
+          row.querySelector("button.n-dev")?.classList.contains("on")), null, {
+          timeout: 5_000,
+        }).catch(() => {});
+      }
       await page.close();
     }
   });
@@ -4689,9 +4814,9 @@ describe("the canvas navigation controls", () => {
         renderMode: "keycap",
       });
       assert.deepEqual(migrated.arrangerDeck, {
-        count: 1,
-        layoutMode: "compact",
-        renderMode: "keycap",
+        count: 0,
+        layoutMode: null,
+        renderMode: null,
       });
       assert.deepEqual(writes, [], "migration never binds or starts a learner");
 
@@ -4799,8 +4924,9 @@ describe("the canvas navigation controls", () => {
       });
       assert.equal(failure.surfaceControls, 2, "the session-only copy remains usable");
       assert.match(failure.status, /Not saved: browser storage is unavailable/i);
-      assert.equal(failure.arrangerLayout, "players");
-      assert.equal(failure.arrangerRender, "arcade");
+      assert.equal(failure.arrangerLayout, null,
+        "the legacy arranger stays persisted but is not mounted over an I-PAC signal source");
+      assert.equal(failure.arrangerRender, null);
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -5116,6 +5242,28 @@ describe("the canvas navigation controls", () => {
         "first-run setup must also work when an ordinary keyboard was previously selected",
       );
 
+      await encoderLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent
+          ?.includes("Hardware Setup has not read the I-PAC chart yet"));
+      assert.match(
+        (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent()).replace(/\s+/g, " "),
+        /KSX routes currently reference these Windows key names.*has not read the I-PAC chart yet.*has not proven which physical terminals emit them.*terminal → Windows key ownership/i,
+        "before chart read, mapped names are references rather than proven I-PAC emissions",
+      );
+
+      if (await page.locator(".n-right").evaluate((element) => element.classList.contains("rail"))) {
+        await page.locator('.n-right .n-rail [data-nx="pane-right"]').click();
+      }
+      assert.equal(await page.locator(".n-right").evaluate((element) => element.classList.contains("rail")), false,
+        "the Mapping Inspector begins open so setup can prove it collapses contextually");
+      for (let press = 0; press < 12; press++) {
+        await page.click('[data-nx="canvas-zoom-out"]');
+      }
+      await settle(page);
+      assert.equal((await page.textContent(".n-zoomval")).trim(), "20%",
+        "the setup check begins from the worst saved overview zoom");
+      const entryCameraStyle = await page.getAttribute(".forma-canvas-stage", "style");
       await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
       const setup = page.locator('.n-widget-surface[data-entry="encoder-setup"]');
       await setup.waitFor({ state: "visible" });
@@ -5126,6 +5274,27 @@ describe("the canvas navigation controls", () => {
 
       assert.equal(chartReads, 1,
         "Set up performs one explicit complete-chart read and backup even when clicked twice while loading");
+      assert.equal(await page.locator(".forma-canvas-viewport.is-widget-focus-mode").count(), 1,
+        "hardware setup enters a focused canvas workspace instead of shrinking into the whole graph");
+      assert.equal(await setup.evaluate((element) => element.classList.contains("is-focus-mode")), true);
+      const focusedZoom = Number.parseInt((await page.textContent(".n-zoomval")).trim(), 10);
+      assert.ok(focusedZoom >= 68,
+        `hardware setup raises a miniature overview to a readable scale (got ${focusedZoom}%)`);
+      const viewportBox = await page.locator(".forma-canvas-viewport").boundingBox();
+      const journeyBox = await setup.locator(".n-panel-signal-journey").boundingBox();
+      assert.ok(viewportBox && journeyBox &&
+        journeyBox.y >= viewportBox.y - 1 && journeyBox.y < viewportBox.y + viewportBox.height,
+      "an oversized hardware form opens at the beginning of its signal journey, not halfway down");
+      assert.equal(await page.locator("#n-mapping-paths").isHidden(), true,
+        "route cords leave the focused persistent-hardware task unobstructed");
+      assert.equal(await page.locator("#n-mapping-processors").isHidden(), true,
+        "floating macro cards cannot cover writer qualification or recovery controls");
+      assert.equal(await page.locator(".forma-canvas-navigator").isHidden(), true,
+        "the passive navigator cannot cover lower-right terminal controls in focused hardware setup");
+      assert.equal(await page.locator(".n-mapshow").isHidden(), true,
+        "focused hardware setup cannot replace the hidden navigator with another corner obstruction");
+      assert.equal(await page.locator(".n-right").evaluate((element) => element.classList.contains("rail")), true,
+        "the stale mapping inspector collapses while the user is editing persistent hardware outputs");
       assert.equal(await setup.locator(".n-surface-control").count(), 0,
         "writer qualification does not invent a drawn physical control");
       assert.equal(await setup.locator(".n-surface-starters").isHidden(), true,
@@ -5135,23 +5304,63 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /I-PAC Setup.*Hardware first.*I-PAC first-run setup.*Initialize the keyboard chart.*No emitted key and no drawn panel are required/i,
+        /I-PAC Hardware Setup.*I-PAC terminal.*Windows key.*KSX mapping.*virtual controller.*game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
+      );
+      assert.deepEqual(
+        await setup.locator("[data-panel-journey-step] strong").allTextContents(),
+        ["I-PAC", "Windows keys", "KSX", "Controller", "Game"],
+        "the workspace teaches the complete physical-terminal-to-game signal chain",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-journey-step="keys"]').getAttribute("data-state"),
+        "active",
+        "an empty chart stops visibly at Windows key output rather than pretending the encoder is ready",
+      );
+      assert.match(
+        (await setup.locator("[data-surface-programming-device]").textContent()).replace(/\s+/g, " "),
+        /Windows key outputs\s*0 of 2.*KSX routes\s*0 hardware keys mapped/i,
+        "device facts report the empty hardware chart and empty KSX route layer independently",
+      );
+      assert.match(
+        (await setup.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
+        /Initialize it with a complete layout/i,
+        "the recommended next action lives in task guidance rather than hardware facts",
+      );
+      assert.match(
+        (await page.locator(".n-left").textContent()).replace(/\s+/g, " "),
+        /Input capture behavior.*Dedicated arcade panel.*Share unused outputs with Windows.*Observe and pass through/i,
+        "an encoder gets cabinet-specific capture choices instead of generic keyboard prose",
       );
       assert.deepEqual(signalWrites, [], "first-run chart setup never asks Windows to emit or learn a key");
 
-      const terminal = setup.locator('[data-nx="surface-qualification-terminal"]');
-      const key = setup.locator('[data-nx="surface-qualification-key"]');
-      const review = setup.locator('[data-nx="surface-encoder-review"]');
+      const qualificationTerminal = setup.locator('[data-nx="surface-qualification-terminal"]');
       await page.waitForFunction(() => document.activeElement?.matches(
         '[data-nx="surface-qualification-terminal"]',
       ));
       assert.equal(
-        await page.evaluate(() => document.activeElement?.matches(
-          '[data-nx="surface-qualification-terminal"]',
-        )),
+        await qualificationTerminal.evaluate((element) => document.activeElement === element),
         true,
         "focus lands on the first safe hardware decision after read-back",
       );
+      await qualificationTerminal.press("Escape");
+      await page.waitForFunction(() =>
+        !document.querySelector(".forma-canvas-viewport")?.classList.contains("is-widget-focus-mode")
+      );
+      await settle(page);
+      assert.equal((await page.textContent(".n-zoomval")).trim(), "20%",
+        "leaving Hardware Setup focus restores the exact overview zoom it entered from");
+      assert.equal(await page.getAttribute(".forma-canvas-stage", "style"), entryCameraStyle,
+        "leaving Hardware Setup restores pan and zoom rather than an intermediate one-shot reveal");
+      await page.click('.n-selbar [data-nx="w-focus"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".forma-canvas-viewport")?.classList.contains("is-widget-focus-mode")
+      );
+      assert.ok(Number.parseInt((await page.textContent(".n-zoomval")).trim(), 10) >= 68,
+        "re-entering Hardware Setup reapplies its readable focus contract");
+
+      const terminal = setup.locator('[data-nx="surface-qualification-terminal"]');
+      const key = setup.locator('[data-nx="surface-qualification-key"]');
+      const review = setup.locator('[data-nx="surface-encoder-review"]');
       assert.equal(await terminal.locator('option[value="1sw1"]').count(), 1);
       assert.match(await terminal.locator('option[value="1sw1"]').textContent(), /currently Unassigned/i);
       assert.equal(await review.isDisabled(), true);
@@ -5189,14 +5398,140 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("I-PAC setup names a partial hardware chart as work to finish", async () => {
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          pad.mapping_available = false;
+          pad.macro_available = false;
+          // Deliberately stale and relevant to the chart below: unavailable
+          // authorities must win over their last successful payloads.
+          pad.fn_keys = { A: "B" };
+          const seed = pad.macros?.[0];
+          if (seed) {
+            pad.macros = [{ ...seed, triggers: ["B"], outputs: ["A"], disabled: false }];
+          }
+        }
+        await route.fulfill({ response, json: payload });
+      });
+      await candidate.route("**/api/panel/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelStatusPayload()),
+      }));
+      await candidate.route("**/api/panel/chart", async (route) => {
+        const payload = panelChartPayload();
+        payload.view.terminals[1].normal = {
+          code: 0,
+          key: null,
+          label: "Unassigned",
+          supported: true,
+        };
+        payload.view.terminals[0].shifted = {
+          code: 255,
+          key: null,
+          label: "Preserved vendor action",
+          supported: false,
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      const setup = page.locator('.n-widget-surface[data-entry="encoder-setup"]');
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming')
+          ?.getAttribute("data-qualification") === "qualified");
+      assert.match(
+        (await setup.textContent()).replace(/\s+/g, " "),
+        /Partially configured I-PAC.*Finish the terminal-to-key chart.*1 of 2 terminals currently emit a supported Windows key/i,
+      );
+      assert.match(
+        (await encoderLane.locator(".n-dev-meta").textContent()).replace(/\s+/g, " "),
+        /Partially configured.*1\/2 outputs/i,
+      );
+      assert.equal(
+        await encoderLane.getByRole("button", { name: /Finish setup.*Ultimarc I-PAC 4/i }).count(),
+        1,
+        "the rail resumes with an outcome-oriented action instead of calling every board first-run",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-journey-step="keys"]').getAttribute("data-state"),
+        "complete",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-journey-step="mapping"]').getAttribute("data-state"),
+        "active",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-journey-step="controller"]').getAttribute("data-state"),
+        "upcoming",
+        "stale mapper and macro rows cannot falsely complete the controller journey",
+      );
+      assert.match(
+        (await setup.locator("[data-surface-programming-device]").textContent()).replace(/\s+/g, " "),
+        /0 hardware keys mapped/i,
+        "unavailable mapper and macro authorities contribute no routed hardware keys",
+      );
+      assert.match(
+        (await setup.locator("[data-panel-route-copy]").textContent()).replace(/\s+/g, " "),
+        /Hardware output is only the source.*connect these Windows keys through KSX to virtual controller controls/i,
+      );
+      const advanced = setup.locator('[data-nx="surface-terminal-advanced"]');
+      await advanced.check();
+      const opaqueShifted = setup.locator(
+        '[data-nx="surface-terminal-key"][data-panel-terminal="1sw1"][data-panel-field="shifted"]',
+      );
+      assert.equal(await opaqueShifted.inputValue(), "__preserve__");
+      await opaqueShifted.selectOption("A");
+      assert.equal(
+        await opaqueShifted.locator('option[value="__preserve__"]').count(),
+        1,
+        "editing an opaque vendor plane keeps its lossless Preserve escape hatch",
+      );
+      await opaqueShifted.selectOption("__preserve__");
+      assert.equal(await opaqueShifted.inputValue(), "__preserve__",
+        "a deliberate key edit can be reverted to preserving the baseline byte");
+      await setup.locator('[data-nx="surface-encoder-route"]').click();
+      await page.waitForFunction(() =>
+        !document.querySelector(".forma-canvas-viewport")?.classList.contains("is-widget-focus-mode") &&
+        !document.querySelector(".n-right")?.classList.contains("rail"));
+      assert.equal(await page.locator('.n-widget-surface[data-entry="encoder-setup"]').count(), 0,
+        "Continue to routing leaves the optional hardware workspace and opens the mapping inspector");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("qualified I-PAC setup edits all 56 terminals and separates saved layouts from hardware writes", async () => {
+    let chartReads = 0;
     let savedSpec = null;
     let plannedSpec = null;
-    const terminalKinds = ["up", "down", "left", "right", "start", "coin",
-      "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8"];
+    let learnGeneration = 760;
+    let learnHitReady = false;
+    let learnDevice = "";
+    let encoderPresence = "present";
+    let markMissingServed = () => {};
+    let markReenumeratedServed = () => {};
+    const missingServed = new Promise((resolve) => { markMissingServed = resolve; });
+    const reenumeratedServed = new Promise((resolve) => { markReenumeratedServed = resolve; });
+    const bindRequests = [];
     const terminals = [];
     for (let player = 1; player <= 4; player += 1) {
-      for (const kind of terminalKinds) {
+      for (const kind of PANEL_TERMINAL_KINDS) {
         const id = `${player}${kind}`;
         terminals.push({
           terminal_id: id,
@@ -5210,6 +5545,8 @@ describe("the canvas navigation controls", () => {
         });
       }
     }
+    const configuredTerminals = panelCanonicalRecommendedTerminals(terminals);
+    terminals.splice(0, terminals.length, ...configuredTerminals);
     const savedProfile = {
       schema: "ksx-panel-hardware-profile-v1",
       profile_id: "four-player-saved",
@@ -5230,14 +5567,81 @@ describe("the canvas navigation controls", () => {
       })),
     };
     const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        if (encoderPresence === "present") {
+          await route.continue();
+          return;
+        }
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        if (encoderPresence === "missing") {
+          payload.view.cap_selector = "";
+          payload.view.cap_instance = "";
+        } else {
+          payload.view.cap_selector = PANEL_SELECTOR;
+          payload.view.cap_instance = "HID\\VID_D209&PID_0430\\FIXTURE-REENUMERATED";
+        }
+        await route.fulfill({ response, json: payload });
+        if (encoderPresence === "missing") markMissingServed();
+        else markReenumeratedServed();
+      });
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname.endsWith("/api/bind")) {
+          bindRequests.push(JSON.parse(request.postData() ?? "{}"));
+        }
+      });
+      await candidate.route("**/api/learn/start", async (route) => {
+        learnGeneration += 1;
+        learnHitReady = false;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation: learnGeneration,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await candidate.route("**/api/learn", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: learnHitReady ? "hit" : "listening",
+            generation: learnGeneration,
+            remaining_ms: learnHitReady ? null : 10_000,
+            device: learnHitReady ? learnDevice : null,
+            key: learnHitReady ? "E" : null,
+            error: null,
+          }),
+        });
+      });
       await candidate.route("**/api/panel/status", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(panelStatusPayload()),
       }));
       await candidate.route("**/api/panel/chart", async (route) => {
+        chartReads += 1;
         const payload = panelChartPayload();
         payload.view.terminals = terminals;
+        payload.view.recommended_terminals = panelCanonicalRecommendedTerminals(terminals);
+        payload.view.key_options = PANEL_CANONICAL_KEYS.map(([key, code]) => ({
+          key,
+          label: key,
+          code,
+          safe_for_qualification: /^[A-Z]$/u.test(key),
+        }));
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
       });
       await candidate.route("**/api/panel/backups", (route) => route.fulfill({
@@ -5296,16 +5700,208 @@ describe("the canvas navigation controls", () => {
       await setup.locator(".n-surface-terminal-editor").waitFor({ state: "visible" });
       assert.equal(await setup.locator("[data-panel-terminal-row]").count(), 56);
       assert.equal(await setup.locator(".n-surface-terminal-player").count(), 4);
-      assert.match((await setup.textContent()).replace(/\s+/g, " "), /Current chart.*Recommended KSX.*Clear assignments.*Saved hardware layouts/i);
+      assert.match(
+        (await setup.textContent()).replace(/\s+/g, " "),
+        /Configured I-PAC.*Use, test, or reconfigure the outputs.*All 56 terminals currently have supported Windows key outputs/i,
+      );
+      assert.deepEqual(
+        await setup.locator("[data-panel-journey-step] strong").allTextContents(),
+        ["I-PAC", "Windows keys", "KSX", "Controller", "Game"],
+      );
+      assert.match(
+        (await setup.locator(".n-surface-programming-modes").textContent()).replace(/\s+/g, " "),
+        /Use current outputs.*KSX four-player/i,
+      );
+      assert.equal(
+        await setup.locator('.n-surface-programming-modes [data-surface-programming-mode="blank"]').count(),
+        0,
+        "the destructive clear action is not presented as an ordinary starting layout",
+      );
+      const advancedHardware = setup.locator("details.n-surface-programming-advanced");
+      assert.equal(await advancedHardware.getAttribute("open"), null);
+      const clearOutputs = advancedHardware.locator('[data-surface-programming-mode="blank"]');
+      assert.equal(await clearOutputs.isHidden(), true,
+        "Disable all outputs stays behind an explicitly named advanced disclosure");
       assert.equal(await setup.locator(".n-surface-programming-recovery").getAttribute("open"), null,
         "raw recovery history stays collapsed during normal profile authoring");
 
+      const recommended = setup.locator('[data-surface-programming-mode="recommended"]');
+      const keepCurrent = setup.locator('[data-surface-programming-mode="keep-current"]');
+      await recommended.click();
+      assert.equal(await setup.locator("[data-panel-terminal-row]").count(), 56,
+        "the recommendation is a full semantic preview rather than a promise hidden behind Apply");
+      assert.equal(
+        await setup.locator('[data-panel-terminal="1up"][data-panel-field="normal"]').inputValue(),
+        "A",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-terminal="1sw1"][data-panel-field="normal"]').inputValue(),
+        "E",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-terminal="4coin"][data-panel-field="normal"]').inputValue(),
+        "F10",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-terminal][data-panel-field="normal"]:disabled').count(),
+        56,
+        "the backend-owned recommendation is exact but read-only until the reviewed canonical plan is chosen",
+      );
+      assert.match(
+        (await setup.locator("[data-surface-terminal-note]").textContent()).replace(/\s+/g, " "),
+        /Exact preview from the backend.*56 unique Windows key signals.*Review this table before programming/i,
+      );
+
+      await keepCurrent.click();
+      const firstNormal = setup.locator(
+        '[data-panel-terminal="1up"][data-panel-field="normal"]',
+      );
+      await firstNormal.focus();
+      await firstNormal.press("Escape");
+      assert.equal(await page.locator(".forma-canvas-viewport.is-widget-focus-mode").count(), 0,
+        "one Escape from a Hardware Setup select exits canvas focus mode");
+      await page.click('.n-selbar [data-nx="w-focus"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".forma-canvas-viewport")?.classList.contains("is-widget-focus-mode"));
+      assert.ok(Number.parseInt((await page.textContent(".n-zoomval")).trim(), 10) >= 68,
+        "the shared Focus command preserves Hardware Setup's readable minimum");
+      const reentryViewport = await page.locator(".forma-canvas-viewport").boundingBox();
+      const reentryJourney = await setup.locator(".n-panel-signal-journey").boundingBox();
+      assert.ok(reentryViewport && reentryJourney &&
+        reentryJourney.y >= reentryViewport.y - 1 &&
+        reentryJourney.y < reentryViewport.y + reentryViewport.height,
+      "Focus re-entry starts the oversized hardware form at step 1");
+      const lastNormal = setup.locator(
+        '[data-panel-terminal="4coin"][data-panel-field="normal"]',
+      );
+      await lastNormal.focus();
+      await page.waitForFunction(() => {
+        const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+        const target = document.activeElement?.getBoundingClientRect();
+        return Boolean(viewport && target && target.top >= viewport.top && target.bottom <= viewport.bottom);
+      });
+      assert.equal(await lastNormal.evaluate((element) => document.activeElement === element), true,
+        "keyboard focus remains on the lower hardware control while the camera reveals it");
+      await firstNormal.focus();
+      await page.waitForFunction(() => {
+        const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+        const target = document.activeElement?.getBoundingClientRect();
+        return Boolean(viewport && target && target.top >= viewport.top && target.bottom <= viewport.bottom);
+      });
+      assert.equal(await firstNormal.evaluate((element) => document.activeElement === element), true,
+        "reverse keyboard focus reveals the upper hardware control without losing focus");
+
+      await firstNormal.selectOption("B");
+      assert.equal(
+        (await setup.locator('[data-nx="surface-encoder-test"]').textContent()).trim(),
+        "Test current board",
+      );
+      assert.match(
+        (await setup.locator("[data-panel-output-test-copy]").textContent()).replace(/\s+/g, " "),
+        /draft is not written.*Test current board.*outputs that are on the I-PAC now/i,
+        "a wiring test cannot be mistaken for testing an unwritten draft",
+      );
+
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() =>
+        !document.querySelector(".forma-canvas-viewport")?.classList.contains("is-widget-focus-mode")
+      );
+      encoderPresence = "missing";
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await missingServed;
+      await setup.waitFor({ state: "hidden" });
+      encoderPresence = "reenumerated";
+      await page.evaluate(() => {
+        const form = document.querySelector('form:has(input[name="fresh"])');
+        form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      });
+      await reenumeratedServed;
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-open"]')
+        .waitFor({ state: "visible" });
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await setup.locator(".n-surface-terminal-editor").waitFor({ state: "visible" });
+      assert.equal(await firstNormal.inputValue(), "B",
+        "a transient encoder loss and same-board re-enumeration recover its dirty draft");
+      assert.match(
+        (await setup.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
+        /Recovered your unsaved 56-terminal draft for this exact I-PAC.*fresh read did not change the board/i,
+      );
+
+      let discardPrompt = "";
+      page.once("dialog", async (dialog) => {
+        discardPrompt = dialog.message();
+        await dialog.dismiss();
+      });
+      await recommended.click();
+      assert.match(discardPrompt, /Discard the unsaved 56-terminal draft changes.*KSX four-player/i);
+      assert.equal(await firstNormal.inputValue(), "B",
+        "declining a source replacement preserves every dirty terminal edit");
+      const readsBeforeDeclinedReread = chartReads;
+      page.once("dialog", async (dialog) => {
+        assert.match(dialog.message(), /Discard the unsaved 56-terminal draft changes.*read the board again/i);
+        await dialog.dismiss();
+      });
+      await setup.locator('[data-nx="surface-encoder-read"]').click();
+      assert.equal(chartReads, readsBeforeDeclinedReread,
+        "declining Read board again performs no chart request");
+      assert.equal(await firstNormal.inputValue(), "B");
+      page.once("dialog", (dialog) => dialog.accept());
+      await recommended.click();
+      assert.equal(await firstNormal.inputValue(), "A",
+        "accepting the explicit discard replaces the draft with the chosen source");
+      assert.match(
+        await page.locator('.n-widget-kb .n-ipac-signal[data-key="E"] span').textContent(),
+        /1SW1.*P1 SW1/i,
+        "the canvas source names the physical terminal id users see on the I-PAC silkscreen",
+      );
+      learnDevice = "HID\\VID_D209&PID_0430\\FIXTURE-REENUMERATED";
+      assert.ok(learnDevice, "the passive wiring test stays pinned to the re-enumerated Windows device instance");
+      await setup.locator('[data-nx="surface-encoder-test"]').click();
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      assert.match(
+        (await page.locator(".n-learnbar").textContent()).replace(/\s+/g, " "),
+        /Test I-PAC output.*no mapping changes/i,
+      );
+      await page.locator('.n-widget-kb .n-ipac-signal[data-key="E"]').evaluate(
+        (element) => element.click(),
+      );
+      assert.equal(await page.locator(".n-learnbar.listen").count(), 1,
+        "clicking the drawing cannot impersonate a physical I-PAC report");
+      assert.match(await page.textContent(".n-live-sr"), /only clicked in the drawing.*no mapping was changed/i);
+      assert.deepEqual(bindRequests, [],
+        "a drawn signal can never invoke the binding route during passive wiring test");
+      learnHitReady = true;
+      await page.waitForFunction(() =>
+        document.querySelector("[data-panel-output-test-status]")?.textContent?.includes("1sw1 emitted E"));
+      assert.equal(
+        await setup.locator('[data-panel-signal-terminal="1sw1"]').getAttribute("data-hit"),
+        "true",
+        "a real observed key resolves back to every matching terminal chip",
+      );
+      assert.deepEqual(bindRequests, [],
+        "Test wiring observes the I-PAC signal without creating or changing any KSX binding");
+
+      await keepCurrent.click();
+      await firstNormal.selectOption("B");
       await setup.locator("[data-surface-profile]").selectOption(savedProfile.profile_id);
+      page.once("dialog", async (dialog) => {
+        assert.match(dialog.message(), /Discard the unsaved 56-terminal draft changes.*Four player cabinet/i);
+        await dialog.dismiss();
+      });
+      await setup.locator('[data-nx="surface-profile-use"]').click();
+      assert.equal(await firstNormal.inputValue(), "B",
+        "declining a saved-layout replacement preserves the dirty draft");
+      page.once("dialog", (dialog) => dialog.accept());
       await setup.locator('[data-nx="surface-profile-use"]').click();
       assert.equal(await setup.locator('[data-panel-terminal="1up"][data-panel-field="normal"]').inputValue(), "A");
       assert.match(await setup.locator("[data-surface-terminal-status]").textContent(), /Four player cabinet.*not written/i);
 
-      await setup.locator('[data-surface-programming-mode="blank"]').click();
+      await advancedHardware.locator("summary").click();
+      assert.equal(await clearOutputs.isVisible(), true);
+      await clearOutputs.click();
       assert.equal(await setup.locator('[data-panel-terminal="1up"][data-panel-field="normal"]').inputValue(), "");
       await setup.locator("[data-surface-profile-name]").fill("Blank tournament panel");
       await setup.locator('[data-nx="surface-profile-save"]').click();
@@ -5336,6 +5932,8 @@ describe("the canvas navigation controls", () => {
     let chartReads = 0;
     let capturedPlan = null;
     let capturedApply = null;
+    let learnGeneration = 880;
+    let taughtDevice = "";
     let markApplyStarted = () => {};
     let releaseApply = () => {};
     const applyStarted = new Promise((resolve) => {
@@ -5345,6 +5943,37 @@ describe("the canvas navigation controls", () => {
       releaseApply = resolve;
     });
     const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/learn/start", async (route) => {
+        learnGeneration += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation: learnGeneration,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await candidate.route("**/api/learn", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "hit",
+            generation: learnGeneration,
+            remaining_ms: null,
+            device: taughtDevice,
+            key: "B",
+            error: null,
+          }),
+        });
+      });
       await candidate.route("**/api/panel/status", async (route) => {
         await route.fulfill({
           status: 200,
@@ -5451,12 +6080,77 @@ describe("the canvas navigation controls", () => {
       await page.click('.n-widget-surface [data-surface-programming-mode="custom"]');
 
       const controls = page.locator(".n-widget-surface .n-surface-control");
-      for (const [index, terminal] of [[0, "1sw1"], [1, "1sw2"]]) {
-        await controls.nth(index).click();
-        await page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption(terminal);
-        await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
-        await page.locator('.n-widget-surface [data-nx="surface-encoder-share"]').check();
-      }
+      assert.equal(new Set(await controls.evaluateAll((items) => items.map(
+        (item) => item.getAttribute("data-physical-id"),
+      ))).size, 2, "the regression uses two distinct physical drawings");
+      const terminalSelect = page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]');
+      const keySelect = page.locator('.n-widget-surface [data-nx="surface-encoder-key"]');
+      const sharedKey = page.locator('.n-widget-surface [data-nx="surface-encoder-share"]');
+      await controls.nth(0).click();
+      await terminalSelect.selectOption("1sw1");
+      taughtDevice = await page.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance ?? "");
+      assert.ok(taughtDevice, "Teach is pinned to the selected I-PAC Windows device");
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-encoder-verification')
+          ?.getAttribute("data-state") === "matched");
+      await keySelect.selectOption("A");
+      assert.equal(
+        await page.locator('.n-widget-surface .n-surface-encoder-verification').getAttribute("data-state"),
+        "unverified",
+        "a future draft key clears stale Teach evidence instead of manufacturing a mismatch",
+      );
+      assert.doesNotMatch(
+        await page.locator('.n-widget-surface .n-surface-encoder-verification').textContent(),
+        /different key|check the wiring|restore the chart/i,
+      );
+
+      const terminalTableKey = page.locator(
+        '.n-widget-surface [data-nx="surface-terminal-key"][data-panel-terminal="1sw1"][data-panel-field="normal"]',
+      );
+      const terminalTableShared = page.locator(
+        '.n-widget-surface [data-nx="surface-terminal-shared"][data-panel-terminal="1sw1"]',
+      );
+      await terminalTableKey.selectOption("B");
+      assert.equal(await keySelect.inputValue(), "B",
+        "the complete terminal table updates an already-linked canvas control");
+
+      await controls.nth(1).click();
+      await terminalSelect.selectOption("1sw1");
+      assert.equal(await keySelect.inputValue(), "B",
+        "a second drawing inherits the terminal table's canonical key");
+      assert.equal(await terminalTableKey.inputValue(), "B",
+        "linking another view cannot overwrite the canonical terminal draft");
+      await terminalTableShared.check();
+      assert.equal(await sharedKey.isChecked(), true,
+        "terminal-table consent is reflected by every linked drawing");
+      await controls.nth(0).click();
+      assert.equal(await sharedKey.isChecked(), true);
+      await sharedKey.uncheck();
+      assert.equal(await terminalTableShared.isChecked(), false,
+        "canvas consent updates the one canonical terminal row");
+      await controls.nth(1).click();
+      assert.equal(await sharedKey.isChecked(), false,
+        "shared-key consent cannot diverge between views of one terminal");
+      await keySelect.selectOption("A");
+      await controls.nth(0).click();
+      assert.equal(await keySelect.inputValue(), "A",
+        "editing one drawing synchronizes every control linked to that terminal");
+      assert.match(
+        await page.locator(".n-widget-surface [data-surface-programming-summary]").textContent(),
+        /all 2 linked controls/i,
+      );
+
+      // Return to two distinct terminals deliberately sharing A so the rest of
+      // this test continues through the existing fan-in consent path.
+      await sharedKey.check();
+      await controls.nth(1).click();
+      assert.equal(await keySelect.inputValue(), "A");
+      await terminalSelect.selectOption("1sw2");
+      await keySelect.selectOption("A");
+      await sharedKey.check();
 
       const review = page.locator('.n-widget-surface [data-nx="surface-encoder-review"]');
       assert.equal(await review.isEnabled(), true, "deliberate fan-in resolves the otherwise-blocking shared-key conflict");
@@ -5872,9 +6566,8 @@ describe("the canvas navigation controls", () => {
         true,
         "restore is unavailable until a validation transaction or qualified writer exists",
       );
-      const surfaceWidget = page.locator(".n-widget-surface");
-      const qualificationTerminal = surfaceWidget.locator(
-        '[data-nx="surface-encoder-terminal"]',
+      const qualificationTerminal = programming.locator(
+        '[data-nx="surface-qualification-terminal"]',
       );
       const qualificationTerminalOptions = await qualificationTerminal.locator(
         "option",
@@ -5883,37 +6576,29 @@ describe("the canvas navigation controls", () => {
         disabled: option.disabled,
         text: option.textContent,
       })));
-      for (const terminalId of ["1up", "1start", "1coin", "1sw3", "1sw4", "1sw5"]) {
-        assert.ok(
-          qualificationTerminalOptions.some((option) => option.value === terminalId),
-          `${terminalId} is present in ${JSON.stringify(qualificationTerminalOptions)}`,
-        );
-        assert.equal(
-          await qualificationTerminal.locator(`option[value="${terminalId}"]`)
-            .evaluate((option) => option.disabled),
-          true,
-          `${terminalId} is visible for chart fidelity but cannot be used for the writer check`,
-        );
-      }
-      assert.match(
-        await qualificationTerminal.locator('option[value="1sw5"]').textContent(),
-        /opaque Shift state preserved/i,
-        "is_shift=false does not mislabel an opaque shift byte as disabled",
+      assert.deepEqual(
+        qualificationTerminalOptions.slice(1).map((option) => option.value),
+        ["1sw1", "1sw2"],
+        "the writer check offers only noncritical SW actions with an explicitly disabled Shift role",
       );
-      assert.match(
-        await qualificationTerminal.locator('option[value="1sw3"]').textContent(),
-        /Shift enabled/i,
+      assert.equal(
+        qualificationTerminalOptions.every((option) => option.disabled === false),
+        true,
+        "unsafe terminals are omitted rather than mixed into the actionable picker",
       );
 
-      const qualificationKey = surfaceWidget.locator('[data-nx="surface-encoder-key"]');
-      assert.equal(
-        await qualificationKey.locator('option[value="Escape"]').evaluate((option) => option.disabled),
-        true,
-        "command keys remain visible but cannot be selected for the first persistent write",
+      const qualificationKey = programming.locator('[data-nx="surface-qualification-key"]');
+      assert.deepEqual(
+        await qualificationKey.locator("option").evaluateAll((options) =>
+          options.map((option) => option.value).filter(Boolean)
+        ),
+        ["A", "B"],
+        "the actionable picker contains only backend-approved safe keys",
       );
-      assert.match(
-        await qualificationKey.locator('option[value="Escape"]').textContent(),
-        /available after writer check/i,
+      assert.equal(
+        await qualificationKey.locator('option[value="Escape"]').count(),
+        0,
+        "unsafe command keys are omitted instead of presented as possible actions",
       );
       assert.equal(
         await qualificationKey.locator('option[value="A"]').evaluate((option) => option.disabled),
@@ -5921,15 +6606,36 @@ describe("the canvas navigation controls", () => {
         "the backend-approved printable subset remains selectable",
       );
 
+      await programming.locator('[data-nx="surface-encoder-close"]').click();
       const controls = page.locator(".n-widget-surface .n-surface-control");
+      await controls.first().waitFor({ state: "visible" });
+      const terminalSelect = page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]');
+      const keySelect = page.locator('.n-widget-surface [data-nx="surface-encoder-key"]');
       await controls.nth(0).click();
-      await page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw1");
-      await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
+      await terminalSelect.selectOption("1sw1");
+      await controls.nth(1).click();
+      await terminalSelect.selectOption("1sw1");
+      await keySelect.selectOption("A");
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")?.getAttribute("data-qualification") === "required");
       const review = programming.locator('[data-nx="surface-encoder-review"]');
+      assert.equal(await review.isEnabled(), true,
+        "two drawings of one terminal remain one physical writer-check edit");
+      await review.click();
+      const qualificationDialog = page.locator("dialog.n-panel-program-dialog");
+      await qualificationDialog.waitFor({ state: "visible" });
+      assert.deepEqual(capturedQualificationPlan.edits, [
+        { terminal_id: "1sw1", normal_key: "A", allow_shared_key: true },
+        { terminal_id: "1coin", normal_key: "A", allow_shared_key: true },
+      ], "shared terminal views are deduplicated before the guarded plan request");
+      await qualificationDialog.locator('[data-panel-dialog-action="close"]').click();
+
+      await qualificationTerminal.selectOption("1sw1");
+      await qualificationKey.selectOption("A");
       assert.equal(await review.isEnabled(), true,
         "one changed normal terminal is the only allowed qualification plan");
       await review.click();
-      const qualificationDialog = page.locator("dialog.n-panel-program-dialog");
       await qualificationDialog.waitFor({ state: "visible" });
       assert.deepEqual(capturedQualificationPlan.edits, [
         { terminal_id: "1sw1", normal_key: "A", allow_shared_key: true },
@@ -5942,15 +6648,6 @@ describe("the canvas navigation controls", () => {
       );
       await qualificationDialog.locator('[data-panel-dialog-action="close"]').click();
 
-      await controls.nth(1).click();
-      await page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw2");
-      await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
-      assert.equal(await review.isDisabled(), true,
-        "a second changed terminal cannot enter the first-write review");
-      assert.match(await review.textContent(), /2 changed/i);
-
-      await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("B");
-      await controls.nth(0).click();
       assert.equal(await review.isEnabled(), true);
       await review.click();
       await qualificationDialog.locator("[data-panel-program-confirm]").check();
@@ -6680,7 +7377,9 @@ describe("the canvas navigation controls", () => {
       await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
       await page.click('.n-widget-surface [data-nx="surface-teach"]');
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
-      await page.locator('.n-widget-kb .n-key[data-key="J"]').evaluate((button) => button.click());
+      await page.locator('.n-widget-kb .n-ipac-signal[data-key="J"]').evaluate(
+        (button) => button.click(),
+      );
       assert.equal(
         await page.locator('.n-widget-surface .n-surface-channel-anchor[data-key="J"]').count(),
         0,

@@ -7195,6 +7195,18 @@ a.wsrow-title:hover {
   display: none;
 }
 
+/* Persistent hardware programming is its own focused task. Keep the user's
+   path-mode preference intact, but remove unrelated route cords and floating
+   macro cards while they inspect terminal bytes, diffs, and recovery steps. */
+.forma-canvas-viewport.is-panel-programming-workspace :is(
+  .n-flow-layer,
+  .n-flow-node-layer,
+  .forma-canvas-navigator,
+  .n-mapshow
+) {
+  display: none;
+}
+
 /* A processor is graph chrome, not a WidgetCanvas item. The shell supplies
    widget-grade move controls without putting buttons inside the editor link.
    It owns the fixed-screen-size inverse transform; the anchor remains the
@@ -7824,6 +7836,262 @@ a.wsrow-title:hover {
   border: 1px solid var(--n-line);
   background: var(--n-bg);
   padding: 10px 14px 14px;
+}
+
+/* An I-PAC in keyboard mode is an encoder which EMITS key signals, not a
+   second physical QWERTY keyboard. Replace the served keyboard drawing with
+   a compact terminal-to-key source while retaining the exact same widget and
+   key-shaped flow anchors used by the mapping layer. */
+.n-widget-kb[data-input-kind="panel-encoder"] > .n-widget-body {
+  padding: 12px;
+  border-color: color-mix(in srgb, var(--n-accent-line) 58%, var(--n-line));
+  background:
+    radial-gradient(circle at 8% 0, color-mix(in srgb, var(--n-accent-dim) 28%, transparent), transparent 34%),
+    var(--n-bg);
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] > .n-widget-body > :not(.n-ipac-signal-source) {
+  display: none !important;
+}
+
+.n-ipac-signal-source {
+  --kb1: var(--pcs1-key);
+  --kb2: var(--pcs2-key);
+  --kb3: var(--pcs3-key);
+  --kb4: var(--pcs4-key);
+
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 48%, var(--n-line));
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--n-accent-dim) 22%, transparent), transparent 48%),
+    color-mix(in srgb, var(--n-panel) 86%, #090b12);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.035),
+    0 12px 28px rgba(0, 0, 0, 0.25);
+}
+
+.n-ipac-signal-source > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.n-ipac-signal-source > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.n-ipac-signal-source > header > div > span {
+  color: var(--n-accent-2);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.n-ipac-signal-source > header strong {
+  color: var(--n-text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.n-ipac-source-badge {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
+  font: 750 8px/1.2 ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.n-ipac-signal-source > p {
+  max-width: 86ch;
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.n-ipac-source-empty {
+  padding: 18px;
+  border: 1px dashed color-mix(in srgb, var(--n-accent-line) 44%, var(--n-line));
+  border-radius: 9px;
+  background: rgba(6, 8, 14, 0.3);
+  color: var(--n-text-3);
+  font-size: 10px;
+  text-align: center;
+}
+
+.n-ipac-signal-roster {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.n-ipac-signal-player {
+  --ipac-player: var(--n-accent);
+
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--ipac-player) 32%, var(--n-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ipac-player) 5%, rgba(5, 7, 12, 0.46));
+}
+
+.n-ipac-signal-player.np1 { --ipac-player: var(--kb1); }
+.n-ipac-signal-player.np2 { --ipac-player: var(--kb2); }
+.n-ipac-signal-player.np3 { --ipac-player: var(--kb3); }
+.n-ipac-signal-player.np4 { --ipac-player: var(--kb4); }
+
+.n-ipac-signal-player.shared {
+  grid-column: 1 / -1;
+}
+
+.n-ipac-signal-player.shared > .n-kbrow {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.n-ipac-signal-player > header {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 0 1px 2px;
+}
+
+.n-ipac-signal-player > header strong {
+  color: color-mix(in srgb, var(--ipac-player) 74%, white);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+.n-ipac-signal-player > header span {
+  margin-inline-start: auto;
+  color: var(--n-text-3);
+  font: 650 7.5px/1 ui-monospace, Menlo, Consolas, monospace;
+}
+
+.n-ipac-signal-player > .n-kbrow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  width: auto;
+  margin: 0;
+}
+
+.n-ipac-signal-player > .n-kbrow > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 5px;
+  color: var(--n-text-3);
+  font-size: 8.5px;
+  text-align: center;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  height: 34px;
+  min-width: 0;
+  padding: 5px 9px 7px;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--ipac-player) 24%, var(--n-line));
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+    color-mix(in srgb, var(--n-panel-2) 78%, #0b0d14);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.035),
+    0 3px 7px rgba(0, 0, 0, 0.28);
+  color: var(--n-text-3);
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease, box-shadow 100ms ease, transform 100ms ease;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key::before {
+  content: none;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key::after {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  border: 1px solid color-mix(in srgb, var(--ipac-player) 78%, white);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ipac-player) 72%, var(--n-panel-2));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ipac-player) 12%, transparent);
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key > span,
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key > span {
+  color: var(--n-text-3);
+  font: 650 7.5px/1.1 ui-monospace, Menlo, Consolas, monospace;
+  text-align: right;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key > i {
+  color: color-mix(in srgb, var(--ipac-player) 56%, var(--n-text-3));
+  font: normal 700 9px/1 ui-monospace, Menlo, Consolas, monospace;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key > strong {
+  color: var(--n-text-2);
+  font: 750 8.5px/1.1 ui-monospace, Menlo, Consolas, monospace;
+  text-align: left;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key:is(:hover, :focus-visible) {
+  z-index: 2;
+  border-color: color-mix(in srgb, var(--ipac-player) 72%, white);
+  background: color-mix(in srgb, var(--ipac-player) 13%, var(--n-panel-2));
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.06),
+    0 0 0 2px color-mix(in srgb, var(--ipac-player) 17%, transparent),
+    0 6px 13px rgba(0, 0, 0, 0.32);
+  color: var(--n-text);
+  transform: translateY(-1px);
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ipac-player) 76%, white);
+  outline-offset: 2px;
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key.live {
+  border-color: color-mix(in srgb, var(--ipac-player) 82%, white);
+  background: color-mix(in srgb, var(--ipac-player) 26%, var(--n-panel-2));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ipac-player) 34%, transparent);
+  transform: translateY(1px);
+}
+
+.n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key.live > :is(span, i, strong) {
+  color: color-mix(in srgb, var(--ipac-player) 68%, white);
 }
 
 .nocturne .n-widget .n-mini,
@@ -9612,6 +9880,10 @@ a.wsrow-title:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .n-kbtheme::before {
+    transition: none;
+  }
+
+  .n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key {
     transition: none;
   }
 }
@@ -16200,6 +16472,123 @@ a.nm-link {
   border-color: color-mix(in srgb, var(--n-warn) 44%, var(--n-line));
 }
 
+/* The hardware workspace is a causal journey, not a settings form. Keep the
+   five boundaries visible at once so "I-PAC" and "keyboard" cannot be read
+   as two physical devices: terminals emit Windows keys, which KSX then routes
+   into a virtual pad that a game receives. */
+.n-panel-signal-journey {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 46%, var(--n-line));
+  border-radius: 11px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--n-accent-dim) 14%, transparent), transparent 42%),
+    rgba(6, 8, 14, 0.34);
+  list-style: none;
+}
+
+.n-panel-signal-journey li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--n-text-3);
+}
+
+.n-panel-signal-journey li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  right: -9px;
+  width: 10px;
+  height: 1px;
+  background: var(--n-line-2);
+  transform: translateY(-50%);
+}
+
+.n-panel-signal-journey li > span:first-child {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid var(--n-line-2);
+  border-radius: 50%;
+  background: var(--n-panel-2);
+  color: var(--n-text-3);
+  font: 750 9px/1 ui-monospace, Menlo, Consolas, monospace;
+}
+
+.n-panel-signal-journey li > span:last-child,
+.n-panel-signal-journey li strong,
+.n-panel-signal-journey li small {
+  display: block;
+  min-width: 0;
+}
+
+.n-panel-signal-journey li strong {
+  overflow: hidden;
+  color: currentColor;
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-panel-signal-journey li small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: 8px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-panel-signal-journey li[data-state="complete"] {
+  color: var(--n-text-2);
+}
+
+.n-panel-signal-journey li[data-state="complete"] > span:first-child {
+  border-color: color-mix(in srgb, var(--n-accent) 52%, var(--n-line));
+  background: color-mix(in srgb, var(--n-accent-dim) 54%, var(--n-panel-2));
+  color: var(--n-accent-2);
+}
+
+.n-panel-signal-journey li[data-state="complete"]::after {
+  background: color-mix(in srgb, var(--n-accent) 62%, var(--n-line-2));
+}
+
+.n-panel-signal-journey li[data-state="active"] {
+  border-color: color-mix(in srgb, var(--n-accent-line) 82%, var(--n-line));
+  background: color-mix(in srgb, var(--n-accent-dim) 34%, transparent);
+  color: var(--n-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 10%, transparent);
+}
+
+.n-panel-signal-journey li[data-state="active"] > span:first-child {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent);
+  color: #11131d;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--n-accent) 14%, transparent);
+}
+
+.n-panel-signal-journey li[data-state="upcoming"] {
+  opacity: 0.58;
+}
+
 .n-surface-programming-head,
 .n-surface-programming-actions,
 .n-surface-programming-restore {
@@ -16397,8 +16786,12 @@ a.nm-link {
 
 .n-surface-programming-modes {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
+}
+
+.n-surface-programming-modes .n-keylab-button[hidden] {
+  display: none;
 }
 
 .n-surface-programming-modes .n-keylab-button {
@@ -16660,8 +17053,246 @@ a.nm-link {
   display: none;
 }
 
+.n-panel-output-test {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 42%, var(--n-line));
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 0 0, color-mix(in srgb, var(--n-accent-dim) 22%, transparent), transparent 34%),
+    rgba(6, 8, 14, 0.34);
+}
+
+.n-panel-output-test > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.n-panel-output-test > div:first-child > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.n-panel-output-test > div:first-child strong {
+  color: var(--n-text);
+  font-size: 11px;
+}
+
+.n-panel-output-test > div:first-child span {
+  color: var(--n-text-3);
+  font: 650 9px/1.35 ui-monospace, Menlo, Consolas, monospace;
+}
+
+.n-panel-output-test > div:first-child > .n-keylab-button {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.n-panel-output-test > p {
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.n-panel-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+
+.n-panel-signal-grid > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed var(--n-line-2);
+  border-radius: 8px;
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  text-align: center;
+}
+
+.n-panel-signal-grid > section {
+  --panel-signal-color: var(--n-accent);
+
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--panel-signal-color) 30%, var(--n-line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-signal-color) 5%, rgba(5, 7, 12, 0.42));
+}
+
+.n-panel-signal-grid > section.np1 { --panel-signal-color: var(--kb1); }
+.n-panel-signal-grid > section.np2 { --panel-signal-color: var(--kb2); }
+.n-panel-signal-grid > section.np3 { --panel-signal-color: var(--kb3); }
+.n-panel-signal-grid > section.np4 { --panel-signal-color: var(--kb4); }
+
+.n-panel-signal-grid > section > strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: color-mix(in srgb, var(--panel-signal-color) 72%, white);
+  font: 800 9px/1 ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.n-panel-signal-grid > section > strong::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--panel-signal-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--panel-signal-color) 14%, transparent);
+}
+
+.n-panel-signal-grid > section > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal] {
+  display: grid;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid color-mix(in srgb, var(--panel-signal-color) 18%, var(--n-line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--n-panel-2) 64%, transparent);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal] small,
+.n-panel-signal-grid [data-panel-signal-terminal] strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal][data-shift-reachability="dormant"],
+.n-panel-signal-grid [data-panel-signal-terminal][data-shift-reachability="unknown"] {
+  border-style: dashed;
+  opacity: 0.56;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal] small {
+  color: var(--n-text-3);
+  font-size: 7px;
+  line-height: 1.2;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal] strong {
+  margin-top: 2px;
+  color: var(--n-text-2);
+  font: 700 8.5px/1.2 ui-monospace, Menlo, Consolas, monospace;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal][data-hit="true"] {
+  border-color: color-mix(in srgb, var(--panel-signal-color) 84%, white);
+  background: color-mix(in srgb, var(--panel-signal-color) 19%, var(--n-panel-2));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--panel-signal-color) 24%, transparent),
+    0 5px 14px color-mix(in srgb, var(--panel-signal-color) 16%, transparent);
+  transform: translateY(-1px);
+  animation: n-panel-signal-hit 680ms ease-out 1;
+}
+
+.n-panel-signal-grid [data-panel-signal-terminal][data-hit="true"] small,
+.n-panel-signal-grid [data-panel-signal-terminal][data-hit="true"] strong {
+  color: color-mix(in srgb, var(--panel-signal-color) 72%, white);
+}
+
+@keyframes n-panel-signal-hit {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--panel-signal-color) 60%, transparent); }
+  100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--panel-signal-color) 24%, transparent),
+      0 5px 14px color-mix(in srgb, var(--panel-signal-color) 16%, transparent);
+  }
+}
+
+.n-panel-route-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 1px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 34%, var(--n-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--n-accent-dim) 18%, transparent);
+}
+
+.n-panel-route-actions > p {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+
+.n-panel-route-actions .n-keylab-button {
+  flex: none;
+}
+
+.n-panel-route-actions .primary {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+}
+
 .n-surface-programming-actions {
   justify-content: flex-end;
+}
+
+.n-surface-programming-advanced {
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--n-danger-line) 42%, var(--n-line));
+}
+
+.n-surface-programming-advanced > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.n-surface-programming-advanced[open] {
+  padding: 9px 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--n-danger-line) 72%, var(--n-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--n-danger) 7%, rgba(7, 9, 15, 0.28));
+}
+
+.n-surface-programming-advanced[open] > summary {
+  color: var(--n-danger);
+}
+
+.n-surface-programming-advanced > p {
+  margin: 7px 0 9px;
+  color: var(--n-text-2);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.n-surface-programming-advanced .n-keylab-button.danger {
+  border-color: var(--n-danger-line);
+  background: color-mix(in srgb, var(--n-danger) 11%, transparent);
+  color: var(--n-danger);
+}
+
+.n-surface-programming-advanced .n-keylab-button.danger:hover {
+  border-color: color-mix(in srgb, var(--n-danger) 76%, white);
+  background: color-mix(in srgb, var(--n-danger) 18%, var(--n-panel-2));
+  color: color-mix(in srgb, var(--n-danger) 84%, white);
 }
 
 .n-surface-programming-recovery {
@@ -16790,10 +17421,35 @@ a.nm-link {
 }
 
 .n-widget-surface[data-entry="encoder-setup"] .n-surface {
+  padding: 16px;
   border-color: color-mix(in srgb, var(--n-accent-line) 62%, var(--n-line));
   background:
     radial-gradient(circle at 8% 0, color-mix(in srgb, var(--n-accent-dim) 25%, transparent), transparent 32%),
     var(--n-bg);
+}
+
+.n-widget-surface[data-entry="encoder-setup"] .n-surface-hardware {
+  display: none;
+}
+
+.n-widget-surface[data-entry="encoder-setup"] .n-surface-head {
+  padding: 2px 3px 13px;
+}
+
+.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming {
+  gap: 14px;
+  margin: 0;
+  padding: 16px;
+  border-color: color-mix(in srgb, var(--n-accent-line) 74%, var(--n-line));
+  background:
+    radial-gradient(circle at 6% 0, color-mix(in srgb, var(--n-accent-dim) 38%, transparent), transparent 32%),
+    color-mix(in srgb, var(--n-panel) 88%, #090b12);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.22);
+}
+
+.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming-head strong {
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .n-surface-starter-head {
@@ -17804,6 +18460,7 @@ a.nm-link {
 @media (prefers-reduced-motion: reduce) {
   .n-surface-control,
   .n-surface-control.teach,
+  .n-panel-signal-grid [data-panel-signal-terminal],
   .n-panel-program-progress span {
     animation: none;
     transition: none;
@@ -17816,6 +18473,14 @@ a.nm-link {
 }
 
 @media (width <= 900px) {
+  .n-ipac-signal-roster {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .n-ipac-signal-player.shared > .n-kbrow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .n-surface-hardware-status {
     grid-template-columns: 1fr;
   }
@@ -17836,8 +18501,16 @@ a.nm-link {
   .n-surface-programming-modes,
   .n-surface-programming-device,
   .n-surface-terminal-grid,
+  .n-panel-signal-grid,
   .n-panel-program-proof {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .n-panel-signal-journey {
+    grid-template-columns: repeat(5, minmax(124px, 1fr));
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
   }
 
   .n-surface-starter-grid {
@@ -17854,6 +18527,23 @@ a.nm-link {
 }
 
 @media (width <= 620px) {
+  .n-ipac-signal-source > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .n-ipac-source-badge {
+    margin-inline-start: 0;
+  }
+
+  .n-ipac-signal-roster {
+    grid-template-columns: 1fr;
+  }
+
+  .n-ipac-signal-player.shared > .n-kbrow {
+    grid-template-columns: 1fr;
+  }
+
   .n-surface-programming-qualification {
     grid-template-columns: 1fr;
   }
@@ -17890,6 +18580,8 @@ a.nm-link {
   .n-surface-programming-head,
   .n-surface-programming-actions,
   .n-surface-programming-restore,
+  .n-panel-output-test > div:first-child,
+  .n-panel-route-actions,
   .n-surface-profile-picker,
   .n-surface-profile-fields,
   .n-surface-profile-actions {
@@ -17900,6 +18592,8 @@ a.nm-link {
 
   .n-surface-hardware-actions .n-keylab-button,
   .n-surface-programming-actions .n-keylab-button,
+  .n-panel-output-test > div:first-child > .n-keylab-button,
+  .n-panel-route-actions .n-keylab-button,
   .n-surface-programming-restore .n-keylab-button {
     width: 100%;
   }
@@ -17908,10 +18602,38 @@ a.nm-link {
   .n-surface-programming-device,
   .n-surface-programming-modes,
   .n-surface-terminal-grid,
+  .n-panel-signal-grid,
   .n-surface-stages,
   .n-surface-starter-grid,
   .n-surface-tools {
     grid-template-columns: 1fr;
+  }
+
+  .n-panel-signal-journey {
+    grid-template-columns: 1fr;
+    gap: 5px;
+    overflow: visible;
+  }
+
+  .n-panel-signal-journey li:not(:last-child)::after {
+    top: auto;
+    right: auto;
+    bottom: -6px;
+    left: 20px;
+    width: 1px;
+    height: 7px;
+    transform: none;
+  }
+
+  .n-panel-signal-journey li strong,
+  .n-panel-signal-journey li small {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .n-widget-surface[data-entry="encoder-setup"] .n-surface,
+  .n-widget-surface[data-entry="encoder-setup"] .n-surface-programming {
+    padding: 10px;
   }
 
   .n-panel-program-shell {
@@ -17929,6 +18651,10 @@ a.nm-link {
 }
 
 @media (pointer: coarse) {
+  .n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key {
+    min-height: 42px;
+  }
+
   .n-surface-hardware-refresh,
   .n-surface-hardware-actions .n-keylab-button,
   .n-surface-programming .n-keylab-button,

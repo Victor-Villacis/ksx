@@ -298,6 +298,39 @@ function reconcileUnresolvedSignals(
   });
 }
 
+/** One encoder terminal is one physical signal, even when a panel drawing has
+ * several views wired to it. Heal legacy drafts that could persist divergent
+ * expected keys by keeping the first terminal assignment as the canonical
+ * value. A changed expectation is deliberately left unverified; observation
+ * is owned by Teach, not by document migration. */
+function reconcileEncoderTerminalAssignments(
+  controls: readonly ControlSurfaceControl[],
+): ControlSurfaceControl[] {
+  const canonical = new Map<string, ControlSurfaceEncoderAssignment>();
+  return controls.map((control) => ({
+    ...control,
+    channels: control.channels.map((channel) => {
+      const encoder = channel.encoder;
+      if (!encoder) return channel;
+      const identity = `${encoder.boardFingerprint}\u0000${encoder.terminalId}`;
+      const expected = canonical.get(identity);
+      if (!expected) {
+        canonical.set(identity, encoder);
+        return channel;
+      }
+      return {
+        ...channel,
+        encoder: {
+          ...expected,
+          verification: encoder.expectedKey === expected.expectedKey
+            ? encoder.verification
+            : "unverified" as const,
+        },
+      };
+    }),
+  }));
+}
+
 export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSurfaceState {
   return {
     ...state,
@@ -347,7 +380,9 @@ export function sanitizeControlSurfaceState(value: unknown): ControlSurfaceState
       control.physicalResolution = "unresolved-shared-signal";
     }
   }
-  const reconciledControls = reconcileUnresolvedSignals(controls);
+  const reconciledControls = reconcileEncoderTerminalAssignments(
+    reconcileUnresolvedSignals(controls),
+  );
   const selectedControlId = cleanString(value.selectedControlId, MAX_ID);
   const selected = controls.find((control) => control.id === selectedControlId);
   const selectedChannelId = selected?.channels.some(
@@ -1031,7 +1066,9 @@ export function teachControlSurfaceChannel(
 }
 
 /** Attach a backend-decoded encoder terminal to one physical channel.
- * Mirrors share the assignment through `physicalId`; duplicates do not. The
+ * Mirrors share the assignment through `physicalId`. Any other drawn control
+ * already linked to the same board terminal shares its expected key as well:
+ * the terminal is one physical signal, not independent state per drawing. The
  * observed input remains untouched until Teach proves what Windows receives. */
 export function assignControlSurfaceTerminal(
   state: ControlSurfaceState,
@@ -1042,27 +1079,42 @@ export function assignControlSurfaceTerminal(
   const safe = sanitizeControlSurfaceState(state);
   const selected = safe.controls.find((control) => control.id === controlId);
   if (!selected || !selected.channels.some((channel) => channel.id === channelId)) return safe;
+  const normalized = assignment
+    ? cleanEncoderAssignment({ ...assignment, verification: "unverified" })
+    : undefined;
+  if (assignment && !normalized) return safe;
   const controls = safe.controls.map((control) =>
-    control.physicalId === selected.physicalId
-      ? {
-          ...control,
-          channels: control.channels.map((channel) =>
-            channel.id === channelId
-              ? {
-                  ...channel,
-                  encoder: assignment
-                    ? {
-                        ...assignment,
-                        verification: channel.input.kind === "keyboard"
-                          ? channel.input.key === assignment.expectedKey ? "matched" as const : "mismatch" as const
-                          : "unverified" as const,
-                      }
-                    : undefined,
-                }
-              : channel
-          ),
-        }
-      : control
+    ({
+      ...control,
+      channels: control.channels.map((channel) => {
+        const selectedPhysicalChannel = control.physicalId === selected.physicalId &&
+          channel.id === channelId;
+        const sameTerminal = Boolean(normalized &&
+          channel.encoder?.boardFingerprint === normalized.boardFingerprint &&
+          channel.encoder.terminalId === normalized.terminalId);
+        if (!selectedPhysicalChannel && !sameTerminal) return channel;
+        const sameExpectation = Boolean(normalized && channel.encoder &&
+          channel.encoder.driver === normalized.driver &&
+          channel.encoder.boardFingerprint === normalized.boardFingerprint &&
+          channel.encoder.terminalId === normalized.terminalId &&
+          channel.encoder.expectedKey === normalized.expectedKey);
+        return {
+          ...channel,
+          encoder: normalized
+            ? {
+                ...normalized,
+                // Only Teach owns evidence about what this physical control
+                // emitted. Loading or editing a future hardware draft must
+                // never reinterpret an older observation as proof (or a
+                // wiring failure) for a key that has not been programmed yet.
+                verification: sameExpectation && channel.encoder
+                  ? channel.encoder.verification
+                  : "unverified" as const,
+              }
+            : undefined,
+        };
+      }),
+    })
   );
   return sanitizeControlSurfaceState({
     ...safe,

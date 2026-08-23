@@ -311,11 +311,16 @@ The user-facing sequence is:
    Only an exact byte-verified restore unlocks full programming. A partial or
    ambiguous validation still pins that restore but returns to the unqualified
    state instead of manufacturing trust.
-5. Start from **Current hardware**, **Recommended KSX**, **Clear assignments**
-   or **Import saved layout**. The complete 4-by-14 terminal grid exposes all
-   56 normal assignments. An Advanced section exposes shifted assignment and
-   explicit Shift-role editing without pretending opaque shift bytes are
-   ordinary booleans. Shared output keys require deliberate acknowledgement.
+5. Start from **Use current outputs**, **KSX four-player**, a compatible saved
+   layout, or **Use panel design** when an optional physical panel actually has
+   terminal links. The backend serves an exact semantic 56-terminal preview of
+   the deterministic four-player layout against the current image, so the
+   recommendation is visible before review or write. **Disable all hardware
+   outputs** lives under Advanced hardware actions rather than beside the safe
+   starts. The complete 4-by-14 terminal grid exposes all 56 Windows-key
+   outputs; its Advanced section exposes shifted assignment and explicit
+   Shift-role editing without pretending opaque shift bytes are ordinary
+   booleans. Shared output keys require deliberate acknowledgement.
 6. The draft is independent of the on-device chart and shows whether it is
    dirty and not yet written. Save it as a new named layout, update the loaded
    layout with its exact revision, load it on another compatible encoder, or
@@ -328,19 +333,62 @@ The user-facing sequence is:
    physically at the cabinet with WinIPAC closed plus a separate keyboard or
    recovery path. Only then can **Program and verify** unlock. Restore follows
    the same flow through **Review restore…** and **Restore and verify**.
-9. Studio displays `writing`, then `verifying`, and accepts only a backend
-   `verified` outcome. An ambiguous/interrupted result becomes
+9. The blocking apply call is presented truthfully as **programming and
+   verifying**; Studio accepts only a backend `verified` outcome. An
+   ambiguous/interrupted result becomes
    `recovery-required` and blocks further programming until reread/restore.
 10. After byte verification, expected terminal keys are reconciled into the
-   control-surface model, prior signal verification is invalidated, and the
-   user is sent to **Teach inputs**. This deliberately separates “EEPROM bytes
-   matched” from “the wired control emitted the expected Windows signal.”
+   optional control-surface model and prior signal verification is invalidated.
+   A panel-independent **Test wiring** action listens once, identifies the
+   Windows key and every matching current-chart terminal, and performs no
+   binding write. The
+   next action opens contextual KSX routing; a modeled physical panel enters
+   its Route stage, while a cabinet with no panel drawing goes directly to the
+   key's Mapping Inspector. This deliberately separates “EEPROM bytes matched”
+   from “the wired control emitted the expected Windows signal” and from “that
+   signal is routed to a virtual controller.”
 
-The editor opens as a focused canvas task. Its camera framing reserves the
-visible minimap/navigation strip, so the first action and recovery controls
-remain reachable at native viewport sizes instead of landing beneath canvas
-chrome. Detached success or recovery results remain bound to the encoder that
-produced them and expose only **Close** after selection changes.
+The focused setup names and exposes the causal journey as:
+
+```text
+I-PAC terminal → Windows key → KSX macro/transform → virtual controller → game
+```
+
+While an I-PAC is selected, the ordinary QWERTY source art becomes an
+**I-PAC Signals** source. Its player-grouped `terminal → key` chips are the
+actual mapping-cord anchors. This is only a representation change: the I-PAC
+still speaks HID keyboard signals, and the same staged bindings remain the
+runtime authority. The capture choices are correspondingly worded as
+**Dedicated arcade panel**, **Share unused outputs with Windows**, and
+**Observe and pass through**; ordinary keyboards retain their original copy.
+
+One physical board terminal is one shared hardware channel. Multiple drawn
+panel views may reference that channel, but they cannot carry divergent
+expected keys or shared-key consent: changing either in the terminal editor or
+one linked view synchronizes every peer. The browser also heals older saved
+drafts that violated this invariant before they can produce a hardware plan.
+
+Normal outputs are always reachable. Shifted assignments become mapping
+sources only when the chart has a known enabled Shift terminal. They remain
+visible but dormant when Shift is known disabled, and visible with unknown
+reachability when an opaque vendor byte prevents a truthful decision. Neither
+state is counted as a routeable signal. A legacy Keyboard Arranger draft for
+an I-PAC is preserved in browser storage but suppressed while that encoder is
+selected, so fake QWERTY keys cannot compete with terminal-owned signal nodes.
+
+The editor opens as a focused canvas task. A previously saved overview camera
+cannot shrink the 56-terminal form into a miniature: hardware setup raises the
+transient view to at least 68%, aligns an oversized form at the beginning of
+the signal journey and restores the exact entry camera when focus ends. Route
+cords and floating macro cards are presentation-hidden only while this
+persistent-hardware workspace is open. Its passive navigator and corner reopen
+control are hidden too, so neither can cover a lower-right terminal. The user's
+path mode, graph state and navigator preference are not changed. Keyboard focus
+reveals lower or upper terminal controls inside the canvas without moving a
+pointer target during its click; capture-phase pointer cleanup prevents a
+cancelled gesture from disabling later focus reveals.
+Detached success or recovery results remain bound to the encoder that produced
+them and expose only **Close** after selection changes.
 
 Only `assignment_mode` and `show_unchanged` may persist in browser storage.
 Selectors, fingerprints, chart hashes, plans, backup IDs, raw bytes and
@@ -586,16 +634,18 @@ referenced note describes an instant mode-switch button, not an NKRO addition.
 | 2026-08-23 16:44:00–16:44:33 UTC / 12:44:00–12:44:33 EDT | same | Applied Recommended from the cleared chart and performed a fresh independent chart read/backup. | `[MEASURED]` 56 changed / 200 preserved bytes; both readbacks matched final hash `43CAD3F30B900416531D3A65A3799405F3094E34BE0E37E467079D163C8C1D87`; 56 assigned / 0 unassigned, four opaque shift bytes preserved. |
 | 2026-08-23 16:56 UTC / 12:56 EDT | `codex/ipac-first-run-config` / `aa240e1274b7` baseline plus shared worktree | Reconciled the living state with the full 56-terminal editor, Current/Recommended/Clear/saved-layout starts, portable profile CRUD and live hardware record. | `[SOURCE implementation files and immutable recovery artifacts named above]` Physical switch emission and power-cycle persistence remain explicitly open. |
 | 2026-08-23 17:04–17:05 UTC / 13:04–13:05 EDT | same | Opened real Studio against the connected board, reread the final chart into the full editor, saved it as portable profile `KSX Recommended — I-PAC 4`, closed final UI/review findings and fixed the Windows PE main-thread reserve. | `[MEASURED]` Real UI showed 56/56, Qualified and one saved layout; no EEPROM write occurred. Full canvas 50/50, app-with-Studio 105 tests, focused Rust/HTTP suites, clippy, deterministic assets and independent P0–P2 review all passed. |
+| 2026-08-23 16:51 EDT | `codex/ipac-signal-journey` / `edf8fdf` baseline | Completed the encoder-as-hardware UX audit: causal five-stage journey, terminal-owned I-PAC Signals, availability-gated route truth, exact-board draft recovery, shared-terminal invariants, passive wiring test, readable focused setup, keyboard-revealed terminal controls and unobstructed writer actions. Retained the original traceable lasso route projection. | `[MEASURED]` API 107/107, backend panel programming 48/48, Studio render 8/8 and HTTP 139/139 passed. The final complete canvas suite passed 51/51 after the focus-coordinate, capture-lifecycle and navigator-obstruction corrections; its focused blank-board, 56-terminal and writer-qualification gate passed 3/3. Assets rebuilt byte-identically twice at `01092be57893`. Final live browser QA showed 68%, steps I-PAC → Windows keys → KSX → Controller → Game, I-PAC Signals instead of fake QWERTY, no covering graph, macro or navigator layer and no page alert. Independent final review reported no remaining P0–P2 findings. No HID/EEPROM write occurred in this UX slice. |
 
 ## Current pickup
 
-The end-to-end writer, Clear/Recommended plans, full terminal editor and
-portable saved-layout model are implemented on
-`codex/ipac-first-run-config`. The exact connected I-PAC is already qualified
-and currently carries the fully readback-verified Recommended chart at
+The end-to-end writer, Clear/Recommended plans, full terminal editor, portable
+saved-layout model and final signal-journey UX are integrated on
+`codex/ipac-signal-journey`. The exact connected I-PAC is already qualified and
+currently carries the fully readback-verified Recommended chart at
 `43CAD3F30B900416531D3A65A3799405F3094E34BE0E37E467079D163C8C1D87`.
 The next agent must not rerun qualification or restore the original chart as
-if the hardware gate were still pending.
+if the hardware gate were still pending. This UX audit issued no hardware
+report and did not alter that chart.
 
 The remaining cabinet QA is narrower: press representative controls while
 Teach or an input observer is running; then power-cycle/re-enumerate the board,
@@ -603,4 +653,7 @@ reread the chart and confirm the same hash plus representative physical
 signals. NKRO/saturation and deliberate mode-switch behavior are separate
 measurements. The final browser/fixture rerun and independent P0–P2 code review
 are complete; neither is allowed to stand in for those remaining physical
-measurements.
+measurements. The implementation contract to preserve is one causal pipeline:
+physical terminal → Windows key → KSX transform/macro → virtual controller →
+game. A control-surface drawing is optional metadata, never a substitute for
+the board chart or the Windows signal.

@@ -860,6 +860,13 @@ pub struct PanelChartView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qualification_restore_backup_id: Option<String>,
     pub terminals: Vec<PanelTerminalRow>,
+    /// Backend-owned semantic preview of the deterministic four-player KSX
+    /// layout against this exact chart baseline. This is display/draft data,
+    /// not write authority: applying it still requires the ordinary reviewed
+    /// program plan bound to `image_sha256`. Opaque baseline shift bytes stay
+    /// opaque rather than being normalized by the preview.
+    #[serde(default)]
+    pub recommended_terminals: Vec<PanelTerminalRow>,
     pub key_options: Vec<PanelKeyOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<PanelBackupRow>,
@@ -3820,6 +3827,17 @@ mod tests {
         assert!(
             !older_key.safe_for_qualification,
             "missing first-write policy metadata must fail closed"
+        );
+
+        let mut older_chart = serde_json::to_value(PanelChartView::default()).unwrap();
+        older_chart
+            .as_object_mut()
+            .unwrap()
+            .remove("recommended_terminals");
+        let older_chart: PanelChartView = serde_json::from_value(older_chart).unwrap();
+        assert!(
+            older_chart.recommended_terminals.is_empty(),
+            "older chart responses remain readable, but cannot invent a backend-owned recommendation"
         );
     }
 

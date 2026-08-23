@@ -4670,6 +4670,13 @@ impl NocturneDerived {
                 let is_chosen = chosen == Some(selector.as_str());
                 let verdict = if b.claimed {
                     "Held by ksx"
+                } else if b.role == ksx_api::BoardRole::PanelEncoder {
+                    // An arcade encoder being reachable through its HID
+                    // interface does not prove that any terminal has a usable
+                    // key assignment.  The chart read in I-PAC Setup owns that
+                    // answer; the device roster must not call an unchecked (or
+                    // deliberately cleared) EEPROM chart "ready".
+                    "Connected · outputs not checked"
                 } else if b.cannot_type_line.trim().is_empty() {
                     "Ready to use"
                 } else {
@@ -4745,7 +4752,15 @@ impl NocturneDerived {
             None => "No keyboard selected — pick one on the left".to_owned(),
         };
 
-        let mode_note = if staged.reachable {
+        let selected_is_panel_encoder = chosen.is_some_and(|selector| {
+            dev_encoders
+                .iter()
+                .any(|row| row.selector.eq_ignore_ascii_case(selector))
+        });
+        let mode_note = if staged.reachable && selected_is_panel_encoder {
+            "Choose how this encoder's Windows key signals behave while Play is running. Hardware assignments stay unchanged."
+                .to_owned()
+        } else if staged.reachable {
             String::new()
         } else {
             "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
@@ -4756,15 +4771,38 @@ impl NocturneDerived {
             staged
                 .blocking_options
                 .iter()
-                .map(|option| NocturneChoiceRow {
+                .map(|option| {
+                    let (title, detail) = if selected_is_panel_encoder {
+                        match option.name.as_str() {
+                            "whole" => (
+                                "Dedicated arcade panel".to_owned(),
+                                "Capture every I-PAC signal during Play so cabinet buttons never type into Windows or trigger shortcuts."
+                                    .to_owned(),
+                            ),
+                            "bound-keys" => (
+                                "Share unused outputs with Windows".to_owned(),
+                                "Capture mapped I-PAC signals; outputs that KSX does not use still pass through to Windows."
+                                    .to_owned(),
+                            ),
+                            _ => (
+                                "Observe and pass through".to_owned(),
+                                "KSX routes mapped outputs while Windows receives those same I-PAC key signals too."
+                                    .to_owned(),
+                            ),
+                        }
+                    } else {
+                        (option.title.clone(), option.detail.clone())
+                    };
+                    NocturneChoiceRow {
                     name: option.name.clone(),
-                    title: option.title.clone(),
-                    detail: option.detail.clone(),
+                    title,
+                    detail,
                     cls: if option.name == current_mode {
                         "n-radio on".to_owned()
                     } else {
                         "n-radio".to_owned()
                     },
+                }
                 })
                 .collect()
         } else {

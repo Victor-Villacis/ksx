@@ -119,6 +119,12 @@ export interface PanelChartView {
   /** Exact backend-owned restore point required by either validation state. */
   qualification_restore_backup_id?: string | null;
   terminals: PanelChartTerminalView[];
+  /**
+   * Semantic, backend-owned preview of the deterministic KSX four-player
+   * layout against this exact chart baseline. It is presentation data only;
+   * the reviewed plan remains the write authority.
+   */
+  recommended_terminals?: PanelChartTerminalView[];
   key_options: PanelKeyOptionView[];
   backup?: PanelBackupView | null;
   notes: string[];

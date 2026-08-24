@@ -676,6 +676,18 @@ pub struct PanelStatusRow {
     pub product_id: u16,
     /// Raw USB `bcdDevice`; never presented as a parsed firmware version.
     pub bcd_device: u16,
+    /// Friendly firmware wording supplied only by an exact, measured protocol
+    /// profile. A generic USB release is never guessed into a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware_label: Option<String>,
+    /// Backend-owned explanation of how the firmware fact was (or was not)
+    /// established. Surfaces copy this instead of interpreting `bcdDevice`.
+    #[serde(default)]
+    pub firmware_detail: String,
+    /// Terminal capacity of the exact registered programming profile. This is
+    /// absent for recognized-but-unmeasured releases and unsupported boards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_terminal_count: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
     /// Protocol driver id, or `unsupported` when no driver is registered.
@@ -3839,6 +3851,20 @@ mod tests {
             older_chart.recommended_terminals.is_empty(),
             "older chart responses remain readable, but cannot invent a backend-owned recommendation"
         );
+    }
+
+    #[test]
+    fn older_panel_status_rows_leave_profile_derived_firmware_facts_unknown() {
+        let mut older = serde_json::to_value(PanelStatusRow::default()).unwrap();
+        let object = older.as_object_mut().unwrap();
+        object.remove("firmware_label");
+        object.remove("firmware_detail");
+        object.remove("profile_terminal_count");
+
+        let decoded: PanelStatusRow = serde_json::from_value(older).unwrap();
+        assert_eq!(decoded.firmware_label, None);
+        assert!(decoded.firmware_detail.is_empty());
+        assert_eq!(decoded.profile_terminal_count, None);
     }
 
     #[test]

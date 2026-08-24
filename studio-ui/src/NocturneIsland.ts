@@ -551,6 +551,9 @@ interface PanelStatusRowView {
   vendor_id: number;
   product_id: number;
   bcd_device: number;
+  firmware_label?: string | null;
+  firmware_detail?: string;
+  profile_terminal_count?: number | null;
   serial?: string | null;
   driver: string;
   driver_supported: boolean;
@@ -3538,6 +3541,10 @@ function syncPanelProgrammingUi(): void {
     "[data-surface-terminal-status]",
   );
   const chart = panelProgrammingState.inspection.chart;
+  const statusTarget = controlSurfaceHardwarePayload?.target_selector?.trim() ?? "";
+  const statusBoard = statusTarget && statusTarget === panelProgrammingTarget()
+    ? controlSurfaceHardwarePayload?.view?.panels[0] ?? null
+    : null;
   const task = panelProgrammingTaskCopy(chart);
   const authority = currentPanelChartAuthority();
   const capability = panelProgrammingState.capability;
@@ -3577,17 +3584,60 @@ function syncPanelProgrammingUi(): void {
   }
   if (programmingDevice) {
     programmingDevice.replaceChildren();
-    for (const [label, value] of [
-      ["On device", chart?.board_name ?? "Not read"],
-      ["Windows key outputs", chart ? `${panelProgrammingAssignedCount(chart)} of ${chart.terminals.length}` : "—"],
-      ["KSX routes", chart ? `${panelProgrammingMappedKeyCount(chart)} hardware keys mapped` : "—"],
-      ["Hardware writer", qualificationState === "qualified" ? "Verified" : "One-time check required"],
-    ] as const) {
+    const facts = [
+      {
+        key: "board",
+        label: "Board",
+        value: chart?.board_name ?? statusBoard?.name?.trim() ?? "Not read",
+        detail: statusBoard?.identity?.trim() || "Read the hardware chart to identify this encoder.",
+      },
+      {
+        key: "firmware",
+        label: "Board firmware",
+        value: statusBoard?.firmware_label?.trim() || "Not identified",
+        detail: statusBoard?.firmware_detail?.trim() ||
+          "No exact measured firmware profile is available for this status response.",
+      },
+      {
+        key: "input",
+        label: "Input observed",
+        value: statusBoard?.observed_mode_label?.trim() || "Not inspected",
+        detail: statusBoard?.mode_detail?.trim() ||
+          "KSX has not inspected the selected encoder's input collections.",
+      },
+      {
+        key: "outputs",
+        label: "Windows key outputs",
+        value: chart ? `${panelProgrammingAssignedCount(chart)} of ${chart.terminals.length}` : "—",
+        detail: chart
+          ? `${chart.terminals.length}-terminal chart read back${chart.backup ? "; backup ready" : ""}; KSX profile ${chart.protocol_profile}`
+          : statusBoard?.profile_terminal_count
+          ? `${statusBoard.profile_terminal_count}-terminal profile capacity; chart not read`
+          : "Read the chart to inspect terminal assignments.",
+      },
+      {
+        key: "routes",
+        label: "KSX routes",
+        value: chart ? `${panelProgrammingMappedKeyCount(chart)} hardware keys mapped` : "—",
+        detail: qualificationState === "qualified"
+          ? "Hardware writer verified; mappings remain dynamic in KSX."
+          : "One-time hardware-writer check still required.",
+      },
+    ] as const;
+    for (const fact of facts) {
       const row = document.createElement("div");
+      row.dataset.surfaceBoardFact = fact.key;
       const dt = document.createElement("dt");
       const dd = document.createElement("dd");
-      dt.textContent = label;
-      dd.textContent = value;
+      const value = document.createElement("strong");
+      const detail = document.createElement("small");
+      dt.textContent = fact.label;
+      value.dataset.surfaceBoardFactValue = "";
+      value.textContent = fact.value;
+      detail.dataset.surfaceBoardFactDetail = "";
+      detail.textContent = fact.detail;
+      dd.title = `${fact.value} — ${fact.detail}`;
+      dd.append(value, detail);
       row.append(dt, dd);
       programmingDevice.append(row);
     }
@@ -7844,8 +7894,10 @@ function createControlSurfaceItem(): HTMLElement {
   programmingSummary.setAttribute("aria-live", "polite");
   programmingSummary.textContent = "Read and back up the complete encoder chart before changing terminal assignments.";
   const programmingDevice = document.createElement("dl");
-  programmingDevice.className = "n-surface-programming-device";
+  programmingDevice.className = "n-surface-programming-device n-surface-board-facts";
   programmingDevice.dataset.surfaceProgrammingDevice = "";
+  programmingDevice.dataset.surfaceBoardFacts = "";
+  programmingDevice.setAttribute("aria-label", "Selected I-PAC facts");
   const programmingQualification = document.createElement("aside");
   programmingQualification.className = "n-surface-programming-qualification";
   programmingQualification.dataset.surfaceProgrammingQualification = "";
@@ -8097,8 +8149,8 @@ function createControlSurfaceItem(): HTMLElement {
   programming.append(
     signalJourney,
     programmingHead,
-    programmingSummary,
     programmingDevice,
+    programmingSummary,
     programmingQualification,
     programmingConflicts,
     programmingModes,

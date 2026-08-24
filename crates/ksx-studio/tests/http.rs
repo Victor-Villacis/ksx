@@ -1288,14 +1288,17 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 vendor_id: 0xd209,
                 product_id: 0x0430,
                 bcd_device: 0x0056,
+                firmware_label: Some("1.56".to_owned()),
+                firmware_detail: "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.".to_owned(),
+                profile_terminal_count: Some(56),
                 serial: None,
                 driver: "ultimarc-ipac".to_owned(),
                 driver_supported: true,
                 driver_label: "Ultimarc I-PAC family".to_owned(),
                 observed_mode: "keyboard-compatible".to_owned(),
-                mode_detail: "A boot-keyboard interface is present; no vendor mode query was sent."
+                mode_detail: "Keyboard-compatible HID input was observed; exact vendor mode was not queried."
                     .to_owned(),
-                observed_mode_label: "Keyboard-compatible · Recommended".to_owned(),
+                observed_mode_label: "Keyboard-compatible input observed".to_owned(),
                 mode_read_supported: false,
                 chart_state: "protocol-unverified".to_owned(),
                 chart_attempted: false,
@@ -9889,6 +9892,17 @@ fn panel_status_uses_the_staged_selector_and_reports_metadata_without_mutation()
         "{payload}"
     );
     assert_eq!(view["panels"][0]["bcd_device"], 0x0056, "{payload}");
+    assert_eq!(view["panels"][0]["firmware_label"], "1.56", "{payload}");
+    assert_eq!(view["panels"][0]["profile_terminal_count"], 56, "{payload}");
+    assert!(
+        view["panels"][0]["firmware_detail"]
+            .as_str()
+            .is_some_and(|detail| {
+                detail.contains("I-PAC 4 release-0056 profile")
+                    && detail.contains("firmware was not queried from the board")
+            }),
+        "friendly firmware evidence lost its provenance: {payload}"
+    );
     assert_eq!(
         view["panels"][0]["observed_mode"], "keyboard-compatible",
         "{payload}"
@@ -9898,6 +9912,7 @@ fn panel_status_uses_the_staged_selector_and_reports_metadata_without_mutation()
         "{payload}"
     );
     assert_eq!(view["panels"][0]["chart_attempted"], false, "{payload}");
+    assert_eq!(view["panels"][0]["mode_read_supported"], false, "{payload}");
     assert!(
         view["panels"][0]["identity"]
             .as_str()

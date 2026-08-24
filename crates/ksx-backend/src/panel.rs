@@ -16,6 +16,7 @@ use ksx_core::{DeviceSelector, Match};
 use ksx_platform::hid::{HidCollection, HidSurvey};
 
 use crate::devices::{self, DevicesReport, UsbRow};
+use crate::panel_programming::{IPAC4_BCD_DEVICE, IPAC4_TERMINAL_COUNT};
 
 const INSPECTION_NOTE: &str = "Read-only metadata inspection: HID handles used desired access 0; no input, output, or feature report was requested or sent.";
 
@@ -23,6 +24,11 @@ const INSPECTION_NOTE: &str = "Read-only metadata inspection: HID handles used d
 struct PanelDriver {
     id: &'static str,
     label: &'static str,
+    /// These are catalogued facts for this exact measured profile, never a
+    /// generic interpretation of the USB release number.
+    firmware_label: &'static str,
+    firmware_detail: &'static str,
+    terminal_count: usize,
 }
 
 /// Does this exact VID/PID identify a physical panel-encoder family for which
@@ -45,9 +51,12 @@ fn driver_for(vendor_id: u16, product_id: u16, bcd_device: u16) -> Option<PanelD
         is_registered_panel_encoder_family(vendor_id, product_id),
         bcd_device,
     ) {
-        (true, 0x0056) => Some(PanelDriver {
+        (true, IPAC4_BCD_DEVICE) => Some(PanelDriver {
             id: "ultimarc-ipac",
             label: "Ultimarc I-PAC 4 lossless chart driver",
+            firmware_label: "1.56",
+            firmware_detail: "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.",
+            terminal_count: IPAC4_TERMINAL_COUNT,
         }),
         _ => None,
     }
@@ -353,18 +362,18 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
     let (observed_mode, observed_mode_label, mode_detail) = if let Some(row) = boot {
         (
             "keyboard-compatible",
-            "Keyboard-compatible input is present",
+            "Keyboard-compatible input observed",
             format!(
-                "{} declares the HID boot-keyboard protocol; exact vendor mode was not queried",
+                "Keyboard-compatible HID input was observed; exact vendor mode was not queried. Evidence: {} declares the HID boot-keyboard protocol",
                 row.candidate.id
             ),
         )
     } else if let Some(collection) = keyboard_collection {
         (
             "keyboard-compatible",
-            "Keyboard-compatible input is present",
+            "Keyboard-compatible input observed",
             format!(
-                "{} declares Generic Desktop / Keyboard; exact vendor mode was not queried",
+                "Keyboard-compatible HID input was observed; exact vendor mode was not queried. Evidence: {} declares Generic Desktop / Keyboard",
                 collection.instance_id
             ),
         )
@@ -484,6 +493,15 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         "USB VID {:04X}, PID {:04X}, raw bcdDevice 0x{:04X}",
         first.vendor_id, first.product_id, first.bcd_device
     );
+    let firmware_detail = driver.map_or_else(
+        || {
+            format!(
+                "Raw USB release 0x{:04X} has no exact measured firmware mapping in KSX; it remains unidentified rather than being guessed.",
+                first.bcd_device
+            )
+        },
+        |driver| driver.firmware_detail.to_owned(),
+    );
     let mut interfaces: Vec<PanelInterfaceRow> = group
         .interfaces
         .iter()
@@ -507,6 +525,9 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         vendor_id: first.vendor_id,
         product_id: first.product_id,
         bcd_device: first.bcd_device,
+        firmware_label: driver.map(|driver| driver.firmware_label.to_owned()),
+        firmware_detail,
+        profile_terminal_count: driver.map(|driver| driver.terminal_count),
         serial: first.serial.clone(),
         driver: driver.map_or("unsupported", |driver| driver.id).to_owned(),
         driver_supported: driver.is_some(),
@@ -591,6 +612,13 @@ pub fn render(view: &PanelStatusView) -> String {
         let _ = writeln!(out, "{}", panel.name);
         let _ = writeln!(out, "  board       : {}", panel.board_id);
         let _ = writeln!(out, "  identity    : {}", panel.identity);
+        if let Some(firmware) = &panel.firmware_label {
+            let _ = writeln!(out, "  firmware    : {firmware}");
+        }
+        let _ = writeln!(out, "                {}", panel.firmware_detail);
+        if let Some(count) = panel.profile_terminal_count {
+            let _ = writeln!(out, "  terminals   : {count} (profile capacity)");
+        }
         let _ = writeln!(out, "  driver      : {}", panel.driver_label);
         let _ = writeln!(out, "  mode        : {}", panel.observed_mode_label);
         let _ = writeln!(out, "                {}", panel.mode_detail);
@@ -785,12 +813,18 @@ mod tests {
         assert_eq!(panel.interfaces.len(), 3);
         assert_eq!(panel.bcd_device, 0x0056);
         assert!(panel.identity.contains("raw bcdDevice 0x0056"));
+        assert_eq!(panel.firmware_label.as_deref(), Some("1.56"));
+        assert_eq!(
+            panel.firmware_detail,
+            "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board."
+        );
+        assert_eq!(panel.profile_terminal_count, Some(56));
         assert_eq!(panel.driver, "ultimarc-ipac");
         assert_eq!(panel.driver_label, "Ultimarc I-PAC 4 lossless chart driver");
         assert_eq!(panel.observed_mode, "keyboard-compatible");
         assert_eq!(
             panel.observed_mode_label,
-            "Keyboard-compatible input is present"
+            "Keyboard-compatible input observed"
         );
         assert_eq!(panel.chart_state, "not-read");
         assert_eq!(
@@ -1001,6 +1035,10 @@ mod tests {
         let panel = &status.panels[0];
         assert_eq!(panel.driver, "unsupported");
         assert!(!panel.driver_supported);
+        assert_eq!(panel.firmware_label, None);
+        assert_eq!(panel.profile_terminal_count, None);
+        assert!(panel.firmware_detail.contains("0x0057"));
+        assert!(panel.firmware_detail.contains("remains unidentified"));
         assert_eq!(panel.chart_state, "unsupported-release");
         assert_eq!(panel.configuration_collection_state, "unsupported-release");
         assert!(panel.driver_label.contains("0x0057"));
@@ -1018,6 +1056,8 @@ mod tests {
         let text = render(&status);
         assert!(text.contains("desired access 0"));
         assert!(text.contains("no input, output, or feature report was requested or sent"));
+        assert!(text.contains("firmware    : 1.56"));
+        assert!(text.contains("terminals   : 56 (profile capacity)"));
         assert!(text.contains("Chart not read"));
     }
 }

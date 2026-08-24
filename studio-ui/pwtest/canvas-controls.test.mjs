@@ -316,9 +316,12 @@ function panelStatusPayload({
   driver = "ultimarc-ipac",
   driverSupported = true,
   driverLabel = "Ultimarc I-PAC family",
+  firmwareLabel = "1.56",
+  firmwareDetail = "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.",
+  profileTerminalCount = 56,
   mode = "keyboard-compatible",
-  modeLabel = "Keyboard-compatible · Recommended",
-  modeDetail = "A boot-keyboard interface is present; no vendor mode query was sent.",
+  modeLabel = "Keyboard-compatible input observed",
+  modeDetail = "Keyboard-compatible HID input was observed; exact vendor mode was not queried.",
   recommendation = "Keep this encoder in keyboard mode so Teach and Route retain KSX's dynamic transforms.",
   chartState = "protocol-unverified",
   chartAttempted = false,
@@ -344,6 +347,9 @@ function panelStatusPayload({
         vendor_id: 0xd209,
         product_id: 0x0430,
         bcd_device: 0x0056,
+        firmware_label: firmwareLabel,
+        firmware_detail: firmwareDetail,
+        profile_terminal_count: profileTerminalCount,
         serial: null,
         driver,
         driver_supported: driverSupported,
@@ -5049,7 +5055,7 @@ describe("the canvas navigation controls", () => {
       assert.match(cardCopy, /Ultimarc I-PAC 4X/);
       assert.match(cardCopy, /USB D209:0430/);
       assert.match(cardCopy, /bcdDevice 0x0056/);
-      assert.match(cardCopy, /Keyboard-compatible · Recommended/);
+      assert.match(cardCopy, /Keyboard-compatible input observed/);
       assert.match(cardCopy, /USB descriptors and passive HID collection metadata were readable/);
       assert.match(cardCopy, /Protocol unverified · Not attempted/);
       assert.match(cardCopy, /no report was sent/);
@@ -5320,6 +5326,37 @@ describe("the canvas navigation controls", () => {
         (await setup.locator("[data-surface-programming-device]").textContent()).replace(/\s+/g, " "),
         /Windows key outputs\s*0 of 2.*KSX routes\s*0 hardware keys mapped/i,
         "device facts report the empty hardware chart and empty KSX route layer independently",
+      );
+      assert.deepEqual(
+        await setup.locator("[data-surface-board-fact]").evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-surface-board-fact"))),
+        ["board", "firmware", "input", "outputs", "routes"],
+        "the setup opens with one compact board-to-KSX fact strip",
+      );
+      assert.equal(
+        (await setup.locator('[data-surface-board-fact="firmware"] [data-surface-board-fact-value]').textContent()).trim(),
+        "1.56",
+        "the exact registered release is named for people instead of showing only 0x0056",
+      );
+      assert.match(
+        (await setup.locator('[data-surface-board-fact="firmware"] [data-surface-board-fact-detail]').textContent()).replace(/\s+/g, " "),
+        /I-PAC 4 release-0056 profile.*firmware was not queried from the board/i,
+      );
+      assert.match(
+        (await setup.locator('[data-surface-board-fact="input"]').textContent()).replace(/\s+/g, " "),
+        /Keyboard-compatible.*exact vendor mode was not queried/i,
+        "observed HID evidence stays visibly distinct from an exact vendor-mode read",
+      );
+      assert.match(
+        (await setup.locator('[data-surface-board-fact="outputs"] [data-surface-board-fact-detail]').textContent()).replace(/\s+/g, " "),
+        /2-terminal chart read back.*backup ready.*KSX profile ipac4-pac256-v1/i,
+        "the read-back facts name the actual chart and keep the KSX transport profile separate from firmware",
+      );
+      assert.equal(
+        await setup.locator("[data-surface-board-facts]").evaluate((element) =>
+          element.scrollWidth <= element.clientWidth),
+        true,
+        "the board fact strip fits the focused workspace without horizontal clipping",
       );
       assert.match(
         (await setup.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),

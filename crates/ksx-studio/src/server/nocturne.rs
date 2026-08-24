@@ -2867,6 +2867,39 @@ pub(super) async fn api_learn_cancel(
     .await
 }
 
+// ── Shared simultaneous-input diagnostic ─────────────────────────────────
+// One daemon-owned observation works for both ordinary keyboards and
+// keyboard-mode encoders. These handlers add no device logic: the canonical
+// selector is re-resolved and filtered by the daemon immediately before it
+// listens, and the returned held/seen/peak sets are backend facts.
+
+pub(super) async fn api_input_test_poll(State(state): State<Arc<AppState>>) -> Response {
+    control_json(state, |control| control.input_test_poll()).await
+}
+
+pub(super) async fn api_input_test_start(
+    State(state): State<Arc<AppState>>,
+    axum::Json(spec): axum::Json<ksx_api::InputTestSpec>,
+) -> Response {
+    control_json(state, move |control| control.input_test_start(&spec)).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InputTestCancelBody {
+    generation: u64,
+}
+
+pub(super) async fn api_input_test_cancel(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<InputTestCancelBody>,
+) -> Response {
+    control_json(state, move |control| {
+        control.input_test_cancel_generation(Some(body.generation))
+    })
+    .await
+}
+
 // ── The staged bind verb (JSON) — what a learned key writes ────────────────
 
 /// POST /nocturne/api/bind. The body names a SLOT NUMBER and ONE KEY; the

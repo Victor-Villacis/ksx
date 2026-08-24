@@ -104,6 +104,19 @@ pub struct ObservedKey {
     pub vkey: u16,
 }
 
+/// One device-aware make/break transition for a bounded diagnostic.
+///
+/// Unlike [`ObservedKey`], this does not end the Raw Input observation after
+/// one make. Releases carry the same exact instance identity and logical key,
+/// which lets a caller maintain a truthful held set per physical keyboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedKeyEvent {
+    pub instance_path: String,
+    pub key: Key,
+    pub vkey: u16,
+    pub down: bool,
+}
+
 /// Normalize a Raw Input device *interface* path to the PnP *instance* path:
 /// strip the `\\?\` (or `\\.\`) prefix, drop the trailing
 /// `#{interface-class-guid}` segment, turn `#` separators back into `\`, and
@@ -133,7 +146,7 @@ fn wide(s: &str) -> Vec<u16> {
 /// Original M4 picker semantics: no re-baseline (a held key's autorepeat
 /// counts), no cancellation.
 pub fn wait_for_keypress(timeout: Duration) -> Result<Option<IdentifiedPress>, CaptureError> {
-    observe(timeout, None, false).map(|hit| {
+    observe(timeout, None, false, None).map(|hit| {
         hit.map(|press| IdentifiedPress {
             instance_path: press.instance_path,
             vkey: press.vkey,
@@ -157,7 +170,7 @@ pub fn observe_next_key(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> Result<Option<ObservedKey>, CaptureError> {
-    observe(timeout, Some(cancel), true).map(|hit| {
+    observe(timeout, Some(cancel), true, None).map(|hit| {
         hit.map(|press| ObservedKey {
             instance_path: press.instance_path,
             key: press.key,
@@ -166,12 +179,31 @@ pub fn observe_next_key(
     })
 }
 
+/// Observe every device-aware make/break transition until timeout or cancel.
+///
+/// The callback runs on the observer thread and returns `true` to stop early.
+/// It sees only real devices; injected input and unreadable packets are
+/// ignored. `Key::Unknown` is retained so each caller can make an explicit
+/// vocabulary decision; KSX's simultaneous-input diagnostic currently
+/// excludes it because an unknown logical key is not a stable, bindable signal
+/// identity.
+pub fn observe_key_events(
+    timeout: Duration,
+    cancel: &AtomicBool,
+    mut on_event: impl FnMut(ObservedKeyEvent) -> bool,
+) -> Result<(), CaptureError> {
+    let mut callback = |event: ObservedKeyEvent| on_event(event);
+    observe(timeout, Some(cancel), false, Some(&mut callback)).map(|_| ())
+}
+
 /// One decoded WM_INPUT keyboard packet.
 enum SinkEvent {
-    /// A make from a real device, fully resolved.
-    Press(RawPress),
-    /// A break (any device) — only the vkey matters (re-baseline bookkeeping).
-    Release(u16),
+    /// A make or break from a real device, fully resolved.
+    Key(RawKeyEvent),
+    /// A break whose device identity could not be resolved. It cannot be
+    /// admitted to an exact-device diagnostic, but it must still release the
+    /// process-wide vkey re-baseline used by one-shot Learn observations.
+    UnresolvedBreak(u16),
     /// Injected/unreadable/non-keyboard — nothing to do.
     Ignored,
 }
@@ -182,11 +214,38 @@ struct RawPress {
     vkey: u16,
 }
 
+struct RawKeyEvent {
+    instance_path: String,
+    key: Key,
+    vkey: u16,
+    down: bool,
+}
+
+fn unresolved_key_event(vkey: u16, down: bool) -> SinkEvent {
+    if down {
+        SinkEvent::Ignored
+    } else {
+        SinkEvent::UnresolvedBreak(vkey)
+    }
+}
+
+fn clear_rebaseline_release(event: &SinkEvent, held: &mut [bool; 256]) {
+    let vkey = match event {
+        SinkEvent::Key(event) if !event.down => Some(event.vkey),
+        SinkEvent::UnresolvedBreak(vkey) => Some(*vkey),
+        SinkEvent::Key(_) | SinkEvent::Ignored => None,
+    };
+    if let Some(vkey) = vkey {
+        held[usize::from(vkey) & 0xFF] = false;
+    }
+}
+
 /// The shared sink loop behind both public entry points.
 fn observe(
     timeout: Duration,
     cancel: Option<&AtomicBool>,
     rebaseline: bool,
+    mut on_event: Option<&mut dyn FnMut(ObservedKeyEvent) -> bool>,
 ) -> Result<Option<RawPress>, CaptureError> {
     let class_name = wide("ksx-rawinput-identify");
     // SAFETY: null module name = handle of the current module.
@@ -331,19 +390,41 @@ fn observe(
             // cleanup, including for events we ignored.
             // SAFETY: msg came from PeekMessageW just above.
             unsafe { DispatchMessageW(&msg) };
+            // A break clears Learn's process-wide vkey baseline even if the
+            // device disappeared before Windows answered RIDI_DEVICENAME.
+            // Exact-device diagnostics still receive only fully-resolved
+            // `Key` events below.
+            clear_rebaseline_release(&event, &mut held);
             match event {
-                SinkEvent::Press(press) => {
-                    if rebaseline && held[usize::from(press.vkey) & 0xFF] {
+                SinkEvent::Key(event) => {
+                    if let Some(callback) = on_event.as_mut() {
+                        let stop = callback(ObservedKeyEvent {
+                            instance_path: event.instance_path,
+                            key: event.key,
+                            vkey: event.vkey,
+                            down: event.down,
+                        });
+                        if stop {
+                            return Ok(None);
+                        }
+                        continue;
+                    }
+                    if !event.down {
+                        continue;
+                    }
+                    if rebaseline && held[usize::from(event.vkey) & 0xFF] {
                         continue; // still held from before the observe started
                     }
-                    if rebaseline && press.key == Key::Unknown {
+                    if rebaseline && event.key == Key::Unknown {
                         continue; // outside the preset vocabulary — keep listening
                     }
-                    return Ok(Some(press));
+                    return Ok(Some(RawPress {
+                        instance_path: event.instance_path,
+                        key: event.key,
+                        vkey: event.vkey,
+                    }));
                 }
-                SinkEvent::Release(vkey) => {
-                    held[usize::from(vkey) & 0xFF] = false;
-                }
+                SinkEvent::UnresolvedBreak(_) => {}
                 SinkEvent::Ignored => {}
             }
         }
@@ -352,9 +433,9 @@ fn observe(
     // destroyed, class unregistered — in that order (reverse declaration).
 }
 
-/// Decode one WM_INPUT message. Releases are reported (vkey only) so the
-/// re-baseline can clear held keys; presses from injected input (null
-/// `hDevice`) or non-keyboard packets are `Ignored`.
+/// Decode one WM_INPUT message. Makes and breaks carry the same device/key
+/// identity so a multi-key observer can maintain a per-device held set;
+/// injected input (null `hDevice`) and non-keyboard packets are ignored.
 fn read_key_event(handle: HRAWINPUT) -> SinkEvent {
     let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
     let mut size = std::mem::size_of::<RAWINPUT>() as u32;
@@ -374,11 +455,12 @@ fn read_key_event(handle: HRAWINPUT) -> SinkEvent {
     }
     // SAFETY: dwType checked — the union holds the keyboard variant.
     let kb = unsafe { raw.data.keyboard };
-    if u32::from(kb.Flags) & RI_KEY_BREAK != 0 {
-        return SinkEvent::Release(kb.VKey);
-    }
+    let down = u32::from(kb.Flags) & RI_KEY_BREAK == 0;
     if raw.header.hDevice.is_null() {
-        return SinkEvent::Ignored; // injected input has no source device
+        // Preserve the historical Learn re-baseline behavior: an unresolved
+        // break is safe to use only to clear the vkey latch. It is never
+        // surfaced to the exact-device diagnostic callback.
+        return unresolved_key_event(kb.VKey, down);
     }
 
     // Two-call pattern for the device interface path.
@@ -393,7 +475,7 @@ fn read_key_event(handle: HRAWINPUT) -> SinkEvent {
         )
     };
     if chars == 0 {
-        return SinkEvent::Ignored;
+        return unresolved_key_event(kb.VKey, down);
     }
     let mut buf = vec![0u16; chars as usize];
     // SAFETY: buffer sized by the query above.
@@ -406,7 +488,7 @@ fn read_key_event(handle: HRAWINPUT) -> SinkEvent {
         )
     };
     if written == u32::MAX || written == 0 {
-        return SinkEvent::Ignored;
+        return unresolved_key_event(kb.VKey, down);
     }
     let end = buf.iter().position(|&c| c == 0).unwrap_or(written as usize);
     let interface_path = String::from_utf16_lossy(&buf[..end]);
@@ -416,10 +498,11 @@ fn read_key_event(handle: HRAWINPUT) -> SinkEvent {
     // code + extended bits feed the same correction table the capture path
     // uses — one vocabulary, one mapping.
     let state = kb.Flags & ((RI_KEY_E0 | RI_KEY_E1) as u16);
-    SinkEvent::Press(RawPress {
+    SinkEvent::Key(RawKeyEvent {
         instance_path: interface_path_to_instance_path(&interface_path),
         key: keymap::corrected_key(kb.MakeCode, state),
         vkey: kb.VKey,
+        down,
     })
 }
 
@@ -431,6 +514,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: before the multi-event diagnostic, Learn cleared its held
+    /// vkey as soon as a break packet was decoded. Requiring RIDI_DEVICENAME
+    /// for that bookkeeping made a transient lookup failure leave the key
+    /// latched, so its next make was ignored for the rest of the observation.
+    #[test]
+    fn an_unresolved_break_still_clears_the_learn_rebaseline() {
+        let mut held = [false; 256];
+        held[usize::from(b'A')] = true;
+
+        let release = unresolved_key_event(u16::from(b'A'), false);
+        clear_rebaseline_release(&release, &mut held);
+        assert!(!held[usize::from(b'A')]);
+
+        held[usize::from(b'A')] = true;
+        let unresolved_make = unresolved_key_event(u16::from(b'A'), true);
+        clear_rebaseline_release(&unresolved_make, &mut held);
+        assert!(
+            held[usize::from(b'A')],
+            "an unresolved make must not acquire exact-device authority or alter Learn's baseline"
+        );
+    }
 
     #[test]
     fn interface_path_normalizes_to_instance_path() {

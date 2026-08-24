@@ -95,6 +95,21 @@ pub trait ControlSource: Send + Sync {
         self.learn_cancel()
     }
 
+    /// Start a bounded, read-only simultaneous-key diagnostic for one exact
+    /// keyboard-compatible device. The daemon owns the observation so a
+    /// WinUSB-claimed panel and an ordinary keyboard use the same seam.
+    fn input_test_start(&self, _spec: &InputTestSpec) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
+    /// Snapshot the active diagnostic attempt.
+    fn input_test_poll(&self) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
+    /// Stop only the diagnostic generation the caller opened.
+    fn input_test_cancel_generation(&self, _generation: Option<u64>) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
+
     /// Write one binding (pipe `map`). `request.key == None` clears it.
     fn bind(&self, _request: &BindRequest) -> BindOutcome {
         BindOutcome::failed("this control source cannot write bindings")
@@ -749,6 +764,95 @@ impl LearnView {
             self.error
                 .clone()
                 .unwrap_or_else(|| "the learner is unavailable".to_owned()),
+        ))
+    }
+}
+
+/// One exact, bounded simultaneous-input observation request.
+///
+/// `selector` is the canonical selector already returned by the machine
+/// inventory (`usb:VID:PID:MI`, serial/port-qualified when necessary). It is
+/// resolved again by the daemon immediately before listening; a display name
+/// or ambiguous substring is never accepted as authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputTestSpec {
+    pub selector: String,
+    /// Bounded by the daemon to 1–60 seconds. Thirty seconds is long enough to
+    /// hold a cabinet chord without leaving a hidden listener behind.
+    #[serde(default = "default_input_test_duration_ms")]
+    pub duration_ms: u64,
+}
+
+impl Default for InputTestSpec {
+    fn default() -> Self {
+        Self {
+            selector: String::new(),
+            duration_ms: default_input_test_duration_ms(),
+        }
+    }
+}
+
+pub const fn default_input_test_duration_ms() -> u64 {
+    30_000
+}
+
+/// Daemon-owned snapshot of a simultaneous-input diagnostic.
+///
+/// The counts describe signals KSX actually observed, not physical switches:
+/// two encoder terminals programmed to the same key are indistinguishable
+/// after the board emits them. `rollover_visibility` is explicit because Raw
+/// Input cannot see a USB ErrorRollOver report.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputTestView {
+    pub ok: bool,
+    /// `idle` | `listening` | `timeout` | `cancelled` | `failed` |
+    /// `unavailable`.
+    pub state: String,
+    pub generation: Option<u64>,
+    pub selector: Option<String>,
+    pub remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub held: Vec<String>,
+    #[serde(default)]
+    pub seen: Vec<String>,
+    #[serde(default)]
+    pub peak: u32,
+    #[serde(default)]
+    pub events: u64,
+    #[serde(default)]
+    pub dropped: u64,
+    /// `unavailable` in the first implementation: Windows Raw Input exposes
+    /// decoded make/break transitions, not the original rollover report.
+    #[serde(default)]
+    pub rollover_visibility: String,
+    /// Backend-composed interpretation; surfaces render it verbatim.
+    #[serde(default)]
+    pub detail: String,
+    pub error: Option<String>,
+}
+
+impl InputTestView {
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            state: "unavailable".to_owned(),
+            rollover_visibility: "unavailable".to_owned(),
+            detail: "No simultaneous-input observation was made.".to_owned(),
+            error: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn refusal(&self) -> Option<Refusal> {
+        if self.ok {
+            return None;
+        }
+        Some(Refusal::new(
+            codes::REFUSED,
+            self.error
+                .clone()
+                .unwrap_or_else(|| "the simultaneous-input test is unavailable".to_owned()),
         ))
     }
 }

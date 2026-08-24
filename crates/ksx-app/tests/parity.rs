@@ -558,6 +558,18 @@ const ANCHORS: &[Anchors] = &[
         ],
     },
     Anchors {
+        capability: "Measure simultaneous keyboard / encoder host signals",
+        cli: &["input-test start", "input-test poll", "input-test cancel"],
+        // Deliberately absent from the 10-foot surface: this is a timed,
+        // close-range setup diagnostic, not an operating control.
+        egui: &["Screen::InputTest"],
+        studio: &[
+            "/api/input-test",
+            "/api/input-test/start",
+            "/api/input-test/cancel",
+        ],
+    },
+    Anchors {
         capability: "Edit configuration",
         cli: &["slot list", "slot assign", "config export", "config import"],
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen

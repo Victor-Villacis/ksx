@@ -143,16 +143,16 @@ firmware label `1.56` is profile-scoped from the raw release; KSX has not
 queried the vendor mode. Physical switch emission and unplug/power-cycle
 persistence remain separate acceptance checks.
 
-### Studio flow implemented 2026-08-23 EDT
+### Studio flow implemented 2026-08-23 EDT; clarified 2026-08-24 EDT
 
 - Encoder rows open a capability inspection first. A family match alone never
   opens a chart or sends a report.
-- The measured I-PAC 4 profile opens Hardware Setup only when
+- The measured I-PAC 4 profile opens **Configure device** only when
   keyboard-compatible input and one exact available configuration collection
   are both present. A missing mode, missing/ambiguous collection, or stale
   topology stays visibly blocked until refresh.
-- Hardware Setup keeps the causal journey visible:
-  `physical control → encoder terminal → Windows key → KSX transform/macro → virtual controller → game`.
+- **Configure device** keeps the causal journey visible:
+  `physical control → encoder terminal → host signal (for example, Keyboard · J) → KSX transform/macro → virtual controller → game`.
 - A new all-Unassigned board offers **Design physical panel first**. It opens
   blank/arcade/leverless/four-player templates without changing the chart or
   sending a report; terminal links and emitted keys can then be assigned from
@@ -177,6 +177,21 @@ persistence remain separate acceptance checks.
   stranded on invisible endpoints.
 - Recognition-only families still receive the independent panel Builder,
   live Teach, and Route workflows. They do not receive chart actions.
+- Ordinary keyboards and keyboard-mode encoders share the bounded
+  **Test simultaneous inputs** observer. It is device-specific, reports held,
+  seen, peak, event and dropped-event counts, and never changes a mapping or
+  device chart. Peak is explicitly the number of distinct host signals held
+  together; physical terminals assigned the same output key cannot be
+  distinguished at that layer. It deliberately reports rollover visibility as
+  unavailable when the capture transport cannot prove firmware-level
+  saturation; a high observed peak is evidence, not an NKRO certification.
+- The three user verbs are intentionally disjoint: **Arrange appearance**
+  changes the browser-local physical panel model and its canvas geometry,
+  including adding, removing, replacing, duplicating or mirroring components
+  and editing labels or player ownership. **Configure device** changes supported
+  persistent encoder output through the guarded writer, and **Route in KSX**
+  changes runtime mappings. No visual modeling or rearrangement silently
+  rewrites either firmware or a route.
 - Studio's generated panel and capability boundaries are pinned in
   [`canvas-controls.test.mjs`](../studio-ui/pwtest/canvas-controls.test.mjs);
   the backend catalog and operation-specific read/write admission are pinned

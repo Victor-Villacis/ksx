@@ -294,13 +294,13 @@ try {
     // Control Surface Builder, complete 56-terminal encoder editor, portable
     // hardware-layout profiles, supervised backup/program/verify/restore,
     // blank-encoder entry, movable macro processors, multi-family discovery,
-    // chart-derived panels, visible control → terminal → key handoffs, and the
-    // fallback signal shelf live in Nocturne's one island. The measured
-    // compressed route is 275,015 bytes (~268.6 KiB) after the cross-window
-    // hardware journal and canonical learner identity; keep a narrow
-    // 275,100-byte ceiling so those deliberate safety costs are not an
-    // open-ended bump.
-    budgetThreshold: 275_100,
+    // chart-derived panels, visible control → terminal → key handoffs, the
+    // fallback signal shelf, semantic route index, and shared simultaneous-
+    // input diagnostic live in Nocturne's one island. Exact-generation recovery
+    // for lost Start/Poll/Cancel responses adds the final bounded slice; keep a
+    // narrow 282,000-byte ceiling so that safety cost remains deliberate rather
+    // than an open-ended bump.
+    budgetThreshold: 282_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

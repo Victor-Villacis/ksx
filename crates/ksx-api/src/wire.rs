@@ -119,6 +119,14 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         generation: Option<u64>,
     },
+    /// Begin a read-only, bounded simultaneous-input observation for one
+    /// exact keyboard-compatible device.
+    InputTestStart(crate::InputTestSpec),
+    InputTestPoll,
+    InputTestCancel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+    },
 }
 
 impl Request {
@@ -148,6 +156,9 @@ impl Request {
             Self::LearnKey => "learn-key",
             Self::LearnPoll => "learn-poll",
             Self::LearnCancel { .. } => "learn-cancel",
+            Self::InputTestStart(_) => "input-test-start",
+            Self::InputTestPoll => "input-test-poll",
+            Self::InputTestCancel { .. } => "input-test-cancel",
         }
     }
 
@@ -671,6 +682,7 @@ pub enum Response {
     /// chances for the same page to be built from a different view type.
     Stage(Box<crate::StageOutcome>),
     Learn(LearnResponse),
+    InputTest(InputTestResponse),
 }
 
 impl Response {
@@ -725,6 +737,11 @@ impl Response {
             Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. } => {
                 Self::Learn(serde_json::from_value(value).map_err(read(verb))?)
             }
+            Request::InputTestStart(_)
+            | Request::InputTestPoll
+            | Request::InputTestCancel { .. } => {
+                Self::InputTest(serde_json::from_value(value).map_err(read(verb))?)
+            }
         })
     }
 
@@ -741,6 +758,7 @@ impl Response {
             Self::SlotAssign(r) => serde_json::to_value(r),
             Self::Stage(r) => serde_json::to_value(r),
             Self::Learn(r) => serde_json::to_value(r),
+            Self::InputTest(r) => serde_json::to_value(r),
         };
         value.unwrap_or(serde_json::Value::Null)
     }
@@ -1149,6 +1167,40 @@ pub struct LearnResponse {
 
 refusal_of!(LearnResponse);
 
+/// `input-test-start` / `input-test-poll` / `input-test-cancel`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputTestResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub generation: Option<u64>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub held: Vec<String>,
+    #[serde(default)]
+    pub seen: Vec<String>,
+    #[serde(default)]
+    pub peak: u32,
+    #[serde(default)]
+    pub events: u64,
+    #[serde(default)]
+    pub dropped: u64,
+    #[serde(default)]
+    pub rollover_visibility: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+}
+
+refusal_of!(InputTestResponse);
+
 // ---------------------------------------------------------------------------
 // Small shared readers — the daemon's field conventions, in one place
 // ---------------------------------------------------------------------------
@@ -1218,6 +1270,18 @@ mod tests {
         assert_eq!(Request::Quit.to_line(), r#"{"verb":"quit"}"#);
         assert_eq!(Request::LearnKey.to_line(), r#"{"verb":"learn-key"}"#);
         assert_eq!(Request::LearnPoll.to_line(), r#"{"verb":"learn-poll"}"#);
+        assert_eq!(
+            Request::InputTestStart(crate::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 30_000,
+            })
+            .to_line(),
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":30000}"#
+        );
+        assert_eq!(
+            Request::InputTestPoll.to_line(),
+            r#"{"verb":"input-test-poll"}"#
+        );
         assert_eq!(
             Request::LearnCancel { generation: None }.to_line(),
             r#"{"verb":"learn-cancel"}"#
@@ -1306,6 +1370,14 @@ steps = [{ hold = ["A"], frames = 2, allow_short = true }]
                 preset: "Panel P1".into(),
             }),
             Request::LearnKey,
+            Request::InputTestStart(crate::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 12_000,
+            }),
+            Request::InputTestPoll,
+            Request::InputTestCancel {
+                generation: Some(9),
+            },
         ];
         for request in requests {
             let line = request.to_line();
@@ -1313,6 +1385,33 @@ steps = [{ hold = ["A"], frames = 2, allow_short = true }]
                 .unwrap_or_else(|err| panic!("{line} did not read back: {err}"));
             assert_eq!(back, request, "{line}");
         }
+    }
+
+    /// A Studio update may reach an older daemon response shape while the
+    /// resident process is still being restarted. Newly-added diagnostic
+    /// counters therefore default rather than making a truthful partial
+    /// snapshot unreadable; the client supplies the explicit unavailable
+    /// rollover verdict.
+    #[test]
+    fn an_older_input_test_response_remains_readable() {
+        let response = Response::parse(
+            &Request::InputTestPoll,
+            serde_json::json!({
+                "ok": true,
+                "state": "listening",
+                "generation": 4,
+                "selector": "usb:d209:0430:00"
+            }),
+        )
+        .expect("response");
+        let Response::InputTest(response) = response else {
+            panic!("wrong response kind");
+        };
+        assert_eq!(response.generation, Some(4));
+        assert!(response.held.is_empty());
+        assert!(response.seen.is_empty());
+        assert_eq!(response.peak, 0);
+        assert!(response.rollover_visibility.is_empty());
     }
 
     /// THE REGRESSION, in type form. A macro body written with a `repeat`

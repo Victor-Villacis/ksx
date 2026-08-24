@@ -434,6 +434,9 @@ pub fn serve(
             .route("/api/learn", get(api_learn_poll))
             .route("/api/learn/start", post(api_learn_start))
             .route("/api/learn/cancel", post(api_learn_cancel))
+            .route("/api/input-test", get(api_input_test_poll))
+            .route("/api/input-test/start", post(api_input_test_start))
+            .route("/api/input-test/cancel", post(api_input_test_cancel))
             .route("/api/bind", post(api_bind))
             // v10: write a control's WHOLE key list (many keys → one
             // control). The island computes the new set from the payload it

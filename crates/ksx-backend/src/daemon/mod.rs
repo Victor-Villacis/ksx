@@ -58,6 +58,7 @@
 //! End to end, that path is asserted in [`panel_tests`]: two real sessions over
 //! one mock-backed claim, with the panel typing in between.
 
+pub mod input_test;
 pub mod learn;
 pub mod live;
 /// The live feed's own channel out of this process (`\\.\pipe\ksx-live`).
@@ -1692,12 +1693,12 @@ pub fn run(
         let _ = tx.send(DaemonCommand::Start { game: None });
     }
 
-    // The external control channel (M10a): a named-pipe thread that can only
-    // do what the tray can — enqueue a DaemonCommand, read the DaemonState
-    // snapshot, and read games.toml from disk. It has no path to the factory,
-    // the panel or any pipeline thread. Failure to create the pipe (a second
-    // daemon already owns the name) is logged, not fatal: the tray and stdin
-    // surfaces are untouched.
+    // The external control channel (M10a): session verbs enqueue the same
+    // DaemonCommand values as the tray and read the same DaemonState snapshot;
+    // editor/diagnostic verbs delegate to daemon-owned bounded services. It has
+    // no path to the factory or any time-critical pipeline thread. Failure to
+    // create the pipe (a second daemon already owns the name) is logged, not
+    // fatal: the tray and stdin surfaces are untouched.
     #[cfg(windows)]
     {
         let profiles_root = factory.root.clone();
@@ -1741,12 +1742,17 @@ pub fn run(
                 stage_adopt: pipe::stage_adopt_fn(map_root),
                 stage_capture_preflight: Box::new(crate::stage::preflight_capture),
                 // The panel goes in by CLONE, not by moving it into
-                // `PipeDeps`: the daemon still owns the claim, and the pipe
-                // thread still cannot reach the factory or any pipeline thread
-                // (the invariant above). What it gains is the ability to LISTEN
-                // to a board the daemon holds, which is the only way a mapper
-                // can hear a prepared keyboard at all.
+                // `PipeDeps`: the daemon still owns the claim, while the
+                // bounded observer receives only a tap and still cannot reach
+                // the factory or any pipeline thread. That tap is the only way
+                // a mapper can hear a prepared keyboard the daemon already
+                // holds.
                 learn: learn::LearnService::new(observe::observer(claimed.clone())),
+                input_test: input_test::InputTestService::new(observe::input_observer(
+                    claimed.clone(),
+                    state.clone(),
+                    factory.config_dir(),
+                )),
             },
             shutdown.clone(),
         );

@@ -341,8 +341,9 @@ The user-facing sequence is:
    `recovery-required` and blocks further programming until reread/restore.
 10. After byte verification, expected terminal keys are reconciled into the
    optional control-surface model and prior signal verification is invalidated.
-   A panel-independent **Test wiring** action listens once, identifies the
-   Windows key and every matching current-chart terminal, and performs no
+   A panel-independent **Test one control** action listens once, identifies the
+   observed host signal (for keyboard mode, a concrete `Keyboard · Key`)
+   and every matching current-chart terminal, and performs no
    binding write. The
    next action opens contextual KSX routing; a modeled physical panel enters
    its Route stage, while a cabinet with no panel drawing goes directly to the
@@ -353,7 +354,7 @@ The user-facing sequence is:
 The focused setup names and exposes the causal journey as:
 
 ```text
-physical arcade control → I-PAC terminal → Windows key → KSX macro/transform → virtual controller → game
+physical arcade control → I-PAC terminal → host signal (`Keyboard · Key` in keyboard mode) → KSX macro/transform → virtual controller → game
 ```
 
 While an I-PAC is selected, the ordinary QWERTY source art becomes an
@@ -369,7 +370,9 @@ is excluded from endpoint selection. On a multi-channel joystick, the complete
 terminal/stem/keycap row selects and inspects that exact direction, and an
 unassigned row cannot borrow a sibling direction's hover or route highlight.
 This is only a representation change: the I-PAC still speaks HID keyboard
-signals, and the same staged bindings remain the runtime authority. The capture
+signals, and the same staged bindings remain the runtime authority. “Host
+signal” is the protocol-neutral UI term; a keyboard key remains the concrete
+signal subtype for this qualified profile. The capture
 choices are correspondingly worded as
 **Dedicated arcade panel**, **Share unused outputs with Windows**, and
 **Observe and pass through**; ordinary keyboards retain their original copy.
@@ -378,12 +381,22 @@ An all-Unassigned chart also offers **Design physical panel first**. It leaves
 the backend-owned chart and recovery point intact, sends no report, and opens
 the blank/arcade/leverless/four-player templates. That supports the first-time
 cabinet order without making it mandatory: design physical controls, link them
-to terminals, assign Windows-key outputs, review/program/read back, Teach the
+to terminals, assign keyboard host-signal outputs, review/program/read back, Teach the
 wiring, then route through KSX. Physical design is available before keys, but
 an unqualified writer keeps full key authoring locked until the reversible
 one-terminal qualification write and exact restore both verify. Existing
 configured boards can still generate their physical panel directly from the
 current chart.
+
+Keyboard sources and keyboard-mode encoders also share **Test simultaneous
+inputs**. The bounded observer is scoped to the exact selected source and
+shows held, seen, peak, event and dropped-event counts without writing a chart
+or a KSX binding. “Peak” means distinct host signals held together—not
+physical terminals—because two terminals that emit the same key are
+indistinguishable after the encoder. Firmware rollover is not inferred from
+ordinary host events: until a transport exposes saturation evidence, Studio
+says rollover visibility is unavailable and leaves the physical saturation
+acceptance gate open.
 
 Configured firmware and observed wiring remain separate authorities on the
 panel itself. Before Teach, the key from the last complete board read can carry
@@ -764,6 +777,7 @@ referenced note describes an instant mode-switch button, not an NKRO addition.
 | 2026-08-23 22:48 EDT | `codex/panel-encoder-ecosystem` / `6a6de8a` baseline | Completed the six-stage panel flow: design-first blank encoders, chart-generated physical panels, terminal and Windows-key tokens on every channel, truthful current/planned/Teach states, observed-key route authority, and a slot-safe recoverable signal shelf whenever panel endpoints are hidden or incomplete. | `[MEASURED]` Canvas 55/55, SSR/visual 102/102, Studio HTTP 139/139 and docs 3/3 passed. Consecutive Studio builds were byte-identical at build hash `5a41f6c456d5`; independent P0–P2 re-review found no remaining issue. No HID report or EEPROM write occurred in this UX slice. |
 | 2026-08-24 00:54 EDT | `codex/panel-encoder-ecosystem` / `e0bb205` baseline plus reviewed worktree | Closed the first signal-authority and recovery races: fresh Teach evidence outranks an unwritten plan, apply invalidation must persist before USB, transaction and Teach ownership are exact selector plus Windows instance, and settled reads clear obsolete aliases for only that physical board. A backend `not-started` response retires the request's browser epoch but deliberately keeps its target behind a fresh-read gate; it does not restore pre-write Teach evidence. Passive recovery checks share the programming/Play lease and reject unsafe recovery paths; transient probes retry finitely while durable recovery never polls. The served Input source shell now adopts one client-owned I-PAC signal shelf without duplicating keyboard geometry. | `[MEASURED]` Backend panel programming 54/54, API 108/108, Studio HTTP 139/139 and the complete browser suite 181/181 passed before the final ownership audit; the affected canvas suite then passed 58/58 and SSR/visual passed 102/102 after those review fixes. This row predates the later server-token fence recorded below. Backend and Studio all-target clippy passed with warnings denied; docs 3/3 and formatting passed. No HID/EEPROM report was sent during review. |
 | 2026-08-24 06:25 EDT | `codex/panel-encoder-ecosystem` / `e0bb205` baseline plus final reviewed worktree | Completed the mapping commit boundary: canonical learner resolution, exact source selector/MI_00/board/chart proof, retained exclusive MI_02 session plus programming lease, opaque per-slot incarnation/mutation/content revision, a second daemon lock-held target check, conflict and chained-action pin retention, key-first and Control Surface target fencing, and process-local ordering between binds and programming/recovery. Browser regression mocks now model successful writes with a new served revision; programmable-source tests establish chart authority, fixture device selection is isolated and hydration waits for distinct final SVG geometry. | `[MEASURED 2026-08-24 06:25 EDT]` API 110/110, focused panel programming 56/56, focused daemon pipe 75/75 and backend 707 passed / 1 ignored were green; the final touched-package run also passed API, backend and Studio tests. The complete browser matrix passed 189/189, docs passed 3/3, formatting and warnings-denied touched-package clippy passed, and two consecutive Studio builds were byte-identical across 48 assets at build hash `60bbe320730cb7e31d594813c279512f25890f11ace9b3ee36fb871809cf1e94`. Independent frontend, backend and documentation reviews found no remaining P0–P2 issue. No live HID chart query, programming report or EEPROM write was sent during this review. |
+| 2026-08-24 09:25 EDT | `codex/panel-encoder-ecosystem` / `d9de536` baseline plus audited worktree | Completed the shared keyboard/keyboard-mode-encoder signal diagnostic and its Studio/CLI surfaces: exact-device bounded observation, held/seen/peak/event/drop evidence, exact-generation cancel/recovery across lost responses and tabs, and one causal `physical control → terminal → host signal → KSX → controller → game` presentation. The original independently traceable lasso routes remain; semantic route rows supplement them. Review then closed cross-process Play/programming exclusion, late-Play acceptance, slow-resolver accumulation, unresolved-release rebaseline, modal Escape ownership and edge-clipped processor controls. | `[MEASURED 2026-08-24 09:25 EDT]` API 112/112, Raw Input 5/5, backend 730 passed / 1 ignored, Studio HTTP 150/150 and the complete app package 105/105 passed. Browser canvas passed 71/71 and the other 15 browser suites passed 123/123. Formatting, diff checks and warnings-denied all-target clippy for every touched crate passed. Consecutive Studio builds were byte-identical across 48 assets at build hash `757c3f7eb24a1111a74641def1d8259140edd773723c29fdc50216fe23b30bb8`; independent P0–P2 review found no remaining actionable issue. No HID query, programming report or EEPROM write was sent in this audit slice; representative physical signals, power-cycle persistence, rollover/saturation, deliberate mode switching and interrupted physical-write behavior remain measured-hardware gates. |
 
 ## Current pickup
 
@@ -780,7 +794,7 @@ The next agent must not rerun qualification or restore the original chart as
 if the hardware gate were still pending. This UX audit issued no hardware
 report and did not alter that chart.
 
-Hardware Setup now presents the exact registered firmware as `1.56` beside
+**Configure device** now presents the exact registered firmware as `1.56` beside
 the board, observed keyboard-compatible input, complete terminal/key coverage
 and dynamic KSX route count. The firmware label is a backend-owned profile
 fact, not a browser conversion of `bcdDevice`; exact vendor mode and the
@@ -793,6 +807,6 @@ signals. NKRO/saturation and deliberate mode-switch behavior are separate
 measurements. The final browser/fixture rerun and independent P0–P2 code review
 are complete; neither is allowed to stand in for those remaining physical
 measurements. The implementation contract to preserve is one causal pipeline:
-physical control → I-PAC terminal → Windows key → KSX transform/macro → virtual
+physical control → I-PAC terminal → host signal (`Keyboard · Key` here) → KSX transform/macro → virtual
 controller → game. A control-surface drawing is optional metadata, never a
 substitute for the board chart or the Windows signal.

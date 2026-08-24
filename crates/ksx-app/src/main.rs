@@ -15,9 +15,9 @@
 // nothing else — argument definitions, the `match` below, and the exit codes.
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
-    autostart, config_io, daemon, device_edit, device_scan, devices, doctor, install, logging,
-    macro_cli, macro_trace, map, mapping, monitor, pads, panel, panel_programming, play,
-    preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
+    autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel,
+    panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -890,6 +890,32 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Measure the simultaneous keyboard signals KSX can actually observe
+    ///
+    /// This is a bounded, read-only test of one exact keyboard or keyboard-mode
+    /// encoder. It reports decoded Windows signals — held, seen, peak and
+    /// dropped transitions — and does NOT claim to measure physical switches
+    /// or USB rollover: two terminals emitting the same key are indistinguishable,
+    /// and Raw Input does not expose an ErrorRollOver report.
+    ///
+    /// `start` opens one daemon-owned observation and returns immediately with
+    /// its generation. Hold the desired chord at the panel, then use `poll`;
+    /// the peak remains in the snapshot after release. `cancel --generation N`
+    /// stops only that attempt, so a stale shell cannot cancel a newer test.
+    ///
+    /// Learn owns the same physical observer and therefore excludes this test.
+    /// Play and persistent encoder maintenance share its machine-wide lease,
+    /// including standalone processes. The daemon refuses rather than listening
+    /// to a different source or silently shortening the requested duration.
+    /// Every action is one typed control-pipe request; no mapping, hardware
+    /// chart or EEPROM byte changes.
+    ///
+    /// Exit codes: 0 = the daemon answered successfully, 1 = refused / pipe or
+    /// protocol error, 2 = no daemon control channel.
+    InputTest {
+        #[command(subcommand)]
+        command: InputTestCommand,
+    },
     /// The staged setup a visit is deciding on (view / adopt / reorder / socd)
     ///
     /// The DAEMON holds the stage (docs/FIRST-RUN.md §2); every verb here is
@@ -1192,6 +1218,43 @@ enum SessionCommand {
     /// Stop the daemon and wait until its control pipe is closed
     Quit {
         /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum InputTestCommand {
+    /// Begin one bounded observation for an exact canonical selector
+    Start {
+        /// Canonical selector from `ksx device scan` (not a label or substring)
+        #[arg(value_name = "SELECTOR")]
+        selector: String,
+        /// Total wall-clock observation budget in milliseconds (daemon: 1000..=60000)
+        #[arg(
+            long,
+            value_name = "MS",
+            default_value_t = input_test_cli::DEFAULT_DURATION_MS,
+            value_parser = clap::value_parser!(u64)
+                .range(input_test_cli::MIN_DURATION_MS..=input_test_cli::MAX_DURATION_MS)
+        )]
+        duration_ms: u64,
+        /// Print the daemon's exact response as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the current or most recently completed observation snapshot
+    Poll {
+        /// Print the daemon's exact response as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop an observation without discarding its peak/seen snapshot
+    Cancel {
+        /// Stop only this generation (the number returned by `start`)
+        #[arg(long, value_name = "N")]
+        generation: u64,
+        /// Print the daemon's exact response as one JSON object
         #[arg(long)]
         json: bool,
     },
@@ -2401,6 +2464,25 @@ fn main() -> anyhow::Result<()> {
             SessionCommand::Resume { json } => session::run(session::Verb::Resume, json),
             SessionCommand::Reload { json } => session::run(session::Verb::Reload, json),
             SessionCommand::Quit { json } => session::run(session::Verb::Quit, json),
+        },
+        Command::InputTest { command } => match command {
+            InputTestCommand::Start {
+                selector,
+                duration_ms,
+                json,
+            } => input_test_cli::run(
+                input_test_cli::Verb::Start {
+                    selector,
+                    duration_ms,
+                },
+                json,
+            ),
+            InputTestCommand::Poll { json } => {
+                input_test_cli::run(input_test_cli::Verb::Poll, json)
+            }
+            InputTestCommand::Cancel { generation, json } => {
+                input_test_cli::run(input_test_cli::Verb::Cancel { generation }, json)
+            }
         },
         Command::Stage { command } => match command {
             StageCommand::View { json } => stage_cli::run(stage_cli::Verb::View, json),
@@ -4371,6 +4453,96 @@ mod tests {
             "2 = no daemon control channel",
             "predates `ksx session`",
             "`quit` alone treats this as exit 0",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
+    #[test]
+    fn input_test_actions_parse_with_backend_owned_bounds_and_generation() {
+        let cli = Cli::try_parse_from(["ksx", "input-test", "start", "usb:d209:0430:00", "--json"])
+            .unwrap();
+        match cli.command {
+            Command::InputTest {
+                command:
+                    InputTestCommand::Start {
+                        selector,
+                        duration_ms,
+                        json,
+                    },
+            } => {
+                assert_eq!(selector, "usb:d209:0430:00");
+                assert_eq!(duration_ms, input_test_cli::DEFAULT_DURATION_MS);
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+
+        for duration in [
+            input_test_cli::MIN_DURATION_MS,
+            input_test_cli::MAX_DURATION_MS,
+        ] {
+            assert!(Cli::try_parse_from([
+                "ksx".to_owned(),
+                "input-test".to_owned(),
+                "start".to_owned(),
+                "usb:d209:0430:00".to_owned(),
+                "--duration-ms".to_owned(),
+                duration.to_string(),
+            ])
+            .is_ok());
+        }
+        for duration in [
+            input_test_cli::MIN_DURATION_MS - 1,
+            input_test_cli::MAX_DURATION_MS + 1,
+        ] {
+            assert!(Cli::try_parse_from([
+                "ksx".to_owned(),
+                "input-test".to_owned(),
+                "start".to_owned(),
+                "usb:d209:0430:00".to_owned(),
+                "--duration-ms".to_owned(),
+                duration.to_string(),
+            ])
+            .is_err());
+        }
+        assert!(Cli::try_parse_from(["ksx", "input-test", "start"]).is_err());
+        assert!(Cli::try_parse_from(["ksx", "input-test", "poll", "--json"]).is_ok());
+
+        let cli =
+            Cli::try_parse_from(["ksx", "input-test", "cancel", "--generation", "42"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::InputTest {
+                command: InputTestCommand::Cancel {
+                    generation: 42,
+                    json: false,
+                }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from(["ksx", "input-test", "cancel"]).is_err(),
+            "a new client must not expose the unscoped legacy cancel spelling"
+        );
+    }
+
+    #[test]
+    fn input_test_help_states_the_measurement_and_exclusion_contract() {
+        let mut cmd = Cli::command();
+        let input_test = cmd.find_subcommand_mut("input-test").unwrap();
+        let help = input_test.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "decoded Windows signals",
+            "does NOT claim to measure physical switches or USB rollover",
+            "two terminals emitting the same key are indistinguishable",
+            "Raw Input does not expose an ErrorRollOver report",
+            "Learn owns the same physical observer",
+            "machine-wide lease",
+            "standalone processes",
+            "one typed control-pipe request",
+            "no mapping, hardware chart or EEPROM byte changes",
+            "2 = no daemon control channel",
         ] {
             assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
         }

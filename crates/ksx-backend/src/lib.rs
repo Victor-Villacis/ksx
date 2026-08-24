@@ -54,6 +54,7 @@ pub mod doctor;
 pub mod feed;
 #[cfg(windows)]
 pub(crate) mod identity;
+pub mod input_test_cli;
 pub mod install;
 pub mod logging;
 pub mod macro_cli;

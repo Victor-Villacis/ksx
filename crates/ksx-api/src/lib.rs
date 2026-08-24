@@ -29,9 +29,11 @@
 //!   forma, no tokio, no HTTP types — not even behind a feature. If this crate
 //!   ever grows a dependency that can open a socket, the M9 decision has been
 //!   undone by accident.
-//! - **Exactly the tray's reach.** Every write verb is one `DaemonCommand` or
-//!   one call into the single mapping writer. Nothing here can touch capture,
-//!   output, or a live session (docs/ARCHITECTURE.md rules 1–5).
+//! - **Mutations stay within the tray/mapping boundary.** Every write verb is
+//!   one `DaemonCommand` or one call into the single mapping writer. Read-only
+//!   diagnostics may ask the daemon to own a bounded observation, but nothing
+//!   in this API crate can touch capture, output, or a live session directly
+//!   (docs/ARCHITECTURE.md rules 1–5).
 //! - **The read side never needs a daemon.** [`StatusSource`] is satisfiable
 //!   from the config store and the platform alone, which is what keeps the
 //!   read-only mapper alive behind the "No daemon" banner.
@@ -81,8 +83,8 @@ pub use ksx_core::MAX_SLOTS;
 pub use client::{Client, VerbSink};
 pub use control::{
     map_request, multi_key_refusal, with_key, without_key, ActiveSessionView, BindConflict,
-    BindOutcome, BindRequest, ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin,
-    SessionView, SlotOutcome,
+    BindOutcome, BindRequest, ControlSource, InputTestSpec, InputTestView, LearnView, MacroOutcome,
+    MacroWrite, SessionOrigin, SessionView, SlotOutcome,
 };
 pub use live::{
     KeyHit, LiveEnvelope, LiveFeed, LiveFrame, LiveSource, LiveStream, NoFeed, NoLiveSource,
@@ -127,8 +129,8 @@ pub use status::{
 };
 pub use wire::{
     macro_body, ActionResponse, BackupView, BackupsRequest, BackupsResponse, ClearAllRequest,
-    ConflictView, FlashView, HealthView, LastSessionView, LearnResponse, MacroResponse,
-    MacroWriteKind, MapMacroRequest, MapRequest, MapResponse, MovedFromView, Request, Response,
-    RestoreMode, RestoreRequest, RestoreResponse, SlotAssignRequest, SlotAssignResponse,
-    StatusResponse, PIPE_NAME, RESTORE_MODES,
+    ConflictView, FlashView, HealthView, InputTestResponse, LastSessionView, LearnResponse,
+    MacroResponse, MacroWriteKind, MapMacroRequest, MapRequest, MapResponse, MovedFromView,
+    Request, Response, RestoreMode, RestoreRequest, RestoreResponse, SlotAssignRequest,
+    SlotAssignResponse, StatusResponse, PIPE_NAME, RESTORE_MODES,
 };

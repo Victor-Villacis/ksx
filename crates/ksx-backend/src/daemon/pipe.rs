@@ -5,18 +5,20 @@
 //! `stop`, `reload`, plus the M7 mapper slice: `map` (edit one preset binding
 //! through the same [`crate::mapping::apply`] the CLI verb uses — no
 //! pipe-private editor), `learn-key` / `learn-poll` / `learn-cancel` (the
-//! asynchronous "press the panel key" recorder, [`super::learn`]). `ksx
-//! session` and Studio are thin clients of this; docs/CONTROL-SURFACE.md
-//! carries the request/response examples.
+//! asynchronous "press the panel key" recorder, [`super::learn`]), and the
+//! bounded `input-test-*` diagnostic. `ksx session`, `ksx input-test`, and
+//! Studio are thin clients of this; docs/CONTROL-SURFACE.md carries the
+//! request/response examples.
 //!
 //! # Reach
 //!
-//! The pipe thread has exactly the tray's reach and no more: it enqueues the
-//! same [`DaemonCommand`] values the tray menu produces, reads the same
-//! [`DaemonState`] snapshot the tray polls, and reads games.toml from disk.
-//! It owns no path to the factory, the panel, or any pipeline thread — a
-//! wedged pipe client costs other clients their turn on the pipe, never a
-//! keyboard.
+//! Session verbs have exactly the tray's reach: they enqueue the same
+//! [`DaemonCommand`] values and read the same [`DaemonState`] snapshot. Editor
+//! verbs delegate to the daemon-owned mapping and observer services. Those
+//! observers may briefly own a Raw Input window or panel tap, but start is
+//! asynchronous and every attempt is bounded; the pipe still has no path to a
+//! factory or time-critical pipeline thread. A wedged pipe client costs other
+//! clients their turn on the pipe, never an unbounded keyboard claim.
 //!
 //! # Trust model
 //!
@@ -229,6 +231,7 @@ pub struct PipeDeps {
     pub stage_adopt: StageAdoptFn,
     pub stage_capture_preflight: StageCapturePreflightFn,
     pub learn: super::learn::LearnService,
+    pub input_test: super::input_test::InputTestService,
 }
 
 /// The real [`MapFn`] and [`MacroFn`]: [`crate::mapping::apply`] and
@@ -352,6 +355,10 @@ pub fn profile_rows(root: &ksx_config::ConfigRoot) -> Vec<(String, String)> {
 /// that a client is never parked behind a wedged start.
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const SETTLE_POLL: Duration = Duration::from_millis(25);
+/// A cancelled Learn answers before its observer finishes destroying the Raw
+/// Input window. Let that cleanup tail finish so the next user action does not
+/// spuriously bounce; never wait on a generation that is still listening.
+const OBSERVER_HANDOFF_GRACE: Duration = Duration::from_millis(250);
 /// A request line longer than this is an attack or a bug, not a verb.
 const MAX_REQUEST: usize = 64 * 1024;
 
@@ -519,12 +526,21 @@ fn handle_request_with_shutdown(
     };
     let Some(verb) = request.get("verb").and_then(|v| v.as_str()) else {
         return err_msg(
-            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel)"#,
+            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel | input-test-start | input-test-poll | input-test-cancel)"#,
         );
     };
     match verb {
         "status" => status_json(state, &deps.profiles),
         "start" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot start while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
             let profile = request
                 .get("profile")
                 .and_then(|p| p.as_str())
@@ -534,7 +550,18 @@ fn handle_request_with_shutdown(
         }
         // **Put back what `stop` stopped.** Not `start` with an argument: see
         // [`handle_resume`], and `ksx_api::ControlSource::resume`.
-        "resume" => handle_resume(deps, settle),
+        "resume" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot resume while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
+            handle_resume(deps, settle)
+        }
         "stop" => {
             let baseline = snapshot(state).run;
             if !matches!(baseline, RunState::Running { .. } | RunState::Starting) {
@@ -546,6 +573,15 @@ fn handle_request_with_shutdown(
             await_stop(state, settle)
         }
         "reload" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot reload while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
             let baseline = snapshot(state).run;
             if tx.send(DaemonCommand::Reload).is_err() {
                 return err_msg("the daemon is shutting down");
@@ -599,7 +635,18 @@ fn handle_request_with_shutdown(
         "stage-bind" => handle_stage_bind(&request, &deps.state),
         "stage-macro" => handle_stage_macro(&request, &deps.state),
         "stage-commit" => handle_stage_commit(deps),
-        "stage-play" => handle_stage_play(deps, settle),
+        "stage-play" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot start while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
+            handle_stage_play(deps, settle)
+        }
         "stage-apply" => handle_stage_apply(deps, settle),
         "stage-adopt" => handle_stage_adopt(&request, deps),
         // Learn needs an IDLE daemon, and this refusal is deliberate — it was
@@ -649,6 +696,15 @@ fn handle_request_with_shutdown(
                      or bind directly with `ksx map`",
                 );
             }
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "learn-key is unavailable while the simultaneous-input test is listening or releasing; stop that test first",
+                );
+            }
             deps.learn.start()
         }
         "learn-poll" => deps.learn.poll(),
@@ -667,10 +723,96 @@ fn handle_request_with_shutdown(
             };
             deps.learn.cancel(generation)
         }
+        "input-test-start" => {
+            if matches!(
+                snapshot(state).run,
+                RunState::Running { .. } | RunState::Starting
+            ) {
+                return err_code(
+                    "session-running",
+                    "the simultaneous-input test is unavailable while Play is running or starting; stop the session first",
+                );
+            }
+            if !deps
+                .learn
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "the simultaneous-input test is unavailable while Learn is listening or releasing; cancel Learn first",
+                );
+            }
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "the previous simultaneous-input test is still listening or releasing; cancel it and try again",
+                );
+            }
+            let Some(fields) = request.as_object() else {
+                return err_code("bad-request", "input-test-start must be a JSON object");
+            };
+            if fields
+                .keys()
+                .any(|field| !matches!(field.as_str(), "verb" | "selector" | "duration_ms"))
+            {
+                return err_code(
+                    "bad-request",
+                    "input-test-start accepts only selector and duration_ms",
+                );
+            }
+            let spec = match serde_json::from_value::<ksx_api::Request>(request.clone()) {
+                Ok(ksx_api::Request::InputTestStart(spec)) => spec,
+                Ok(_) => unreachable!("the fixed verb was checked above"),
+                Err(err) => {
+                    return err_code(
+                        "bad-request",
+                        format!("input-test-start could not be read: {err}"),
+                    )
+                }
+            };
+            deps.input_test.start(spec)
+        }
+        "input-test-poll" => {
+            if request.as_object().is_none_or(|fields| fields.len() != 1) {
+                return err_code(
+                    "bad-request",
+                    "input-test-poll accepts no fields other than its fixed verb",
+                );
+            }
+            deps.input_test.poll()
+        }
+        "input-test-cancel" => {
+            let Some(fields) = request.as_object() else {
+                return err_code("bad-request", "input-test-cancel must be a JSON object");
+            };
+            if fields
+                .keys()
+                .any(|field| !matches!(field.as_str(), "verb" | "generation"))
+            {
+                return err_code("bad-request", "input-test-cancel accepts only generation");
+            }
+            let generation = match request.get("generation") {
+                None => None,
+                Some(value) => match value.as_u64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return err_code(
+                            "bad-request",
+                            "input-test-cancel generation must be an unsigned integer",
+                        )
+                    }
+                },
+            };
+            deps.input_test.cancel(generation)
+        }
         other => err_msg(format!(
             "unknown verb '{other}' (status | start | stop | reload | quit | map | map-macro | \
              map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | \
-             stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel)"
+             stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel | \
+             input-test-start | input-test-poll | input-test-cancel)"
         )),
     }
 }
@@ -2726,6 +2868,12 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             Request::LearnKey,
             Request::LearnPoll,
             Request::LearnCancel { generation: None },
+            Request::InputTestStart(ksx_api::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 5_000,
+            }),
+            Request::InputTestPoll,
+            Request::InputTestCancel { generation: None },
             // The pure dispatcher has no process-owned rendezvous and must
             // refuse rather than pretending an in-process call closed a pipe.
             Request::Quit,
@@ -2778,6 +2926,12 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                     | (
                         Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. },
                         Response::Learn(_)
+                    )
+                    | (
+                        Request::InputTestStart(_)
+                            | Request::InputTestPoll
+                            | Request::InputTestCancel { .. },
+                        Response::InputTest(_)
                     )
             );
             assert!(right_shape, "`{verb}` was read as the wrong response kind");
@@ -2925,6 +3079,20 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         }))
     }
 
+    fn idle_input_test() -> super::super::input_test::InputTestService {
+        super::super::input_test::InputTestService::new(Arc::new(
+            |_selector, deadline, cancel, _emit| {
+                while Instant::now() < deadline {
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Ok(0);
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(0)
+            },
+        ))
+    }
+
     /// A `map-restore` that refuses everything — protocol tests that never
     /// restore.
     fn no_restore() -> RestoreFn {
@@ -2996,6 +3164,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             stage_adopt: no_stage_adopt(),
             stage_capture_preflight: Box::new(|_| Ok(())),
             learn: idle_learn(),
+            input_test: idle_input_test(),
         }
     }
 
@@ -5562,6 +5731,264 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["state"], "cancelled");
         let v = handle_request(r#"{"verb":"learn-poll"}"#, &d, FAST);
         assert_eq!(v["state"], "cancelled");
+    }
+
+    #[test]
+    fn simultaneous_input_test_is_bounded_typed_and_refused_during_play() {
+        for run in [RunState::Running { slots: 1 }, RunState::Starting] {
+            let state = shared(run);
+            let (tx, _rx) = unbounded();
+            let v = handle_request(
+                r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+                &deps(tx, state, no_profiles()),
+                FAST,
+            );
+            assert_eq!(v["ok"], false, "{v}");
+            assert_eq!(v["code"], "session-running", "{v}");
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        for bad in [
+            r#"{"verb":"input-test-start","selector":"","duration_ms":5000}"#,
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":999}"#,
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000,"guess":true}"#,
+        ] {
+            let v = handle_request(bad, &d, FAST);
+            assert_eq!(v["ok"], false, "{bad} -> {v}");
+            assert_eq!(v["code"], "bad-request", "{bad} -> {v}");
+        }
+    }
+
+    #[test]
+    fn simultaneous_input_test_reports_backend_reduced_held_seen_and_peak() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        d.input_test = super::super::input_test::InputTestService::new(Arc::new(
+            |_selector, _timeout, _cancel, emit| {
+                for event in [
+                    super::super::input_test::InputTransition {
+                        key: "A".into(),
+                        down: true,
+                    },
+                    super::super::input_test::InputTransition {
+                        key: "S".into(),
+                        down: true,
+                    },
+                    super::super::input_test::InputTransition {
+                        key: "A".into(),
+                        down: false,
+                    },
+                ] {
+                    emit(event);
+                }
+                Ok(0)
+            },
+        ));
+        let started = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        let generation = started["generation"].as_u64().expect("generation");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let view = loop {
+            let view = handle_request(r#"{"verb":"input-test-poll"}"#, &d, FAST);
+            if view["state"] != "listening" {
+                break view;
+            }
+            assert!(Instant::now() < deadline, "observer did not settle: {view}");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(view["generation"], generation);
+        assert_eq!(view["held"], serde_json::json!(["S"]));
+        assert_eq!(view["seen"], serde_json::json!(["A", "S"]));
+        assert_eq!(view["peak"], 2);
+        assert_eq!(view["rollover_visibility"], "unavailable");
+    }
+
+    #[test]
+    fn learn_and_simultaneous_test_cannot_own_the_observer_together() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-key"}"#, &d, FAST)["state"],
+            "listening"
+        );
+        let refused = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(refused["code"], "observer-busy", "{refused}");
+        handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while d.learn.observer_active() {
+            assert!(
+                Instant::now() < deadline,
+                "Learn did not release its observer"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let test = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(test["state"], "listening", "{test}");
+        let play = handle_request(r#"{"verb":"start"}"#, &d, FAST);
+        assert_eq!(play["code"], "observer-busy", "{play}");
+        let learn = handle_request(r#"{"verb":"learn-key"}"#, &d, FAST);
+        assert_eq!(learn["code"], "observer-busy", "{learn}");
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+    }
+
+    /// Broken version caught: Learn cancel answered `cancelled` while its Raw
+    /// Input thread was still releasing, so the immediately-following input
+    /// test bounced with `observer-busy` even though the user had completed
+    /// the required cancellation step.
+    #[test]
+    fn a_terminal_learn_cleanup_hands_off_to_input_test_within_a_bounded_grace() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release_cleanup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.learn = super::super::learn::LearnService::new(Arc::new({
+            let release_cleanup = Arc::clone(&release_cleanup);
+            move |_timeout, cancel| {
+                while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                while !release_cleanup.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(None)
+            }
+        }));
+
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-key"}"#, &d, FAST)["state"],
+            "listening"
+        );
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST)["state"],
+            "cancelled"
+        );
+        assert!(d.learn.observer_active(), "cleanup tail was not held open");
+        let release = Arc::clone(&release_cleanup);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let started = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        releaser.join().unwrap();
+        assert_eq!(started["state"], "listening", "{started}");
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+    }
+
+    /// The reverse handoff has the same customer contract: Cancel is a
+    /// terminal answer, so the next deliberate observer action must absorb the
+    /// short OS-release tail rather than bounce with a misleading busy error.
+    #[test]
+    fn a_cancelled_input_test_hands_off_immediately_to_learn_and_a_new_test() {
+        fn releasing_input_test(
+            released: Arc<std::sync::atomic::AtomicBool>,
+        ) -> super::super::input_test::InputTestService {
+            super::super::input_test::InputTestService::new(Arc::new(
+                move |_selector, _deadline, cancel, _emit| {
+                    while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    while !released.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Ok(0)
+                },
+            ))
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        assert_eq!(
+            handle_request(
+                r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+                &d,
+                FAST,
+            )["state"],
+            "listening"
+        );
+        assert_eq!(
+            handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST)["state"],
+            "cancelled"
+        );
+        assert!(
+            d.input_test.observer_active(),
+            "cleanup tail was not held open"
+        );
+        let release_now = Arc::clone(&release);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release_now.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let learned = handle_request(r#"{"verb":"learn-key"}"#, &d, FAST);
+        releaser.join().unwrap();
+        assert_eq!(learned["state"], "listening", "{learned}");
+        handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while d.learn.observer_active() {
+            assert!(
+                Instant::now() < deadline,
+                "Learn did not release its observer"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        let first = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        let first_generation = first["generation"].as_u64().unwrap();
+        handle_request(
+            &format!(r#"{{"verb":"input-test-cancel","generation":{first_generation}}}"#),
+            &d,
+            FAST,
+        );
+        let release_now = Arc::clone(&release);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release_now.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let second = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        releaser.join().unwrap();
+        assert_eq!(second["state"], "listening", "{second}");
+        assert!(
+            second["generation"].as_u64().unwrap() > first_generation,
+            "a fresh generation was not opened: {second}"
+        );
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
     }
 
     #[test]

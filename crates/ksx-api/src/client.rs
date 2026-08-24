@@ -17,16 +17,16 @@
 //! the shell and not the verbs.
 
 use crate::control::{
-    map_request, BindOutcome, BindRequest, ControlSource, LearnView, MacroOutcome, MacroWrite,
-    SessionView, SlotOutcome,
+    map_request, BindOutcome, BindRequest, ControlSource, InputTestSpec, InputTestView, LearnView,
+    MacroOutcome, MacroWrite, SessionView, SlotOutcome,
 };
 use crate::refusal::{codes, Refusal};
 use crate::stage::{
     StageEdit, StageOutcome, StagedBindRequest, StagedMacroRequest, StagedSetupView,
 };
 use crate::wire::{
-    BackupView, BackupsRequest, ClearAllRequest, LearnResponse, Request, Response, RestoreMode,
-    RestoreRequest, SlotAssignRequest,
+    BackupView, BackupsRequest, ClearAllRequest, InputTestResponse, LearnResponse, Request,
+    Response, RestoreMode, RestoreRequest, SlotAssignRequest,
 };
 
 /// Performs one typed verb. The whole seam between a surface and a daemon.
@@ -164,6 +164,14 @@ impl<S: VerbSink> Client<S> {
             Err(refusal) => LearnView::unavailable(refusal.message),
         }
     }
+
+    fn input_test(&self, request: Request) -> InputTestView {
+        match self.call(&request) {
+            Ok(Response::InputTest(answer)) => input_test_view(answer),
+            Ok(_) => InputTestView::unavailable(Self::mismatch(&request).message),
+            Err(refusal) => InputTestView::unavailable(refusal.message),
+        }
+    }
 }
 
 /// One learn answer → the mapper's view. An `ok:false` (the running-session
@@ -189,6 +197,39 @@ fn learn_view(answer: LearnResponse) -> LearnView {
         remaining_ms: answer.remaining_ms,
         device: answer.device,
         key: answer.key,
+        error: answer.error,
+    }
+}
+
+fn input_test_view(answer: InputTestResponse) -> InputTestView {
+    if !answer.ok {
+        return InputTestView::unavailable(
+            answer
+                .error
+                .unwrap_or_else(|| "the daemon refused".to_owned()),
+        );
+    }
+    InputTestView {
+        ok: true,
+        state: if answer.state.is_empty() {
+            "unknown".to_owned()
+        } else {
+            answer.state
+        },
+        generation: answer.generation,
+        selector: answer.selector,
+        remaining_ms: answer.remaining_ms,
+        held: answer.held,
+        seen: answer.seen,
+        peak: answer.peak,
+        events: answer.events,
+        dropped: answer.dropped,
+        rollover_visibility: if answer.rollover_visibility.is_empty() {
+            "unavailable".to_owned()
+        } else {
+            answer.rollover_visibility
+        },
+        detail: answer.detail,
         error: answer.error,
     }
 }
@@ -244,6 +285,18 @@ impl<S: VerbSink> ControlSource for Client<S> {
 
     fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
         self.learn(Request::LearnCancel { generation })
+    }
+
+    fn input_test_start(&self, spec: &InputTestSpec) -> InputTestView {
+        self.input_test(Request::InputTestStart(spec.clone()))
+    }
+
+    fn input_test_poll(&self) -> InputTestView {
+        self.input_test(Request::InputTestPoll)
+    }
+
+    fn input_test_cancel_generation(&self, generation: Option<u64>) -> InputTestView {
+        self.input_test(Request::InputTestCancel { generation })
     }
 
     fn bind(&self, request: &BindRequest) -> BindOutcome {
@@ -483,6 +536,33 @@ mod tests {
         assert_eq!(learned.generation, Some(42));
         assert_eq!(learned.state, "hit");
         assert_eq!(client.sink().last(), Request::LearnKey);
+    }
+
+    #[test]
+    fn simultaneous_input_snapshot_survives_the_typed_control_seam() {
+        let client = Client::new(Fake::answering(Response::InputTest(InputTestResponse {
+            ok: true,
+            state: "listening".into(),
+            generation: Some(17),
+            selector: Some("usb:d209:0430:00".into()),
+            remaining_ms: Some(28_000),
+            held: vec!["A".into(), "S".into()],
+            seen: vec!["A".into(), "S".into(), "D".into()],
+            peak: 3,
+            events: 7,
+            rollover_visibility: "unavailable".into(),
+            detail: "observed".into(),
+            ..InputTestResponse::default()
+        })));
+        let spec = InputTestSpec {
+            selector: "usb:d209:0430:00".into(),
+            duration_ms: 30_000,
+        };
+        let view = client.input_test_start(&spec);
+        assert_eq!(view.generation, Some(17));
+        assert_eq!(view.held, ["A", "S"]);
+        assert_eq!(view.peak, 3);
+        assert_eq!(client.sink().last(), Request::InputTestStart(spec));
     }
 
     #[test]

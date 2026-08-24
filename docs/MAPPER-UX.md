@@ -116,15 +116,24 @@ The replacement has four parts:
    escape hatch.** Native forms and consequence text survive there (and on
    `/map`); they no longer reserve a quarter of the main canvas.
 
-### Canvas processor placement contract (2026-08-23)
+### Canvas route and processor placement contract (revised 2026-08-24)
 
-The committed player-harness route model remains the canvas presentation
-contract. Macro and transformation processors auto-place between their live
-source and destination groups. Dragging a processor, or nudging its move
-control with the keyboard, stores a manual offset from that automatic position;
-the relationship can therefore move with its widgets without discarding the
-user's adjustment. The processor exposes an explicit **Auto** action which
-removes that offset and returns it to automatic placement.
+The shipped direct-route presentation is one independent, axis-aware lasso
+curve for every physical-key → virtual-control relation. Direct cords never
+merge into a player harness, trunk, shared bus or bundled segment. Fan-out is
+therefore one real source endpoint with separately traceable outgoing cords;
+fan-in likewise keeps every incoming relation distinct. Each cord attaches to
+the exact visible keycap and controller control, receives its own deterministic
+lane, and remains independently inspectable.
+
+Macro segments are the deliberate causal exception to a direct key → control
+cord: they remain explicit key → processor and processor → control relations.
+Macro processors auto-place between their live source and destination groups.
+Dragging a processor, or nudging its move control with the keyboard, stores a
+manual offset from that automatic position; the relationship can therefore
+move with its widgets without discarding the user's adjustment. The processor
+exposes an explicit **Auto** action which removes that offset and returns it to
+automatic placement.
 If browser storage refuses either write, the card stays useful for the current
 session, labels that state visibly, and keeps a keyboard-reachable retry rather
 than claiming the change was saved.

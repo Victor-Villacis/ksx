@@ -190,6 +190,9 @@ struct ScriptedControl {
     committed: AtomicBool,
     learning: AtomicBool,
     learn_generation: AtomicUsize,
+    input_test_generation: AtomicUsize,
+    input_test_spec: Mutex<Option<ksx_api::InputTestSpec>>,
+    input_test_cancelled: AtomicBool,
     /// The daemon's StageMeta dirty stamp, scripted: set by the test that
     /// exercises the Apply button's running+dirty visibility.
     dirty: AtomicBool,
@@ -230,6 +233,9 @@ impl ScriptedControl {
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
             learn_generation: AtomicUsize::new(0),
+            input_test_generation: AtomicUsize::new(0),
+            input_test_spec: Mutex::new(None),
+            input_test_cancelled: AtomicBool::new(false),
             dirty: AtomicBool::new(false),
             stage_revision: AtomicUsize::new(0),
             apply_needs_restart: AtomicBool::new(false),
@@ -478,6 +484,68 @@ impl ControlSource for ScriptedControl {
             return self.learn_poll();
         }
         self.learn_cancel()
+    }
+
+    fn input_test_start(&self, spec: &ksx_api::InputTestSpec) -> ksx_api::InputTestView {
+        let generation = self.input_test_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.input_test_spec.lock().unwrap() = Some(spec.clone());
+        self.input_test_cancelled.store(false, Ordering::SeqCst);
+        ksx_api::InputTestView {
+            ok: true,
+            state: "listening".into(),
+            generation: Some(generation as u64),
+            selector: Some(spec.selector.clone()),
+            remaining_ms: Some(spec.duration_ms),
+            held: vec!["A".into(), "S".into()],
+            seen: vec!["A".into(), "S".into(), "D".into()],
+            peak: 3,
+            events: 7,
+            dropped: 0,
+            rollover_visibility: "unavailable".into(),
+            detail: "KSX observed three simultaneous signals.".into(),
+            error: None,
+        }
+    }
+
+    fn input_test_poll(&self) -> ksx_api::InputTestView {
+        let Some(spec) = self.input_test_spec.lock().unwrap().clone() else {
+            return ksx_api::InputTestView {
+                ok: true,
+                state: "idle".into(),
+                rollover_visibility: "unavailable".into(),
+                detail: "Release every key, then start the test.".into(),
+                ..ksx_api::InputTestView::default()
+            };
+        };
+        let cancelled = self.input_test_cancelled.load(Ordering::SeqCst);
+        ksx_api::InputTestView {
+            ok: true,
+            state: if cancelled { "cancelled" } else { "listening" }.into(),
+            generation: Some(self.input_test_generation.load(Ordering::SeqCst) as u64),
+            selector: Some(spec.selector),
+            remaining_ms: (!cancelled).then_some(spec.duration_ms.saturating_sub(1_000)),
+            held: if cancelled {
+                Vec::new()
+            } else {
+                vec!["S".into()]
+            },
+            seen: vec!["A".into(), "S".into(), "D".into()],
+            peak: 3,
+            events: 8,
+            dropped: 0,
+            rollover_visibility: "unavailable".into(),
+            detail: "KSX observed three simultaneous signals.".into(),
+            error: None,
+        }
+    }
+
+    fn input_test_cancel_generation(&self, generation: Option<u64>) -> ksx_api::InputTestView {
+        let current = self.input_test_generation.load(Ordering::SeqCst) as u64;
+        if generation.is_some_and(|generation| generation != current) {
+            return self.input_test_poll();
+        }
+        self.input_test_cancelled.store(true, Ordering::SeqCst);
+        self.input_test_poll()
     }
 
     // ── The staged setup, the way the daemon holds it ────────────────────
@@ -809,6 +877,11 @@ struct ScriptedMachine {
     panel_program_entered: AtomicBool,
     panel_restore_plan_specs: Mutex<Vec<ksx_api::PanelRestoreSpec>>,
     panel_restore_specs: Mutex<Vec<ksx_api::PanelRestoreApplySpec>>,
+    /// Restore uses the same fence as program; keep an independent hermetic
+    /// hold so that parity is proven rather than inferred from duplicated
+    /// handler structure.
+    panel_restore_hold: AtomicBool,
+    panel_restore_entered: AtomicBool,
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
     /// Raw daemon learner identities presented for safe inventory resolution.
@@ -881,6 +954,8 @@ impl Default for ScriptedMachine {
             panel_program_entered: AtomicBool::new(false),
             panel_restore_plan_specs: Mutex::new(Vec::new()),
             panel_restore_specs: Mutex::new(Vec::new()),
+            panel_restore_hold: AtomicBool::new(false),
+            panel_restore_entered: AtomicBool::new(false),
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             identified_from: Mutex::new(Vec::new()),
@@ -1609,6 +1684,10 @@ impl ksx_api::MachineSource for ScriptedMachine {
         &self,
         spec: &ksx_api::PanelRestoreApplySpec,
     ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_restore_entered.store(true, Ordering::SeqCst);
+        while self.panel_restore_hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
         self.panel_restore_specs.lock().unwrap().push(spec.clone());
         let mut outcome = Self::panel_program_outcome();
         outcome.summary = "The backup was restored and every byte verified.".to_owned();
@@ -2442,6 +2521,15 @@ fn start_server_with_sources(
         fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
             self.0.learn_cancel_generation(generation)
         }
+        fn input_test_start(&self, spec: &ksx_api::InputTestSpec) -> ksx_api::InputTestView {
+            self.0.input_test_start(spec)
+        }
+        fn input_test_poll(&self) -> ksx_api::InputTestView {
+            self.0.input_test_poll()
+        }
+        fn input_test_cancel_generation(&self, generation: Option<u64>) -> ksx_api::InputTestView {
+            self.0.input_test_cancel_generation(generation)
+        }
         fn bind(&self, request: &BindRequest) -> BindOutcome {
             self.0.bind(request)
         }
@@ -3177,6 +3265,88 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
     // The mapping controls remain present and visibly inert, but there is no
     // customer-facing shell fallback competing with the reopen remedy.
     assert!(!map.contains("ksx map --preset"), "{map}");
+}
+
+#[test]
+fn simultaneous_input_http_routes_share_one_typed_generation_stamped_contract() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let idle = get(addr, "/api/input-test");
+    assert!(idle.starts_with("HTTP/1.1 200"), "{idle}");
+    assert!(
+        idle.to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "a held-key snapshot must never be cached: {idle}"
+    );
+    let idle: serde_json::Value = serde_json::from_str(body_of(&idle)).unwrap();
+    assert_eq!(idle["state"], "idle");
+
+    let unknown_start = post_json(
+        addr,
+        "/api/input-test/start",
+        r#"{"selector":"usb:d209:0430:00","guess":true}"#,
+    );
+    assert!(
+        !unknown_start.starts_with("HTTP/1.1 200"),
+        "the HTTP seam accepted a field the daemon pipe refuses: {unknown_start}"
+    );
+
+    let started = post_json(
+        addr,
+        "/api/input-test/start",
+        r#"{"selector":"usb:d209:0430:00"}"#,
+    );
+    assert!(started.starts_with("HTTP/1.1 200"), "{started}");
+    let started: serde_json::Value = serde_json::from_str(body_of(&started)).unwrap();
+    assert_eq!(started["state"], "listening");
+    assert_eq!(started["selector"], "usb:d209:0430:00");
+    assert_eq!(started["remaining_ms"], 30_000, "HTTP default is typed");
+    assert_eq!(started["held"], serde_json::json!(["A", "S"]));
+    assert_eq!(started["seen"], serde_json::json!(["A", "S", "D"]));
+    assert_eq!(started["peak"], 3);
+    assert_eq!(started["rollover_visibility"], "unavailable");
+    assert_eq!(
+        control.input_test_spec.lock().unwrap().as_ref().unwrap(),
+        &ksx_api::InputTestSpec {
+            selector: "usb:d209:0430:00".into(),
+            duration_ms: 30_000,
+        }
+    );
+
+    let generation = started["generation"].as_u64().unwrap();
+    let unknown_cancel = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{generation},"all":true}}"#),
+    );
+    assert!(
+        !unknown_cancel.starts_with("HTTP/1.1 200"),
+        "cancel accepted an unstamped authority field: {unknown_cancel}"
+    );
+    let stale = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{}}}"#, generation + 1),
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).unwrap();
+    assert_eq!(stale["state"], "listening", "stale cancel won: {stale}");
+    assert_eq!(stale["generation"], generation);
+
+    let cancelled = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{generation}}}"#),
+    );
+    let cancelled: serde_json::Value = serde_json::from_str(body_of(&cancelled)).unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    assert_eq!(cancelled["generation"], generation);
+
+    let missing = post_json(addr, "/api/input-test/start", r#"{"duration_ms":5000}"#);
+    assert!(
+        !missing.starts_with("HTTP/1.1 200"),
+        "a missing exact selector must fail closed: {missing}"
+    );
 }
 
 /// FIX 0 over HTTP: the mapper's own session controls are the same
@@ -11123,6 +11293,73 @@ fn panel_apply_epoch_wins_before_recovery_read() {
     assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
     assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
     assert_eq!(machine.panel_program_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
+}
+
+/// Restore is a full persistent-chart mutation too. A recovery read carrying
+/// its epoch must wait for the admitted restore, then prove the post-restore
+/// hardware state before the browser may settle its journal.
+#[test]
+fn panel_restore_epoch_wins_before_recovery_read() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_restore_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-restore-wins-1";
+    let restore_body = format!(
+        r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+        "B".repeat(64),
+        "B".repeat(64)
+    );
+    let restore =
+        std::thread::spawn(move || post_json(addr, "/api/panel/restore/apply", &restore_body));
+    let entered_deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_restore_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the restore never entered the scripted hardware provider"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let recovery_body = format!(
+        r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+    );
+    let (chart_tx, chart_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = chart_tx.send(post_json(addr, "/api/panel/chart", &recovery_body));
+    });
+    assert!(
+        matches!(
+            chart_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the recovery chart returned before the admitted restore finished"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the chart provider ran before the admitted restore finished"
+    );
+
+    machine.panel_restore_hold.store(false, Ordering::SeqCst);
+    let restored = restore.join().unwrap();
+    let restored: serde_json::Value = serde_json::from_str(body_of(&restored)).unwrap();
+    assert_eq!(restored["mutation_disposition"], "verified", "{restored}");
+    assert_eq!(restored["hardware_epoch"], epoch, "{restored}");
+    let recovered = chart_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(machine.panel_restore_specs.lock().unwrap().len(), 1);
     assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
 }
 

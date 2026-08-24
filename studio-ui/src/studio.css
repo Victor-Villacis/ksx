@@ -6878,8 +6878,8 @@ a.wsrow-title:hover {
 }
 
 .n-sact {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   display: grid;
   place-items: center;
@@ -7089,10 +7089,11 @@ a.wsrow-title:hover {
    potentially dense all-player view an explicit choice. */
 
 .n-pathctl {
+  position: relative;
   display: inline-flex;
   align-items: center;
   min-height: 29px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--n-line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--n-panel) 72%, transparent);
@@ -7149,6 +7150,113 @@ a.wsrow-title:hover {
   display: none;
 }
 
+.n-mapping-trace {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 85;
+  width: min(420px, calc(100vw - 32px));
+  min-height: 26px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--n-panel-2) 94%, #080a11);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 44%);
+  color: var(--n-accent-2);
+  font: 700 10px/1.2 ui-monospace, Menlo, monospace;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n-mapping-trace[hidden] {
+  display: none;
+}
+
+/* The trace is a non-interactive overlay. Showing it cannot wrap the toolbar,
+   move the canvas underneath the pointer, or steal the click/drag it explains. */
+
+.n-flow-route-index {
+  position: relative;
+  color: var(--n-text-2);
+  font-size: 10.5px;
+}
+
+.n-flow-route-index[hidden] {
+  display: none;
+}
+
+.n-flow-route-index > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 29px;
+  padding: 4px 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--n-panel) 72%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+
+.n-flow-route-index > summary::marker {
+  color: var(--n-text-3);
+}
+
+.n-flow-route-index > summary [data-flow-route-index-count] {
+  color: var(--n-text-3);
+  font: 700 9px/1 ui-monospace, Menlo, monospace;
+}
+
+.n-flow-route-index > ol {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 80;
+  display: grid;
+  gap: 4px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(420px, 60vh);
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--n-line-2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--n-panel-2) 96%, #080a11);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 55%);
+  list-style: none;
+}
+
+.n-flow-route-index > ol[hidden] {
+  display: none;
+}
+
+.n-flow-route-row {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px 6px 13px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--n-flow-color) 30%, var(--n-line));
+  border-left: 3px solid var(--n-flow-color);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--n-flow-color) 7%, transparent);
+  color: var(--n-text-2);
+  font: 650 10px/1.35 ui-monospace, Menlo, monospace;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n-flow-route-row:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--n-flow-color) 70%, white);
+  background: color-mix(in srgb, var(--n-flow-color) 16%, var(--n-panel-2));
+  color: white;
+  outline: 2px solid color-mix(in srgb, var(--n-flow-color) 48%, transparent);
+  outline-offset: 1px;
+}
+
 /* World-coordinate siblings of the stage. Mutation mirroring keeps their
    camera transform byte-for-byte equal to the stage. Both cords and endpoint
    handles sit above widget art so every route visibly leaves its real keycap. */
@@ -7203,6 +7311,16 @@ a.wsrow-title:hover {
   .n-flow-node-layer,
   .forma-canvas-navigator,
   .n-mapshow
+) {
+  display: none;
+}
+
+/* The semantic index lives in the toolbar rather than inside the viewport,
+   so suppress it explicitly during the same focused hardware task. The path
+   preference remains intact and returns when Configure device closes. */
+.n-center:has(.forma-canvas-viewport.is-panel-programming-workspace) :is(
+  .n-flow-route-index,
+  .n-mapping-trace
 ) {
   display: none;
 }
@@ -7265,11 +7383,15 @@ a.wsrow-title:hover {
   left: auto;
   width: 100%;
   padding-right: 50px;
+  /* Auto and Nudge are a second, non-drag row. Reserve their vertical band
+     so neither control masks the processor timeline or its editor target. */
+  padding-bottom: 39px;
   transform: none;
 }
 
 .n-flow-processor-grip,
-.n-flow-processor-auto {
+.n-flow-processor-auto,
+.n-flow-processor-nudge-toggle {
   position: absolute;
   right: 6px;
   z-index: 2;
@@ -7295,9 +7417,16 @@ a.wsrow-title:hover {
 }
 
 .n-flow-processor-auto {
+  right: 48px;
+  bottom: 6px;
+  height: 26px;
+  cursor: pointer;
+}
+
+.n-flow-processor-nudge-toggle {
   right: 6px;
   bottom: 6px;
-  height: 23px;
+  height: 26px;
   cursor: pointer;
 }
 
@@ -7305,8 +7434,50 @@ a.wsrow-title:hover {
   display: none;
 }
 
+.n-flow-processor-nudges {
+  position: absolute;
+  top: 5px;
+  right: auto;
+  left: calc(100% + 3px);
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(2, 28px);
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--n-flow-color) 46%, var(--n-line));
+  border-radius: 9px;
+  background: rgb(17 20 31 / 98%);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 48%);
+  pointer-events: auto;
+}
+
+.n-flow-processor-nudges[hidden] {
+  display: none;
+}
+
+.n-flow-processor-nudges button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--n-flow-color) 34%, var(--n-line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--n-flow-color) 12%, var(--n-panel-2));
+  color: color-mix(in srgb, var(--n-flow-color) 46%, white);
+  cursor: pointer;
+}
+
+.n-flow-processor-nudges button:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--n-flow-color) 62%, white);
+  color: white;
+  outline: 2px solid color-mix(in srgb, var(--n-flow-color) 46%, transparent);
+  outline-offset: 1px;
+}
+
 .n-flow-processor-grip:is(:hover, :focus-visible),
-.n-flow-processor-auto:is(:hover, :focus-visible) {
+.n-flow-processor-auto:is(:hover, :focus-visible),
+.n-flow-processor-nudge-toggle:is(:hover, :focus-visible) {
   border-color: color-mix(in srgb, var(--n-flow-color) 24%, white);
   background: color-mix(in srgb, var(--n-flow-color) 34%, rgb(17 20 31 / 98%));
   color: white;
@@ -7520,12 +7691,12 @@ a.wsrow-title:hover {
 
 .n-flow-node-layer.is-inspecting
   .n-flow-processor-shell:not(:has(> .n-flow-processor.is-related))
-  :is(.n-flow-processor-grip, .n-flow-processor-auto) {
+  :is(.n-flow-processor-grip, .n-flow-processor-auto, .n-flow-processor-nudge-toggle) {
   opacity: 0.16;
 }
 
 .forma-canvas-viewport:is(.is-pan-ready, .is-panning, .is-navigating, .is-dragging-widget, .is-camera-animating)
-  :is(.n-flow-processor, .n-flow-processor-grip, .n-flow-processor-auto) {
+  :is(.n-flow-processor, .n-flow-processor-grip, .n-flow-processor-auto, .n-flow-processor-nudge-toggle, .n-flow-processor-nudges) {
   pointer-events: none;
 }
 
@@ -7780,10 +7951,11 @@ a.wsrow-title:hover {
   }
 
   .n-flow-processor-grip,
-  .n-flow-processor-auto {
+  .n-flow-processor-auto,
+  .n-flow-processor-nudge-toggle {
     top: auto;
     bottom: 0;
-    width: calc(50% - 3px);
+    width: calc(33.333% - 3px);
     height: 44px;
   }
 
@@ -7793,6 +7965,11 @@ a.wsrow-title:hover {
   }
 
   .n-flow-processor-auto {
+    right: auto;
+    left: calc(33.333% + 1px);
+  }
+
+  .n-flow-processor-nudge-toggle {
     right: 0;
   }
 }
@@ -7835,6 +8012,7 @@ a.wsrow-title:hover {
   .n-flow-processor,
   .n-flow-processor-grip,
   .n-flow-processor-auto,
+  .n-flow-processor-nudge-toggle,
   .n-flow-edge,
   .n-flow-edge.is-live .n-flow-core {
     transition: none;
@@ -8284,8 +8462,8 @@ a.wsrow-title:hover {
   top: 4px;
   right: 4px;
   z-index: 3;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 6px;
@@ -10964,8 +11142,8 @@ a.wsrow-title:hover {
 
 /* The key's own Clear — quiet until the row is under the pointer. */
 .n-krow-clear {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   flex: none;
   display: grid;
@@ -11328,8 +11506,8 @@ button.n-keychip:hover {
 
 .n-addchip {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   margin-left: 4px;
   display: grid;
@@ -13472,7 +13650,7 @@ button.n-keychip:hover {
   right: -6px;
   z-index: 40;
   display: grid;
-  grid-template-columns: repeat(4, 18px);
+  grid-template-columns: repeat(4, 24px);
   gap: 5px;
   padding: 8px;
   border: 1px solid var(--n-line-2);
@@ -13482,8 +13660,8 @@ button.n-keychip:hover {
 }
 
 .n-swatch {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.35);
   background: none;
@@ -14633,8 +14811,8 @@ button.n-keychip:hover {
    hover; shown only where a pair choice exists. */
 .n-minus {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   margin-left: 4px;
   display: grid;
@@ -14678,8 +14856,8 @@ button.n-keychip:hover {
 
 /* The control row's own Clear: quiet until the row is under the pointer. */
 .n-rowclear {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   flex: none;
   display: grid;
@@ -16482,6 +16660,9 @@ a.nm-link {
 }
 
 .n-surface-hardware-details > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   width: fit-content;
   color: var(--n-text-2);
   font-size: 10px;
@@ -17381,6 +17562,9 @@ a.nm-link {
 }
 
 .n-surface-programming-advanced > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   width: fit-content;
   cursor: pointer;
   color: var(--n-text-3);
@@ -17425,6 +17609,9 @@ a.nm-link {
 }
 
 .n-surface-programming-recovery > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   cursor: pointer;
   color: var(--n-text-3);
   font-size: 9.5px;
@@ -18454,6 +18641,35 @@ a.nm-link {
   flex: 0 0 100%;
 }
 
+.n-surface-route-list {
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.n-surface-position {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.n-surface-position > span {
+  grid-column: 1 / -1;
+  color: var(--n-text-3);
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.n-surface-position .n-keylab-button {
+  min-width: 0;
+  min-height: 31px;
+  padding-inline: 4px;
+}
+
 .n-surface-route,
 .n-surface-route-empty {
   padding: 4px 6px;
@@ -18468,6 +18684,241 @@ a.nm-link {
 .n-surface-route.np2 { --route-color: var(--kb2); }
 .n-surface-route.np3 { --route-color: var(--kb3); }
 .n-surface-route.np4 { --route-color: var(--kb4); }
+
+/* Shared keyboard / keyboard-mode encoder diagnostic. It measures the exact
+   host signals KSX can observe and deliberately avoids claiming an NKRO
+   limit the selected transport cannot expose. */
+.n-input-test-dialog {
+  --n-panel-2: #232532;
+  --n-line: #2b2d3a;
+  --n-line-2: #3f424d;
+  --n-text: #e9e9ed;
+  --n-text-2: #9397ab;
+  --n-text-3: #75798c;
+  --n-accent: #968ae0;
+  --n-accent-2: #b6aff4;
+  --n-accent-dim: rgb(150 138 224 / 20%);
+  --n-accent-line: rgb(150 138 224 / 48%);
+  --n-warn: #e4bb79;
+
+  width: min(720px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 15px;
+  background: #161826;
+  color: var(--n-text);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 72%);
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+.n-input-test-dialog::backdrop {
+  background: rgb(4 5 10 / 78%);
+  backdrop-filter: blur(4px);
+}
+
+.n-input-test-dialog > article {
+  display: grid;
+  gap: 13px;
+  padding: 18px;
+}
+
+.n-input-test-dialog header {
+  display: flex;
+  align-items: start;
+  gap: 14px;
+}
+
+.n-input-test-dialog header > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.n-input-test-dialog header span,
+.n-input-test-section-label {
+  color: var(--n-accent-2);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.n-input-test-dialog h2 {
+  margin: 3px 0 0;
+  font-size: 20px;
+}
+
+.n-input-test-dialog header p,
+.n-input-test-intro,
+.n-input-test-detail,
+.n-input-test-evidence {
+  margin: 4px 0 0;
+  color: var(--n-text-2);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.n-input-test-dialog header > button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.n-input-test-expected {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  color: var(--n-text-2);
+  font-size: 11px;
+}
+
+.n-input-test-expected input {
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 7px;
+  background: var(--n-panel-2);
+  color: var(--n-text);
+  font: 700 12px/1 ui-monospace, Menlo, monospace;
+}
+
+.n-input-test-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.n-input-test-stats > div {
+  padding: 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: rgb(7 9 15 / 30%);
+}
+
+.n-input-test-stats dt {
+  color: var(--n-text-3);
+  font-size: 9px;
+}
+
+.n-input-test-stats dd {
+  margin: 4px 0 0;
+  color: var(--n-accent-2);
+  font: 800 20px/1 ui-monospace, Menlo, monospace;
+}
+
+.n-input-test-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 43px;
+  padding: 7px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: rgb(7 9 15 / 28%);
+}
+
+.n-input-test-signals.held {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+}
+
+.n-input-test-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 7px;
+  background: var(--n-accent-dim);
+  color: var(--n-text);
+}
+
+.n-input-test-key strong {
+  font: 800 11px/1 ui-monospace, Menlo, monospace;
+}
+
+.n-input-test-key small,
+.n-input-test-empty {
+  color: var(--n-text-3);
+  font-size: 9px;
+}
+
+.n-input-test-evidence {
+  padding: 9px 10px;
+  border-left: 3px solid var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent-dim) 48%, transparent);
+}
+
+.n-input-test-evidence[data-tone="warning"] {
+  border-color: var(--n-warn);
+  color: var(--n-warn);
+}
+
+.n-input-test-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.n-input-test-dialog footer button {
+  min-height: 38px;
+  padding: 7px 13px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  cursor: pointer;
+}
+
+.n-input-test-dialog footer button.primary {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+}
+
+.n-input-test-dialog button:is(:hover, :focus-visible) {
+  border-color: var(--n-accent-line);
+  color: var(--n-text);
+  outline: 2px solid color-mix(in srgb, var(--n-accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.n-input-test-dialog button:disabled,
+.n-input-test-dialog input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 620px) {
+  .n-input-test-dialog > article {
+    padding: 14px;
+  }
+
+  .n-input-test-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .n-input-test-expected {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* The programming confirmation is page-root on purpose: canvas transforms,
    clipping and drag z-indexes must never weaken a hardware-write modal. */

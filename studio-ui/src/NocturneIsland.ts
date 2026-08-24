@@ -1960,7 +1960,7 @@ function panelBoardChartAccessGuidance(board: PanelStatusRowView | null): string
   }
   const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
   if (mode !== "keyboard-compatible" && mode !== "keyboard") {
-    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh status before opening Hardware Setup.`;
+    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh status before Configure device.`;
   }
   return `${name} has a measured chart driver, but one exact configuration collection is not currently available. Reconnect or resolve the reported HID collection issue, then refresh status.`;
 }
@@ -2134,8 +2134,8 @@ function syncControlSurfaceHardwareCard(): void {
     !chartAccessReady;
   setup.textContent = chartAccessReady
     ? canWriteChart
-      ? "Configure hardware…"
-      : "Read hardware…"
+      ? "Configure device…"
+      : "Read device…"
     : canReadChart
     ? "Resolve hardware first"
     : controlSurfaceHardwarePhase === "ready" && board
@@ -2146,7 +2146,7 @@ function syncControlSurfaceHardwareCard(): void {
       ? `Open the complete hardware chart for ${selectedEncoderDisplayName()}, including reviewed persistent programming`
       : `Open the read-only hardware chart for ${selectedEncoderDisplayName()}`
     : canReadChart
-    ? `Hardware Setup requires keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
+    ? `Configure device requires keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
     : board?.family_id
     ? `${selectedEncoderDisplayName()} is recognized, but this exact model and firmware do not have a measured chart driver yet. Teach, Route, and Control Surface Builder remain available.`
     : "Inspect this exact encoder before opening hardware configuration";
@@ -2904,7 +2904,7 @@ function syncIpacSignalSource(): void {
   const kicker = document.createElement("span");
   kicker.textContent = "Input signal layer";
   const title = document.createElement("strong");
-  title.textContent = `${encoderName} terminal → Windows key`;
+  title.textContent = `${encoderName} terminal → Host signal`;
   heading.append(kicker, title);
   const badge = document.createElement("span");
   badge.className = "n-ipac-source-badge";
@@ -2915,11 +2915,11 @@ function syncIpacSignalSource(): void {
     ? panelRecoveryProbeState === "checking"
       ? `KSX is checking this exact ${encoderName} against its machine recovery journal. Routes stay unresolved until that passive check finishes.`
       : panelRecoveryProbeState === "indeterminate"
-      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open Hardware Setup or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
+      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open Configure device or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
       : `KSX cannot prove which keys the ${encoderName} emits after the interrupted hardware transaction. Routes stay unresolved until the complete chart is read again or a verified backup is restored.`
     : chart
-    ? `The ${encoderName} emits these Windows key signals. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
-    : `KSX routes currently reference these Windows key names. Hardware Setup has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read Hardware Setup to establish terminal → Windows key ownership.`;
+    ? `The ${encoderName} emits these keyboard host signals to Windows. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
+    : `KSX routes currently reference these keyboard host signals. Configure device has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read the device chart to establish terminal → host-signal ownership.`;
   source.append(head, copy);
   if (groups.length === 0) {
     const empty = document.createElement("div");
@@ -2932,7 +2932,7 @@ function syncIpacSignalSource(): void {
           ? `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but opaque Shift state leaves their reachability unknown.`
           : `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but no enabled Shift terminal can emit them.`
         : "This chart has no supported Windows key outputs."
-      : `No routed key signals are visible yet. Open ${encoderName} Hardware Setup to read the on-device output chart.`;
+      : `No routed key signals are visible yet. Open ${encoderName} · Configure device to read the on-device output chart.`;
     source.append(empty);
     mappingFlowLayer?.scheduleLayout();
     return;
@@ -3103,6 +3103,630 @@ async function panelProgrammingJSON<T>(
   }
   if (!payload) throw new Error("Panel request returned no JSON body.");
   return payload as T;
+}
+
+interface NocturneInputTestView {
+  ok: boolean;
+  state: "idle" | "listening" | "timeout" | "cancelled" | "failed" | "unavailable" | "unknown";
+  generation: number | null;
+  selector: string | null;
+  remaining_ms: number | null;
+  held: string[];
+  seen: string[];
+  peak: number;
+  events: number;
+  dropped: number;
+  rollover_visibility: string;
+  detail: string;
+  error: string | null;
+  code?: string | null;
+}
+
+const INPUT_TEST_DURATION_MS = 30_000;
+const INPUT_TEST_POLL_MS = 80;
+let inputTestDialog: HTMLDialogElement | null = null;
+let inputTestReturnFocus: HTMLElement | null = null;
+let inputTestView: NocturneInputTestView | null = null;
+let inputTestTimer: number | undefined;
+let inputTestRequest = 0;
+let inputTestSelector = "";
+let inputTestSourceName = "Selected input";
+let inputTestEncoder = false;
+let inputTestExpectedCount = 0;
+let inputTestStarting = false;
+let inputTestRecovering = false;
+
+function inputTestState(value: unknown): NocturneInputTestView["state"] {
+  switch (value) {
+    case "idle":
+    case "listening":
+    case "timeout":
+    case "cancelled":
+    case "failed":
+    case "unavailable":
+      return value;
+    default:
+      return "unknown";
+  }
+}
+
+async function inputTestJSON(
+  url: string,
+  method: "GET" | "POST",
+  body?: unknown,
+): Promise<NocturneInputTestView> {
+  const response = await fetch(url, {
+    method,
+    headers: method === "POST"
+      ? { Accept: "application/json", "Content-Type": "application/json" }
+      : { Accept: "application/json" },
+    cache: "no-store",
+    body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+  });
+  const payload = await response.json().catch(() => null) as NocturneInputTestView | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || `Input test returned HTTP ${response.status}.`);
+  }
+  return { ...payload, state: inputTestState(payload.state) };
+}
+
+function inputTestTerminalLabels(key: string): string[] {
+  const chart = panelProgrammingState.inspection.chart;
+  const chartSelector = panelProgrammingState.inspection.target_selector.trim();
+  if (!inputTestEncoder || !chart || panelProgrammingRoutingAuthoritySuspended() ||
+      chartSelector !== inputTestSelector || panelProgrammingTarget() !== inputTestSelector) {
+    return [];
+  }
+  const shiftState = panelProgrammingShiftLayerState(chart);
+  return chart.terminals.flatMap((terminal) => {
+    const labels: string[] = [];
+    if (terminal.normal.supported && samePanelKey(terminal.normal.key, key)) {
+      labels.push(`${terminal.terminal_label} · normal`);
+    }
+    if (terminal.shifted.supported && samePanelKey(terminal.shifted.key, key)) {
+      const reachability = shiftState === "active"
+        ? "shifted"
+        : shiftState === "dormant"
+        ? "shifted (stored; Shift inactive)"
+        : "shifted (stored; Shift state unknown)";
+      labels.push(`${terminal.terminal_label} · ${reachability}`);
+    }
+    return labels;
+  });
+}
+
+function appendInputTestSignals(container: HTMLElement, keys: readonly string[]): void {
+  const document_ = container.ownerDocument;
+  const signals = keys.map((key) => ({ key, terminals: inputTestTerminalLabels(key) }));
+  const fingerprint = JSON.stringify(signals);
+  if (container.dataset.inputTestFingerprint === fingerprint) return;
+  container.dataset.inputTestFingerprint = fingerprint;
+  if (signals.length === 0) {
+    const empty = document_.createElement("span");
+    empty.className = "n-input-test-empty";
+    empty.textContent = "None";
+    container.replaceChildren(empty);
+    return;
+  }
+  container.replaceChildren(...signals.map(({ key, terminals }) => {
+    const chip = document_.createElement("span");
+    chip.className = "n-input-test-key";
+    const label = document_.createElement("strong");
+    label.textContent = key;
+    if (terminals.length > 0) {
+      const terminal = document_.createElement("small");
+      terminal.textContent = terminals.join(" · ");
+      chip.append(label, terminal);
+    } else {
+      chip.append(label);
+    }
+    return chip;
+  }));
+}
+
+function ensureInputTestDialog(): HTMLDialogElement {
+  if (inputTestDialog?.isConnected) return inputTestDialog;
+  const dialog = document.createElement("dialog");
+  dialog.className = "n-input-test-dialog";
+  dialog.setAttribute("aria-labelledby", "n-input-test-title");
+  const shell = document.createElement("article");
+  const head = document.createElement("header");
+  const heading = document.createElement("div");
+  const kicker = document.createElement("span");
+  kicker.textContent = "Signal diagnostic";
+  const title = document.createElement("h2");
+  title.id = "n-input-test-title";
+  title.textContent = "Simultaneous input test";
+  const source = document.createElement("p");
+  source.dataset.inputTestSource = "";
+  heading.append(kicker, title, source);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.dataset.inputTestAction = "close";
+  close.setAttribute("aria-label", "Close simultaneous input test");
+  close.textContent = "×";
+  head.append(heading, close);
+
+  const intro = document.createElement("p");
+  intro.className = "n-input-test-intro";
+  intro.textContent =
+    "Release every control first. Start, then press and hold the real combination you need. KSX reports only distinct host signals it actually observes; two controls or encoder terminals assigned to the same key are indistinguishable here. This test does not infer NKRO or a hardware limit.";
+  const expectedLabel = document.createElement("label");
+  expectedLabel.className = "n-input-test-expected";
+  const expectedText = document.createElement("span");
+  expectedText.textContent = "Expected distinct host signals held together (optional)";
+  const expected = document.createElement("input");
+  expected.type = "number";
+  expected.min = "1";
+  expected.max = "128";
+  expected.inputMode = "numeric";
+  expected.dataset.inputTestExpected = "";
+  expected.addEventListener("input", () => {
+    const value = Number(expected.value);
+    inputTestExpectedCount = Number.isInteger(value) && value > 0 ? Math.min(value, 128) : 0;
+    renderInputTestDialog();
+  });
+  expectedLabel.append(expectedText, expected);
+
+  const stats = document.createElement("dl");
+  stats.className = "n-input-test-stats";
+  for (const [name, label] of [
+    ["held", "Distinct held now"],
+    ["peak", "Peak distinct signals"],
+    ["seen", "Distinct signals seen"],
+    ["events", "Events"],
+    ["dropped", "Dropped"],
+  ] as const) {
+    const row = document.createElement("div");
+    const dt = document.createElement("dt");
+    const dd = document.createElement("dd");
+    dt.textContent = label;
+    dd.dataset.inputTestStat = name;
+    dd.textContent = "0";
+    row.append(dt, dd);
+    stats.append(row);
+  }
+
+  const heldLabel = document.createElement("strong");
+  heldLabel.className = "n-input-test-section-label";
+  heldLabel.textContent = "Held host signals";
+  const held = document.createElement("div");
+  held.className = "n-input-test-signals held";
+  held.dataset.inputTestHeld = "";
+  held.setAttribute("role", "status");
+  held.setAttribute("aria-live", "polite");
+  const seenLabel = document.createElement("strong");
+  seenLabel.className = "n-input-test-section-label";
+  seenLabel.textContent = "Seen during this run";
+  const seen = document.createElement("div");
+  seen.className = "n-input-test-signals";
+  seen.dataset.inputTestSeen = "";
+  const detail = document.createElement("p");
+  detail.className = "n-input-test-detail";
+  detail.dataset.inputTestDetail = "";
+  detail.setAttribute("role", "status");
+  const detailMessage = document.createElement("span");
+  detailMessage.dataset.inputTestDetailMessage = "";
+  const detailRemaining = document.createElement("span");
+  detailRemaining.dataset.inputTestDetailRemaining = "";
+  detailRemaining.setAttribute("aria-hidden", "true");
+  detail.append(detailMessage, detailRemaining);
+  const evidence = document.createElement("p");
+  evidence.className = "n-input-test-evidence";
+  evidence.dataset.inputTestEvidence = "";
+
+  const actions = document.createElement("footer");
+  const start = document.createElement("button");
+  start.type = "button";
+  start.className = "primary";
+  start.dataset.inputTestAction = "start";
+  start.textContent = "Start 30-second test";
+  const stop = document.createElement("button");
+  stop.type = "button";
+  stop.dataset.inputTestAction = "stop";
+  stop.textContent = "Stop test";
+  stop.hidden = true;
+  actions.append(start, stop);
+  shell.append(
+    head,
+    intro,
+    expectedLabel,
+    stats,
+    heldLabel,
+    held,
+    seenLabel,
+    seen,
+    detail,
+    evidence,
+    actions,
+  );
+  dialog.append(shell);
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    void closeInputTest();
+  });
+  dialog.addEventListener("click", (event) => {
+    const action = (event.target as HTMLElement | null)
+      ?.closest<HTMLElement>("[data-input-test-action]")?.dataset.inputTestAction;
+    if (action === "start") void startInputTest();
+    else if (action === "stop") void stopInputTest();
+    else if (action === "close") void closeInputTest();
+  });
+  document.body.append(dialog);
+  inputTestDialog = dialog;
+  renderInputTestDialog();
+  return dialog;
+}
+
+function renderInputTestDialog(): void {
+  const dialog = inputTestDialog;
+  if (!dialog) return;
+  const view = inputTestView;
+  const listening = view?.state === "listening";
+  const unknownAttempt = view?.state === "unknown" && view.generation !== null;
+  const foreignAttempt = view?.code === "busy-other";
+  const interactionBusy = listening || unknownAttempt || foreignAttempt ||
+    inputTestStarting || inputTestRecovering;
+  dialog.dataset.state = view?.state ?? "idle";
+  dialog.setAttribute("aria-busy", String(inputTestStarting || inputTestRecovering));
+  const source = dialog.querySelector<HTMLElement>("[data-input-test-source]");
+  if (source) source.textContent = `${inputTestSourceName} · ${inputTestSelector || "No exact source"}`;
+  const value = (name: string, text: string): void => {
+    const node = dialog.querySelector<HTMLElement>(`[data-input-test-stat="${name}"]`);
+    if (node) node.textContent = text;
+  };
+  value("held", String(view?.held.length ?? 0));
+  value("peak", String(view?.peak ?? 0));
+  value("seen", String(view?.seen.length ?? 0));
+  value("events", String(view?.events ?? 0));
+  value("dropped", String(view?.dropped ?? 0));
+  const held = dialog.querySelector<HTMLElement>("[data-input-test-held]");
+  const seen = dialog.querySelector<HTMLElement>("[data-input-test-seen]");
+  if (held) appendInputTestSignals(held, view?.held ?? []);
+  if (seen) appendInputTestSignals(seen, view?.seen ?? []);
+  const detailMessage = dialog.querySelector<HTMLElement>("[data-input-test-detail-message]");
+  const detailRemaining = dialog.querySelector<HTMLElement>("[data-input-test-detail-remaining]");
+  if (detailMessage) {
+    const message = view?.error || (view?.state === "unknown"
+      ? "KSX returned an input-test state this Studio build cannot interpret. Stop this run and try again after Studio and the daemon are on the same version."
+      : view?.detail) ||
+      "Ready. Release all controls, then start when the device is neutral.";
+    if (detailMessage.textContent !== message) detailMessage.textContent = message;
+  }
+  if (detailRemaining) {
+    const remaining = listening && view?.remaining_ms !== null
+      ? ` · ${Math.max(0, Math.ceil((view?.remaining_ms ?? 0) / 1000))}s remaining`
+      : "";
+    if (detailRemaining.textContent !== remaining) detailRemaining.textContent = remaining;
+  }
+  const evidence = dialog.querySelector<HTMLElement>("[data-input-test-evidence]");
+  if (evidence) {
+    const shortfall = inputTestExpectedCount > 0 && (view?.peak ?? 0) < inputTestExpectedCount;
+    const dropped = (view?.dropped ?? 0) > 0;
+    evidence.dataset.tone = view?.state === "failed" || view?.state === "unavailable" ||
+        view?.state === "unknown" || shortfall || dropped
+      ? "warning"
+      : "neutral";
+    evidence.textContent = dropped && view
+      ? `KSX dropped ${view.dropped} input ${view.dropped === 1 ? "event" : "events"} before reduction. This run is incomplete; repeat it before judging the device.`
+      : view?.state === "unknown"
+      ? "This diagnostic state is unknown, so KSX cannot treat its counts as a completed result."
+      : shortfall && view && !listening
+      ? `KSX observed ${view.peak} distinct host ${view.peak === 1 ? "signal" : "signals"} held together, below the expected ${inputTestExpectedCount}. Two controls assigned to one key collapse to one signal. This is evidence of the end-to-end path, not proof of the device's electrical or USB limit.`
+      : view
+      ? `Observed peak: ${view.peak} distinct KSX-readable host ${view.peak === 1 ? "signal" : "signals"}. Rollover visibility: ${view.rollover_visibility || "unavailable"}. Duplicate terminal key assignments collapse to one signal, and missing presses can be silent on keyboard transports.`
+      : "Avoid Windows, Alt+Tab, and other system shortcuts during an ordinary-keyboard test; observation does not suppress them.";
+  }
+  const expected = dialog.querySelector<HTMLInputElement>("[data-input-test-expected]");
+  if (expected) expected.disabled = interactionBusy;
+  const start = dialog.querySelector<HTMLButtonElement>('[data-input-test-action="start"]');
+  const stop = dialog.querySelector<HTMLButtonElement>('[data-input-test-action="stop"]');
+  if (start) {
+    start.disabled = interactionBusy || !inputTestSelector;
+    start.textContent = inputTestRecovering
+      ? "Checking current test…"
+      : inputTestStarting
+      ? "Starting…"
+      : view && !listening
+      ? "Run again"
+      : "Start 30-second test";
+  }
+  if (stop) stop.hidden = !listening && !unknownAttempt;
+}
+
+function scheduleInputTestPoll(request: number, generation: number): void {
+  if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
+  inputTestTimer = window.setTimeout(() => {
+    inputTestTimer = undefined;
+    void pollInputTest(request, generation);
+  }, INPUT_TEST_POLL_MS);
+}
+
+async function pollInputTest(request: number, generation: number): Promise<void> {
+  try {
+    const view = await inputTestJSON("/api/input-test", "GET");
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    if (view.generation !== generation) {
+      inputTestView = {
+        ...view,
+        ok: false,
+        state: "failed",
+        error: "Another window or diagnostic replaced this input test. Start again to use the current selected device.",
+      };
+      renderInputTestDialog();
+      return;
+    }
+    inputTestView = view;
+    renderInputTestDialog();
+    if (view.state === "listening") scheduleInputTestPoll(request, generation);
+  } catch (error) {
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    const lastKnown = inputTestView;
+    inputTestView = {
+      ...(lastKnown ?? {
+        held: [],
+        seen: [],
+        peak: 0,
+        events: 0,
+        dropped: 0,
+        rollover_visibility: "unavailable",
+        detail: "",
+      }),
+      ok: false,
+      // The GET failed, not the daemon-owned observation. Keep the exact
+      // generation visibly cancellable until Stop/Close reaches the daemon;
+      // calling this terminal would strand the observer behind a hidden Stop.
+      state: "unknown",
+      generation,
+      selector: inputTestSelector,
+      remaining_ms: null,
+      detail: "",
+      error: `KSX lost contact with this running diagnostic. Stop the test or close this window to release its exact generation. ${
+        error instanceof Error ? error.message : "The input test could not be polled."
+      }`,
+    };
+    renderInputTestDialog();
+  }
+}
+
+async function startInputTest(): Promise<void> {
+  if (!inputTestSelector || inputTestView?.state === "listening" || inputTestStarting) return;
+  const request = ++inputTestRequest;
+  if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
+  inputTestTimer = undefined;
+  inputTestStarting = true;
+  renderInputTestDialog();
+  try {
+    await cancelLearn();
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    const view = await inputTestJSON("/api/input-test/start", "POST", {
+      selector: inputTestSelector,
+      duration_ms: INPUT_TEST_DURATION_MS,
+    });
+    if (request !== inputTestRequest || !inputTestDialog?.open) {
+      if (view.state === "listening" && view.generation !== null) {
+        void inputTestJSON("/api/input-test/cancel", "POST", {
+          generation: view.generation,
+        }).catch(() => undefined);
+      }
+      return;
+    }
+    inputTestView = view;
+    if (view.state === "listening") {
+      if (view.generation === null) {
+        inputTestView = {
+          ...view,
+          ok: false,
+          state: "failed",
+          error: "KSX began listening without a diagnostic generation. Restart Studio and the daemon, then try again.",
+        };
+      } else {
+        scheduleInputTestPoll(request, view.generation);
+      }
+    }
+  } catch (error) {
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    const startError = error instanceof Error ? error.message : "The input test could not start.";
+    // Admission may have succeeded even when its HTTP response was lost. Ask
+    // the daemon what it owns before making this look terminal; only the exact
+    // requested source is safe to expose as a cancellable unknown attempt.
+    try {
+      const recovered = await inputTestJSON("/api/input-test", "GET");
+      if (request !== inputTestRequest || !inputTestDialog?.open) return;
+      if (recovered.state === "listening" && recovered.generation !== null &&
+          recovered.selector === inputTestSelector) {
+        inputTestView = {
+          ...recovered,
+          ok: false,
+          state: "unknown",
+          remaining_ms: null,
+          error: `KSX could not confirm the start response, but the exact selected source still has a live diagnostic. Stop the test or close this window to release generation ${recovered.generation}. ${startError}`,
+        };
+        return;
+      }
+    } catch {
+      // The original error remains the useful diagnosis. With no exact live
+      // generation to prove, this client must not cancel another window's run.
+    }
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    inputTestView = {
+      ok: false,
+      state: "failed",
+      generation: null,
+      selector: inputTestSelector,
+      remaining_ms: null,
+      held: [],
+      seen: [],
+      peak: 0,
+      events: 0,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: "",
+      error: startError,
+    };
+  } finally {
+    if (request === inputTestRequest) inputTestStarting = false;
+    renderInputTestDialog();
+  }
+}
+
+async function stopInputTest(): Promise<void> {
+  const generation = inputTestView?.generation ?? null;
+  const cancellable = inputTestView?.state === "listening" || inputTestView?.state === "unknown";
+  const request = ++inputTestRequest;
+  if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
+  inputTestTimer = undefined;
+  if (generation === null || !cancellable) return;
+  try {
+    const view = await inputTestJSON("/api/input-test/cancel", "POST", { generation });
+    if (request !== inputTestRequest) return;
+    if (view.generation !== generation) {
+      inputTestView = {
+        ...view,
+        ok: false,
+        state: "unavailable",
+        generation: null,
+        remaining_ms: null,
+        held: [],
+        seen: [],
+        peak: 0,
+        events: 0,
+        dropped: 0,
+        code: "busy-other",
+        error: `This diagnostic was replaced before its cancellation completed. The newer run${view.selector ? ` on ${view.selector}` : ""} belongs to another attempt, so this window will not stop it. Close and reopen the exact source to inspect current ownership.`,
+      };
+    } else {
+      inputTestView = view;
+    }
+  } catch (error) {
+    if (request !== inputTestRequest) return;
+    inputTestView = inputTestView
+      ? {
+        ...inputTestView,
+        ok: false,
+        state: "unknown",
+        error: `KSX could not confirm that generation ${generation} stopped. Retry Stop or close this window to release that same generation. ${
+          error instanceof Error ? error.message : "The input test could not be stopped."
+        }`,
+      }
+      : null;
+  }
+  renderInputTestDialog();
+}
+
+async function recoverInputTestOnOpen(request: number, selector: string): Promise<void> {
+  try {
+    const view = await inputTestJSON("/api/input-test", "GET");
+    const exactLiveAttempt = view.state === "listening" && view.generation !== null &&
+      view.selector === selector;
+    if (request !== inputTestRequest || !inputTestDialog?.open) {
+      if (exactLiveAttempt) {
+        // Closing while the recovery GET was in flight has the same meaning as
+        // closing an already-rendered run: release only its exact generation.
+        void inputTestJSON("/api/input-test/cancel", "POST", {
+          generation: view.generation,
+        }).catch(() => undefined);
+      }
+      return;
+    }
+    if (exactLiveAttempt) {
+      inputTestView = view;
+      scheduleInputTestPoll(request, view.generation!);
+    } else if (view.state === "listening") {
+      inputTestView = {
+        ...view,
+        ok: false,
+        state: "unavailable",
+        generation: null,
+        remaining_ms: null,
+        held: [],
+        seen: [],
+        peak: 0,
+        events: 0,
+        dropped: 0,
+        code: "busy-other",
+        error: `Another simultaneous-input test is already listening to ${view.selector || "an unknown source"}. Select that exact source to inspect or stop it; this window has no cancellation authority.`,
+      };
+    } else {
+      inputTestView = view.selector === selector ? view : null;
+    }
+  } catch (error) {
+    if (request !== inputTestRequest || !inputTestDialog?.open) return;
+    inputTestView = {
+      ok: false,
+      state: "failed",
+      generation: null,
+      selector,
+      remaining_ms: null,
+      held: [],
+      seen: [],
+      peak: 0,
+      events: 0,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: "",
+      error: `KSX could not check for an existing input test. ${
+        error instanceof Error ? error.message : "The diagnostic status request failed."
+      }`,
+    };
+  } finally {
+    if (request === inputTestRequest) {
+      inputTestRecovering = false;
+      renderInputTestDialog();
+    }
+  }
+}
+
+function openInputTest(): void {
+  const selector = nCapSelector().trim();
+  if (!selector) {
+    keyboardWorkbenchAnnounce(
+      "Select one exact keyboard or keyboard-mode encoder before testing simultaneous inputs.",
+    );
+    return;
+  }
+  inputTestReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  inputTestSelector = selector;
+  inputTestEncoder = selectedInputIsPanelEncoder();
+  inputTestSourceName = inputTestEncoder
+    ? selectedEncoderDisplayName()
+    : nKbTitle().trim() || "Selected keyboard";
+  const request = ++inputTestRequest;
+  if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
+  inputTestTimer = undefined;
+  inputTestView = null;
+  inputTestStarting = false;
+  inputTestRecovering = true;
+  const dialog = ensureInputTestDialog();
+  renderInputTestDialog();
+  if (!dialog.open) dialog.showModal();
+  void recoverInputTestOnOpen(request, selector);
+  window.requestAnimationFrame(() => {
+    dialog.querySelector<HTMLButtonElement>('[data-input-test-action="start"]')
+      ?.focus({ preventScroll: true });
+  });
+}
+
+async function closeInputTest(): Promise<void> {
+  const generation = inputTestView?.state === "listening" || inputTestView?.state === "unknown"
+    ? inputTestView.generation
+    : null;
+  inputTestRequest += 1;
+  inputTestStarting = false;
+  inputTestRecovering = false;
+  if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
+  inputTestTimer = undefined;
+  inputTestDialog?.close();
+  const target = inputTestReturnFocus;
+  inputTestReturnFocus = null;
+  if (target?.isConnected) target.focus({ preventScroll: true });
+  if (generation !== null) {
+    // Closing is immediate; the daemon request is bounded and generation-
+    // specific, so a late answer cannot repaint or cancel somebody else's run.
+    void inputTestJSON("/api/input-test/cancel", "POST", { generation }).catch(() => undefined);
+  }
 }
 
 function panelProgrammingTerminal(terminalId: string): PanelChartTerminalView | null {
@@ -4526,7 +5150,7 @@ function syncPanelProgrammingUi(): void {
     setupButton.textContent = open
       ? `${selectedEncoderShortName()} hardware open`
       : canOpenChart
-      ? `${task.action} hardware…`
+      ? "Configure device…"
       : panelBoardCanReadChart(statusBoard)
       ? "Resolve hardware first"
       : statusBoard?.family_id
@@ -4535,7 +5159,7 @@ function syncPanelProgrammingUi(): void {
     setupButton.title = canOpenChart
       ? `Open ${selectedEncoderShortName()}'s complete hardware chart`
       : panelBoardCanReadChart(statusBoard)
-      ? `Hardware Setup requires keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
+      ? `Configure device requires keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
       : statusBoard?.family_id
       ? `${selectedEncoderShortName()} is recognized, but this exact model and firmware do not have a measured chart driver yet`
       : "Inspect this exact encoder before opening hardware configuration";
@@ -5261,6 +5885,40 @@ function openPanelProgrammingSetup(): void {
   } else {
     void loadPanelProgrammingBackups();
     void loadPanelHardwareProfiles();
+  }
+}
+
+/** Honor a visible Configure-device gesture even when a just-arrived device
+ * identity poll has invalidated the status object one task earlier. The
+ * button is normally disabled during that refresh, but a click already in
+ * flight must not disappear: refresh the exact target once, then either open
+ * its current chart or explain the measured blocker. */
+async function openPanelProgrammingSetupFromGesture(): Promise<void> {
+  if (panelProgrammingTransactionActive()) return;
+  const target = currentControlSurfaceHardwareFingerprint();
+  const openIfReady = (): boolean => {
+    if (target !== currentControlSurfaceHardwareFingerprint() ||
+        !controlSurfaceState.open) return false;
+    const board = selectedPanelStatusBoard();
+    if (!panelBoardChartAccessReady(board)) return false;
+    openPanelProgrammingSetup();
+    return true;
+  };
+  if (!selectedInputIsPanelEncoder() || !nCapSelector().trim()) {
+    keyboardWorkbenchAnnounce(
+      panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
+    );
+    return;
+  }
+  keyboardWorkbenchAnnounce(
+    `Confirming this exact ${selectedEncoderShortName()} before Configure device opens…`,
+  );
+  await refreshControlSurfaceHardwareStatus();
+  if (openIfReady()) return;
+  if (target === currentControlSurfaceHardwareFingerprint() && controlSurfaceState.open) {
+    keyboardWorkbenchAnnounce(
+      panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
+    );
   }
 }
 
@@ -7902,7 +8560,7 @@ function labelCanvasMarkers(): void {
       marker.classList.add("nm-kb");
       marker.classList.toggle("nm-ipac", isEncoder);
       marker.title = isEncoder
-        ? `${encoderName} Signals · terminal and Windows key source`
+        ? `${encoderName} Signals · terminal and keyboard host-signal source`
         : "Keyboard · physical key source";
       marker.setAttribute("aria-label", isEncoder ? `Focus ${encoderName} Signals` : "Focus Keyboard");
       continue;
@@ -8326,6 +8984,11 @@ function syncKeyboardWorkbenchToolbar(): void {
   }
   const returnButton = item.querySelector<HTMLButtonElement>('[data-nx="keylab-return"]');
   if (returnButton) returnButton.disabled = keyboardWorkbenchSelectedKey === "";
+  for (const button of Array.from(
+    item.querySelectorAll<HTMLButtonElement>('[data-nx="keylab-nudge"]'),
+  )) {
+    button.disabled = keyboardWorkbenchSelectedToken === "";
+  }
 
   const padBySlot = new Map((lastBindView?.pads ?? []).map((pad) => [pad.slot, pad]));
   for (const panel of Array.from(item.querySelectorAll<HTMLElement>(".n-keylab-player-panel"))) {
@@ -8495,7 +9158,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   kicker.textContent = "Keyboard Arranger";
   const sub = document.createElement("span");
   sub.className = "n-keylab-sub";
-  sub.textContent = "Real keycaps from the selected keyboard · identity preserved";
+  sub.textContent = "Arrange appearance · real key identity and KSX routes stay unchanged";
   heading.append(kicker, sub);
   const close = makeKeyboardWorkbenchButton(
     "Close",
@@ -8549,6 +9212,21 @@ function createKeyboardWorkbenchItem(): HTMLElement {
     button.prepend(swatch);
     return button;
   });
+  const nudgeButtons = ([
+    ["Left", -8, 0],
+    ["Up", 0, -8],
+    ["Down", 0, 8],
+    ["Right", 8, 0],
+  ] as const).map(([label, dx, dy]) => {
+    const button = makeKeyboardWorkbenchButton(
+      label,
+      "keylab-nudge",
+      `Move the selected keycap ${label.toLocaleLowerCase()} without dragging`,
+    );
+    button.dataset.keylabDx = String(dx);
+    button.dataset.keylabDy = String(dy);
+    return button;
+  });
   tools.append(
     makeKeyboardWorkbenchGroup("Bring onto arranger", "n-keylab-add-group", [
       makeKeyboardWorkbenchButton(
@@ -8560,6 +9238,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
     makeKeyboardWorkbenchGroup("Arrange", "n-keylab-layout-group", [
       makeKeyboardWorkbenchButton("Repack", "keylab-layout-compact", "Pack the selected real keys into a compact arrangement", "compact"),
     ]),
+    makeKeyboardWorkbenchGroup("Move selected", "n-keylab-nudge-group", nudgeButtons),
     makeKeyboardWorkbenchGroup("Keycap shape", "n-keylab-profile-group", profileButtons),
     makeKeyboardWorkbenchGroup("Finish", "n-keylab-finish-group", finishButtons),
     makeKeyboardWorkbenchGroup("Panel", "n-keylab-remove-group", [
@@ -8642,7 +9321,7 @@ function createKeyboardWorkbenchItem(): HTMLElement {
   note.className = "n-keylab-note";
   note.id = "key-workbench-note";
   note.textContent =
-    "This is an arrangement of the actual selected keyboard. Drag to place · arrows nudge · Delete returns the keycap to the source. Build Surface is the separate path for I-PAC panels, arcade buttons, and leverless layouts.";
+    "Canvas appearance only: this arranges the actual selected keyboard without changing firmware, key identity, or KSX routes. Drag, tap Move selected, or use arrows to place · Delete returns the keycap to the source. Build Surface is the separate path for encoder panels, arcade buttons, and leverless layouts.";
   const deckScroll = document.createElement("div");
   deckScroll.className = "n-keylab-deck-scroll";
   deckScroll.append(deck);
@@ -9060,6 +9739,7 @@ function syncControlSurfaceInspector(): void {
   const focusToken = active?.dataset.nx ?? "";
   const focusPlayer = active?.dataset.playerSlot ?? "";
   const focusChannel = active?.dataset.surfaceChannelId ?? "";
+  const focusMove = active?.dataset.surfaceMove ?? "";
   inspector.replaceChildren();
 
   const kicker = document.createElement("span");
@@ -9082,7 +9762,7 @@ function syncControlSurfaceInspector(): void {
     : relationship === "duplicate"
     ? "Duplicate signal · this is a separate physical control that currently emits the same signal."
     : relationship === "shared-signal"
-    ? "Shared signal · mappings prove these views use the same Windows key; the physical wiring is not confirmed yet."
+    ? "Shared host signal · mappings prove these views emit the same keyboard signal; the physical wiring is not confirmed yet."
     : "Independent physical control";
   copy.textContent = relationshipCopy;
 
@@ -9309,9 +9989,11 @@ function syncControlSurfaceInspector(): void {
   const signal = document.createElement("div");
   signal.className = "n-surface-signal";
   const signalLabel = document.createElement("span");
-  signalLabel.textContent = "Observed input";
+  signalLabel.textContent = "Host signal";
   const signalValue = document.createElement("strong");
-  signalValue.textContent = channel.input.kind === "keyboard" ? channel.input.key : "Unassigned";
+  signalValue.textContent = channel.input.kind === "keyboard"
+    ? `Keyboard · ${channel.input.key}`
+    : "Unassigned";
   const signalMeta = document.createElement("small");
   const selectedDevice = nCapInstance().trim();
   const verifiedDevice = channel.input.kind === "keyboard" &&
@@ -9337,7 +10019,7 @@ function syncControlSurfaceInspector(): void {
       "Read this encoder's complete current chart before teaching a physical input";
   }
   const route = makeKeyboardWorkbenchButton(
-    "Route output",
+    "Route in KSX",
     "surface-route",
     "Hold this learned signal, then choose one or more virtual-controller controls on the canvas",
   );
@@ -9351,25 +10033,55 @@ function syncControlSurfaceInspector(): void {
   routes.className = "n-surface-routes";
   const routeTitle = document.createElement("span");
   routeTitle.className = "n-surface-routes-label";
+  routeTitle.id = "n-surface-route-list-label";
   routeTitle.textContent = "Backend routes";
-  routes.append(routeTitle);
+  const routeList = document.createElement("div");
+  routeList.className = "n-surface-route-list";
+  routeList.setAttribute("role", "list");
+  routeList.setAttribute("aria-labelledby", routeTitle.id);
+  routes.append(routeTitle, routeList);
   if (routeRows.length === 0) {
     const empty = document.createElement("span");
     empty.className = "n-surface-route-empty";
+    empty.setAttribute("role", "listitem");
     empty.textContent = routeFlowKey
       ? "Not routed yet"
       : channel.input.kind === "keyboard"
       ? "Teach again before routing"
       : "Teach an input first";
-    routes.append(empty);
+    routeList.append(empty);
   } else {
     for (const routeRow of routeRows) {
       const badge = document.createElement("span");
       badge.className = `n-surface-route np${routeRow.slot}`;
+      badge.setAttribute("role", "listitem");
       badge.title = routeRow.title;
       badge.textContent = routeRow.label;
-      routes.append(badge);
+      routeList.append(badge);
     }
+  }
+
+  const position = document.createElement("div");
+  position.className = "n-surface-position";
+  position.setAttribute("role", "group");
+  position.setAttribute("aria-label", `Move ${control.label} without dragging`);
+  const positionLabel = document.createElement("span");
+  positionLabel.textContent = "Position";
+  position.append(positionLabel);
+  for (const [move, label, dx, dy] of [
+    ["left", "Move left", -8, 0],
+    ["up", "Move up", 0, -8],
+    ["down", "Move down", 0, 8],
+    ["right", "Move right", 8, 0],
+  ] as const) {
+    const button = makeKeyboardWorkbenchButton(label.replace("Move ", ""), "surface-nudge", `${label} ${control.label}`);
+    button.dataset.surfaceControlId = control.id;
+    button.dataset.surfaceChannelId = channel.id;
+    button.dataset.surfaceMove = move;
+    button.dataset.surfaceDx = String(dx);
+    button.dataset.surfaceDy = String(dy);
+    button.setAttribute("aria-label", `${label} ${control.label}`);
+    position.append(button);
   }
 
   const copies = document.createElement("div");
@@ -9392,9 +10104,9 @@ function syncControlSurfaceInspector(): void {
         "Confirm that each unresolved view carrying this signal is independently wired",
       ),
     );
-    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, resolution, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, position, resolution, copies);
   } else {
-    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, position, copies);
   }
   if (relationship !== "shared-signal") {
     copies.append(
@@ -9421,6 +10133,7 @@ function syncControlSurfaceInspector(): void {
     let selector = `[data-nx="${CSS.escape(focusToken)}"]`;
     if (focusPlayer) selector += `[data-player-slot="${CSS.escape(focusPlayer)}"]`;
     if (focusChannel) selector += `[data-surface-channel-id="${CSS.escape(focusChannel)}"]`;
+    if (focusMove) selector += `[data-surface-move="${CSS.escape(focusMove)}"]`;
     inspector.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   }
 }
@@ -9718,24 +10431,24 @@ function syncControlSurfaceChrome(): void {
   const note = item.querySelector<HTMLElement>("[data-surface-note]");
   const encoderName = selectedEncoderShortName();
   item.dataset.entry = hardwareWorkspace ? "encoder-setup" : "builder";
-  const widgetName = hardwareWorkspace ? `${encoderName} Hardware Setup` : "Control Surface Builder";
+  const widgetName = hardwareWorkspace ? `${encoderName} · Configure device` : "Control Surface Builder";
   item.dataset.widgetName = widgetName;
   item.setAttribute("aria-label", widgetName);
   item.querySelector<HTMLElement>(".widget-drag-handle")
     ?.setAttribute("aria-label", `Move ${widgetName}`);
   if (heading) heading.textContent = widgetName;
   if (sub) sub.textContent = hardwareWorkspace
-    ? `${encoderName} terminal → Windows key → KSX mapping → virtual controller → game`
-    : "Browser draft · physical hardware → observed signal → KSX route";
+    ? `${encoderName} terminal → host signal (keyboard key) → KSX transformation → virtual controller → game`
+    : "Arrange physical appearance · host signal → KSX route stays separate";
   if (hardware) hardware.hidden = hardwareWorkspace;
   if (starters) starters.hidden = hardwareWorkspace || !choosing;
   if (workarea) workarea.hidden = (hardwareWorkspace && !panelLinkingWorkspace) || choosing;
   if (tools) tools.hidden = hardwareWorkspace || choosing;
   if (stages) stages.hidden = hardwareWorkspace;
   if (note) note.textContent = panelLinkingWorkspace
-    ? `Panel-linking view: select a drawn physical control, associate its ${encoderName} terminal and expected Windows key in the inspector, then review the complete hardware chart above. These links do not write KSX controller mappings.`
+    ? `Panel-linking view: select a drawn physical control, associate its ${encoderName} terminal and expected keyboard host signal in the inspector, then review the complete device chart above. These links do not write KSX controller mappings.`
     : hardwareWorkspace
-    ? `The ${encoderName} stores terminal-to-key outputs in hardware. KSX then observes those Windows keys and applies the dynamic mappings, macros, and virtual-controller output. A physical panel drawing is optional.`
+    ? `The ${encoderName} stores terminal-to-key outputs in the device. Windows exposes each as a keyboard host signal; KSX then applies dynamic mappings, macros, and virtual-controller output. A physical panel drawing is optional.`
     : selectedInputIsPanelEncoder() && panelBoardChartAccessReady(selectedPanelStatusBoard()) &&
         panelBoardCanWriteChart(selectedPanelStatusBoard())
     ? "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping."
@@ -9743,7 +10456,7 @@ function syncControlSurfaceChrome(): void {
     ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
     : selectedInputIsPanelEncoder() && selectedPanelStatusBoard()?.capabilities?.can_identify
     ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
-    : "Design the physical controls independently of their signal source. Teach observes what each control sends; Route connects that signal through KSX to virtual controllers.";
+    : "Arrange the physical controls independently of their signal source. Teach host signals observes what each control sends; Route in KSX connects that signal to virtual controllers.";
   const mappingRecords = controlSurfaceMappingRecords();
   const encoderRecords = controlSurfaceEncoderRecords();
   const selectedSlot = Number(nSlotVal() || "1");
@@ -9763,7 +10476,7 @@ function syncControlSurfaceChrome(): void {
       card.disabled = encoderRecords.length === 0;
       card.title = encoderRecords.length > 0
         ? `Build a physical panel from ${encoderRecords.length} terminal-to-key assignments read from ${selectedEncoderDisplayName()}`
-        : "Read a supported encoder chart in Hardware Setup before generating its physical panel";
+        : "Read a supported encoder chart in Configure device before generating its physical panel";
     } else if (template === "mapping-selected") {
       card.disabled = !mappingRecords.some((record) => record.slot === selectedSlot);
     } else if (template === "mapping-four") {
@@ -9808,10 +10521,10 @@ function syncControlSurfaceChrome(): void {
         : "Choose a starting shape. Templates create physical controls only—no KSX mapping is changed."
       : `${physical.size} physical ${physical.size === 1 ? "component" : "components"} · ${controlSurfaceState.controls.length} visual ${controlSurfaceState.controls.length === 1 ? "view" : "views"} · ${verified} of ${channels} physical ${channels === 1 ? "input" : "inputs"} verified · ${
           controlSurfaceState.stage === "design"
-            ? "Design: add and arrange hardware"
+            ? "Arrange appearance: add and place physical controls"
             : controlSurfaceState.stage === "teach"
-            ? "Teach: press what Windows receives"
-            : "Route: connect learned signals to KSX outputs"
+            ? "Teach host signals: press what the selected device emits"
+            : "Route in KSX: connect learned signals to virtual outputs"
         }${controlSurfaceSaveFailed ? " · Not saved: browser storage is unavailable" : " · Browser draft saved locally"}`;
     if (status.textContent !== nextStatus) status.textContent = nextStatus;
   }
@@ -9834,7 +10547,7 @@ function createControlSurfaceItem(): HTMLElement {
   const sub = document.createElement("span");
   sub.className = "n-surface-sub";
   sub.dataset.surfaceWidgetSub = "";
-  sub.textContent = "Browser draft · physical hardware → observed signal → KSX route";
+  sub.textContent = "Arrange physical appearance · host signal and KSX route stay separate";
   heading.append(kicker, sub);
   const close = makeKeyboardWorkbenchButton(
     "Close",
@@ -9967,9 +10680,9 @@ function createControlSurfaceItem(): HTMLElement {
   ([
     ["physical", "1", "Panel control", "Button, stick, or key"],
     ["encoder", "2", "I-PAC", "Wired terminal"],
-    ["keys", "3", "Windows key", "Hardware output"],
-    ["mapping", "4", "KSX", "Macro or transform"],
-    ["controller", "5", "Controller", "Virtual target"],
+    ["keys", "3", "Host signal", "Keyboard key emitted to Windows"],
+    ["mapping", "4", "KSX transform", "Route, macro, or behavior"],
+    ["controller", "5", "Virtual controller", "Game-facing target"],
     ["game", "6", "Game", "Receives when running"],
   ] as const).forEach(([step, number, label, detail]) => {
     const item = document.createElement("li");
@@ -10177,11 +10890,16 @@ function createControlSurfaceItem(): HTMLElement {
   outputTestStatus.textContent = "Program or load at least one output first";
   outputTestHeading.append(outputTestTitle, outputTestStatus);
   const outputTestButton = makeKeyboardWorkbenchButton(
-    "Test a wired control",
+    "Test one control",
     "surface-encoder-test",
     "Listen once and identify the Windows key and every matching I-PAC terminal without changing a KSX mapping",
   );
-  outputTestHead.append(outputTestHeading, outputTestButton);
+  const simultaneousTestButton = makeKeyboardWorkbenchButton(
+    "Test simultaneous inputs…",
+    "input-test-open",
+    "Measure the peak distinct keyboard-mode signals KSX observes during one bounded test of this exact encoder",
+  );
+  outputTestHead.append(outputTestHeading, outputTestButton, simultaneousTestButton);
   const outputTestCopy = document.createElement("p");
   outputTestCopy.dataset.panelOutputTestCopy = "";
   outputTestCopy.textContent =
@@ -10295,9 +11013,9 @@ function createControlSurfaceItem(): HTMLElement {
   stages.className = "n-surface-stages";
   stages.setAttribute("aria-label", "Control surface workflow");
   ([
-    ["design", "1", "Design", "Add and arrange the physical parts"],
-    ["teach", "2", "Teach inputs", "Press each wired control and record what Windows receives"],
-    ["route", "3", "Route outputs", "Connect learned signals through KSX to virtual controls"],
+    ["design", "1", "Arrange appearance", "Add and arrange the physical parts without changing device firmware or KSX routes"],
+    ["teach", "2", "Teach host signals", "Press each wired control and record the exact signal and source device KSX receives"],
+    ["route", "3", "Route in KSX", "Connect learned host signals through KSX to virtual controls"],
   ] as const).forEach(([stage, number, label, title]) => {
     const button = makeKeyboardWorkbenchButton(label, "surface-stage", title, stage);
     button.classList.add("n-surface-stage");
@@ -10599,7 +11317,7 @@ function openControlSurfaceBuilder(encoderSetup = false): void {
       if (controlSurfaceHardwarePhase === "ready" && panelBoardChartAccessReady(board)) {
         openPanelProgrammingSetup();
         keyboardWorkbenchAnnounce(
-          `${selectedEncoderShortName()} Hardware Setup opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
+          `${selectedEncoderShortName()} · Configure device opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
         );
         focusControlSurfacePrimary();
         return;
@@ -10685,7 +11403,7 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   }
   if (template === "encoder-current" && encoderRecords.length === 0) {
     keyboardWorkbenchAnnounce(
-      "No readable terminal-to-key chart is loaded for this encoder. Open Hardware Setup and read a supported board first; the current panel was kept intact.",
+      "No readable terminal-to-key chart is loaded for this encoder. Open Configure device and read a supported board first; the current panel was kept intact.",
     );
     return;
   }
@@ -10766,10 +11484,10 @@ function chooseControlSurfaceStage(stage: ControlSurfaceStage): void {
     stage === "design"
       ? "Design selected. Add, name, link, duplicate, and arrange physical parts."
       : !hasControl
-      ? `${stage === "teach" ? "Teach inputs" : "Route outputs"} selected. Add a physical component first.`
+      ? `${stage === "teach" ? "Teach host signals" : "Route in KSX"} selected. Add a physical component first.`
       : stage === "teach"
-      ? "Teach inputs selected. Choose Teach input for a component, then press its real wired control."
-      : "Route outputs selected. Choose Route output for a learned signal, then choose its virtual controller control.",
+      ? "Teach host signals selected. Choose Teach input for a component, then press its real wired control."
+      : "Route in KSX selected. Choose Route in KSX for a learned host signal, then choose its virtual-controller control.",
   );
   window.requestAnimationFrame(() => {
     const item = controlSurfaceItem;
@@ -10962,7 +11680,7 @@ function teachSelectedControlSurfaceWithKey(
   );
   setInspectorContext({ kind: "key", key });
   keyboardWorkbenchAnnounce(
-    `${key} learned for the selected physical control. No KSX mapping changed; Route output chooses its destination.`,
+    `${key} learned for the selected physical control. No KSX mapping changed; Route in KSX chooses its destination.`,
   );
   return true;
 }
@@ -11311,6 +12029,8 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   const flowLines = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="lines"]');
   const flowPorts = surface?.querySelector<SVGSVGElement>('.n-flow-layer[data-flow-layer="ports"]');
   const flowNodes = surface?.querySelector<HTMLElement>('[data-flow-layer="processors"]');
+  const flowRouteList = scope.querySelector<HTMLOListElement>("#n-mapping-route-list");
+  const flowTrace = scope.querySelector<HTMLOutputElement>("#n-mapping-trace");
   // The zoom readout IS the 100% button in the meta bar: the engine writes
   // the live percentage into whatever element it is handed, and a button
   // that reads the zoom and resets it on click is one control instead of a
@@ -11405,6 +12125,8 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
           const sr = (learnRoot ?? scope).querySelector<HTMLElement>(".n-live-sr");
           if (sr) sr.textContent = message;
         },
+        routeList: flowRouteList,
+        traceOutput: flowTrace,
       },
     );
     syncMappingFlow();
@@ -13462,7 +14184,8 @@ function macroDialogOpen(): boolean {
 }
 
 function anyDialogOpen(): boolean {
-  return ui.dlg || nConfOpen() || nApplyOpen() || macroDialogOpen();
+  return inputTestDialog?.open === true || ui.dlg || nConfOpen() || nApplyOpen() ||
+    macroDialogOpen();
 }
 
 /** Leave the macro editor the way its ✕ does — the dialog's open state IS
@@ -13491,6 +14214,13 @@ function closeMacroDialog(): void {
 }
 
 function closeOpenDialog(): void {
+  // The native input diagnostic is appended to <body>, above every island
+  // dialog and canvas state. Give it first refusal so Escape cannot leak
+  // through to an armed assignment, Inspector context, or widget focus mode.
+  if (inputTestDialog?.open) {
+    void closeInputTest();
+    return;
+  }
   // The macro panel is the outermost of the four, so it yields to any
   // dialog opened on top of it.
   if (!nApplyOpen() && !nConfOpen() && !ui.dlg && macroDialogOpen()) {
@@ -14082,6 +14812,11 @@ export function nocturneWire(root: HTMLElement): void {
     true,
   );
   window.addEventListener("keydown", (ev) => {
+    if (inputTestDialog?.open && ev.key === "Escape") {
+      ev.preventDefault();
+      closeOpenDialog();
+      return;
+    }
     if (
       (ev.ctrlKey || ev.metaKey) &&
       ev.key.toLowerCase() === "k" &&
@@ -14618,13 +15353,7 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-hardware-refresh") {
       void refreshControlSurfaceHardwareStatus();
     } else if (hit === "surface-encoder-open") {
-      if (panelBoardChartAccessReady(selectedPanelStatusBoard())) {
-        openPanelProgrammingSetup();
-      } else {
-        keyboardWorkbenchAnnounce(
-          panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
-        );
-      }
+      void openPanelProgrammingSetupFromGesture();
     } else if (hit === "surface-encoder-close") {
       closePanelProgrammingSetup();
     } else if (hit === "surface-encoder-read") {
@@ -14634,6 +15363,8 @@ export function nocturneWire(root: HTMLElement): void {
       }
     } else if (hit === "surface-encoder-test") {
       togglePanelProgrammingOutputTest();
+    } else if (hit === "input-test-open") {
+      openInputTest();
     } else if (hit === "surface-encoder-build-panel") {
       buildPhysicalPanelFromEncoderChart();
     } else if (hit === "surface-encoder-design-panel") {
@@ -14706,6 +15437,21 @@ export function nocturneWire(root: HTMLElement): void {
           value === 0 ? "Component shown panel-wide without a player owner." : `Component assigned to the Player ${value} panel view.`,
         );
       }
+    } else if (hit === "surface-nudge") {
+      const button = target?.closest<HTMLButtonElement>(
+        '[data-surface-control-id][data-surface-dx][data-surface-dy]',
+      );
+      const controlId = button?.dataset.surfaceControlId ?? "";
+      const channelId = button?.dataset.surfaceChannelId ?? "";
+      const dx = Number(button?.dataset.surfaceDx ?? "0");
+      const dy = Number(button?.dataset.surfaceDy ?? "0");
+      if (controlId && Number.isFinite(dx) && Number.isFinite(dy)) {
+        selectControlSurfaceChannel(controlId, channelId);
+        nudgeControlSurfaceControl(controlId, dx, dy);
+        keyboardWorkbenchAnnounce(
+          `${selectedControlSurfaceControl()?.label ?? "Physical control"} moved without dragging.`,
+        );
+      }
     } else if (hit === "surface-teach") {
       startControlSurfaceTeach();
     } else if (hit === "surface-route") {
@@ -14723,7 +15469,7 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "kb-workbench") {
       if (selectedInputIsPanelEncoder()) {
         keyboardWorkbenchAnnounce(
-          "Arcade encoder terminals belong in Hardware Setup or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
+          "Arcade encoder terminals belong in Configure device or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
         );
         return;
       }
@@ -14753,6 +15499,26 @@ export function nocturneWire(root: HTMLElement): void {
       pullMappedKeyboardWorkbenchKeys();
     } else if (hit === "keylab-layout-compact") {
       repackKeyboardWorkbench();
+    } else if (hit === "keylab-nudge") {
+      const button = target?.closest<HTMLButtonElement>(
+        '[data-keylab-dx][data-keylab-dy]',
+      );
+      const dx = Number(button?.dataset.keylabDx ?? "0");
+      const dy = Number(button?.dataset.keylabDy ?? "0");
+      if (
+        keyboardWorkbenchSelectedKey && keyboardWorkbenchSelectedToken &&
+        Number.isFinite(dx) && Number.isFinite(dy)
+      ) {
+        nudgeKeyboardWorkbenchKey(
+          keyboardWorkbenchSelectedKey,
+          keyboardWorkbenchSelectedToken,
+          dx,
+          dy,
+        );
+        keyboardWorkbenchAnnounce(
+          `${keyboardWorkbenchSelectedKey} moved without dragging.`,
+        );
+      }
     } else if (hit === "keylab-cap-profile") {
       setKeyboardWorkbenchCapProfile(
         target?.closest<HTMLElement>("[data-keycap-profile]")?.dataset.keycapProfile ?? "",
@@ -15565,6 +16331,17 @@ export function NocturneIsland() {
             "button",
             {
               type: "button",
+              class: "n-kbbuild n-input-test-open",
+              "data-nx": "input-test-open",
+              title:
+                "Measure simultaneous signals from this exact keyboard without changing mappings",
+            },
+            "Test inputs…",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
               "data-nx": "auto-map",
               class: "n-autobtn",
               title:
@@ -15619,7 +16396,7 @@ export function NocturneIsland() {
                 id: "n-mapping-path-scope",
                 class: "n-pathsel",
                 "data-nx": "mapping-paths",
-                "aria-controls": "n-mapping-paths n-mapping-ports n-mapping-processors",
+                "aria-controls": "n-mapping-paths n-mapping-ports n-mapping-processors n-mapping-route-list",
                 "aria-describedby": "n-mapping-path-status",
               },
               h("option", { value: "off" }, "Off"),
@@ -15632,11 +16409,39 @@ export function NocturneIsland() {
               "aria-hidden": "true",
               "data-live-chatter": "",
             }),
+            h("output", {
+              id: "n-mapping-trace",
+              class: "n-mapping-trace",
+              title: "",
+              "data-live-chatter": "",
+              "data-client-canvas": "",
+              hidden: "",
+            }),
             h(
               "span",
               { id: "n-mapping-path-status", class: "n-sr-description" },
               "Mapping paths are off.",
             ),
+          ),
+          h(
+            "details",
+            {
+              class: "n-flow-route-index",
+              "data-client-canvas": "",
+              hidden: "",
+            },
+            h(
+              "summary",
+              null,
+              h("span", null, "Trace list"),
+              h("span", { "data-flow-route-index-count": "" }, "0 routes"),
+            ),
+            h("ol", {
+              id: "n-mapping-route-list",
+              "aria-label": "Visible keyboard-to-controller routes",
+              "data-client-subtree": "",
+              hidden: "",
+            }),
           ),
           h(
             "button",
@@ -16515,7 +17320,7 @@ export function NocturneIsland() {
                   h("section", {
                     class: "n-ipac-signal-source",
                     "data-client-subtree": "",
-                    "aria-label": "Encoder terminal and Windows key signals",
+                    "aria-label": "Encoder terminal and keyboard host signals",
                   }),
                   h(
                     "div",
@@ -16639,7 +17444,7 @@ export function NocturneIsland() {
                 "Arrange real keycaps from this detected keyboard without changing their identities or mappings",
               "aria-pressed": () => nKbWorkbenchPressed(),
             },
-            () => nKeyboardWorkbenchOpen() ? "Arranging" : "Arrange keys",
+            () => nKeyboardWorkbenchOpen() ? "Arranging appearance" : "Arrange appearance",
           ),
           // Focus the board on the controller you are editing: everyone
           // else's color greys out — nothing is hidden, so a key never

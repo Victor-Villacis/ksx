@@ -168,6 +168,9 @@ fn daemon_sink(
                 "the cabinet cannot learn a key. That is authoring — it exists to fill in a \
                  binding. Author with ksx Studio, or `ksx map --learn`",
             ),
+            input_test: crate::daemon::input_test::InputTestService::refusing(
+                "the cabinet cannot open a simultaneous-input diagnostic; use ksx Studio",
+            ),
         }),
     }
 }

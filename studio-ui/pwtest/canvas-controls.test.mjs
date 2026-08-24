@@ -1193,6 +1193,38 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("the simultaneous-input modal owns the first Escape over canvas focus mode", async () => {
+    const page = await openCanvas();
+    try {
+      await page.click('[data-instance-id="pad-1"] .n-mini-head', { force: true });
+      await page.click('.n-selbar [data-nx="w-focus"]');
+      await settle(page);
+      const focusToggle = page.locator('.n-selbar [data-nx="w-focus"]');
+      assert.equal(await focusToggle.getAttribute("aria-pressed"), "true");
+
+      const opener = page.locator('.n-meta [data-nx="input-test-open"]');
+      await opener.click();
+      const dialog = page.locator("dialog.n-input-test-dialog");
+      await dialog.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+
+      assert.equal(
+        await focusToggle.getAttribute("aria-pressed"),
+        "true",
+        "the modal consumes Escape before the underlying canvas focus mode",
+      );
+      assert.equal(
+        await opener.evaluate((button) => document.activeElement === button),
+        true,
+        "closing with Escape returns focus to the input-test action",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("the camera's own controls move it", async () => {
     const page = await openCanvas();
     try {
@@ -1299,6 +1331,49 @@ describe("the canvas navigation controls", () => {
       assert.equal(topology.processorCount, "1");
       assert.equal(topology.unavailableMappings, "0");
       assert.equal(topology.unavailableMacros, "0");
+
+      const routeIndex = page.locator("details.n-flow-route-index");
+      assert.equal(await routeIndex.isHidden(), false,
+        "visible cords also expose a semantic route index");
+      assert.equal(
+        (await routeIndex.locator("[data-flow-route-index-count]").textContent()).trim(),
+        "15 routes",
+        "four macro segments collapse into one logical trace while direct routes stay independent",
+      );
+      await routeIndex.locator("summary").click();
+      const sourceKey = page.locator(
+        '.n-widget-kb:not([data-source-hidden="true"]) [data-key="G"]:not(.ghost):not(.extracted)',
+      ).first();
+      await sourceKey.evaluate((key) => {
+        key.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+      });
+      await page.waitForFunction(
+        (lines) => Array.from(document.querySelectorAll(`${lines} .n-flow-edge.is-related`))
+          .some((edge) => edge.dataset.flowKey === "G"),
+        lines,
+      );
+      const firstSemanticRoute = routeIndex.locator(".n-flow-route-row")
+        .filter({ hasNotText: "Keyboard · G →" }).first();
+      await firstSemanticRoute.evaluate((row) => row.focus());
+      const semanticChain = await firstSemanticRoute.getAttribute("data-flow-chain");
+      assert.ok(semanticChain, "each semantic row identifies one logical route");
+      await page.waitForFunction(
+        ({ lines, semanticChain }) => {
+          const related = Array.from(document.querySelectorAll(`${lines} .n-flow-edge.is-related`));
+          return related.length === 1 && related[0].dataset.flowChain === semanticChain;
+        },
+        { lines, semanticChain },
+      );
+      assert.ok(semanticChain,
+        "keyboard focus wins even while a different pointer inspection remains active");
+      assert.match(
+        (await page.locator("#n-mapping-trace").textContent()).trim(),
+        /^Tracing Keyboard · .+ → P\d+ .+$/,
+        "keyboard focus gets a visible, human-readable trace instead of relying on aria-hidden SVG",
+      );
+      assert.equal(await page.getAttribute(lines, "aria-hidden"), "true");
+      await page.locator(select).focus();
+      await routeIndex.locator("summary").click();
       assert.equal(
         await page.evaluate((processors) => {
           const node = document.querySelector(`${processors} a.n-flow-processor`).getBoundingClientRect();
@@ -1891,6 +1966,43 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("the semantic route index describes independent macro triggers as alternatives", async () => {
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          const macro = pad.macros?.find((row) => row.name === "hadouken");
+          if (macro) macro.triggers = ["G", "H"];
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.waitForFunction(() =>
+        document.querySelectorAll(
+          '#n-mapping-paths [data-flow-kind="macro-trigger"]',
+        ).length === 2
+      );
+      const index = page.locator("details.n-flow-route-index");
+      await index.locator("summary").click();
+      const route = index.locator(".n-flow-route-row").filter({ hasText: "hadouken macro" });
+      await route.waitFor({ state: "visible" });
+      const text = (await route.textContent()).replace(/\s+/g, " ").trim();
+      assert.match(text, /Keyboard · G or Keyboard · H → P\d+ hadouken macro →/,
+        "either trigger is named as an alternative, never as an invented chord");
+      assert.doesNotMatch(text, /Keyboard · G \+ Keyboard · H/);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a macro processor opens the exact existing step editor without writing", async () => {
     const page = await openCanvas();
     const writes = [];
@@ -2009,6 +2121,8 @@ describe("the canvas navigation controls", () => {
       const anchorSelector = `${shellSelector} > a.n-flow-processor`;
       const gripSelector = `${shellSelector} > .n-flow-processor-grip`;
       const autoSelector = `${shellSelector} > .n-flow-processor-auto`;
+      const nudgeToggleSelector = `${shellSelector} > .n-flow-processor-nudge-toggle`;
+      const nudgeSelector = `${shellSelector} > .n-flow-processor-nudges`;
       const triggerSelector = '#n-mapping-paths [data-flow-kind="macro-trigger"] .n-flow-core';
       const storageKey = "ksx-nocturne-canvas";
       const storedOffset = (processorId) => page.evaluate(({ storageKey, processorId }) => {
@@ -2033,7 +2147,7 @@ describe("the canvas navigation controls", () => {
           placement: "auto",
           saveState: "saved",
           buttonInsideLink: false,
-          children: ["A", "BUTTON", "BUTTON"],
+          children: ["A", "BUTTON", "BUTTON", "BUTTON", "DIV"],
         },
         "move and Auto are sibling controls around the unchanged editor link",
       );
@@ -2041,10 +2155,13 @@ describe("the canvas navigation controls", () => {
         await page.locator(shellSelector).evaluate((shell) => {
           const grip = shell.querySelector(".n-flow-processor-grip");
           const auto = shell.querySelector(".n-flow-processor-auto");
+          const nudge = shell.querySelector(".n-flow-processor-nudge-toggle");
           return {
             gripLabel: grip?.getAttribute("aria-label"),
             gripShortcuts: grip?.getAttribute("aria-keyshortcuts"),
             autoLabel: auto?.getAttribute("aria-label"),
+            nudgeLabel: nudge?.getAttribute("aria-label"),
+            nudgeControls: nudge?.getAttribute("aria-controls"),
           };
         }),
         {
@@ -2053,10 +2170,69 @@ describe("the canvas navigation controls", () => {
           gripShortcuts:
             "ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Home Delete",
           autoLabel: `Return hadouken for Player ${processorSlot} to automatic placement`,
+          nudgeLabel:
+            `Show click or tap movement controls for hadouken, Player ${processorSlot}`,
+          nudgeControls: await page.locator(nudgeSelector).getAttribute("id"),
         },
         "the sibling controls expose their complete move and reset contracts",
       );
       assert.equal(await page.locator(autoSelector).isHidden(), true);
+
+      await page.locator(nudgeToggleSelector).click();
+      assert.equal(await page.locator(nudgeToggleSelector).getAttribute("aria-expanded"), "true");
+      assert.equal(await page.locator(nudgeSelector).isVisible(), true,
+        "a click or tap reveals movement controls without requiring a drag");
+      const rightNudge = page.locator(`${nudgeSelector} [aria-label^="Move right"]`);
+      await rightNudge.focus();
+      await page.evaluate(() => {
+        const select = document.querySelector('[data-nx="mapping-paths"]');
+        if (!(select instanceof HTMLSelectElement)) throw new Error("missing path scope");
+        select.value = "all";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await page.waitForFunction(
+        (nudgeSelector) =>
+          document.querySelector('[data-nx="mapping-paths"]')?.value === "all" &&
+          document.activeElement?.matches(`${nudgeSelector} [data-flow-nudge-direction="right"]`),
+        nudgeSelector,
+      );
+      await page.evaluate(() => {
+        const select = document.querySelector('[data-nx="mapping-paths"]');
+        if (!(select instanceof HTMLSelectElement)) throw new Error("missing path scope");
+        select.value = "selected";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await page.waitForFunction(
+        (nudgeSelector) =>
+          document.querySelector('[data-nx="mapping-paths"]')?.value === "selected" &&
+          document.activeElement?.matches(`${nudgeSelector} [data-flow-nudge-direction="right"]`),
+        nudgeSelector,
+      );
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator(nudgeSelector).isHidden(), true,
+        "Escape closes the disclosed movement group");
+      assert.equal(
+        await page.locator(nudgeToggleSelector).evaluate((button) => document.activeElement === button),
+        true,
+        "Escape returns focus to the disclosure that opened the group",
+      );
+      await page.locator(nudgeToggleSelector).click();
+      await rightNudge.click();
+      await page.waitForFunction(
+        ({ storageKey, processorId }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.x) && offset.x > 0;
+        },
+        { storageKey, processorId },
+      );
+      await page.locator(autoSelector).click();
+      await page.waitForFunction(
+        ({ storageKey, processorId }) =>
+          JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId] === undefined,
+        { storageKey, processorId },
+      );
 
       const cameraBefore = await page.getAttribute(".forma-canvas-stage", "style");
       const routeBefore = await page.getAttribute(triggerSelector, "d");
@@ -2254,7 +2430,32 @@ describe("the canvas navigation controls", () => {
       assert.ok(dragBaseline?.requested, "the zoomed canvas offers one unclamped drag direction");
       assert.ok(dragBaseline.route, "the zoomed macro route has rendered before dragging");
       const requestedDrag = dragBaseline.requested;
+      const gripHit = await page.evaluate(({ gripSelector, grip }) => {
+        const expected = document.querySelector(gripSelector);
+        const actual = document.elementFromPoint(grip.x, grip.y);
+        return {
+          reachesGrip: actual === expected || Boolean(expected?.contains(actual)),
+          actual: actual instanceof HTMLElement
+            ? `${actual.tagName}.${actual.className}`
+            : actual?.nodeName ?? "none",
+          viewport: document.querySelector(".forma-canvas-viewport")?.className ?? "",
+        };
+      }, { gripSelector, grip: dragBaseline.grip });
+      assert.equal(gripHit.reachesGrip, true,
+        `the visible Move control owns its hit point: ${JSON.stringify(gripHit)}`);
       await page.mouse.move(dragBaseline.grip.x, dragBaseline.grip.y);
+      const afterMoveHit = await page.evaluate(({ gripSelector, grip }) => {
+        const current = document.querySelector(gripSelector);
+        const actual = document.elementFromPoint(grip.x, grip.y);
+        return {
+          reachesCurrent: actual === current || Boolean(current?.contains(actual)),
+          actual: actual instanceof HTMLElement
+            ? `${actual.tagName}.${actual.className}`
+            : actual?.nodeName ?? "none",
+        };
+      }, { gripSelector, grip: dragBaseline.grip });
+      assert.equal(afterMoveHit.reachesCurrent, true,
+        `showing the trace never moves the canvas out from under Move: ${JSON.stringify(afterMoveHit)}`);
       await page.mouse.down();
       await page.mouse.move(dragBaseline.grip.x + requestedDrag.x, dragBaseline.grip.y + requestedDrag.y, {
         steps: 6,
@@ -2669,6 +2870,82 @@ describe("the canvas navigation controls", () => {
         ({ storageKey, processorId }) =>
           !JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId],
         { storageKey, processorId },
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a processor nudge disclosure stays usable at the right viewport edge", async () => {
+    const page = await openCanvas();
+    try {
+      const shellSelector =
+        '#n-mapping-processors .n-flow-processor-shell[data-flow-macro-id*="hadouken"]';
+      const gripSelector = `${shellSelector} > .n-flow-processor-grip`;
+      const toggleSelector = `${shellSelector} > .n-flow-processor-nudge-toggle`;
+      const menuSelector = `${shellSelector} > .n-flow-processor-nudges`;
+      const storageKey = "ksx-nocturne-canvas";
+
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.locator(gripSelector).waitFor({ state: "visible" });
+      const processorId = await page.locator(shellSelector).getAttribute("data-flow-macro-id");
+      const grip = await page.locator(gripSelector).boundingBox();
+      const browserViewport = page.viewportSize();
+      assert.ok(processorId && grip && browserViewport, "the edge disclosure has browser geometry");
+
+      await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(browserViewport.width - 2, grip.y + grip.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+      await page.locator(toggleSelector).click();
+
+      const disclosure = await page.evaluate(({ shellSelector, menuSelector }) => {
+        const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+        const shell = document.querySelector(shellSelector)?.getBoundingClientRect();
+        const menu = document.querySelector(menuSelector);
+        const menuRect = menu?.getBoundingClientRect();
+        if (!viewport || !shell || !menu || !menuRect) return null;
+        return {
+          viewport: { left: viewport.left, right: viewport.right },
+          shell: { left: shell.left, right: shell.right },
+          menu: { left: menuRect.left, right: menuRect.right },
+          side: menu.getAttribute("data-flow-nudge-side"),
+          buttons: Array.from(menu.querySelectorAll("button")).map((button) => {
+            const rect = button.getBoundingClientRect();
+            return { left: rect.left, right: rect.right };
+          }),
+        };
+      }, { shellSelector, menuSelector });
+      assert.ok(disclosure, "the disclosed movement group is measurable");
+      assert.ok(
+        disclosure.shell.right > disclosure.viewport.right - 14,
+        `the processor reached the right-edge clamp: ${JSON.stringify(disclosure)}`,
+      );
+      assert.equal(disclosure.side, "left", "the movement group flips to the available side");
+      assert.ok(
+        disclosure.menu.left >= disclosure.viewport.left + 7 &&
+          disclosure.menu.right <= disclosure.viewport.right - 7 &&
+          disclosure.buttons.every((button) =>
+            button.left >= disclosure.viewport.left && button.right <= disclosure.viewport.right
+          ),
+        `every nudge target remains inside the clipped canvas viewport: ${JSON.stringify(disclosure)}`,
+      );
+
+      const before = await page.evaluate(({ storageKey, processorId }) =>
+        JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId],
+      { storageKey, processorId });
+      await page.locator(`${menuSelector} [data-flow-nudge-direction="left"]`).click();
+      await page.waitForFunction(
+        ({ storageKey, processorId, beforeX }) => {
+          const offset = JSON.parse(localStorage.getItem(storageKey) ?? "{}")
+            .processorOffsets?.[processorId];
+          return Number.isFinite(offset?.x) && offset.x < beforeX;
+        },
+        { storageKey, processorId, beforeX: before.x },
       );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -4084,7 +4361,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.match(
         await encoderMarker.getAttribute("title"),
-        /I-PAC(?: 4X?)? Signals.*Windows key source/i,
+        /I-PAC(?: 4X?)? Signals.*terminal and keyboard host-signal source/i,
       );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -4606,7 +4883,7 @@ describe("the canvas navigation controls", () => {
         );
       }, sourceSelector);
 
-      await page.locator(".n-kbbuild").evaluate((button) => button.click());
+      await page.locator('[data-nx="kb-workbench"]').evaluate((button) => button.click());
       await page.waitForSelector(".n-widget-keylab");
       await settle(page);
       assert.equal(
@@ -5042,6 +5319,21 @@ describe("the canvas navigation controls", () => {
       );
 
       const wButton = page.locator('.n-deck-key[data-keylab-key="W"]');
+      await wButton.click();
+      const beforeClickNudge = await wButton.evaluate((button) => ({
+        left: button.style.left,
+        top: button.style.top,
+      }));
+      await page.click('.n-widget-keylab [data-nx="keylab-nudge"][data-keylab-dx="8"]');
+      await page.waitForFunction(
+        (left) => document.querySelector('.n-deck-key[data-keylab-key="W"]')?.style.left !== left,
+        beforeClickNudge.left,
+      );
+      assert.equal(
+        await wButton.evaluate((button) => button.style.top),
+        beforeClickNudge.top,
+        "click movement offers the same axis-safe alternative as dragging",
+      );
       await wButton.focus();
       const beforeNudge = await wButton.evaluate((button) => ({
         left: button.style.left,
@@ -5072,6 +5364,8 @@ describe("the canvas navigation controls", () => {
         const active = document.activeElement;
         return Boolean(active?.matches(".n-widget-keylab .n-deck-key, .n-widget-keylab button"));
       });
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.n-widget-kb .n-key[data-key="D"].extracted').length === 0);
       const focusAfterDelete = await page.evaluate(() => ({
         inWorkbench: Boolean(document.activeElement?.closest(".n-widget-keylab")),
         isControl: Boolean(document.activeElement?.matches(".n-deck-key, button")),
@@ -5145,7 +5439,7 @@ describe("the canvas navigation controls", () => {
         0,
         "closing the editor shows the complete physical keyboard again",
       );
-      await page.locator(".n-kbbuild").evaluate((button) => button.click());
+      await page.locator('[data-nx="kb-workbench"]').evaluate((button) => button.click());
       await page.waitForFunction(
         () => document.querySelectorAll(".n-widget-keylab .n-deck-key").length === 3,
       );
@@ -5161,6 +5455,383 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(bindingPosts, []);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      if (await encoderLane.count()) {
+        await encoderLane.locator("button.n-dev").click().catch(() => {});
+        await page.waitForFunction(() => Array.from(
+          document.querySelectorAll(".n-encoder-form"),
+        ).some((row) => row.textContent?.includes("Ultimarc I-PAC 4") &&
+          row.querySelector("button.n-dev")?.classList.contains("on")), null, {
+          timeout: 5_000,
+        }).catch(() => {});
+      }
+      await page.close();
+    }
+  });
+
+  test("one read-only simultaneous-input diagnostic serves keyboards and keyboard-mode encoders", async () => {
+    const starts = [];
+    const cancels = [];
+    const forbiddenWrites = [];
+    let releaseFirstStart = () => {};
+    const firstStartGate = new Promise((resolve) => {
+      releaseFirstStart = resolve;
+    });
+    let active = null;
+    let generation = 9100;
+    let failNextPoll = false;
+    let loseNextStartResponse = false;
+    let failNextCancel = false;
+    let replaceOnNextCancel = null;
+    const view = ({ state = "listening", selector = active?.selector ?? "", generation: run = active?.generation ?? 0 } = {}) => {
+      const encoder = selector === PANEL_SELECTOR;
+      const held = state === "listening" ? (encoder ? ["B"] : ["A", "S"]) : [];
+      const seen = encoder ? ["B"] : ["A", "S"];
+      return {
+        ok: true,
+        state,
+        generation: run,
+        selector,
+        remaining_ms: state === "listening" ? 28_000 : 0,
+        held,
+        seen,
+        peak: seen.length,
+        events: seen.length * 2,
+        dropped: 0,
+        rollover_visibility: "unavailable",
+        detail: state === "listening"
+          ? "Listening to the exact selected source."
+          : "The bounded input test was cancelled.",
+        error: null,
+      };
+    };
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        if (request.method() !== "POST") return;
+        const pathname = new URL(request.url()).pathname;
+        if (/\/(?:bind)(?:\/|$)/.test(pathname) ||
+            pathname === "/api/panel/program/apply" ||
+            pathname === "/api/panel/restore/apply") {
+          forbiddenWrites.push(pathname);
+        }
+      });
+      await candidate.route("**/api/panel/chart", (route) => {
+        const payload = panelChartPayload();
+        payload.view.terminals[0].shifted = {
+          code: 5,
+          key: "B",
+          label: "B",
+          supported: true,
+        };
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+      await candidate.route("**/api/panel/backups", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          target_selector: PANEL_SELECTOR,
+          unavailable: null,
+          view: {
+            summary: "One complete safety backup.",
+            board_fingerprint: PANEL_FINGERPRINT,
+            backups: [panelBackup()],
+          },
+        }),
+      }));
+      await candidate.route("**/api/input-test/start", async (route) => {
+        const body = JSON.parse(route.request().postData() ?? "{}");
+        starts.push(body);
+        active = { selector: body.selector, generation: ++generation };
+        if (starts.length === 1) await firstStartGate;
+        if (loseNextStartResponse) {
+          loseNextStartResponse = false;
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: "null",
+          });
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(view()),
+        });
+      });
+      await candidate.route(/\/api\/input-test$/, (route) => {
+        if (failNextPoll) {
+          failNextPoll = false;
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: "null",
+          });
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(active ? view() : view({ state: "idle", selector: "", generation: 0 })),
+        });
+      });
+      await candidate.route("**/api/input-test/cancel", async (route) => {
+        const body = JSON.parse(route.request().postData() ?? "{}");
+        if (failNextCancel) {
+          failNextCancel = false;
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: "null",
+          });
+        }
+        if (replaceOnNextCancel !== null) {
+          active = {
+            selector: active?.selector ?? body.selector ?? "",
+            generation: replaceOnNextCancel,
+          };
+          replaceOnNextCancel = null;
+        }
+        cancels.push(body);
+        if (active && body.generation !== active.generation) {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(view()),
+          });
+        }
+        const cancelled = view({ state: "cancelled" });
+        active = null;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(cancelled),
+        });
+      });
+    });
+
+    try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb')?.getAttribute("data-input-kind") !== "panel-encoder");
+      const keyboardOpen = page.locator('.n-meta [data-nx="input-test-open"]');
+      await keyboardOpen.click();
+      const dialog = page.locator("dialog.n-input-test-dialog");
+      await dialog.waitFor({ state: "visible" });
+      assert.match(await dialog.locator("[data-input-test-source]").textContent(), /Logitech G915/i);
+      assert.match(await dialog.locator(".n-input-test-intro").textContent(),
+        /Release every control first.*does not infer NKRO/i);
+      assert.equal(
+        (await dialog.locator(".n-input-test-expected > span").textContent()).trim(),
+        "Expected distinct host signals held together (optional)",
+      );
+      await dialog.locator("[data-input-test-expected]").fill("3");
+      await dialog.locator('[data-input-test-action="start"]').evaluate((button) => {
+        button.click();
+        button.click();
+      });
+      for (let attempt = 0; starts.length === 0 && attempt < 100; attempt += 1) {
+        await page.waitForTimeout(10);
+      }
+      await page.waitForFunction(
+        () => document.querySelector('dialog.n-input-test-dialog')?.getAttribute("aria-busy") === "true",
+      );
+      assert.equal(starts.length, 1,
+        "double activation while startup is pending issues one observer request");
+      assert.equal(
+        await dialog.locator('[data-input-test-action="start"]').isDisabled(),
+        true,
+        "startup locks another activation without marking the whole listening run busy",
+      );
+      await dialog.locator('[data-input-test-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      releaseFirstStart();
+      for (let attempt = 0; cancels.length === 0 && attempt < 100; attempt += 1) {
+        await page.waitForTimeout(10);
+      }
+      assert.deepEqual(cancels, [{ generation: 9101 }],
+        "a start response that arrives after close is cancelled by its exact generation");
+      assert.equal(await keyboardOpen.evaluate((button) => document.activeElement === button), true,
+        "closing during startup still returns focus to its source action");
+
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      await dialog.locator("[data-input-test-expected]").fill("3");
+      await dialog.locator('[data-input-test-action="start"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('[data-input-test-stat="peak"]')?.textContent === "2");
+      assert.equal(await dialog.getAttribute("aria-busy"), "false",
+        "live updates remain available to assistive technology while listening");
+      assert.equal(starts.length, 2);
+      assert.equal(starts[1].duration_ms, 30_000);
+      assert.notEqual(starts[1].selector, PANEL_SELECTOR,
+        "the ordinary-keyboard run keeps its exact keyboard selector");
+      assert.deepEqual(
+        await dialog.locator("[data-input-test-held] strong").allTextContents(),
+        ["A", "S"],
+      );
+      assert.match(await dialog.locator("[data-input-test-evidence]").textContent(),
+        /Rollover visibility: unavailable/i);
+      failNextCancel = true;
+      await dialog.locator('[data-input-test-action="stop"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "unknown");
+      assert.equal(await dialog.locator('[data-input-test-action="stop"]').isVisible(), true,
+        "an ambiguous cancel response keeps the same generation available for retry");
+      assert.match(await dialog.locator("[data-input-test-detail-message]").textContent(),
+        /could not confirm.*generation 9102 stopped.*Retry Stop or close/i);
+      await dialog.locator('[data-input-test-action="stop"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "cancelled");
+      for (let attempt = 0; cancels.length < 2 && attempt < 100; attempt += 1) {
+        await page.waitForTimeout(10);
+      }
+      assert.deepEqual(cancels, [{ generation: 9101 }, { generation: 9102 }]);
+      assert.match(await dialog.locator("[data-input-test-evidence]").textContent(),
+        /observed 2 distinct host signals held together, below the expected 3/i);
+      await dialog.locator('[data-input-test-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await keyboardOpen.evaluate((button) => document.activeElement === button), true,
+        "closing returns focus to the exact source action that opened the diagnostic");
+
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      failNextPoll = true;
+      await dialog.locator('[data-input-test-action="start"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "unknown");
+      assert.equal(
+        await dialog.locator('[data-input-test-action="stop"]').isVisible(),
+        true,
+        "a lost poll keeps the daemon-owned generation visibly cancellable",
+      );
+      assert.match(await dialog.locator("[data-input-test-detail-message]").textContent(),
+        /lost contact.*Stop the test or close this window.*HTTP 200/i);
+      await dialog.locator('[data-input-test-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      for (let attempt = 0; cancels.length < 3 && attempt < 100; attempt += 1) {
+        await page.waitForTimeout(10);
+      }
+      assert.deepEqual(cancels, [
+        { generation: 9101 },
+        { generation: 9102 },
+        { generation: 9103 },
+      ], "closing after a transient poll failure releases the exact live observer");
+
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      loseNextStartResponse = true;
+      await dialog.locator('[data-input-test-action="start"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "unknown");
+      assert.match(await dialog.locator("[data-input-test-detail-message]").textContent(),
+        /could not confirm the start response.*exact selected source.*generation 9104.*HTTP 200/i);
+      assert.equal(await dialog.locator('[data-input-test-action="stop"]').isVisible(), true,
+        "a lost start response recovers the matching daemon generation before offering cleanup");
+      await dialog.locator('[data-input-test-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      for (let attempt = 0; cancels.length < 4 && attempt < 100; attempt += 1) {
+        await page.waitForTimeout(10);
+      }
+      assert.deepEqual(cancels, [
+        { generation: 9101 },
+        { generation: 9102 },
+        { generation: 9103 },
+        { generation: 9104 },
+      ], "closing after a lost start response releases the recovered exact generation");
+
+      const keyboardSelector = starts[1].selector;
+      active = { selector: keyboardSelector, generation: 9201 };
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "listening");
+      assert.equal(await dialog.locator('[data-input-test-action="stop"]').isVisible(), true,
+        "a reopened tab adopts a live run only for its exact selected source");
+      await dialog.locator('[data-input-test-action="stop"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "cancelled");
+      await dialog.locator('[data-input-test-action="close"]').click();
+      assert.deepEqual(cancels.at(-1), { generation: 9201 });
+
+      active = { selector: PANEL_SELECTOR, generation: 9202 };
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "unavailable");
+      assert.match(await dialog.locator("[data-input-test-detail-message]").textContent(),
+        /already listening.*select that exact source.*no cancellation authority/i);
+      assert.equal(await dialog.locator('[data-input-test-action="start"]').isDisabled(), true,
+        "a foreign live run is explained without offering a doomed second start");
+      assert.equal(await dialog.locator('[data-input-test-action="stop"]').isVisible(), false,
+        "a foreign generation is never exposed as cancellable");
+      await dialog.locator('[data-input-test-action="close"]').click();
+      assert.equal(cancels.some((entry) => entry.generation === 9202), false);
+
+      active = { selector: keyboardSelector, generation: 9301 };
+      await keyboardOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "listening");
+      replaceOnNextCancel = 9302;
+      await dialog.locator('[data-input-test-action="stop"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "unavailable");
+      assert.match(await dialog.locator("[data-input-test-detail-message]").textContent(),
+        /replaced before its cancellation completed.*newer run.*will not stop it/i);
+      assert.equal(await dialog.locator('[data-input-test-action="stop"]').isVisible(), false,
+        "a stale tab never gains cancellation authority for the replacement generation");
+      const cancellationRequestsBeforeSecondClick = cancels.length;
+      await dialog.locator('[data-input-test-action="stop"]').evaluate((button) => button.click());
+      await page.waitForTimeout(100);
+      assert.equal(cancels.length, cancellationRequestsBeforeSecondClick,
+        "even a synthetic second activation cannot cancel the newer generation");
+      await dialog.locator('[data-input-test-action="close"]').click();
+      assert.equal(cancels.some((entry) => entry.generation === 9302), false);
+      active = null;
+
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.locator("button.n-dev").click();
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      const setup = page.locator('.n-widget-surface[data-entry="encoder-setup"]');
+      await setup.locator(".n-surface-terminal-editor").waitFor({ state: "visible" });
+      const encoderOpen = setup.locator('[data-nx="input-test-open"]');
+      await encoderOpen.click();
+      await dialog.waitFor({ state: "visible" });
+      assert.match(await dialog.locator("[data-input-test-source]").textContent(), /I-PAC 4/i);
+      await dialog.locator("[data-input-test-expected]").fill("1");
+      await dialog.locator('[data-input-test-action="start"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('[data-input-test-stat="peak"]')?.textContent === "1");
+      assert.equal(starts.length, 5);
+      assert.equal(starts[4].selector, PANEL_SELECTOR,
+        "the encoder run is pinned to the exact selected I-PAC");
+      assert.match(
+        (await dialog.locator("[data-input-test-seen]").textContent()).replace(/\s+/g, " "),
+        /B.*P1 SW1 · normal.*P1 SW1 · shifted \(stored; Shift inactive\).*P1 SW2 · normal/,
+        "a current read chart annotates every normal and shifted terminal layer truthfully",
+      );
+      await dialog.locator('[data-input-test-action="stop"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-input-test-dialog")?.getAttribute("data-state") === "cancelled");
+      assert.deepEqual(cancels, [
+        { generation: 9101 },
+        { generation: 9102 },
+        { generation: 9103 },
+        { generation: 9104 },
+        { generation: 9201 },
+        { generation: 9301 },
+        { generation: 9105 },
+      ]);
+      await dialog.locator('[data-input-test-action="close"]').click();
+      assert.deepEqual(forbiddenWrites, [],
+        "input diagnostics never bind a route or call a persistent hardware writer");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseFirstStart();
       const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
       if (await encoderLane.count()) {
         await encoderLane.locator("button.n-dev").click().catch(() => {});
@@ -5460,6 +6131,471 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("legacy v1 and v2 Control Surface documents migrate to v3 without reviving hardware authority", async () => {
+    await restoreFixturePanelSource();
+    const identity = "keyboard:usb:d209:0430:00";
+    const exactDevice = "HID\\VID_D209&PID_0430\\FIXTURE";
+    const otherDevice = "HID\\VID_046D&PID_C545\\LEGACY-KEYBOARD";
+    const exactBoard = PANEL_FINGERPRINT.toLocaleUpperCase();
+    const storageKey = "ksx-nocturne-control-surfaces1";
+    const scenarios = [
+      {
+        label: "v1",
+        epoch: "pwtest-v1-hardware-epoch",
+        phase: "pending",
+        document: {
+          version: 1,
+          devices: {
+            [identity]: {
+              open: true,
+              started: true,
+              name: "Legacy four-player geometry",
+              template: "custom",
+              stage: "route",
+              theme: "violet-circuit",
+              controls: [
+                {
+                  id: "c41",
+                  physicalId: "legacy:shared-g",
+                  kind: "button30",
+                  label: "P1 Guard",
+                  playerSlot: 1,
+                  origin: "mapping-generated",
+                  x: 137.125,
+                  y: 209.875,
+                  width: 74,
+                  height: 74,
+                  channels: [{
+                    id: "press",
+                    label: "Press",
+                    input: { kind: "keyboard", key: "G", device: otherDevice },
+                  }],
+                },
+                {
+                  id: "c42",
+                  physicalId: "legacy:shared-g",
+                  kind: "button30",
+                  label: "P2 Guard",
+                  playerSlot: 2,
+                  origin: "mapping-generated",
+                  x: 843.5,
+                  y: 219.25,
+                  width: 74,
+                  height: 74,
+                  channels: [{
+                    id: "press",
+                    label: "Press",
+                    input: { kind: "keyboard", key: "G", device: otherDevice },
+                  }],
+                },
+                {
+                  id: "c43",
+                  physicalId: "cabinet-service",
+                  kind: "keycap",
+                  label: "Service",
+                  playerSlot: null,
+                  origin: "manual",
+                  x: 560.75,
+                  y: 511.125,
+                  width: 88,
+                  height: 64,
+                  channels: [{
+                    id: "press",
+                    label: "Service key",
+                    input: { kind: "keyboard", key: "Escape", device: exactDevice },
+                  }],
+                },
+              ],
+              selectedControlId: "c43",
+              selectedChannelId: "press",
+              nextId: 44,
+            },
+          },
+          migratedWorkbench: { [identity]: true },
+        },
+      },
+      {
+        label: "v2",
+        epoch: "pwtest-v2-hardware-epoch",
+        phase: "settled",
+        document: {
+          version: 2,
+          devices: {
+            [identity]: {
+              open: true,
+              started: true,
+              name: "Legacy encoder joystick",
+              template: "custom",
+              panelLayout: "single",
+              stage: "teach",
+              theme: "glacier-current",
+              controls: [{
+                id: "c9",
+                physicalId: "physical:flight-stick",
+                physicalResolution: "confirmed",
+                kind: "joystick",
+                label: "P3 Stick",
+                playerSlot: 3,
+                origin: "manual",
+                x: 303.375,
+                y: 271.625,
+                width: 168,
+                height: 168,
+                channels: [
+                  {
+                    id: "up",
+                    label: "Up",
+                    input: { kind: "keyboard", key: "W", device: exactDevice },
+                    encoder: {
+                      driver: PANEL_PROTOCOL_PROFILE,
+                      boardFingerprint: PANEL_FINGERPRINT,
+                      terminalId: "3up",
+                      terminalLabel: "P3 Up",
+                      expectedKey: "W",
+                      verification: "matched",
+                    },
+                  },
+                  {
+                    id: "right",
+                    label: "Right",
+                    input: { kind: "keyboard", key: "D", device: exactDevice },
+                  },
+                  {
+                    id: "down",
+                    label: "Down",
+                    input: { kind: "keyboard", key: "S", device: otherDevice },
+                    encoder: {
+                      driver: "other-driver",
+                      boardFingerprint: "other-fixture-board",
+                      terminalId: "aux-down",
+                      terminalLabel: "Other Down",
+                      expectedKey: "S",
+                      verification: "matched",
+                    },
+                  },
+                  {
+                    id: "left",
+                    label: "Left",
+                    input: { kind: "unassigned", key: "", device: "" },
+                  },
+                ],
+                selected: true,
+              }],
+              selectedControlId: "c9",
+              selectedChannelId: "right",
+              nextId: 10,
+            },
+          },
+          migratedWorkbench: {},
+        },
+      },
+    ];
+
+    const readSnapshot = (page) => page.evaluate(({ key, keyboardIdentity, device }) => {
+      const store = JSON.parse(localStorage.getItem(key) ?? "null");
+      const surface = store?.devices?.[keyboardIdentity] ?? null;
+      const deck = document.querySelector(".n-widget-surface .n-surface-deck");
+      const renderedControls = Array.from(
+        document.querySelectorAll(".n-widget-surface .n-surface-control"),
+      ).map((control) => ({
+        id: control.getAttribute("data-surface-control-id"),
+        physicalId: control.getAttribute("data-physical-id"),
+        kind: control.getAttribute("data-control-kind"),
+        playerSlot: control.getAttribute("data-player-slot"),
+        sharedSignal: control.classList.contains("shared-signal"),
+        geometry: [control.style.left, control.style.top, control.style.width, control.style.height],
+        channels: Array.from(control.querySelectorAll(".n-surface-signal-chain")).map((channel) => {
+          const keycap = channel.querySelector(".n-surface-signal-keycap");
+          return {
+            id: channel.getAttribute("data-surface-channel-id"),
+            authoritativeKey: keycap?.getAttribute("data-key") ?? null,
+          };
+        }),
+      }));
+      return {
+        store,
+        version: store?.version ?? null,
+        identities: Object.keys(store?.devices ?? {}),
+        migratedWorkbench: store?.migratedWorkbench?.[keyboardIdentity] === true,
+        hardwareEpoch: store?.hardwareEpochs?.[device] ?? null,
+        surface,
+        rendered: {
+          template: deck?.getAttribute("data-template") ?? null,
+          panelLayout: deck?.getAttribute("data-panel-layout") ?? null,
+          stage: deck?.getAttribute("data-stage") ?? null,
+          theme: document.querySelector(".n-widget-surface")
+            ?.getAttribute("data-keyboard-theme") ?? null,
+          controls: renderedControls,
+        },
+      };
+    }, { key: storageKey, keyboardIdentity: identity, device: exactDevice.toLocaleUpperCase() });
+
+    for (const scenario of scenarios) {
+      const writes = [];
+      const context = await browser.newContext({
+        viewport: { width: 1600, height: 1000 },
+        colorScheme: "dark",
+      });
+      let page = null;
+      try {
+        page = await openCanvasInContext(context, async (candidate) => {
+          candidate.on("request", (request) => {
+            if (request.method() !== "POST") return;
+            const pathname = new URL(request.url()).pathname;
+            if (/\/(?:bind|learn)(?:\/|$)/.test(pathname) ||
+                pathname === "/api/panel/program/apply" ||
+                pathname === "/api/panel/restore/apply") {
+              writes.push(`${request.method()} ${pathname}`);
+            }
+          });
+          await candidate.addInitScript((seed) => {
+            if (location.origin !== seed.expectedOrigin) return;
+            const marker = `ksx-pwtest-${seed.label}-surface-migration`;
+            if (sessionStorage.getItem(marker) === "1") return;
+            localStorage.setItem(seed.storageKey, JSON.stringify(seed.document));
+            localStorage.setItem(seed.epochKey, JSON.stringify({
+              version: 2,
+              device: seed.exactDevice,
+              epoch: seed.epoch,
+              boardFingerprint: seed.exactBoard,
+              selector: seed.selector,
+              phase: seed.phase,
+            }));
+            sessionStorage.setItem(marker, "1");
+          }, {
+            expectedOrigin: new URL(BASE).origin,
+            label: scenario.label,
+            storageKey,
+            document: scenario.document,
+            epochKey: `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(
+              exactDevice.toLocaleUpperCase(),
+            )}`,
+            exactDevice: exactDevice.toLocaleUpperCase(),
+            exactBoard,
+            selector: PANEL_SELECTOR.toLocaleUpperCase(),
+            epoch: scenario.epoch,
+            phase: scenario.phase,
+          });
+        });
+        await page.waitForFunction(({ key, keyboardIdentity, device, epoch, count }) => {
+          try {
+            const store = JSON.parse(localStorage.getItem(key) ?? "null");
+            return store?.version === 3 && store?.hardwareEpochs?.[device] === epoch &&
+              store?.devices?.[keyboardIdentity]?.controls?.length === count &&
+              document.querySelectorAll(".n-widget-surface .n-surface-control").length === count;
+          } catch {
+            return false;
+          }
+        }, {
+          key: storageKey,
+          keyboardIdentity: identity,
+          device: exactDevice.toLocaleUpperCase(),
+          epoch: scenario.epoch,
+          count: scenario.label === "v1" ? 3 : 1,
+        }, { timeout: 20_000 });
+
+        const migrated = await readSnapshot(page);
+        assert.equal(migrated.version, 3, `${scenario.label} is durably rewritten as v3`);
+        assert.deepEqual(migrated.identities, [identity],
+          `${scenario.label} keeps its device-scoped document`);
+        assert.equal(migrated.hardwareEpoch, scenario.epoch,
+          `${scenario.label} records the independently published hardware epoch`);
+        assert.equal(migrated.surface.open, true);
+        assert.equal(migrated.surface.started, true);
+        assert.equal(migrated.rendered.template, "custom");
+        assert.equal(migrated.rendered.theme, migrated.surface.theme);
+        assert.equal(migrated.rendered.controls.length, migrated.surface.controls.length);
+
+        if (scenario.label === "v1") {
+          assert.equal(migrated.migratedWorkbench, true,
+            "the v1 one-way Workbench marker survives migration");
+          assert.equal(migrated.surface.panelLayout, "four-player",
+            "v1 infers the durable panel shape from its surviving player controls");
+          assert.equal(migrated.rendered.panelLayout, "four-player");
+          assert.equal(migrated.surface.stage, "route");
+          assert.equal(migrated.rendered.stage, "route");
+          assert.equal(migrated.surface.nextId, 44);
+          assert.deepEqual(
+            migrated.surface.controls.map((control) => ({
+              id: control.id,
+              physicalId: control.physicalId,
+              physicalResolution: control.physicalResolution,
+              kind: control.kind,
+              label: control.label,
+              playerSlot: control.playerSlot,
+              origin: control.origin,
+              geometry: [control.x, control.y, control.width, control.height],
+              input: control.channels[0].input,
+            })),
+            [
+              {
+                id: "c41",
+                physicalId: "physical:c41",
+                physicalResolution: "unresolved-shared-signal",
+                kind: "button30",
+                label: "P1 Guard",
+                playerSlot: 1,
+                origin: "mapping-generated",
+                geometry: [137.125, 209.875, 74, 74],
+                input: { kind: "keyboard", key: "G", device: otherDevice },
+              },
+              {
+                id: "c42",
+                physicalId: "physical:c42",
+                physicalResolution: "unresolved-shared-signal",
+                kind: "button30",
+                label: "P2 Guard",
+                playerSlot: 2,
+                origin: "mapping-generated",
+                geometry: [843.5, 219.25, 74, 74],
+                input: { kind: "keyboard", key: "G", device: otherDevice },
+              },
+              {
+                id: "c43",
+                physicalId: "cabinet-service",
+                physicalResolution: "confirmed",
+                kind: "keycap",
+                label: "Service",
+                playerSlot: null,
+                origin: "manual",
+                geometry: [560.75, 511.125, 88, 64],
+                input: { kind: "unassigned", key: "", device: "" },
+              },
+            ],
+            "v1 preserves geometry and control meaning while retiring only its stale exact-device observation",
+          );
+          assert.deepEqual(
+            migrated.rendered.controls.map((control) => ({
+              id: control.id,
+              physicalId: control.physicalId,
+              sharedSignal: control.sharedSignal,
+            })),
+            [
+              { id: "c41", physicalId: "physical:c41", sharedSignal: true },
+              { id: "c42", physicalId: "physical:c42", sharedSignal: true },
+              { id: "c43", physicalId: "cabinet-service", sharedSignal: false },
+            ],
+            "the migrated v1 physical relationships reach the rendered panel",
+          );
+          assert.equal(
+            migrated.rendered.controls.find((control) => control.id === "c43")
+              ?.channels[0]?.authoritativeKey,
+            null,
+            "the v1 exact-device key cannot remain route authority after the pending epoch",
+          );
+        } else {
+          assert.equal(migrated.migratedWorkbench, false);
+          assert.equal(migrated.surface.panelLayout, "single",
+            "v2 keeps its explicit panel shape even with a P3-owned component");
+          assert.equal(migrated.rendered.panelLayout, "single");
+          assert.equal(migrated.surface.stage, "teach");
+          assert.equal(migrated.rendered.stage, "teach");
+          assert.equal(migrated.surface.selectedControlId, "c9");
+          assert.equal(migrated.surface.selectedChannelId, "right");
+          assert.equal(migrated.surface.nextId, 10);
+          const control = migrated.surface.controls[0];
+          assert.deepEqual({
+            id: control.id,
+            physicalId: control.physicalId,
+            physicalResolution: control.physicalResolution,
+            kind: control.kind,
+            label: control.label,
+            playerSlot: control.playerSlot,
+            origin: control.origin,
+            geometry: [control.x, control.y, control.width, control.height],
+          }, {
+            id: "c9",
+            physicalId: "physical:flight-stick",
+            physicalResolution: "confirmed",
+            kind: "joystick",
+            label: "P3 Stick",
+            playerSlot: 3,
+            origin: "manual",
+            geometry: [303.375, 271.625, 168, 168],
+          }, "v2 preserves its joystick identity and exact geometry");
+          assert.deepEqual(
+            control.channels.map((channel) => ({
+              id: channel.id,
+              label: channel.label,
+              input: channel.input,
+              encoder: channel.encoder ?? null,
+            })),
+            [
+              {
+                id: "up",
+                label: "Up",
+                input: { kind: "keyboard", key: "W", device: exactDevice },
+                encoder: {
+                  driver: PANEL_PROTOCOL_PROFILE,
+                  boardFingerprint: PANEL_FINGERPRINT,
+                  terminalId: "3up",
+                  terminalLabel: "P3 Up",
+                  expectedKey: "W",
+                  verification: "unverified",
+                },
+              },
+              {
+                id: "right",
+                label: "Right",
+                input: { kind: "unassigned", key: "", device: "" },
+                encoder: null,
+              },
+              {
+                id: "down",
+                label: "Down",
+                input: { kind: "keyboard", key: "S", device: otherDevice },
+                encoder: {
+                  driver: "other-driver",
+                  boardFingerprint: "other-fixture-board",
+                  terminalId: "aux-down",
+                  terminalLabel: "Other Down",
+                  expectedKey: "S",
+                  verification: "matched",
+                },
+              },
+              {
+                id: "left",
+                label: "Left",
+                input: { kind: "unassigned", key: "", device: "" },
+                encoder: null,
+              },
+            ],
+            "v2 keeps channel order and metadata, retires exact-board verification, clears only the unlinked exact-device key, and leaves unrelated hardware alone",
+          );
+          assert.deepEqual(
+            migrated.rendered.controls[0].channels.map((channel) => ({
+              id: channel.id,
+              authoritativeKey: channel.authoritativeKey,
+            })),
+            [
+              { id: "up", authoritativeKey: null },
+              { id: "right", authoritativeKey: null },
+              { id: "down", authoritativeKey: null },
+              { id: "left", authoritativeKey: null },
+            ],
+            "the rendered v2 panel exposes no route authority before this selected encoder is read again",
+          );
+        }
+
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await page.waitForFunction(({ count }) =>
+          document.querySelectorAll(".n-widget-surface .n-surface-control").length === count,
+        { count: scenario.label === "v1" ? 3 : 1 }, { timeout: 20_000 });
+        await settle(page);
+        const restored = await readSnapshot(page);
+        assert.deepEqual(restored.store, migrated.store,
+          `${scenario.label} reloads the v3 document without resurrecting retired authority`);
+        assert.deepEqual(restored.rendered, migrated.rendered,
+          `${scenario.label} reload renders the same geometry and channel authority`);
+        assert.deepEqual(writes, [],
+          `${scenario.label} migration and reload never map a key or write panel hardware`);
+        assert.deepEqual(page.ksxNoise, []);
+      } finally {
+        await context.close();
+      }
+    }
+  });
+
   test("Control Surface passively checks recovery once, then inspects only on open, refresh, or concrete identity change", async () => {
     let panelCalls = 0;
     let observedMode = "keyboard-compatible";
@@ -5573,7 +6709,7 @@ describe("the canvas navigation controls", () => {
       assert.match(cardCopy, /Inspection only\. KSX did not program or change this encoder\./);
       assert.equal(await card.locator("form").count(), 0);
       assert.equal(await card.locator("button").count(), 2, "the hardware card offers passive Refresh and explicit Encoder setup");
-      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Set up hardware…");
+      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Configure device…");
       assert.equal(await card.locator('[data-nx*="program"], [data-nx*="write"]').count(), 0);
       const hardwareDetails = card.locator("details.n-surface-hardware-details");
       assert.equal(await hardwareDetails.getAttribute("open"), null);
@@ -5583,7 +6719,7 @@ describe("the canvas navigation controls", () => {
         (buttons) => buttons.map((button) =>
           (button.textContent ?? "").replace(/^\s*\d+\s*/, "").trim()),
       );
-      assert.deepEqual(stageLabels, ["Design", "Teach inputs", "Route outputs"]);
+      assert.deepEqual(stageLabels, ["Arrange appearance", "Teach host signals", "Route in KSX"]);
 
       await page.waitForTimeout(2_250);
       assert.equal(panelCalls, 2, "ordinary Nocturne polls do not re-inspect hardware");
@@ -5763,10 +6899,10 @@ describe("the canvas navigation controls", () => {
       await encoderLane.locator("button.n-dev").click();
       await page.waitForFunction(() =>
         document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent
-          ?.includes("Hardware Setup has not read the I-PAC"));
+          ?.includes("Configure device has not read the I-PAC"));
       assert.match(
         (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent()).replace(/\s+/g, " "),
-        /KSX routes currently reference these Windows key names.*has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them.*terminal → Windows key ownership/i,
+        /KSX routes currently reference these keyboard host signals.*Configure device has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them.*terminal → host-signal ownership/i,
         "before chart read, mapped names are references rather than proven I-PAC emissions",
       );
 
@@ -5822,11 +6958,11 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /I-PAC 4X Hardware Setup.*Panel control.*I-PAC 4X.*Windows key.*KSX.*Controller.*Game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
+        /I-PAC 4X.*Configure device.*Panel control.*I-PAC 4X.*Host signal.*KSX transform.*Virtual controller.*Game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["Panel control", "I-PAC 4X", "Windows key", "KSX", "Controller", "Game"],
+        ["Panel control", "I-PAC 4X", "Host signal", "KSX transform", "Virtual controller", "Game"],
         "the workspace teaches the complete physical-control-to-game signal chain",
       );
       assert.equal(
@@ -6307,7 +7443,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["Panel control", "I-PAC 4X", "Windows key", "KSX", "Controller", "Game"],
+        ["Panel control", "I-PAC 4X", "Host signal", "KSX transform", "Virtual controller", "Game"],
       );
       assert.match(
         (await setup.locator(".n-surface-programming-modes").textContent()).replace(/\s+/g, " "),
@@ -7184,8 +8320,16 @@ describe("the canvas navigation controls", () => {
       const learnPeerSetup = learnPeer.locator(
         '.n-widget-surface [data-nx="surface-encoder-open"]',
       );
-      if (await learnPeerSetup.getAttribute("aria-expanded") !== "true") {
-        await learnPeerSetup.click();
+      await learnPeer.waitForFunction(() => {
+        const surface = document.querySelector(".n-widget-surface");
+        const ready = surface?.querySelector(".n-surface-hardware")
+          ?.getAttribute("data-state") === "ready";
+        const programmable = surface?.querySelector(".n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable";
+        return ready && (surface?.getAttribute("data-entry") === "builder" || programmable);
+      });
+      if (await learnPeer.locator(".n-widget-surface").getAttribute("data-entry") !== "encoder-setup") {
+        await learnPeerSetup.evaluate((button) => button.click());
       }
       await learnPeer.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-programming")
@@ -8282,7 +9426,7 @@ describe("the canvas navigation controls", () => {
           assert.match(
             (await page.locator('.n-widget-kb .n-ipac-signal-source > p').first().textContent())
               .replace(/\s+/g, ' '),
-            /Hardware Setup has not read/i,
+            /Configure device has not read/i,
             "settled status repaints ordinary shelf copy even while the Builder remains closed",
           );
 
@@ -8957,7 +10101,13 @@ describe("the canvas navigation controls", () => {
       qualificationState = "validation-recovery";
       await programming.locator('[data-nx="surface-encoder-read"]').click();
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-programming")?.getAttribute("data-qualification") === "validation-recovery");
+        document.querySelector(".n-widget-surface .n-surface-programming")?.getAttribute("data-qualification") === "validation-recovery" &&
+        /does not unlock Recommended/i.test(document.querySelector(
+          '.n-widget-surface [data-surface-programming-mode="recommended"]',
+        )?.getAttribute("title") ?? "") &&
+        document.querySelector(
+          '.n-widget-surface [data-nx="surface-encoder-restore"]',
+        )?.disabled === false);
       const recoveryCopy = (await programming.locator(
         "[data-surface-programming-qualification]",
       ).textContent()).replace(/\s+/g, " ");
@@ -9194,7 +10344,7 @@ describe("the canvas navigation controls", () => {
         document.querySelector(".n-widget-surface .n-surface-hardware")
           ?.getAttribute("data-state") === "ready");
       assert.equal(await setup.isEnabled(), true);
-      assert.equal((await setup.textContent()).trim(), "Set up hardware…");
+      assert.equal((await setup.textContent()).trim(), "Configure device…");
       assert.equal(chartCalls, 0, "status recovery remains passive until the user opens setup");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -9736,7 +10886,11 @@ describe("the canvas navigation controls", () => {
         "Route stays unavailable until this exact replacement instance is taught");
       physicalDevice = capInstanceOverride;
 
-      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "ready");
+      await surface.locator('[data-nx="surface-encoder-open"]')
+        .evaluate((button) => button.click());
       await page.waitForFunction(() =>
         document.querySelector('.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming')
           ?.getAttribute('data-qualification') === 'qualified'
@@ -9842,6 +10996,10 @@ describe("the canvas navigation controls", () => {
       ).evaluate((keycap) => keycap.click());
       await surface.locator('[data-nx="surface-encoder-terminal"]').selectOption("");
       await page.mouse.move(1, 1);
+      await page.waitForFunction(() =>
+        document.querySelectorAll(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"].is-related',
+        ).length === 0);
       await firstStick.locator(
         '.n-surface-signal-chain.channel-right .n-surface-signal-direction',
       ).evaluate((direction) => direction.dispatchEvent(new PointerEvent("pointerover", {
@@ -10382,7 +11540,23 @@ describe("the canvas navigation controls", () => {
         `.n-widget-surface .n-surface-control[data-surface-control-id="${controlId}"]`,
       );
       assert.equal(await control.getAttribute("data-player-slot"), null);
+      const initial = await storedControl(controlId);
+      await page.click(
+        `.n-widget-surface [data-nx="surface-nudge"][data-surface-move="right"][data-surface-control-id="${controlId}"]`,
+      );
+      await page.waitForFunction(
+        ({ id, x }) => {
+          const store = JSON.parse(
+            localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+          );
+          const surface = Object.values(store?.devices ?? {})[0];
+          return surface?.controls?.find((candidate) => candidate.id === id)?.x > x;
+        },
+        { id: controlId, x: initial.x },
+      );
       const before = await storedControl(controlId);
+      assert.equal(before.y, initial.y,
+        "click movement offers a horizontal panel-control move without dragging");
       assert.equal(before.playerSlot, null);
 
       const box = await control.boundingBox();
@@ -10795,7 +11969,7 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(bindBodies, [], "Teach input never calls the binding verb");
       assert.equal(
         (await page.textContent(".n-widget-surface .n-surface-signal strong")).trim(),
-        "J",
+        "Keyboard · J",
       );
       const canonicalTeachCopy = await page.textContent(
         ".n-widget-surface .n-surface-signal small",

@@ -11,6 +11,11 @@
 
 export type MappingPathMode = "off" | "selected" | "all";
 
+// Nocturne may replace the client-owned flow DOM while adopting a fresh
+// server snapshot. Keep this transient disclosure outside the layer instance
+// so a harmless snapshot refresh cannot close it between pointerup and click.
+let openProcessorNudgeId = "";
+
 /** Backend-owned controller endpoint in persona/zone order. Exact key arrays
  * avoid recovering authoring data from presentation strings such as `G · H`;
  * behavior fields travel with the endpoint even though this module currently
@@ -166,6 +171,12 @@ export interface MappingFlowLayerOptions {
     offset: MappingFlowProcessorOffset | null,
   ) => boolean;
   announce?: (message: string) => void;
+  /** Focusable, non-SVG projection of the same causal relations. The visual
+   * cords stay aria-hidden; this list is the traceable assistive-technology
+   * and compact-pointer alternative. */
+  routeList?: HTMLOListElement | null;
+  /** Compact visible description of the relation(s) under inspection. */
+  traceOutput?: HTMLOutputElement | null;
 }
 
 interface MappingFlowEntry {
@@ -187,6 +198,8 @@ interface MacroProcessorEntry {
   element: HTMLAnchorElement;
   moveGrip: HTMLButtonElement;
   autoButton: HTMLButtonElement;
+  nudgeToggle: HTMLButtonElement;
+  nudgeMenu: HTMLDivElement;
   sourceElements: Element[];
   targetElements: Element[];
   padElement: Element | null;
@@ -196,6 +209,13 @@ interface MacroProcessorEntry {
   previewOffset: MappingFlowProcessorOffset | null;
   savePending: boolean;
   resetPending: boolean;
+}
+
+interface MappingFlowRelationSummary {
+  chainId: string;
+  slot: number;
+  description: string;
+  routeCount: number;
 }
 
 interface MappingAnchorCache {
@@ -209,9 +229,18 @@ interface MappingInspection {
   slot?: number;
   functionName?: string;
   macroId?: string;
+  chainId?: string;
 }
 
-type MacroProcessorFocusTarget = "editor" | "move" | "auto";
+type MacroProcessorFocusTarget =
+  | "editor"
+  | "move"
+  | "auto"
+  | "nudge"
+  | "nudge-left"
+  | "nudge-up"
+  | "nudge-down"
+  | "nudge-right";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -561,7 +590,8 @@ function inspectionEqual(left: MappingInspection | null, right: MappingInspectio
   return left?.key === right?.key &&
     left?.slot === right?.slot &&
     left?.functionName === right?.functionName &&
-    left?.macroId === right?.macroId;
+    left?.macroId === right?.macroId &&
+    left?.chainId === right?.chainId;
 }
 
 /** Owns two non-interactive SVG projections plus an interactive HTML processor
@@ -584,6 +614,8 @@ export class MappingFlowLayer {
     offset: MappingFlowProcessorOffset | null,
   ) => boolean;
   readonly #announce: (message: string) => void;
+  readonly #routeList: HTMLOListElement | null;
+  readonly #traceOutput: HTMLOutputElement | null;
   readonly #entries = new Map<string, MappingFlowEntry>();
   readonly #processorEntries = new Map<string, MacroProcessorEntry>();
   readonly #mutationObserver: MutationObserver;
@@ -608,6 +640,7 @@ export class MappingFlowLayer {
   #overflowNode: HTMLDetailsElement | null = null;
   #overflowFingerprint = "";
   #processorOverflow = 0;
+  #routeListFingerprint = "";
   #restoreProcessorFocusId: string | null = null;
   #restoreProcessorFocusTarget: MacroProcessorFocusTarget = "editor";
   #restoreOverflowSummaryFocus = false;
@@ -639,6 +672,8 @@ export class MappingFlowLayer {
       normalizedOptions.processorOffsetIsSessionOnly ?? (() => false);
     this.#onProcessorOffsetCommit = normalizedOptions.onProcessorOffsetCommit ?? (() => true);
     this.#announce = normalizedOptions.announce ?? (() => undefined);
+    this.#routeList = normalizedOptions.routeList ?? null;
+    this.#traceOutput = normalizedOptions.traceOutput ?? null;
     this.#mutationObserver = new MutationObserver((records) => {
       let cameraChanged = false;
       let geometryChanged = false;
@@ -716,7 +751,26 @@ export class MappingFlowLayer {
         return;
       }
       if (event.key === "Escape") {
+        const focusedNudgeShell = event.target instanceof Element &&
+            event.target.closest(".n-flow-processor-nudges")
+          ? event.target.closest<HTMLElement>(
+            ".n-flow-processor-shell[data-flow-macro-id]",
+          )
+          : null;
+        const focusedNudgeEntry = focusedNudgeShell?.dataset.flowMacroId
+          ? this.#processorEntries.get(focusedNudgeShell.dataset.flowMacroId)
+          : undefined;
         this.#cancelProcessorDrag?.();
+        openProcessorNudgeId = "";
+        for (const entry of this.#processorEntries.values()) {
+          entry.nudgeMenu.hidden = true;
+          entry.nudgeToggle.setAttribute("aria-expanded", "false");
+        }
+        if (focusedNudgeEntry) {
+          event.preventDefault();
+          event.stopPropagation();
+          focusedNudgeEntry.nudgeToggle.focus();
+        }
         this.#clearInspections();
       }
     }, { capture: true, signal: this.#abort.signal });
@@ -745,10 +799,18 @@ export class MappingFlowLayer {
       ? []
       : graph.processors.filter((processor) => inScope(processor.slot));
     const processorIds = new Set(this.#processors.map((processor) => processor.id));
+    if (!processorIds.has(openProcessorNudgeId)) openProcessorNudgeId = "";
+    const chainIds = new Set(this.#routes.map((route) => route.chainId));
     if (this.#pointerInspection?.macroId && !processorIds.has(this.#pointerInspection.macroId)) {
       this.#pointerInspection = null;
     }
     if (this.#focusInspection?.macroId && !processorIds.has(this.#focusInspection.macroId)) {
+      this.#focusInspection = null;
+    }
+    if (this.#pointerInspection?.chainId && !chainIds.has(this.#pointerInspection.chainId)) {
+      this.#pointerInspection = null;
+    }
+    if (this.#focusInspection?.chainId && !chainIds.has(this.#focusInspection.chainId)) {
       this.#focusInspection = null;
     }
     this.#unavailableMappings = mode === "off"
@@ -771,6 +833,7 @@ export class MappingFlowLayer {
     this.#lines.dataset.flowMode = mode;
     this.#ports.dataset.flowMode = mode;
     this.#nodes.dataset.flowMode = mode;
+    this.#syncSemanticRoutes();
     if (fingerprint !== this.#fingerprint) {
       this.#fingerprint = fingerprint;
       this.#rebuild();
@@ -794,6 +857,7 @@ export class MappingFlowLayer {
     this.#syncCameraTransform();
     if (hidden) {
       this.#cancelProcessorDrag?.();
+      openProcessorNudgeId = "";
       this.#restoreProcessorFocusId = null;
       this.#restoreProcessorFocusTarget = "editor";
       if (this.#layoutFrame !== 0) cancelAnimationFrame(this.#layoutFrame);
@@ -817,6 +881,130 @@ export class MappingFlowLayer {
     }
     this.scheduleLayout();
     return this.#routes.length;
+  }
+
+  #relationSummaries(): MappingFlowRelationSummary[] {
+    const byChain = new Map<string, MappingFlowSegment[]>();
+    for (const route of this.#routes) {
+      const group = byChain.get(route.chainId) ?? [];
+      group.push(route);
+      byChain.set(route.chainId, group);
+    }
+    const summaries: MappingFlowRelationSummary[] = [];
+    const emitted = new Set<string>();
+    for (const route of this.#routes) {
+      if (emitted.has(route.chainId)) continue;
+      emitted.add(route.chainId);
+      const chain = byChain.get(route.chainId) ?? [route];
+      if (route.kind === "binding") {
+        summaries.push({
+          chainId: route.chainId,
+          slot: route.slot,
+          description: `Keyboard · ${route.source.key} → P${route.slot} ${route.target.label}`,
+          routeCount: 1,
+        });
+        continue;
+      }
+      const processor = this.#processors.find((candidate) => candidate.id === route.chainId);
+      const triggers = Array.from(new Set(chain.flatMap((segment) =>
+        segment.kind === "macro-trigger" ? [segment.source.key] : []
+      )));
+      const targets = Array.from(new Set(chain.flatMap((segment) =>
+        segment.kind === "macro-output" ? [`P${segment.slot} ${segment.target.label}`] : []
+      )));
+      const triggerLabel = triggers.length === 0
+        ? "No host trigger"
+        : triggers.map((key) => `Keyboard · ${key}`).join(" or ");
+      const targetLabel = targets.length === 0 ? "no virtual output" : targets.join(", ");
+      summaries.push({
+        chainId: route.chainId,
+        slot: route.slot,
+        description: `${triggerLabel} → P${route.slot} ${processor?.name ?? "Macro"} macro${
+          processor?.disabled ? " (off)" : ""
+        } → ${targetLabel}`,
+        routeCount: chain.length,
+      });
+    }
+    return summaries;
+  }
+
+  #syncSemanticRoutes(): void {
+    const list = this.#routeList;
+    if (!list) return;
+    const summaries = this.#relationSummaries();
+    const container = list.closest<HTMLDetailsElement>("details");
+    const hidden = this.#mode === "off" || summaries.length === 0;
+    list.toggleAttribute("hidden", hidden);
+    if (container) container.hidden = hidden;
+    const count = container?.querySelector<HTMLElement>("[data-flow-route-index-count]");
+    if (count) {
+      count.textContent = `${summaries.length} ${summaries.length === 1 ? "route" : "routes"}`;
+    }
+    const fingerprint = summaries.map((summary) =>
+      `${summary.chainId}\u0000${summary.description}\u0000${summary.routeCount}`
+    ).join("\u0001");
+    if (fingerprint === this.#routeListFingerprint) return;
+    this.#routeListFingerprint = fingerprint;
+    const document_ = list.ownerDocument;
+    const rows = summaries.map((summary) => {
+      const item = document_.createElement("li");
+      const button = document_.createElement("button");
+      button.type = "button";
+      button.className = `n-flow-route-row np${summary.slot}`;
+      button.dataset.flowChain = summary.chainId;
+      button.dataset.flowSlot = String(summary.slot);
+      button.dataset.flowPattern = String(((summary.slot - 1) % 16 + 16) % 16 + 1);
+      button.style.setProperty("--n-flow-color", `var(--pcs${summary.slot})`);
+      button.textContent = summary.description;
+      button.title = `${summary.description} · ${summary.routeCount} ${
+        summary.routeCount === 1 ? "connection" : "connections"
+      }`;
+      item.append(button);
+      return item;
+    });
+    list.replaceChildren(...rows);
+  }
+
+  #syncTrace(relatedChains: ReadonlySet<string>): string {
+    const output = this.#traceOutput;
+    if (!output) return "";
+    const inspection = this.#activeInspection();
+    const summaries = this.#relationSummaries().filter((summary) =>
+      relatedChains.has(summary.chainId)
+    );
+    if (!inspection || summaries.length === 0) {
+      output.hidden = true;
+      output.textContent = "";
+      output.title = "";
+      return "";
+    }
+    const subject = inspection.chainId && summaries.length === 1
+      ? summaries[0].description
+      : inspection.key
+      ? `Keyboard · ${inspection.key}`
+      : inspection.functionName
+      ? (() => {
+          const endpoint = this.#routes.find((route) =>
+            route.target.kind === "control" &&
+            route.target.slot === inspection.slot &&
+            sameControlDirection(route.target.functionName, inspection.functionName ?? "")
+          );
+          return `P${inspection.slot ?? this.#selectedSlot} ${
+            endpoint?.target.kind === "control"
+              ? endpoint.target.label
+              : inspection.functionName
+          }`;
+        })()
+      : inspection.macroId
+      ? summaries[0]?.description ?? "macro route"
+      : `${summaries.length} related routes`;
+    const text = inspection.chainId && summaries.length === 1
+      ? `Tracing ${subject}`
+      : `Tracing ${subject} · ${summaries.length} ${summaries.length === 1 ? "route" : "routes"}`;
+    output.hidden = false;
+    output.textContent = text;
+    output.title = summaries.map((summary) => summary.description).join("\n");
+    return text;
   }
 
   scheduleLayout(): void {
@@ -915,6 +1103,13 @@ export class MappingFlowLayer {
     this.#lines.replaceChildren();
     this.#ports.replaceChildren();
     this.#nodes.replaceChildren();
+    this.#routeList?.replaceChildren();
+    this.#routeListFingerprint = "";
+    if (this.#traceOutput) {
+      this.#traceOutput.hidden = true;
+      this.#traceOutput.textContent = "";
+      this.#traceOutput.title = "";
+    }
   }
 
   #rebuild(): void {
@@ -950,12 +1145,45 @@ export class MappingFlowLayer {
       autoButton.type = "button";
       autoButton.className = "n-flow-processor-auto";
       autoButton.textContent = "Auto";
+      const nudgeToggle = document_.createElement("button");
+      nudgeToggle.type = "button";
+      nudgeToggle.className = "n-flow-processor-nudge-toggle";
+      nudgeToggle.textContent = "Nudge";
+      const nudgeMenu = document_.createElement("div");
+      nudgeMenu.className = "n-flow-processor-nudges";
+      nudgeMenu.id = `n-flow-nudges-${routePart(processor.id)}`;
+      nudgeMenu.setAttribute("role", "group");
+      nudgeMenu.setAttribute(
+        "aria-label",
+        `Move ${processor.name} for Player ${processor.slot}`,
+      );
+      nudgeMenu.hidden = openProcessorNudgeId !== processor.id;
+      for (const [label, title, direction, dx, dy] of [
+        ["←", "Move left", "left", -16, 0],
+        ["↑", "Move up", "up", 0, -16],
+        ["↓", "Move down", "down", 0, 16],
+        ["→", "Move right", "right", 16, 0],
+      ] as const) {
+        const button = document_.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = title;
+        button.setAttribute("aria-label", `${title} ${processor.name}`);
+        button.dataset.flowNudgeDirection = direction;
+        button.dataset.flowDx = String(dx);
+        button.dataset.flowDy = String(dy);
+        nudgeMenu.append(button);
+      }
+      nudgeToggle.setAttribute("aria-controls", nudgeMenu.id);
+      nudgeToggle.setAttribute("aria-expanded", String(!nudgeMenu.hidden));
       const entry: MacroProcessorEntry = {
         processor,
         shell,
         element,
         moveGrip,
         autoButton,
+        nudgeToggle,
+        nudgeMenu,
         sourceElements: [],
         targetElements: [],
         padElement: null,
@@ -969,7 +1197,7 @@ export class MappingFlowLayer {
       this.#syncProcessorElement(entry);
       this.#syncProcessorPlacementChrome(entry);
       this.#bindProcessorControls(entry);
-      shell.append(element, moveGrip, autoButton);
+      shell.append(element, moveGrip, autoButton, nudgeToggle, nudgeMenu);
       this.#nodes.append(shell);
       this.#processorEntries.set(processor.id, entry);
     }
@@ -1207,14 +1435,61 @@ export class MappingFlowLayer {
     }
   }
 
+  #positionProcessorNudgeMenu(
+    entry: MacroProcessorEntry,
+    viewport = this.#viewport.getBoundingClientRect(),
+  ): void {
+    if (entry.nudgeMenu.hidden || entry.shell.hidden) return;
+    const shell = entry.shell.getBoundingClientRect();
+    const menu = entry.nudgeMenu.getBoundingClientRect();
+    if (menu.width <= 0 || viewport.width <= 0) return;
+    const gap = 3;
+    const margin = 8;
+    const roomRight = viewport.right - margin - shell.right - gap;
+    const roomLeft = shell.left - gap - (viewport.left + margin);
+    const placeRight = roomRight >= menu.width ||
+      (roomLeft < menu.width && roomRight >= roomLeft);
+    const naturalLeft = placeRight
+      ? shell.right + gap
+      : shell.left - gap - menu.width;
+    const minimumLeft = viewport.left + margin;
+    const maximumLeft = Math.max(minimumLeft, viewport.right - margin - menu.width);
+    const clampedLeft = Math.min(maximumLeft, Math.max(minimumLeft, naturalLeft));
+    // Processor cards keep a fixed screen size while their parent layer
+    // follows the camera, so this screen delta is also the menu's local CSS
+    // offset. Recompute it after every layout and disclosure rather than
+    // persisting a side that can become wrong after pan, zoom, or resize.
+    entry.nudgeMenu.style.left = `${(clampedLeft - shell.left).toFixed(2)}px`;
+    entry.nudgeMenu.dataset.flowNudgeSide = placeRight ? "right" : "left";
+  }
+
   #bindProcessorControls(entry: MacroProcessorEntry): void {
-    const { shell, moveGrip, autoButton } = entry;
+    const { shell, moveGrip, autoButton, nudgeToggle, nudgeMenu } = entry;
     const signal = this.#abort.signal;
-    moveGrip.addEventListener("click", (event) => {
-      // The grip is a real button for focus and keyboard discovery, but a
-      // click is not a second state change after a completed pointer drag.
+    const setNudgeMenuOpen = (open: boolean, announce = true): void => {
+      if (open) {
+        for (const candidate of this.#processorEntries.values()) {
+          if (candidate === entry) continue;
+          candidate.nudgeMenu.hidden = true;
+          candidate.nudgeToggle.setAttribute("aria-expanded", "false");
+        }
+      }
+      nudgeMenu.hidden = !open;
+      openProcessorNudgeId = open ? entry.processor.id : "";
+      nudgeToggle.setAttribute("aria-expanded", String(open));
+      if (open) this.#positionProcessorNudgeMenu(entry);
+      if (open && announce) {
+        this.#announce(`Movement controls shown for ${entry.processor.name}.`);
+      }
+    };
+    const toggleNudgeMenu = (): void => setNudgeMenuOpen(nudgeMenu.hidden);
+    nudgeToggle.addEventListener("pointerdown", (event) => {
+      if (event.button === 0) event.stopPropagation();
+    }, { signal });
+    nudgeToggle.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      toggleNudgeMenu();
     }, { signal });
     moveGrip.addEventListener("keydown", (event) => {
       if (event.key === "Home" || event.key === "Delete") {
@@ -1246,6 +1521,20 @@ export class MappingFlowLayer {
       event.stopPropagation();
       this.#resetProcessorOffset(entry, true);
     }, { signal });
+    for (const button of Array.from(nudgeMenu.querySelectorAll<HTMLButtonElement>("button"))) {
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button === 0) event.stopPropagation();
+      }, { signal });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#nudgeProcessor(
+          entry,
+          Number(button.dataset.flowDx ?? "0"),
+          Number(button.dataset.flowDy ?? "0"),
+        );
+      }, { signal });
+    }
 
     moveGrip.addEventListener("pointerdown", (event) => {
       if (
@@ -1369,7 +1658,7 @@ export class MappingFlowLayer {
   }
 
   #syncProcessorElement(entry: MacroProcessorEntry): void {
-    const { processor, shell, element, moveGrip, autoButton } = entry;
+    const { processor, shell, element, moveGrip, autoButton, nudgeToggle } = entry;
     const document_ = this.#root.ownerDocument;
     const hasNoSteps = processor.timeline.length === 0;
     const timeline = hasNoSteps ? ["no steps"] : processor.timeline;
@@ -1408,6 +1697,12 @@ export class MappingFlowLayer {
       "Move macro · Arrow keys 16 · Shift+Arrow 64 · Home or Delete returns to Auto";
     autoButton.dataset.flowMacroId = processor.id;
     autoButton.dataset.flowSlot = String(processor.slot);
+    nudgeToggle.dataset.flowMacroId = processor.id;
+    nudgeToggle.dataset.flowSlot = String(processor.slot);
+    nudgeToggle.setAttribute(
+      "aria-label",
+      `Show click or tap movement controls for ${processor.name}, Player ${processor.slot}`,
+    );
     element.href = processor.editHref;
     element.setAttribute("aria-haspopup", "dialog");
     element.setAttribute("aria-controls", "n-macro-dialog");
@@ -1553,7 +1848,15 @@ export class MappingFlowLayer {
         ? directEntry.moveGrip
         : this.#restoreProcessorFocusTarget === "auto" && !directEntry.autoButton.hidden
           ? directEntry.autoButton
-          : directEntry.element;
+          : this.#restoreProcessorFocusTarget === "nudge"
+            ? directEntry.nudgeToggle
+            : this.#restoreProcessorFocusTarget.startsWith("nudge-")
+              ? directEntry.nudgeMenu.querySelector<HTMLButtonElement>(
+                `[data-flow-nudge-direction="${
+                  CSS.escape(this.#restoreProcessorFocusTarget.slice("nudge-".length))
+                }"]`,
+              ) ?? directEntry.nudgeToggle
+              : directEntry.element;
       this.#restoreProcessorFocusId = null;
       this.#restoreProcessorFocusTarget = "editor";
       direct.focus();
@@ -1583,7 +1886,11 @@ export class MappingFlowLayer {
         ? "move"
         : active.classList.contains("n-flow-processor-auto")
           ? "auto"
-          : "editor";
+          : active.classList.contains("n-flow-processor-nudge-toggle")
+            ? "nudge"
+            : active instanceof HTMLElement && active.dataset.flowNudgeDirection
+              ? `nudge-${active.dataset.flowNudgeDirection}` as MacroProcessorFocusTarget
+              : "editor";
     }
     const overflow = this.#overflowNode;
     this.#restoreOverflowSummaryFocus = active === overflow?.querySelector("summary");
@@ -1966,6 +2273,7 @@ export class MappingFlowLayer {
       shell.style.top = `${position.y.toFixed(2)}px`;
       entry.renderedPosition = { x: position.x, y: position.y };
       this.#syncProcessorPlacementChrome(entry);
+      if (!entry.nudgeMenu.hidden) this.#positionProcessorNudgeMenu(entry, viewport);
       const screenPosition = position.matrixTransform(matrix);
       placedProcessors.push(new DOMRect(
         screenPosition.x - shell.offsetWidth / 2,
@@ -2239,6 +2547,13 @@ export class MappingFlowLayer {
 
   #inspectionFor(target: EventTarget | null): MappingInspection | null {
     if (!(target instanceof Element)) return null;
+    const relation = target.closest<HTMLElement>("[data-flow-chain]");
+    if (relation?.dataset.flowChain) {
+      return {
+        chainId: relation.dataset.flowChain,
+        slot: Number(relation.dataset.flowSlot ?? this.#selectedSlot),
+      };
+    }
     const macro = target.closest<HTMLElement>("[data-flow-macro-id]");
     if (macro?.dataset.flowMacroId) {
       return {
@@ -2294,7 +2609,17 @@ export class MappingFlowLayer {
   }
 
   #activeInspection(): MappingInspection | null {
-    return this.#pointerInspection ?? this.#focusInspection;
+    // The semantic route index is the keyboard-accessible equivalent of
+    // pointing at a cord, so a resting mouse must not override its deliberate
+    // focus. Elsewhere the canvas keeps its established pointer-first model:
+    // hovering a key is still a useful temporary trace while an editor control
+    // happens to retain focus.
+    const active = this.#root.ownerDocument.activeElement;
+    const semanticRouteFocused = active instanceof Element &&
+      Boolean(this.#routeList?.contains(active));
+    return semanticRouteFocused
+      ? this.#focusInspection ?? this.#pointerInspection
+      : this.#pointerInspection ?? this.#focusInspection;
   }
 
   #setInspection(kind: "pointer" | "focus", inspection: MappingInspection | null): void {
@@ -2303,6 +2628,13 @@ export class MappingFlowLayer {
     else this.#focusInspection = inspection;
     if (inspectionEqual(before, this.#activeInspection())) return;
     this.#applyInspection();
+    const active = this.#root.ownerDocument.activeElement;
+    const semanticRouteFocused = active instanceof Element &&
+      Boolean(this.#routeList?.contains(active));
+    if (kind === "focus" && inspection && semanticRouteFocused) {
+      const trace = this.#traceOutput?.textContent?.trim();
+      if (trace) this.#announce(trace);
+    }
   }
 
   #clearInspections(): void {
@@ -2316,6 +2648,7 @@ export class MappingFlowLayer {
     const inspection = this.#activeInspection();
     const chains = new Set<string>();
     if (!inspection) return chains;
+    if (inspection.chainId) chains.add(inspection.chainId);
     if (inspection.macroId) chains.add(inspection.macroId);
     for (const route of this.#routes) {
       if (inspection.key && route.source.kind === "key" && route.source.key === inspection.key) {
@@ -2345,6 +2678,7 @@ export class MappingFlowLayer {
     this.#ports.classList.toggle("is-inspecting", inspecting);
     this.#nodes.classList.toggle("is-inspecting", inspecting);
     const relatedChains = this.#inspectionChains();
+    this.#syncTrace(relatedChains);
     for (const entry of this.#processorEntries.values()) {
       const related = relatedChains.has(entry.processor.id);
       entry.element.classList.toggle("is-related", related);

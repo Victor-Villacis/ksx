@@ -162,6 +162,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Create / update / delete profiles | planned | view | **primary** |
 | Device pick / remove | owns | planned | **primary** |
 | Inspect and program panel encoder hardware / chart | owns (status, chart, backup, program, restore) | — | **primary** (Control Surface Builder) |
+| Measure simultaneous keyboard / encoder host signals | owns (`ksx input-test start`, `poll`, `cancel`) | — | **primary** (keyboard workbench / Control Surface Builder) |
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
 | Is it working: pads, drivers | owns | **primary** | view |
@@ -240,6 +241,16 @@ One row advanced on 2026-08-23 with E10's guarded encoder programmer:
   backend façade. Studio is therefore the primary human workflow; the CLI owns
   the same advanced verbs. The cabinet surface remains deliberately absent
   because persistent EEPROM recovery needs the close-range review UI.
+
+The simultaneous-signal diagnostic gets its own row rather than being folded
+into "Press a button, see it light." The latter compares a running pipeline's
+input and virtual-pad output. This diagnostic runs only while Play is stopped,
+measures the host signals an exact keyboard or keyboard-mode encoder exposes,
+and deliberately has no output-pad half. Studio owns the human interaction;
+`ksx input-test start|poll|cancel` is the thin, scriptable second caller over
+the same generation-stamped pipe verbs. There is no cabinet face: opening a
+timed diagnostic and tracing its evidence is close-range setup work, not a
+10-foot operating action.
 
 ### §3c The first-run row, and the build order it ran backwards
 

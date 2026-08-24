@@ -712,12 +712,12 @@ fn installer_and_ci_package_the_prepare_provider_only_in_the_installed_product()
         );
     }
 
-    let portable = build
+    let portable_tail = build
         .split("- name: Package portable distribution with license material")
         .nth(1)
-        .expect("portable packaging step exists")
-        .split("- uses: actions/upload-artifact@v4")
-        .next()
+        .expect("portable packaging step exists");
+    let (portable, _) = portable_tail
+        .split_once("- uses: actions/upload-artifact@")
         .expect("portable step has an upload boundary");
     for forbidden in [
         "ksx-winusb-helper.exe",
@@ -1438,12 +1438,12 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
         );
     }
 
-    let portable = build
+    let portable_tail = build
         .split("- name: Package portable distribution with license material")
         .nth(1)
-        .expect("portable packaging step")
-        .split("- uses: actions/upload-artifact@v4")
-        .next()
+        .expect("portable packaging step");
+    let (portable, _) = portable_tail
+        .split_once("- uses: actions/upload-artifact@")
         .expect("portable upload boundary");
     for forbidden in [
         "ksx-hidmaestro-host.exe",
@@ -1811,8 +1811,7 @@ fn the_code_section_uses_line_comments_only() {
 /// `.github/workflows/build-installer.yml` refuses to build a release unless the
 /// tag equals both, and it is the release that makes the disagreement expensive:
 /// a tag is a public name you cannot reuse, so learning ten minutes into a
-/// release run that two files disagree costs a deleted tag and a burned version
-/// number.
+/// release run that two files disagree burns an immutable candidate version.
 ///
 /// Fails against the ordinary broken tree: someone bumps `Cargo.toml` to 0.2.1
 /// and `ksx.iss` keeps 0.2.0. Nothing else in this repository notices — the
@@ -1830,7 +1829,7 @@ fn the_installer_version_and_the_workspace_version_cannot_drift() {
     );
 }
 
-/// **The release is a pushed tag, and nothing else is a release.**
+/// **A pushed tag starts the only release-candidate path.**
 ///
 /// Fails against three broken versions, each of which has a plausible author:
 ///
@@ -1957,6 +1956,10 @@ fn the_release_attaches_the_installer_that_ksx_iss_actually_produces() {
     assert!(
         assets.contains("PORTABLE_NAME"),
         "the portable distribution rides along for people who want no installer: {assets}"
+    );
+    assert!(
+        assets.contains("MANIFEST_NAME"),
+        "the exact-candidate manifest must remain public beside both distributables: {assets}"
     );
 }
 

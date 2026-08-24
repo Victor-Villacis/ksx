@@ -3,17 +3,20 @@
 Updated 2026-08-24. This file is the port, provenance, seeding, and teardown
 contract for people and agents working on Nocturne.
 
-The label in Studio's title bar is authoritative. A fixture banner means every
-device, chart, session, and saved configuration shown by that process is
-synthetic. `LIVE MACHINE · REAL HARDWARE` means the production providers are
-reading this computer and confirmed hardware actions can affect a physical
-device.
+The label in Studio's title bar is authoritative for both artifact and data
+provenance. A fixture banner means every device, chart, session, and saved
+configuration shown by that process is synthetic. `DEV BUILD · REAL HARDWARE`
+means a matched source-tree artifact is reading this computer; confirmed
+hardware actions can affect a physical device, but the executable is not an
+installed candidate. `LIVE MACHINE · REAL HARDWARE` is reserved for a normal
+product-shaped process. The full promotion contract is
+[`DEVELOPMENT-PIPELINE.md`](DEVELOPMENT-PIPELINE.md).
 
 ## Environment roster
 
 | Port | Banner | Purpose | State source | Who owns it |
 |---|---|---|---|---|
-| **4460** | `LIVE MACHINE · REAL HARDWARE` | Victor's production-like hardware QA: actual USB inventory, KSX config root, backups, daemon, and physical I-PAC | `CollectorSource` + `LocalMachine` | A person performing real-machine QA. Never seed it. |
+| **4460** | `DEV BUILD · REAL HARDWARE` | Fast product-shaped development against the actual USB inventory, KSX config root, backups, daemon, and physical I-PAC | `CollectorSource` + `LocalMachine` | A person performing real-machine development/QA. Never seed it. |
 | **4476** | `FIXTURE · SEEDED DEMO` | Rich visual/design workspace with controllers, mappings, and macros already present | `macro_fixture` seeded scenario | UI work and screenshots |
 | **4478** | fixture (test-owned) | Macro-editor Playwright suite | test runner | Tests only. Never start, stop, or browse it manually. |
 | **4479** | fixture (test-owned) | Canvas-controls Playwright suite | test runner | Tests only |
@@ -31,13 +34,35 @@ testable without lying on 4520.
 
 ## Start or reseed a fixture
 
-From the repository root:
+On a fresh clone, or after removing `tmp/studio-env`, establish the guarded
+asset receipt first. The watcher does this automatically; direct launchers
+deliberately refuse to compile against an absent or stale receipt:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/build-assets.ps1
+```
+
+Then, from the repository root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment seeded
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment first-run
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment blank-encoder
 ```
+
+For continuous fixture work, replace `seed.ps1` with
+`watch.ps1 -Environment <name>`. One watcher owns one lane; a second refuses.
+Its content fingerprints absorb rename-save editor behavior and changes that
+arrive during a build without launching overlapping Node/Cargo processes. The
+reconcile pass also restarts a crashed managed lane when source did not change;
+transient filesystem observations retry in place, while one permanent build
+failure for an exact content graph waits for an edit instead of hot-looping.
+Changing `watch.ps1`, `source-graph.ps1`, or `build-graph.ps1` makes a resident
+watcher exit as `restart-required` while leaving its last healthy lane running;
+restart it so one script implementation owns the next receipt and swap.
+`-NoInitialRefresh` attaches without an immediate swap only when the existing
+managed artifact is healthy and current; otherwise reconciliation repairs it.
+It cannot be combined with `-Once`.
 
 Seeding first builds the replacement into an isolated target directory. Only
 after that succeeds does it stop the process recorded for the environment,
@@ -63,8 +88,17 @@ safety fences expected by the launcher and documentation.
 
 ## Start real-hardware QA
 
+The same guarded asset-receipt prerequisite applies to a direct start. Prefer
+the watcher for normal iteration because it rebuilds assets when needed.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/start-real.ps1
+```
+
+For the normal edit/rebuild/restart loop, use the repository watcher instead:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment real
 ```
 
 This builds `ksx-app` with the `studio` feature and starts a managed matched pair from
@@ -114,17 +148,27 @@ Persistent I-PAC writes are allowed only when the assigned task explicitly
 calls for real hardware mutation and the in-app supervised confirmation is
 completed. A fixture result is never evidence for a real write.
 
+Before a replacement swap, the launcher holds the machine-wide panel
+programming lease and proves the answering daemon reports `run = stopped`. If
+Play is running or an I-PAC EEPROM transaction is active, a watched refresh
+reports `deferred` and leaves the healthy pair untouched. Cargo and the Studio
+generator also share one machine-wide build-graph mutex, so Cargo cannot embed
+a partially rebuilt asset directory.
+
 ## Development loop versus installation
 
 Do **not** reinstall KSX for each code iteration. The ordinary product-shaped
 loop is:
 
 1. edit and run the relevant unit/UI tests;
-2. rebuild generated Studio assets once under the asset lock, when applicable;
-3. run `start-real.ps1`, refresh 4460, and exercise the matched artifact built
-   by that invocation against the real `%APPDATA%\ksx` state and hardware;
+2. keep `watch.ps1 -Environment real` running (or use `-Once` at a checkpoint);
+   it rebuilds generated Studio assets when those inputs changed and then runs
+   the guarded real launcher;
+3. refresh 4460 and exercise the matched artifact against the real
+   `%APPDATA%\ksx` state and hardware;
 4. use `status.ps1` as the evidence that both artifact-matched processes and both
-   daemon pipes agree; then tear down or run the next replacement.
+   daemon pipes agree and that `Current` is true; then tear down or run the next
+   replacement.
 
 The Start-menu shortcut and `C:\Program Files\ksx\ksx.exe` are a separate
 installed-product acceptance lane. Use a coherent installer/upgrade candidate
@@ -152,6 +196,8 @@ task. Test that write from the complete installed candidate.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1 -Environment real -RequireHealthy -RequireCurrent
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1 -Environment first-run -Json -RequireHealthy -RequireCurrent
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/teardown.ps1 -Environment first-run
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/teardown.ps1 -All
 ```
@@ -161,7 +207,17 @@ stopping anything. It will not kill an unrecorded process merely because it
 owns a known port or daemon pipe. Logs remain under `tmp/studio-env/logs`; PID
 records and copied executables are disposable and ignored by Git.
 
-Status lists every manual and default Playwright port. For 4460,
+Status lists every manual and default Playwright port and its watcher state.
+`-Environment` selects one lane, `-Json` is stable automation output, and
+`-RequireHealthy` throws/exits nonzero unless every selected lane is healthy.
+`ProvenanceComplete` means a managed receipt contains all four identities: the
+runtime source graph, Studio authoring graph, Rust zone-producer graph, and
+generated asset graph. `Current` additionally re-hashes the actual generated
+outputs and requires those four identities to equal the checkout and the
+running managed artifact; `-RequireCurrent` makes that an independent nonzero
+gate. A healthy previous artifact can therefore remain usable while a new edit
+is building without being mislabeled current.
+For 4460,
 `managed / running` means the Studio listener, daemon process, control pipe,
 live-feed pipe, recorded matched artifact, environment id, and writable draft
 reachability all agree. A Studio-only process is reported as daemon unavailable,
@@ -176,9 +232,16 @@ pointed at 4460, 4476, 4520, or 4521.
 
 ## Asset rebuild lock
 
-The scripts consume the already-generated files in `crates/ksx-studio/assets`.
-They do not run `studio-ui/build.mjs`. When Studio source changes, the one agent
-holding the asset-rebuild lock runs `node studio-ui/build.mjs` once after the
-source graph settles, verifies the generated byte diff, and only then reseeds
-the desired environments. No second agent should rebuild or hand-merge
-`manifest.json` or `sw.js`.
+Never call `node studio-ui/build.mjs` directly in a shared checkout. Use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/build-assets.ps1
+```
+
+The wrapper holds `Global\KSXStudioBuildGraph-v1`, writes an `assets.dirty`
+sentinel before the destructive generator, runs the build twice, and compares
+every generated path, byte length, and SHA-256. Only then does it atomically
+record `assets-state.json` and clear the sentinel. `start-real.ps1` and
+`seed.ps1` hold the same lock while Cargo reads embedded assets and refuse a
+missing, stale, or dirty receipt. Generated `manifest.json` and `sw.js` remain
+byte-diffed CI outputs and must never be hand-merged.

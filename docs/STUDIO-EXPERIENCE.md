@@ -657,7 +657,7 @@ dedicated remote flow exist.
 ### What the current source-ready job does
 
 The Studio browser job is configured for the pinned Windows 2022 runner, Node
-20.19.0, Playwright 1.62.1, and pinned Chromium. Its visual smoke source builds
+24.19.0 LTS, Playwright 1.62.1, and pinned Chromium. Its visual smoke source builds
 the Studio fixture and captures all eight routes in three contexts:
 
 | Context | Viewport | Theme/input |

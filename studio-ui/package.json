@@ -3,9 +3,14 @@
   "private": true,
   "version": "0.2.0",
   "description": "Forma authoring project for KSX Studio. Node is needed only to regenerate crates/ksx-studio/assets/ — never to build or run KSX.",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": "24.19.0",
+    "npm": "11.17.0"
+  },
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../tools/studio-env/build-assets.ps1"
   },
   "dependencies": {
     "@getforma/build": "^0.2.0",

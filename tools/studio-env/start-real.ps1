@@ -1,11 +1,16 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+
+    [ValidateNotNullOrEmpty()]
+    [string]$LaunchReason = "manual"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime-probe.ps1")
+. (Join-Path $PSScriptRoot "build-graph.ps1")
+. (Join-Path $PSScriptRoot "source-graph.ps1")
 
 if ($SkipBuild) {
     throw "-SkipBuild is intentionally unavailable for real-hardware QA. The launcher must rebuild so the disposable runtime is guaranteed to carry the current machine-lifecycle safety fences. Use -SkipBuild only with isolated fixtures."
@@ -24,26 +29,6 @@ if ($ReservedNonRealPorts -contains $Port) {
 
 New-Item -ItemType Directory -Force -Path $BinRoot, $LogRoot | Out-Null
 
-function Invoke-DaemonStatusProbe {
-    param([Parameter(Mandatory = $true)][string]$Executable)
-
-    $Lines = @(& $Executable session status --json 2>&1)
-    $ExitCode = $LASTEXITCODE
-    $Text = $Lines -join "`n"
-    $Payload = $null
-    try {
-        $Payload = $Text | ConvertFrom-Json
-    } catch {
-        # The caller needs both the exit code and unparsed text to distinguish
-        # a cleanly absent channel from a broken or incompatible responder.
-    }
-    [pscustomobject]@{
-        exit_code = $ExitCode
-        text = $Text
-        payload = $Payload
-    }
-}
-
 function Write-ManagedRecord {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Record,
@@ -56,6 +41,231 @@ function Write-ManagedRecord {
         Move-Item -LiteralPath $Temporary -Destination $Path -Force
     } finally {
         Remove-Item -LiteralPath $Temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-RealManagedRecord {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } catch {
+        throw "Refusing real-hardware replacement: the managed process record is unreadable. Resolve it with status/teardown before retrying. $($_.Exception.Message)"
+    }
+}
+
+function Get-ValidatedRealRecordArtifact {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    if (-not ($Record.PSObject.Properties.Name -contains "schema_version") -or
+        [int]$Record.schema_version -ne 2 -or
+        -not ($Record.PSObject.Properties.Name -contains "processes") -or
+        -not ($Record.PSObject.Properties.Name -contains "executable") -or
+        -not ($Record.PSObject.Properties.Name -contains "artifact_sha256")) {
+        throw "Refusing real-hardware replacement: the managed record has no complete schema-2 artifact identity. Run the supervised teardown/status recovery first."
+    }
+    $Artifact = [System.IO.Path]::GetFullPath([string]$Record.executable)
+    $ManagedPrefix = [System.IO.Path]::GetFullPath($BinRoot).TrimEnd('\', '/') +
+        [System.IO.Path]::DirectorySeparatorChar
+    if (-not $Artifact.StartsWith($ManagedPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]$Record.artifact_sha256 -notmatch '^[0-9A-Fa-f]{64}$' -or
+        -not (Test-Path -LiteralPath $Artifact -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash -ne [string]$Record.artifact_sha256) {
+        throw "Refusing real-hardware replacement: the record-derived probe artifact is outside the managed bin or fails its SHA-256 identity."
+    }
+    $Daemons = @($Record.processes | Where-Object { [string]$_.role -eq "daemon" })
+    if ($Daemons.Count -ne 1) {
+        throw "Refusing real-hardware replacement: schema 2 does not name exactly one daemon."
+    }
+    foreach ($ProcessRecord in @($Record.processes)) {
+        if (-not ($ProcessRecord.PSObject.Properties.Name -contains "executable") -or
+            -not ([System.IO.Path]::GetFullPath([string]$ProcessRecord.executable)).Equals(
+                $Artifact,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "Refusing real-hardware replacement: the managed record mixes artifact paths."
+        }
+    }
+    return $Artifact
+}
+
+function Get-PreBuildProbeExecutable {
+    param(
+        [AllowNull()][object]$Record,
+        [Parameter(Mandatory = $true)][string]$BuiltExecutable
+    )
+
+    $Candidates = New-Object System.Collections.Generic.List[string]
+    if ($Record) {
+        # A mutable ignored receipt never becomes command authority merely by
+        # containing an executable string. Validate its managed path, one-artifact
+        # shape and hash before any record-derived file can be invoked.
+        $Candidates.Add((Get-ValidatedRealRecordArtifact -Record $Record))
+    }
+    $Candidates.Add($BuiltExecutable)
+    $Candidates.Add((Join-Path $env:ProgramFiles "ksx\ksx.exe"))
+
+    foreach ($Candidate in $Candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($Candidate) -and
+            (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+            return [System.IO.Path]::GetFullPath($Candidate)
+        }
+    }
+    return ""
+}
+
+function Assert-RealDaemonSafeForReplacement {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string]$RecordPath,
+        [Parameter(Mandatory = $true)][string]$Phase
+    )
+
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        throw "Refusing real-hardware replacement during ${Phase}: daemon probe executable is missing at $Executable."
+    }
+
+    $Record = Read-RealManagedRecord -Path $RecordPath
+    $RecordedDaemon = $null
+    $ExactRecordedDaemon = $null
+    try {
+        if ($Record -and ($Record.PSObject.Properties.Name -contains "schema_version")) {
+            $null = Get-ValidatedRealRecordArtifact -Record $Record
+            if ([int]$Record.schema_version -ne 2 -or
+                -not ($Record.PSObject.Properties.Name -contains "processes")) {
+                throw "Refusing real-hardware replacement during ${Phase}: the managed record has an incomplete schema-2 shape."
+            }
+            $RecordedDaemons = @($Record.processes | Where-Object { [string]$_.role -eq "daemon" })
+            if ($RecordedDaemons.Count -ne 1) {
+                throw "Refusing real-hardware replacement during ${Phase}: schema 2 does not name exactly one managed daemon."
+            }
+            $RecordedDaemon = $RecordedDaemons[0]
+            foreach ($Required in @("process_id", "executable", "creation_time_utc")) {
+                if (-not ($RecordedDaemon.PSObject.Properties.Name -contains $Required) -or
+                    [string]::IsNullOrWhiteSpace([string]$RecordedDaemon.$Required)) {
+                    throw "Refusing real-hardware replacement during ${Phase}: the recorded daemon has no $Required."
+                }
+            }
+            try {
+                $ExactRecordedDaemon = Open-KsxExactProcess `
+                    -ProcessId ([int]$RecordedDaemon.process_id) `
+                    -ExpectedExecutable ([string]$RecordedDaemon.executable) `
+                    -ExpectedCreationTimeUtc $RecordedDaemon.creation_time_utc
+            } catch {
+                throw "Refusing real-hardware replacement during ${Phase}: the recorded daemon identity is ambiguous. $($_.Exception.Message)"
+            }
+        }
+
+        $Probe = Invoke-KsxDaemonStatusProbe -Executable $Executable
+        $Payload = $Probe.payload
+        $HasOk = $Payload -and ($Payload.PSObject.Properties.Name -contains "ok")
+        $HasRun = $Payload -and ($Payload.PSObject.Properties.Name -contains "run")
+        $HasCode = $Payload -and ($Payload.PSObject.Properties.Name -contains "code")
+        $ExactStopped = $Probe.exit_code -eq 0 -and $HasOk -and
+            [bool]$Payload.ok -and $HasRun -and [string]$Payload.run -ceq "stopped"
+        $ExactAbsent = $Probe.exit_code -eq 2 -and $HasOk -and
+            -not [bool]$Payload.ok -and $HasCode -and
+            [string]$Payload.code -ceq "daemon-not-running"
+
+        $ControlServerPid = Get-KsxPipeServerProcessId `
+            -PipeName "ksx-daemon" `
+            -TimeoutMilliseconds 1000
+        $LiveServerPid = Get-KsxPipeServerProcessId `
+            -PipeName "ksx-live" `
+            -ReadOnly `
+            -TimeoutMilliseconds 1000
+        $RecordedPid = if ($ExactRecordedDaemon) { [int]$ExactRecordedDaemon.ProcessId } else { 0 }
+        $RecordedDaemonStillLive = $ExactRecordedDaemon -and -not $ExactRecordedDaemon.HasExited
+        $RecordedIdentityOwnsPipes = $RecordedPid -ne 0 -and $RecordedDaemonStillLive -and
+            [int]$ControlServerPid -eq $RecordedPid -and
+            [int]$LiveServerPid -eq $RecordedPid
+
+        if ($ExactStopped) {
+            if (-not $RecordedIdentityOwnsPipes) {
+                throw "Refusing real-hardware replacement during ${Phase}: a stopped daemon answers, but it is not the exact daemon recorded for this managed runtime (recorded=$RecordedPid, control=$ControlServerPid, live=$LiveServerPid)."
+            }
+            return
+        }
+        if ($ExactAbsent) {
+            if ($ExactRecordedDaemon -or [int]$ControlServerPid -ne 0 -or [int]$LiveServerPid -ne 0) {
+                throw "Refusing real-hardware replacement during ${Phase}: the client reports daemon-not-running while a recorded process or daemon pipe still exists (recorded=$RecordedPid, control=$ControlServerPid, live=$LiveServerPid)."
+            }
+            return
+        }
+
+        if ($Probe.exit_code -eq 0 -and $HasOk -and [bool]$Payload.ok -and $HasRun) {
+            if (-not $RecordedIdentityOwnsPipes) {
+                throw "Refusing real-hardware replacement during ${Phase}: an unrecorded or mismatched daemon reports run state '$([string]$Payload.run)' (recorded=$RecordedPid, control=$ControlServerPid, live=$LiveServerPid)."
+            }
+            throw "KSX_WATCH_DEFERRED: the current KSX session is '$([string]$Payload.run)'; stop Play before replacing the real-hardware development runtime."
+        }
+
+        $Detail = if ($Probe.text) { $Probe.text } else { "exit $($Probe.exit_code), no typed response" }
+        throw "Refusing real-hardware replacement during ${Phase}: daemon state is ambiguous. Only typed stopped or typed daemon-not-running permits replacement. Probe: $Detail"
+    } finally {
+        if ($ExactRecordedDaemon) {
+            $ExactRecordedDaemon.Dispose()
+        }
+    }
+}
+
+function Invoke-RealHardwarePreBuildPreflight {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ProbeExecutable,
+        [Parameter(Mandatory = $true)][string]$RecordPath
+    )
+
+    $Lease = $null
+    $Held = $false
+    try {
+        try {
+            $Lease = [System.Threading.Mutex]::new(
+                $false,
+                "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
+            )
+        } catch [System.UnauthorizedAccessException] {
+            throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
+        }
+        try {
+            $Held = $Lease.WaitOne(0)
+        } catch [System.Threading.AbandonedMutexException] {
+            $Held = $true
+        }
+        if (-not $Held) {
+            throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
+        }
+        if ($ProbeExecutable) {
+            Assert-RealDaemonSafeForReplacement `
+                -Executable $ProbeExecutable `
+                -RecordPath $RecordPath `
+                -Phase "pre-build preflight"
+        } else {
+            # A completely fresh checkout may have no compatible client until
+            # its first build. Building is non-destructive, but an existing
+            # pipe without a typed client is ambiguous and may not be built
+            # past toward teardown. The post-build probe remains mandatory.
+            $ControlServerPid = Get-KsxPipeServerProcessId `
+                -PipeName "ksx-daemon" `
+                -TimeoutMilliseconds 250
+            $LiveServerPid = Get-KsxPipeServerProcessId `
+                -PipeName "ksx-live" `
+                -ReadOnly `
+                -TimeoutMilliseconds 250
+            if ([int]$ControlServerPid -ne 0 -or [int]$LiveServerPid -ne 0) {
+                throw "Refusing real-hardware replacement before build: a daemon pipe exists but no compatible executable is available for the required typed status probe (control=$ControlServerPid, live=$LiveServerPid)."
+            }
+            Write-Verbose "No prior KSX client exists; the first build will provide the typed pre-swap probe."
+        }
+    } finally {
+        if ($Held) {
+            $Lease.ReleaseMutex()
+        }
+        if ($Lease) {
+            $Lease.Dispose()
+        }
     }
 }
 
@@ -76,6 +286,9 @@ try {
     throw "The machine-wide real-QA transition lock is owned by another Windows identity. Refusing to race that environment."
 }
 $TransitionLockHeld = $false
+$BuildGraphLock = $null
+$HardwareLease = $null
+$HardwareLeaseHeld = $false
 $LocationPushed = $false
 $RecordPath = Join-Path $RuntimeRoot "real.json"
 $RecordWritten = $false
@@ -101,14 +314,64 @@ try {
     Push-Location $RepoRoot
     $LocationPushed = $true
 
-    # Compile the replacement before stopping the current QA process. The
-    # running instance is a timestamped copy, so this output remains writable.
-    & cargo build -p ksx-app --features studio --target-dir $BuildRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "real Studio build failed with exit code $LASTEXITCODE"
+    $BuiltExe = Join-Path $BuildRoot "debug\ksx.exe"
+    $PreflightRecord = Read-RealManagedRecord -Path $RecordPath
+    $PreflightProbeExecutable = Get-PreBuildProbeExecutable `
+        -Record $PreflightRecord `
+        -BuiltExecutable $BuiltExe
+    # This pass is deliberately before Cargo. A watched refresh that is waiting
+    # on Play or an EEPROM transaction must stay cheap; the post-build pass
+    # below remains authoritative for the actual swap.
+    Invoke-RealHardwarePreBuildPreflight `
+        -ProbeExecutable $PreflightProbeExecutable `
+        -RecordPath $RecordPath
+
+    # Cargo embeds the generated Studio asset tree. Hold the same graph lock as
+    # build-assets.ps1 and require its receipt so a failed/partial Node build
+    # can never become a real-hardware executable.
+    $BuildGraphLock = Enter-KsxStudioBuildGraphLock -Operation "building real-hardware Studio"
+    try {
+        $StudioInputHashBefore = Get-KsxSourceGraphFingerprint -Kind Studio -RepoRoot $RepoRoot
+        $ZoneProducerHashBefore = Get-KsxSourceGraphFingerprint -Kind ZoneProducers -RepoRoot $RepoRoot
+        $SourceGraphHashBefore = Get-KsxSourceGraphFingerprint -Kind Runtime -RepoRoot $RepoRoot
+        $AssetStateBefore = Assert-KsxStudioAssetGraphReady `
+            -RepoRoot $RepoRoot `
+            -ExpectedStudioInputSha256 $StudioInputHashBefore `
+            -ExpectedZoneProducerSha256 $ZoneProducerHashBefore
+
+        # Compile the replacement before stopping the current QA process. The
+        # running instance is a timestamped copy, so this output remains writable.
+        & cargo build -p ksx-app --features studio --target-dir $BuildRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "real Studio build failed with exit code $LASTEXITCODE"
+        }
+
+        # Editors can save without taking the build mutex. Re-read every input
+        # after Cargo and revalidate the asset receipt; an executable is usable
+        # only when one stable source/asset graph surrounded its whole build.
+        $StudioInputHashAfter = Get-KsxSourceGraphFingerprint -Kind Studio -RepoRoot $RepoRoot
+        $ZoneProducerHashAfter = Get-KsxSourceGraphFingerprint -Kind ZoneProducers -RepoRoot $RepoRoot
+        $SourceGraphHashAfter = Get-KsxSourceGraphFingerprint -Kind Runtime -RepoRoot $RepoRoot
+        $AssetStateAfter = Assert-KsxStudioAssetGraphReady `
+            -RepoRoot $RepoRoot `
+            -ExpectedStudioInputSha256 $StudioInputHashAfter `
+            -ExpectedZoneProducerSha256 $ZoneProducerHashAfter
+        if ($StudioInputHashBefore -cne $StudioInputHashAfter -or
+            $ZoneProducerHashBefore -cne $ZoneProducerHashAfter -or
+            $SourceGraphHashBefore -cne $SourceGraphHashAfter -or
+            [string]$AssetStateBefore.studio_input_sha256 -cne [string]$AssetStateAfter.studio_input_sha256 -or
+            [string]$AssetStateBefore.asset_graph_sha256 -cne [string]$AssetStateAfter.asset_graph_sha256) {
+            throw "Studio or runtime source changed while Cargo was building. The completed executable was not served; retry after the source graph settles."
+        }
+        $StudioInputHash = $StudioInputHashAfter
+        $ZoneProducerHash = $ZoneProducerHashAfter
+        $SourceGraphHash = $SourceGraphHashAfter
+        $AssetGraphHash = [string]$AssetStateAfter.asset_graph_sha256
+    } finally {
+        Exit-KsxStudioBuildGraphLock -Lock $BuildGraphLock
+        $BuildGraphLock = $null
     }
 
-    $BuiltExe = Join-Path $BuildRoot "debug\ksx.exe"
     if (-not (Test-Path -LiteralPath $BuiltExe -PathType Leaf)) {
         throw "Studio-enabled ksx.exe is missing at $BuiltExe."
     }
@@ -125,6 +388,31 @@ try {
         throw "Refusing the managed real-QA copy because ksx.toml would change portable config-root discovery. Launch the portable ksx.exe in place on port 4460 instead."
     }
 
+    # Programming the I-PAC and transitioning Play use this same cross-process
+    # lease. Reacquire it after compilation and repeat the typed probe while
+    # holding it. This is the authoritative authorization for teardown; the
+    # cheap pre-build pass deliberately did not span a long Cargo build.
+    try {
+        $HardwareLease = [System.Threading.Mutex]::new(
+            $false,
+            "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
+        )
+    } catch [System.UnauthorizedAccessException] {
+        throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
+    }
+    try {
+        $HardwareLeaseHeld = $HardwareLease.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        $HardwareLeaseHeld = $true
+    }
+    if (-not $HardwareLeaseHeld) {
+        throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
+    }
+    Assert-RealDaemonSafeForReplacement `
+        -Executable $BuiltExe `
+        -RecordPath $RecordPath `
+        -Phase "authoritative post-build preflight"
+
     & (Join-Path $PSScriptRoot "teardown.ps1") -Environment real -AllowMissing
     $Conflicts = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
     if ($Conflicts.Count -gt 0) {
@@ -132,16 +420,12 @@ try {
         throw "Refusing to start real QA: port $Port is already owned by unmanaged PID(s) $Owners."
     }
 
-    # The named daemon pipe is machine-global. A listener from an installed or
-    # another branch build would make Studio look writable while serving a
-    # different protocol/config implementation. Only the exact, typed
-    # daemon-not-running response authorizes a replacement launch.
-    $Before = Invoke-DaemonStatusProbe -Executable $BuiltExe
-    $AbsentCode = if ($Before.payload) { [string]$Before.payload.code } else { "" }
-    if ($Before.exit_code -ne 2 -or $AbsentCode -ne "daemon-not-running") {
-        $Detail = if ($Before.text) { $Before.text } else { "exit $($Before.exit_code), no response" }
-        throw "Refusing to mix builds: a daemon channel already answers or is unhealthy. Stop that daemon explicitly before starting current-branch QA. Probe: $Detail"
-    }
+    # Teardown must have changed the only permitted pre-state (our exact idle
+    # daemon) into the other permitted state (typed daemon-not-running).
+    Assert-RealDaemonSafeForReplacement `
+        -Executable $BuiltExe `
+        -RecordPath $RecordPath `
+        -Phase "post-teardown absence proof"
 
     $Stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
     $LaunchId = $Stamp
@@ -225,6 +509,11 @@ try {
         working_tree_revision = [string]$WorkingTreeRevision
         build_reused = $false
         managed_dev_runtime = $Stamp
+        launch_reason = $LaunchReason
+        source_graph_sha256 = $SourceGraphHash
+        studio_input_sha256 = $StudioInputHash
+        zone_producer_sha256 = $ZoneProducerHash
+        asset_graph_sha256 = $AssetGraphHash
         artifact_sha256 = $ArtifactHash
         artifact = [ordered]@{
             executable = $RuntimeExe
@@ -248,7 +537,7 @@ try {
     $LastDaemonError = "the control channel has not answered"
     for ($Attempt = 0; $Attempt -lt 80; $Attempt += 1) {
         if ($DaemonProcess.HasExited) { break }
-        $Probe = Invoke-DaemonStatusProbe -Executable $RuntimeExe
+        $Probe = Invoke-KsxDaemonStatusProbe -Executable $RuntimeExe
         if ($Probe.exit_code -eq 0 -and $Probe.payload -and
             [bool]$Probe.payload.ok -and [string]$Probe.payload.run -eq "stopped") {
             $DaemonReady = $true
@@ -337,6 +626,13 @@ try {
             if (-not [bool]$Payload.staged.reachable) {
                 throw "Studio cannot reach the managed daemon: $($Payload.staged.error)"
             }
+            $IdleProbe = Invoke-KsxDaemonStatusProbe -Executable $RuntimeExe
+            if ($IdleProbe.exit_code -ne 0 -or -not $IdleProbe.payload -or
+                -not [bool]$IdleProbe.payload.ok -or
+                [string]$IdleProbe.payload.run -ne "stopped") {
+                $IdleDetail = if ($IdleProbe.text) { $IdleProbe.text } else { "no typed daemon response" }
+                throw "managed development replacement did not remain idle: $IdleDetail"
+            }
             $StatusResponse = Invoke-WebRequest `
                 -UseBasicParsing `
                 -Uri "http://127.0.0.1:$Port/api/status" `
@@ -377,9 +673,18 @@ try {
     $Record.state = "ready"
     Write-ManagedRecord -Record $Record -Path $RecordPath
 
+    # Keep the cross-process hardware lease through the complete matched-pair
+    # launch. If Studio startup fails, no panel write can begin in the narrow
+    # window before cleanup has stopped the new processes.
+    $HardwareLease.ReleaseMutex()
+    $HardwareLeaseHeld = $false
+    $HardwareLease.Dispose()
+    $HardwareLease = $null
+
     Write-Host "Started a matched real-hardware QA artifact built by this invocation (source $SourceRevision)."
     Write-Host "Daemon PID $($DaemonProcess.Id) and Studio PID $($StudioProcess.Id) share artifact $($ArtifactHash.Substring(0, 12))."
     Write-Host "Config: $($Record.config_root)"
+    Write-Host "Build graph: source $($SourceGraphHash.Substring(0, 12)); assets $($AssetGraphHash.Substring(0, 12)); reason $LaunchReason."
     Write-Host "Open: http://127.0.0.1:$Port/nocturne"
     Write-Host "Warning: confirmed hardware actions on this instance can affect the selected physical device."
 } catch {
@@ -468,6 +773,15 @@ try {
     }
     if ($LocationPushed) {
         Pop-Location
+    }
+    if ($HardwareLeaseHeld) {
+        $HardwareLease.ReleaseMutex()
+    }
+    if ($HardwareLease) {
+        $HardwareLease.Dispose()
+    }
+    if ($BuildGraphLock) {
+        Exit-KsxStudioBuildGraphLock -Lock $BuildGraphLock
     }
     if ($TransitionLockHeld) {
         $TransitionMutex.ReleaseMutex()

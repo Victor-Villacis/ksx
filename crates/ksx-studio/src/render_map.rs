@@ -3687,14 +3687,14 @@ mod tests {
         let path = zone_tokens_path();
         let actual = std::fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
-                "could not read generated zone tokens at {}: {error}; run the ignored writer test",
+                "could not read generated zone tokens at {}: {error}; run tools/studio-env/build-assets.ps1",
                 path.display()
             )
         });
         assert_eq!(
             actual,
             generated_zone_tokens_json(),
-            "generated zone tokens are stale; run `cargo test -p ksx-studio write_generated_zone_tokens_json -- --ignored`"
+            "generated zone tokens are stale; run tools/studio-env/build-assets.ps1"
         );
     }
 

@@ -21,6 +21,8 @@ $Targets = if ($All) { @("seeded", "first-run", "blank-encoder", "real") } else 
 foreach ($Target in $Targets) {
     $TransitionMutex = $null
     $TransitionLockHeld = $false
+    $HardwareLease = $null
+    $HardwareLeaseHeld = $false
     $OpenedProcessHandles = @()
     try {
         # Windows mutex ownership is recursive for the owning thread. A seed
@@ -44,17 +46,45 @@ foreach ($Target in $Targets) {
             throw "Another process is building or swapping the '$Target' Studio environment. Teardown refused to race it."
         }
 
+        if ($Target -eq "real") {
+            try {
+                $HardwareLease = [System.Threading.Mutex]::new(
+                    $false,
+                    "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
+                )
+            } catch [System.UnauthorizedAccessException] {
+                throw "The hardware transition lease belongs to another Windows identity. Real teardown refused."
+            }
+            try {
+                $HardwareLeaseHeld = $HardwareLease.WaitOne(0)
+            } catch [System.Threading.AbandonedMutexException] {
+                $HardwareLeaseHeld = $true
+            }
+            if (-not $HardwareLeaseHeld) {
+                throw "An I-PAC programming or Play transition is active. Real teardown left the runtime and hardware transaction untouched."
+            }
+        }
+
         $RecordPath = Join-Path $RuntimeRoot "$Target.json"
         if (-not (Test-Path -LiteralPath $RecordPath -PathType Leaf)) {
             if (-not $AllowMissing) { Write-Host "${Target}: no managed process record." }
             continue
         }
 
-        $Record = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json
-        $HasProcessArray = ($Record.PSObject.Properties.Name -contains "processes") -and
+        $RecordJson = Get-Content -LiteralPath $RecordPath -Raw
+        $RecordRoot = $RecordJson.TrimStart().TrimStart([char]0xFEFF).TrimStart()
+        if (-not $RecordRoot.StartsWith("{", [System.StringComparison]::Ordinal)) {
+            throw "Refusing to stop ${Target}: the managed record must be one JSON object."
+        }
+        $Record = $RecordJson | ConvertFrom-Json
+        if (-not ($Record -is [pscustomobject])) {
+            throw "Refusing to stop ${Target}: the managed record must be one JSON object."
+        }
+        $HasProcessesProperty = $Record.PSObject.Properties.Name -contains "processes"
+        $HasProcessArray = $HasProcessesProperty -and
             @($Record.processes).Count -gt 0
         $HasSchemaVersion = $Record.PSObject.Properties.Name -contains "schema_version"
-        if ($HasProcessArray -or $HasSchemaVersion) {
+        if ($HasProcessesProperty -or $HasSchemaVersion) {
             if (-not $HasSchemaVersion -or [int]$Record.schema_version -ne 2 -or -not $HasProcessArray) {
                 throw "Refusing to stop ${Target}: the managed record is neither a complete schema-2 record nor the explicit legacy scalar shape."
             }
@@ -86,6 +116,24 @@ foreach ($Target in $Targets) {
                 if (-not $ValidStarting -and -not $ValidReady) {
                     throw "Refusing to stop real: schema 2 must be a starting daemon (optionally with Studio) or a ready daemon/Studio pair."
                 }
+            } else {
+                $SchemaStudios = @($Record.processes | Where-Object { [string]$_.role -eq "studio" })
+                $SchemaDaemons = @($Record.processes | Where-Object { [string]$_.role -eq "daemon" })
+                if ($SchemaStudios.Count -ne 1 -or $SchemaDaemons.Count -ne 0 -or
+                    @($Record.processes).Count -ne 1 -or
+                    [string]$Record.state -notin @("starting", "ready")) {
+                    throw "Refusing to stop ${Target}: schema 2 must name exactly one starting or ready Studio process."
+                }
+            }
+        } else {
+            foreach ($LegacyField in @("process_id", "executable")) {
+                if (-not ($Record.PSObject.Properties.Name -contains $LegacyField) -or
+                    [string]::IsNullOrWhiteSpace([string]$Record.$LegacyField)) {
+                    throw "Refusing to stop ${Target}: the legacy managed record is missing '$LegacyField'."
+                }
+            }
+            if ([int]$Record.process_id -le 0) {
+                throw "Refusing to stop ${Target}: the legacy managed record has an invalid process_id."
             }
         }
         # Schema 2 records every long-lived process in the environment. The
@@ -124,10 +172,9 @@ foreach ($Target in $Targets) {
             if (-not $ExpectedExe.StartsWith($ManagedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                 throw "Refusing to stop ${Target}: recorded $Role executable is outside $RuntimeRoot"
             }
-            if ($Target -eq "real" -and
-                ($Record.PSObject.Properties.Name -contains "schema_version") -and
+            if (($Record.PSObject.Properties.Name -contains "schema_version") -and
                 -not $ExpectedExe.Equals($RecordedArtifactPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Refusing to stop real: the $Role process does not use the one recorded runtime artifact."
+                throw "Refusing to stop ${Target}: the $Role process does not use the one recorded runtime artifact."
             }
 
             $ExpectedCreation = if ($RecordedProcess.PSObject.Properties.Name -contains "creation_time_utc") {
@@ -202,6 +249,39 @@ foreach ($Target in $Targets) {
                     Write-Warning "Mixed runtime: recorded daemon PID $DaemonPid does not own the answering KSX pipes (control=$ControlServerPid, live=$LiveServerPid). Only the exact recorded process will be stopped."
                 }
             }
+
+            if (@($ValidatedProcesses | Where-Object live).Count -gt 0) {
+                $Probe = Invoke-KsxDaemonStatusProbe -Executable $RecordedArtifactPath
+                $Payload = $Probe.payload
+                $ExactStopped = $Probe.exit_code -eq 0 -and $Payload -and
+                    ($Payload.PSObject.Properties.Name -contains "ok") -and
+                    [bool]$Payload.ok -and
+                    ($Payload.PSObject.Properties.Name -contains "run") -and
+                    [string]$Payload.run -ceq "stopped"
+                $ExactAbsent = $Probe.exit_code -eq 2 -and $Payload -and
+                    ($Payload.PSObject.Properties.Name -contains "ok") -and
+                    -not [bool]$Payload.ok -and
+                    ($Payload.PSObject.Properties.Name -contains "code") -and
+                    [string]$Payload.code -ceq "daemon-not-running"
+                if ($ManagedDaemon.Count -eq 1) {
+                    $DaemonPid = [int]$ManagedDaemon[0].process_id
+                    $ExactReadyIdle = $ExactStopped -and
+                        [int]$ControlServerPid -eq $DaemonPid -and
+                        [int]$LiveServerPid -eq $DaemonPid
+                    $ExactIncompleteAbsent =
+                        ($Record.PSObject.Properties.Name -contains "state") -and
+                        [string]$Record.state -ceq "starting" -and $ExactAbsent -and
+                        [int]$ControlServerPid -eq 0 -and [int]$LiveServerPid -eq 0
+                    if (-not $ExactReadyIdle -and -not $ExactIncompleteAbsent) {
+                        $Detail = if ($Probe.text) { $Probe.text } else { "exit $($Probe.exit_code), no typed response" }
+                        throw "Refusing real teardown: only the exact recorded idle daemon, or a schema-starting daemon with typed absence and no pipes, may be terminated. Stop Play and retry. Probe: $Detail"
+                    }
+                } elseif (-not $ExactAbsent -or [int]$ControlServerPid -ne 0 -or
+                    [int]$LiveServerPid -ne 0) {
+                    $Detail = if ($Probe.text) { $Probe.text } else { "exit $($Probe.exit_code), no typed response" }
+                    throw "Refusing real teardown: daemon absence is ambiguous while a managed process remains. Probe: $Detail"
+                }
+            }
         }
 
         # Stop the web view before its daemon. This prevents a still-serving
@@ -270,6 +350,12 @@ foreach ($Target in $Targets) {
         }
         if ($TransitionMutex) {
             $TransitionMutex.Dispose()
+        }
+        if ($HardwareLeaseHeld) {
+            $HardwareLease.ReleaseMutex()
+        }
+        if ($HardwareLease) {
+            $HardwareLease.Dispose()
         }
     }
 }

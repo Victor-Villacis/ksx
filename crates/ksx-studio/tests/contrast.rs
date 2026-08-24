@@ -919,7 +919,7 @@ fn anti_flash_css_matches_the_tokens_it_mirrors() {
         assert!(
             compact.contains(&want_compact),
             "theme_tokens.rs: PERSONALITY_CSS must carry `{want}` (derived from \
-             the token source). Regenerate: cd studio-ui && node build.mjs"
+             the token source). Regenerate through tools/studio-env/build-assets.ps1"
         );
     }
 }
@@ -946,7 +946,7 @@ fn pad_art_palette_stays_separable() {
     assert!(
         PAD_DS4_SVG.contains(sheet),
         "pad-ds4.svg must carry the same palette sheet as pad-xbox.svg — \
-         regenerate both: cd studio-ui && node build.mjs"
+         regenerate both through tools/studio-env/build-assets.ps1"
     );
 
     let grab = |class: &str, prop: &str, nth: usize| -> Rgba {
@@ -1066,7 +1066,7 @@ fn pad_art_palette_stays_separable() {
             "pad-xbox.svg palette sheet: {theme} {class}{prop} must equal the \
              `--{token}` token it is templated from, but the shipped asset \
              reads {} while the token is {}. The committed art is stale — \
-             regenerate: cd studio-ui && node build.mjs (an <img> SVG is its \
+             regenerate through tools/studio-env/build-assets.ps1 (an <img> SVG is its \
              own document and cannot use var(), so the sheet is baked in).",
             css_hex(got),
             css_hex(expect)

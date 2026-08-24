@@ -1,5 +1,25 @@
 Set-StrictMode -Version Latest
 
+function Invoke-KsxDaemonStatusProbe {
+    param([Parameter(Mandatory = $true)][string]$Executable)
+
+    $Lines = @(& $Executable session status --json 2>&1)
+    $ExitCode = $LASTEXITCODE
+    $Text = $Lines -join "`n"
+    $Payload = $null
+    try {
+        $Payload = $Text | ConvertFrom-Json
+    } catch {
+        # Callers inspect exit code plus raw text when a responder is absent,
+        # incompatible, or otherwise ambiguous.
+    }
+    [pscustomobject]@{
+        exit_code = $ExitCode
+        text = $Text
+        payload = $Payload
+    }
+}
+
 # A successful JSON status proves that *a* daemon answered. The server PID on
 # the connected handle proves which daemon answered. Keep this tiny Windows
 # interop at the environment boundary instead of weakening the product pipe

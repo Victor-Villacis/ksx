@@ -50,6 +50,15 @@ on:
       portable_sha256:
         description: SHA-256 of the portable ZIP, as built.
         value: ${{ jobs.build.outputs.portable_sha256 }}
+      manifest_name:
+        description: The exact-candidate manifest filename.
+        value: ${{ jobs.build.outputs.manifest_name }}
+      manifest_sha256:
+        description: SHA-256 of the exact-candidate manifest.
+        value: ${{ jobs.build.outputs.manifest_sha256 }}
+
+permissions:
+  contents: read
 
 # A called workflow does NOT inherit the caller's workflow-level env, so this is
 # repeated here rather than relied upon from ci.yml.
@@ -65,9 +74,11 @@ jobs:
       exe_sha256: ${{ steps.exe.outputs.sha256 }}
       portable_name: ${{ steps.portable.outputs.name }}
       portable_sha256: ${{ steps.portable.outputs.sha256 }}
+      manifest_name: ${{ steps.candidate_manifest.outputs.name }}
+      manifest_sha256: ${{ steps.candidate_manifest.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.400
 
@@ -91,9 +102,10 @@ jobs:
       #    disagreement rather than removing it.
       #
       # So one rule covers all three: the tag says what the tree already says.
-      # The cost of being wrong is one deleted tag and one more commit. The cost
-      # of the silent version is a user holding a setup.exe whose About box
-      # disagrees with the page they downloaded it from.
+      # The cost of being wrong is one new version commit and candidate tag.
+      # Release tags are immutable evidence even when their candidate fails;
+      # deleting or moving one is forbidden. The cost of a silent version is a
+      # user holding a setup.exe whose About box disagrees with its release.
       #
       # `crates/ksx-app/tests/installer.rs` pins .iss == Cargo.toml on every
       # test run, so the only thing left to check here is the tag — and it is
@@ -141,8 +153,8 @@ jobs:
               "  packaging/ksx.iss says $issVersion   (#define AppVersion)"
               "  Cargo.toml says        $cargoVersion   ([workspace.package] version)"
               ''
-              "Nothing has been built. Fix the tree, delete the tag, tag again:"
-              "  git tag -d $tag && git push origin :refs/tags/$tag"
+              "Nothing has been built. Do not delete or move immutable $tag."
+              "Fix the tree, increment the version, merge it, and cut a new tag."
             )
             throw ($lines -join "`n")
           }
@@ -152,7 +164,7 @@ jobs:
       # overrides the pin.
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build pinned production HIDMaestro host
         shell: pwsh
@@ -176,7 +188,7 @@ jobs:
       # bytes identically either way.
       - name: Cache pinned HIDMaestro release archive
         id: sdk-archive-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: sdk-archive/HIDMaestro-v1.6.1.zip
           key: hidmaestro-release-00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34
@@ -533,10 +545,11 @@ jobs:
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           Write-Host "$name  SHA256 $h"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ksx-windows-portable
           path: packaging/out/*-portable.zip
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -891,9 +904,109 @@ jobs:
             Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-      - uses: actions/upload-artifact@v4
+      # One machine-readable identity for the candidate a person installs.
+      # Branch and tag builds can have the same source commit and still produce
+      # different container bytes, so QA and publication bind to these files,
+      # this run, and this hash rather than to "the same recipe".
+      - name: Write exact-candidate manifest
+        id: candidate_manifest
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.sha }}
+          CANDIDATE_REF: ${{ github.ref }}
+          CANDIDATE_RUN_ID: ${{ github.run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CANDIDATE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SETUP_NAME: ${{ steps.installer.outputs.name }}
+          SETUP_SHA256: ${{ steps.installer.outputs.sha256 }}
+          PORTABLE_NAME: ${{ steps.portable.outputs.name }}
+          PORTABLE_SHA256: ${{ steps.portable.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cargo = Get-Content -LiteralPath 'Cargo.toml' -Raw
+          if ($cargo -notmatch '(?s)\[workspace\.package\][^\[]*?version\s*=\s*"([^"]+)"') {
+            throw 'Cargo.toml has no [workspace.package] version.'
+          }
+          $version = $Matches[1]
+          $toolchainSpec = Get-Content -LiteralPath 'rust-toolchain.toml' -Raw
+          if ($toolchainSpec -notmatch '(?m)^channel\s*=\s*"([^"]+)"') {
+            throw 'rust-toolchain.toml has no pinned channel'
+          }
+          $toolchainChannel = $Matches[1]
+          $activeToolchain = (& rustup show active-toolchain | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($activeToolchain)) {
+            throw 'the active Rust toolchain could not be recorded'
+          }
+
+          $setup = Join-Path 'packaging/out' $env:SETUP_NAME
+          $portable = Join-Path 'packaging/out' $env:PORTABLE_NAME
+          foreach ($path in @($setup, $portable)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "candidate artifact is missing before manifest creation: $path"
+            }
+          }
+          $setupItem = Get-Item -LiteralPath $setup
+          $portableItem = Get-Item -LiteralPath $portable
+          $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash
+          if ($setupHash -cne $env:SETUP_SHA256 -or
+              $portableHash -cne $env:PORTABLE_SHA256) {
+            throw 'candidate bytes changed after their build-step hashes were recorded'
+          }
+
+          $manifest = [ordered]@{
+            schema = 1
+            source = [ordered]@{
+              repository = $env:CANDIDATE_REPOSITORY
+              commit = $env:CANDIDATE_COMMIT
+              ref = $env:CANDIDATE_REF
+            }
+            run = [ordered]@{
+              id = $env:CANDIDATE_RUN_ID
+              attempt = [int]$env:CANDIDATE_RUN_ATTEMPT
+            }
+            release = [ordered]@{
+              tag = [string]$env:RELEASE_TAG
+              version = $version
+            }
+            toolchain = [ordered]@{
+              channel = $toolchainChannel
+              active = $activeToolchain
+            }
+            artifacts = [ordered]@{
+              installer = [ordered]@{
+                filename = $setupItem.Name
+                size = [long]$setupItem.Length
+                sha256 = $setupHash
+              }
+              portable = [ordered]@{
+                filename = $portableItem.Name
+                size = [long]$portableItem.Length
+                sha256 = $portableHash
+              }
+            }
+          }
+          $name = 'ksx-candidate-manifest.json'
+          $path = Join-Path 'packaging/out' $name
+          $manifest | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath $path -Encoding utf8
+          $manifestHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+          "name=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "sha256=$manifestHash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          Write-Host "$name SHA256 $manifestHash"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ksx-windows-installer
           path: packaging/out/*setup.exe
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ksx-windows-candidate-manifest
+          path: packaging/out/ksx-candidate-manifest.json
+          overwrite: true
           if-no-files-found: error
           retention-days: 30

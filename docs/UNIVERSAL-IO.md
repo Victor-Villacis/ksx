@@ -228,7 +228,7 @@ physical** result, never a code state.
 
 | M | Scope | Acceptance target |
 |---|---|---|
-| **M11** | **The vocabulary can grow** (pure refactor, no user-visible change) | Workspace green with every existing test **unchanged**; `adding_a_function_to_the_vocabulary_needs_no_array_edit` passes; both insta snapshots byte-identical; `node build.mjs` byte-identical; cabinet `ksx doctor --latency` p99 unmoved |
+| **M11** | **The vocabulary can grow** (pure refactor, no user-visible change) | Workspace green with every existing test **unchanged**; `adding_a_function_to_the_vocabulary_needs_no_array_edit` passes; both insta snapshots byte-identical; guarded asset-wrapper rebuild byte-identical; cabinet `ksx doctor --latency` p99 unmoved |
 | **M12** | **Analog authoring** — pressure, ladders, curves, gates, tap/hold | A 5-step ladder publishes 5 distinct `rt` values in a replay; existing presets round-trip byte-identically; curve tables give identical digests on CI and cabinet; joy.cpl shows intermediate stick travel on an Xbox Series pad |
 | **M13** | **The input event grows up** (invisible) | `SESSION_DIGEST` unmoved; cabinet p99 unmoved; every existing `config.toml`/`games.toml` byte-identical after load+save; `ksx devices` lists a gamepad |
 | **M14** | **Real devices drive pads** — HID + mouse readers, `[axes]`, hiding | Cabinet: a DS4 and the I-PAC both drive slot 1; a WinUSB-claimed DS4 vanishes from `joy.cpl` while still driving; a Wii Remote's pitch drives `ry`; `--dry-run` prints the hiding route per source |
@@ -394,7 +394,7 @@ Per milestone, before any hardware leg:
 cargo fmt --all --check
 cargo clippy --workspace --exclude vigem-client --all-targets -- -D warnings
 cargo test --workspace --exclude vigem-client
-cd studio-ui && node build.mjs     # twice; assets byte-identical
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/build-assets.ps1
 cd studio-ui/pwtest && npm test
 ```
 

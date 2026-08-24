@@ -52,7 +52,7 @@ pub struct CollectorSource;
 
 impl StatusSource for CollectorSource {
     fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
-        ksx_api::RuntimeEnvironmentView::live()
+        runtime_environment(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref())
     }
 
     fn snapshot(&self) -> StatusSnapshot {
@@ -497,6 +497,15 @@ const MANAGED_DEV_RUNTIME_ENV: &str = "KSX_MANAGED_DEV_RUNTIME";
 
 fn managed_dev_runtime(marker: Option<&std::ffi::OsStr>) -> bool {
     marker.is_some_and(|value| !value.is_empty())
+}
+
+fn runtime_environment(marker: Option<&std::ffi::OsStr>) -> ksx_api::RuntimeEnvironmentView {
+    let mut environment = ksx_api::RuntimeEnvironmentView::live();
+    if managed_dev_runtime(marker) {
+        environment.label = "DEV BUILD · REAL HARDWARE".to_owned();
+        environment.detail = "A matched local development artifact is reading this computer's real KSX state and devices. Confirmed hardware actions can affect the selected physical device; this build is not an installed release candidate.".to_owned();
+    }
+    environment
 }
 
 fn managed_dev_autostart_refusal(marker: Option<&std::ffi::OsStr>) -> Option<Refusal> {
@@ -2449,6 +2458,22 @@ mod tests {
         assert_eq!(environment.id, "live-machine");
         assert!(!environment.fixture);
         assert!(environment.generation.is_empty());
+    }
+
+    #[test]
+    fn a_managed_source_tree_runtime_is_visibly_development_on_real_hardware() {
+        let environment = runtime_environment(Some(std::ffi::OsStr::new("launch-123")));
+        assert_eq!(environment.id, "live-machine");
+        assert_eq!(environment.label, "DEV BUILD · REAL HARDWARE");
+        assert!(!environment.fixture);
+        assert!(environment.generation.is_empty());
+        assert!(environment.detail.contains("local development artifact"));
+        assert!(environment.detail.contains("real KSX state and devices"));
+
+        assert_eq!(
+            runtime_environment(None).label,
+            "LIVE MACHINE · REAL HARDWARE"
+        );
     }
 
     /// A pointer, not a test: the request SHAPES this file used to pin

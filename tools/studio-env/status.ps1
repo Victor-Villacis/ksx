@@ -1,9 +1,40 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet(
+        "real",
+        "seeded",
+        "test-macro",
+        "test-canvas",
+        "test-parity-idle",
+        "test-parity-running",
+        "test-parity-down",
+        "test-canvas-live",
+        "test-visual",
+        "test-theme-dark",
+        "test-theme-light",
+        "test-theme-matrix",
+        "first-run",
+        "blank-encoder"
+    )]
+    [string]$Environment,
+
+    [switch]$Json,
+
+    [switch]$RequireHealthy,
+
+    [switch]$RequireCurrent,
+
+    # Watch mode already hashes the source graph itself. This keeps its health
+    # reconciliation cheap while preserving the default exact-current audit
+    # for people and deployment gates.
+    [switch]$SkipCurrentVerification
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime-probe.ps1")
+. (Join-Path $PSScriptRoot "build-graph.ps1")
+. (Join-Path $PSScriptRoot "source-graph.ps1")
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $RuntimeRoot = Join-Path $RepoRoot "tmp\studio-env"
@@ -23,7 +54,68 @@ $Definitions = @(
     @{ Name = "first-run"; Port = 4520; Id = "fixture-first-run"; Fixture = $true; Record = "first-run" }
     @{ Name = "blank-encoder"; Port = 4521; Id = "fixture-blank-encoder"; Fixture = $true; Record = "blank-encoder" }
 )
+if (($RequireHealthy -or $RequireCurrent) -and [string]::IsNullOrWhiteSpace($Environment)) {
+    throw "-RequireHealthy and -RequireCurrent require one explicit -Environment so stopped, test-owned ports are never treated as an implicit deployment gate."
+}
+if ($RequireCurrent -and $SkipCurrentVerification) {
+    throw "-RequireCurrent cannot be combined with -SkipCurrentVerification."
+}
+if (-not [string]::IsNullOrWhiteSpace($Environment)) {
+    $Definitions = @($Definitions | Where-Object { [string]$_.Name -eq $Environment })
+}
 $Rows = @()
+$script:KsxStatusBuildGraphEvidence = $null
+
+function Get-KsxStatusBuildGraphEvidence {
+    if ($null -ne $script:KsxStatusBuildGraphEvidence) {
+        return $script:KsxStatusBuildGraphEvidence
+    }
+
+    $BuildGraphLock = $null
+    try {
+        # A build in progress is intentionally not "current" yet. Taking the
+        # same nonblocking lock also closes the gap between reading the receipt
+        # and hashing the generated files it vouches for.
+        $BuildGraphLock = Enter-KsxStudioBuildGraphLock `
+            -Operation "proving Studio environment currency"
+        $StudioHash = Get-KsxSourceGraphFingerprint -Kind Studio -RepoRoot $RepoRoot
+        $ZoneProducerHash = Get-KsxSourceGraphFingerprint -Kind ZoneProducers -RepoRoot $RepoRoot
+        $RuntimeHash = Get-KsxSourceGraphFingerprint -Kind Runtime -RepoRoot $RepoRoot
+        $AssetState = Assert-KsxStudioAssetGraphReady `
+            -RepoRoot $RepoRoot `
+            -ExpectedStudioInputSha256 $StudioHash `
+            -ExpectedZoneProducerSha256 $ZoneProducerHash
+        $StudioAfter = Get-KsxSourceGraphFingerprint -Kind Studio -RepoRoot $RepoRoot
+        $ZoneProducerAfter = Get-KsxSourceGraphFingerprint -Kind ZoneProducers -RepoRoot $RepoRoot
+        $RuntimeAfter = Get-KsxSourceGraphFingerprint -Kind Runtime -RepoRoot $RepoRoot
+        if ($StudioAfter -cne $StudioHash -or $ZoneProducerAfter -cne $ZoneProducerHash -or
+            $RuntimeAfter -cne $RuntimeHash) {
+            throw "source changed while its current-build evidence was being collected; retry after the edit settles"
+        }
+        $script:KsxStatusBuildGraphEvidence = [pscustomobject]@{
+            Available = $true
+            Detail = "current source and generated asset graph verified"
+            Studio = $StudioHash
+            ZoneProducers = $ZoneProducerHash
+            Runtime = $RuntimeHash
+            Assets = [string]$AssetState.asset_graph_sha256
+        }
+    } catch {
+        $script:KsxStatusBuildGraphEvidence = [pscustomobject]@{
+            Available = $false
+            Detail = $_.Exception.Message
+            Studio = ""
+            ZoneProducers = ""
+            Runtime = ""
+            Assets = ""
+        }
+    } finally {
+        if ($BuildGraphLock) {
+            Exit-KsxStudioBuildGraphLock -Lock $BuildGraphLock
+        }
+    }
+    return $script:KsxStatusBuildGraphEvidence
+}
 
 foreach ($Definition in $Definitions) {
     $Name = [string]$Definition.Name
@@ -36,9 +128,32 @@ foreach ($Definition in $Definitions) {
     $RecordError = ""
     if ($RecordPath -and (Test-Path -LiteralPath $RecordPath -PathType Leaf)) {
         try {
-            $Record = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json
+            $RecordJson = Get-Content -LiteralPath $RecordPath -Raw
+            $RecordRoot = $RecordJson.TrimStart().TrimStart([char]0xFEFF).TrimStart()
+            if (-not $RecordRoot.StartsWith("{", [System.StringComparison]::Ordinal)) {
+                throw "managed record must be one JSON object"
+            }
+            $ParsedRecord = $RecordJson | ConvertFrom-Json
+            if (-not ($ParsedRecord -is [pscustomobject])) {
+                throw "managed record must be one JSON object"
+            }
+            $ParsedFields = @($ParsedRecord.PSObject.Properties.Name)
+            if ($ParsedFields -notcontains "schema_version" -and
+                $ParsedFields -notcontains "processes") {
+                foreach ($LegacyField in @("process_id", "executable")) {
+                    if ($ParsedFields -notcontains $LegacyField -or
+                        [string]::IsNullOrWhiteSpace([string]$ParsedRecord.$LegacyField)) {
+                        throw "legacy managed record is missing $LegacyField"
+                    }
+                }
+                if ([int]$ParsedRecord.process_id -le 0) {
+                    throw "legacy managed record has an invalid process_id"
+                }
+            }
+            $Record = $ParsedRecord
         } catch {
             $RecordError = $_.Exception.Message
+            $Record = $null
         }
     }
 
@@ -50,10 +165,11 @@ foreach ($Definition in $Definitions) {
     $ManagedRecordShapeValid = $true
     $ManagedProcessDetail = ""
     if ($Record) {
-        $HasProcessArray = ($Record.PSObject.Properties.Name -contains "processes") -and
+        $HasProcessesProperty = $Record.PSObject.Properties.Name -contains "processes"
+        $HasProcessArray = $HasProcessesProperty -and
             @($Record.processes).Count -gt 0
         $HasSchemaVersion = $Record.PSObject.Properties.Name -contains "schema_version"
-        if ($HasProcessArray -or $HasSchemaVersion) {
+        if ($HasProcessesProperty -or $HasSchemaVersion) {
             try {
                 if (-not $HasSchemaVersion -or [int]$Record.schema_version -ne 2 -or -not $HasProcessArray) {
                     throw "incomplete schema"
@@ -85,6 +201,14 @@ foreach ($Definition in $Definitions) {
                         @($Record.processes).Count -eq 2
                     if (-not $ValidStarting -and -not $ValidReady) {
                         throw "invalid real roles"
+                    }
+                } else {
+                    $SchemaStudios = @($Record.processes | Where-Object { [string]$_.role -eq "studio" })
+                    $SchemaDaemons = @($Record.processes | Where-Object { [string]$_.role -eq "daemon" })
+                    if ($SchemaStudios.Count -ne 1 -or $SchemaDaemons.Count -ne 0 -or
+                        @($Record.processes).Count -ne 1 -or
+                        [string]$Record.state -notin @("starting", "ready")) {
+                        throw "invalid fixture roles"
                     }
                 }
             } catch {
@@ -130,7 +254,7 @@ foreach ($Definition in $Definitions) {
                 try {
                     $ManagedPid = [int]$RecordedProcess.process_id
                     $ExpectedExe = [System.IO.Path]::GetFullPath([string]$RecordedProcess.executable)
-                    if ($Name -eq "real" -and $HasProcessArray -and
+                    if ($HasProcessArray -and
                         -not $ExpectedExe.Equals(
                             [System.IO.Path]::GetFullPath([string]$Record.executable),
                             [System.StringComparison]::OrdinalIgnoreCase
@@ -167,6 +291,10 @@ foreach ($Definition in $Definitions) {
                     $ManagedProcessDetail = "invalid process record"
                 }
             }
+        }
+        if (-not $ManagedRecordShapeValid) {
+            $RecordError = $ManagedProcessDetail
+            $Record = $null
         }
     }
     $ManagedOwner = $false
@@ -270,10 +398,10 @@ foreach ($Definition in $Definitions) {
         "invalid record"
     } elseif ($Name -eq "real" -and $Record -and -not $ManagedRecordShapeValid) {
         "managed / invalid schema-2 record"
-    } elseif ($Name -eq "real" -and $Record -and
+    } elseif ($Record -and
         ($Record.PSObject.Properties.Name -contains "state") -and [string]$Record.state -ne "ready") {
         "managed / incomplete start"
-    } elseif ($Name -eq "real" -and $Record -and -not $ManagedProcessesValid) {
+    } elseif ($Record -and -not $ManagedProcessesValid) {
         "managed / $ManagedProcessDetail"
     } elseif ($Name -eq "real" -and -not $Record -and $Owners.Count -eq 0 -and
         ([int]$ControlServerPid -gt 0 -or [int]$LiveServerPid -gt 0)) {
@@ -305,10 +433,87 @@ foreach ($Definition in $Definitions) {
         "unmanaged listener"
     }
 
+    $Healthy = $State -in @(
+        "managed / running",
+        "manual live / running",
+        "test-owned / running"
+    )
+    $ProvenanceComplete = $false
+    $Current = $false
+    $CurrentDetail = "this process has no managed source/asset identity receipt"
+    if ($Record) {
+        $IdentityFields = @(
+            "source_graph_sha256",
+            "studio_input_sha256",
+            "zone_producer_sha256",
+            "asset_graph_sha256"
+        )
+        $ProvenanceComplete = @(
+            $IdentityFields | Where-Object {
+                -not ($Record.PSObject.Properties.Name -contains $_) -or
+                [string]$Record.$_ -notmatch '^[0-9A-Fa-f]{64}$'
+            }
+        ).Count -eq 0
+
+        if (-not $ProvenanceComplete) {
+            $CurrentDetail = "managed receipt predates or is missing exact source/asset identities"
+        } elseif (-not $Healthy -or $State -ne "managed / running") {
+            $CurrentDetail = "the exact managed artifact is not healthy and running"
+        } elseif ($SkipCurrentVerification) {
+            $CurrentDetail = "exact current-source verification skipped for this lightweight health probe"
+        } else {
+            $BuildEvidence = Get-KsxStatusBuildGraphEvidence
+            if (-not [bool]$BuildEvidence.Available) {
+                $CurrentDetail = "current build graph could not be verified: $([string]$BuildEvidence.Detail)"
+            } elseif ([string]$Record.studio_input_sha256 -ine [string]$BuildEvidence.Studio) {
+                $CurrentDetail = "Studio authoring inputs changed after this artifact was built"
+            } elseif ([string]$Record.asset_graph_sha256 -ine [string]$BuildEvidence.Assets) {
+                $CurrentDetail = "generated Studio assets changed after this artifact was built"
+            } elseif ([string]$Record.zone_producer_sha256 -ine [string]$BuildEvidence.ZoneProducers) {
+                $CurrentDetail = "Rust zone-vocabulary producer inputs changed after this artifact was built"
+            } elseif ([string]$Record.source_graph_sha256 -ine [string]$BuildEvidence.Runtime) {
+                $CurrentDetail = "runtime source changed after this artifact was built"
+            } else {
+                $Current = $true
+                $CurrentDetail = "running artifact matches the verified current source and asset graph"
+            }
+        }
+    }
+    $Watch = "not running"
+    $WatchPath = Join-Path $RuntimeRoot "watch-$Name.json"
+    if (Test-Path -LiteralPath $WatchPath -PathType Leaf) {
+        try {
+            $WatchRecord = Get-Content -LiteralPath $WatchPath -Raw | ConvertFrom-Json
+            $WatchState = [string]$WatchRecord.state
+            if ($WatchState -eq "stopped") {
+                $Watch = "stopped"
+            } else {
+                $WatchProcess = Get-CimInstance Win32_Process `
+                    -Filter "ProcessId = $([int]$WatchRecord.process_id)" `
+                    -ErrorAction SilentlyContinue
+                $WatchIdentityMatches = $false
+                if ($WatchProcess -and
+                    ($WatchRecord.PSObject.Properties.Name -contains "process_creation_time_utc")) {
+                    $ActualWatchCreation = ([datetime]$WatchProcess.CreationDate).ToUniversalTime()
+                    $ExpectedWatchCreation = ([datetime]$WatchRecord.process_creation_time_utc).ToUniversalTime()
+                    $WatchIdentityMatches = [Math]::Abs(
+                        ($ActualWatchCreation - $ExpectedWatchCreation).Ticks
+                    ) -le 9
+                }
+                $Watch = if ($WatchIdentityMatches) { $WatchState } else { "stale / $WatchState" }
+            }
+        } catch {
+            $Watch = "invalid record"
+        }
+    }
     $Rows += [pscustomobject]@{
         Environment = $Name
         Port = $Port
         State = $State
+        Healthy = $Healthy
+        Current = $Current
+        ProvenanceComplete = $ProvenanceComplete
+        CurrentDetail = $CurrentDetail
         PID = if ($Name -eq "real" -and $Record) {
             "studio=$RecordedStudioPid daemon=$RecordedDaemonPid"
         } elseif ($Name -eq "real" -and $Owners.Count -gt 0 -and [int]$ControlServerPid -gt 0) {
@@ -317,8 +522,35 @@ foreach ($Definition in $Definitions) {
             "daemon=$ControlServerPid"
         } elseif ($Owners.Count -gt 0) { $Owners -join "," } else { "" }
         Provenance = $Provenance
+        Watch = $Watch
         URL = "http://127.0.0.1:$Port/nocturne"
     }
 }
 
-$Rows | Format-Table -AutoSize
+if ($Json) {
+    ConvertTo-Json -InputObject ([object[]]$Rows) -Depth 4
+} else {
+    $Rows |
+        Select-Object Environment, Port, State, Current, ProvenanceComplete, Watch, PID, Provenance, URL |
+        Format-Table -AutoSize
+}
+
+if ($RequireHealthy) {
+    $Unhealthy = @($Rows | Where-Object { -not $_.Healthy })
+    if ($Unhealthy.Count -gt 0) {
+        $FailedNames = @($Unhealthy | ForEach-Object { "$($_.Environment) [$($_.State)]" }) -join ", "
+        throw "Studio environment health gate failed: $FailedNames."
+    }
+}
+
+if ($RequireCurrent) {
+    $NotCurrent = @($Rows | Where-Object { -not $_.Current })
+    if ($NotCurrent.Count -gt 0) {
+        $FailedRows = @(
+            $NotCurrent | ForEach-Object {
+                "$($_.Environment) [$($_.CurrentDetail)]"
+            }
+        ) -join ", "
+        throw "Studio environment current-artifact gate failed: $FailedRows."
+    }
+}

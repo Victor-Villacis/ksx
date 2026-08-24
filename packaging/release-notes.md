@@ -1,6 +1,7 @@
 <!-- The body of every ksx release. `.github/workflows/release.yml` substitutes
-     VERSION, TAG, SETUP_NAME, SETUP_SHA256, PORTABLE_NAME and COMMIT (each written in double
-     braces below) and publishes the result; a placeholder that workflow does
+     VERSION, TAG, SETUP_NAME, SETUP_SHA256, PORTABLE_NAME, PORTABLE_SHA256,
+     MANIFEST_NAME, MANIFEST_SHA256 and COMMIT (each written in double braces
+     below) and publishes the result; a placeholder that workflow does
      not know fails the release rather than reaching the page as literal braces
      (crates/ksx-app/tests/installer.rs).
 
@@ -107,6 +108,10 @@ It should print:
 Built from commit {{COMMIT}} by the `Release` workflow on a GitHub runner - no
 developer machine touched these bytes.
 
+Portable ZIP SHA-256: `{{PORTABLE_SHA256}}`
+
+Candidate manifest SHA-256: `{{MANIFEST_SHA256}}`
+
 ## What is in Assets
 
 - **{{SETUP_NAME}}** - the installer. This is the supported first-run file. It
@@ -120,6 +125,9 @@ developer machine touched these bytes.
   prepare/release path. It cannot use the installed-only DualSense lane. It is
   for advanced Interception or already-prepared setups; use the installer for
   first run.
+- **{{MANIFEST_NAME}}** - machine-readable provenance for this exact build:
+  source commit/ref, Release run and attempt, Rust toolchain, filenames, sizes,
+  and SHA-256 values for both distributables.
 
 Nothing installs a driver behind your back. The installer shows separate
 ViGEmBus and HIDMaestro tasks, and the later WinUSB action has its own three

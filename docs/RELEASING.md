@@ -1,130 +1,186 @@
 # Releasing
 
-A release is a pushed tag. There is nothing to click.
+A pushed numeric tag starts a release **candidate**. It does not immediately
+publish one.
 
 ```sh
 git switch main && git pull
-# bump BOTH versions in the same commit (see below), then:
-git tag v0.2.0
-git push origin v0.2.0
+# bump BOTH versions in the same commit, merge it, and let main CI pass
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
-That is it. `gh run watch` if you want to see it happen; a release appears on
-the [releases page](https://github.com/Victor-Villacis/ksx/releases)
-with `ksx-0.2.0-setup.exe` attached, and `docs/FIRST-RUN.md` §1 moment 1 — "a
-`.exe` from the releases page. One file." — is satisfied.
+The Release workflow first proves the tag is exactly the current
+`origin/main` HEAD, executes the complete clean-runner CI, and builds the
+installer and portable ZIP once. Publication then waits at the protected
+GitHub Environment named `production`. A reviewer installs and tests that
+run's exact candidate before approving it.
 
-There is **no GitHub Release to create by hand first.** Creating one in the web
-UI works only *because* it creates a tag; the tag is the trigger, so the UI step
-is optional polish and never a requirement.
+There is no GitHub Release to create by hand first. The tag is the build
+trigger; approval is the promotion action.
 
-## The tag pattern
+## Required repository controls
 
-`v*`, declared in `.github/workflows/release.yml`. The same pattern the owner's
-other repos release from, which is the reason it is `v*` and not something
-cleverer.
+Before pushing any release tag:
 
-The version part is not free text. `v<major>.<minor>.<patch>`, digits only: a
-`v0.2.0-rc1` is refused in the first seconds of the run, because Inno Setup's
-`VersionInfoVersion` is a numeric Windows version resource and cannot hold a
-suffix. ksx has no prerelease channel.
+1. GitHub Environment `production` has a required reviewer, allows only `v*`
+   deployment refs, and has administrator bypass disabled.
+2. Repository variable `KSX_PRODUCTION_APPROVAL_CONFIGURED` is exactly `true`.
+3. Active ruleset `KSX main promotion gate` requires pull requests, an
+   up-to-date branch, all six CI jobs, and blocks force-push/deletion.
+4. Active ruleset `KSX release tag immutability` blocks deletion or movement
+   of `v*` tags.
+5. Repository **immutable releases** are enabled, locking a published release's
+   tag and assets and producing GitHub's release attestation.
+6. Repository Actions require full-length commit-SHA pins for third-party
+   actions.
+7. Run the maintainer audit from an authenticated `gh` session:
 
-## Two files must already say what the tag says
+   ```powershell
+   tools/release/assert-promotion-controls.ps1 `
+     -Repository Victor-Villacis/ksx `
+     -ApprovalConfigured true `
+     -RequireNoRulesetBypassActors `
+     -RequireStudioPipelineChecks
+   ```
+
+The publish job fails closed when the repository variable is absent. This
+prevents GitHub's auto-creation of an unprotected environment from silently
+turning a tag into a public release, but the variable is not a substitute for
+the required-reviewer setting. The workflow trusts the `${{ vars }}` value it
+received and repeats the API-visible environment/ruleset structural audit
+before candidate construction and after approval. Its built-in token cannot
+API-read the repository variable, immutable-release setting, Actions policy,
+or complete ruleset bypass lists. Only the maintainer command above certifies
+those administrative controls, and it fails if its token lacks the necessary
+visibility.
+
+When these two Studio jobs and full-SHA action pins are introduced for the
+first time, merge their workflow before making the check names required or
+enabling repository-wide SHA enforcement. Immediately after that merge, run
+`tools/release/activate-studio-promotion-checks.ps1 -Repository
+Victor-Villacis/ksx -Confirm:$false`; it refuses to activate until GitHub's
+default branch contains both jobs and every workflow action is pinned to a
+40-character SHA. No release tag may be cut between that merge and the
+successful six-check administrative audit.
+
+## The tag and version contract
+
+The trigger pattern is `v*`, but the accepted version is digits-only
+`v<major>.<minor>.<patch>`. A suffix such as `-rc1` is refused because Inno
+Setup's Windows `VersionInfoVersion` cannot carry it.
+
+Two files must already agree with the tag:
 
 | file | field | what it becomes |
 |---|---|---|
-| `packaging/ksx.iss` | `#define AppVersion` | the installer's filename, its `VersionInfoVersion`, and the "ksx 0.2.0" row in Apps & Features |
-| `Cargo.toml` | `[workspace.package] version` | what `ksx --version` prints |
+| `packaging/ksx.iss` | `#define AppVersion` | installer filename, Windows version metadata, and Apps & Features row |
+| `Cargo.toml` | `[workspace.package] version` | `ksx --version` |
 
-`crates/ksx-app/tests/installer.rs` fails if those two disagree, so an ordinary
-`cargo test` catches the common mistake (bumping one of them) long before a tag
-exists. The release **also** checks the tag against both, before it builds
-anything, and **fails rather than deriving** — see the long comment in
-`.github/workflows/build-installer.yml` for why a version patched in by CI is
-worse than a refused release.
+Tests pin those files to each other. The workflow also checks the tag and
+fails rather than patching a version into the source.
 
-If the tag was wrong, nothing has been built and nothing published:
+Release tags are immutable once pushed, including when candidate QA fails.
+Fix and commit, increment the version, and cut a new candidate tag. Never
+delete, move, or reuse a `v*` tag: the repository ruleset rejects those
+operations so an old evidence ledger can never name new bytes.
 
-```sh
-git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0
-```
+## Exact candidate QA
 
-Fix the tree, commit, tag again. Do not reuse a version number that already has
-a release: the tag is public the moment it is pushed.
+An ordinary main run and a tag run can produce different installer/ZIP bytes
+at the same commit. Similar recipes are not identical artifacts. Therefore the
+only valid installed QA target is the artifact produced by the Release run
+that is waiting for approval.
 
-## What the run does
+When its `ci` job finishes, download these three artifacts from that same run:
 
-`release.yml` calls `ci.yml` whole — fmt, clippy, all four feature
-combinations, the test suite — and only then builds. A release cannot ship a
-binary that skipped a check an ordinary branch push would have run. The build
-itself is `build-installer.yml`, the same reusable workflow every branch push
-uses, so branch candidates and tagged releases share one recipe rather than two
-hand-copied command lines. The gate must still record the exact artifact hash;
-workflow equivalence is not a substitute. Gates 1–4 are **NOT RUN** for 0.2.0
-until their ledgers name that evidence.
+- `ksx-windows-installer`
+- `ksx-windows-portable`
+- `ksx-windows-candidate-manifest`
 
-The build also treats WinUSB preparation as an installed security boundary:
+The manifest records its schema, repository, commit, ref, Release run id and
+attempt, tag/version, pinned and active Rust toolchain, and both distributable
+filenames, sizes, and SHA-256 values. Independently hash the manifest and
+installer. Record in `docs/GATES.md`:
 
-1. build `ksx-winusb-helper.exe` as an x64 Windows GUI-subsystem executable and
-   verify its embedded `requireAdministrator` manifest;
-2. build the prepare-only `libwdi.dll` twice in separate directories with the
-   pinned Windows runner/toolset and reject differing SHA-256 hashes;
-3. run the provider's disposable elevated smoke: generate a synthetic signed
-   package, use `pnputil /add-driver` **without `/install`**, prove Windows
-   accepts it, then delete that exact published package and prove package,
-   certificate, key-container and work-directory absence in `finally`; and
-4. package helper, provider and corresponding source only in the installer.
+- tag/version;
+- commit;
+- Release run id and attempt;
+- candidate-manifest SHA-256;
+- installer filename and SHA-256;
+- machine/operator/timestamps and each gate result.
 
-Those steps being present in YAML are not evidence that they passed. For the
-current 0.2.0 candidate, the clean-runner provider/helper/ISCC job is **NOT
-RUN** until Actions records it against the candidate commit. Local DLL hashes
-and developer-machine diagnostics are not release evidence.
+Install that setup file and complete the supervised hardware/product gates.
+Reject the environment deployment on any failure. Approve `production` only
+when the exact candidate's ledgers pass.
 
-Then it publishes: `gh release create` with the repository's own
-`GITHUB_TOKEN` (no PAT, no secret to rotate, no third-party action), attaching
+GitHub artifact retention is 30 days. The 14-day soak fits inside that window;
+do not approve after artifacts or evidence have expired.
 
-1. `ksx-<version>-setup.exe` — the file, and
-2. `ksx-<version>-windows-x86_64-portable.zip` — `ksx.exe`, the console-free
-   launcher, product licences, `NOTICE`, and full third-party licence material,
-   for advanced use without an installer. It deliberately omits
-   `ksx-winusb-helper.exe`, `libwdi.dll`, their corresponding source and the
-   protected ProgramData journal contract, so it cannot perform supported
-   built-in preparation/release.
+The manifest binds `run_attempt`. If a candidate workflow is rerun, rerun the
+whole workflow and repeat QA against the new attempt's manifest and bytes.
+Rerunning only a failed publish job against an earlier-attempt manifest is
+intentionally refused. A whole-run retry is possible only while the immutable
+tag is still the current `origin/main` tip; if main advanced during the soak,
+fix/increment as needed and cut a new candidate version instead.
 
-The release body comes from `packaging/release-notes.md` with the version, the
-installer's name and SHA-256, the portable ZIP name, and the commit substituted
-in. **Edit the prose there**, not in the workflow. Before publishing, the job
-re-hashes both downloaded assets and refuses to publish if either does not match
-what the build computed, so the installer SHA-256 on the page is provably the
-SHA-256 of the attached installer.
+## What approval publishes
 
-## Two gotchas, both cheap to hit
+After approval, the publish job downloads the three artifacts from the same
+workflow run. It verifies:
 
-1. **`on: push: tags` runs the workflow file as it exists at the tagged
-   commit.** A `release.yml` that only exists on a branch will not run. Tag
-   `main`, after merging. The visible symptom of not having merged yet is that
-   `gh workflow view release.yml` answers *"not found on the default branch"*
-   and the Actions tab lists only CI — GitHub registers workflows from the
-   default branch, so an unmerged release workflow is invisible AND inert.
-2. **A tag pushed by `GITHUB_TOKEN` from inside Actions does not trigger
-   workflows.** A tag you push from your machine does, which is the path above.
+- manifest hash and JSON schema;
+- repository, commit, ref, run id/attempt, tag, and toolchain;
+- both artifact filenames, sizes, and SHA-256 values;
+- the reusable build job's independently reported hashes.
 
-## SmartScreen, and why the release body talks about it
+Only then does publication create a **private draft** and upload the
+already-built installer, portable ZIP, and candidate manifest. GitHub's own
+reported name, size, and SHA-256 digest for all three must match before the
+draft becomes public. The workflow then confirms `isImmutable=true`; a partial
+upload therefore never becomes a customer release. It never recompiles or
+repackages. Release notes come from `packaging/release-notes.md`; edit the prose
+there. The installer hash shown in the notes is consequently the hash of the
+exact file QA installed and the exact file customers download.
 
-The installer is not code-signed, so Windows shows "Windows protected your PC"
-with only a *Don't run* button visible. That is a statement about a certificate
-this project has not bought, not a finding about the file — but a first-time
-user meeting an unexplained warning stops there, and no later screen gets a
-turn. So the release body names the dialog, gives the two clicks through it
-(*More info* → *Run anyway*), says why plainly, and then gives the SHA-256 and
-the commit so the file can be checked instead of trusted.
+Release workflows use GitHub's `queue: max` concurrency mode so immutable tag
+events wait FIFO instead of replacing one another. If a newer release already
+exists, an older candidate is published without moving GitHub's “Latest” marker
+backward.
 
-Signing it would remove the dialog and is the only thing that would. Until then
-the honest paragraph is the product, and `crates/ksx-app/tests/installer.rs`
-fails if it goes missing.
+The portable ZIP remains an advanced, non-installing distribution. It omits
+the protected WinUSB/HIDMaestro helpers and their Program Files/ProgramData
+security boundary; the installer is the supported first-run path.
 
-The installer's SmartScreen signature and the machine-local certificate used
-for a generated WinUSB package are unrelated. The latter is created only after
-three explicit in-app confirmations and UAC, has its private key deleted before
-its public half is trusted, and is removed by verified Release/uninstall. It
-does not sign the KSX installer and does not make the release “code-signed.”
+## Clean-runner boundaries
+
+The reusable CI covers the same checks as every branch plus the release build:
+format/lint/test feature matrices, browser suites, deterministic Studio assets,
+PowerShell environment lifecycle, compile-only cabinet hardware tests,
+HIDMaestro evidence, installed provider smoke, installer upgrade behavior, and
+artifact packaging. A local hash or build is diagnostic only and can never be
+substituted for the run's candidate.
+
+The WinUSB/provider steps deliberately build and test the installed-only
+helper boundary on the Windows runner. They do not make a fixture or loose
+portable copy equivalent to an installed candidate, and they do not replace
+the supervised physical gates.
+
+## Trigger gotchas
+
+1. `on: push: tags` uses the workflow file at the tagged commit. Merge the
+   workflow to `main` before tagging. The preflight additionally refuses any
+   tag that is not the exact current `origin/main` HEAD.
+2. A tag pushed by `GITHUB_TOKEN` inside Actions does not trigger workflows.
+   Push the tag from an authenticated human/developer session.
+3. Do not approve a run merely because all automated jobs are green. The
+   protected environment exists specifically for installed, real-hardware QA
+   of that run's bytes.
+
+## SmartScreen
+
+The installer is not code-signed, so Windows may show “Windows protected your
+PC.” The release notes explain *More info* → *Run anyway* and provide the exact
+SHA-256 and commit. Signing the public installer would remove that warning;
+the machine-local certificate used for generated WinUSB packages is unrelated
+and does not sign the KSX installer.

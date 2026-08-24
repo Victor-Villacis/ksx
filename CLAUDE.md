@@ -28,16 +28,24 @@ performs it on**. There is no "egui first or web first" question.
 Before opening, restarting, or judging a Nocturne page, read
 [`docs/STUDIO-ENVIRONMENTS.md`](docs/STUDIO-ENVIRONMENTS.md). Port 4460 is the
 real-machine QA process; 4476, 4520, and 4521 are distinct synthetic fixtures.
+The dev/candidate/installed-QA/production promotion contract is
+[`docs/DEVELOPMENT-PIPELINE.md`](docs/DEVELOPMENT-PIPELINE.md).
 The default Playwright ports and ranges recorded in that document are test-owned
 (notably 4478, 4479, 4488–4490, 4496, 4500, and 4510–4512). Use the checked-in
-seed/status/teardown scripts under `tools/studio-env` rather than starting an
-anonymous fixture by hand. The persistent title-bar banner is the provenance
-authority: fixture evidence never proves what Victor's physical I-PAC contains.
+seed/status/teardown/watch scripts under `tools/studio-env` rather than starting
+an anonymous fixture by hand. The persistent title-bar banner is the
+provenance authority: fixture evidence never proves what Victor's physical
+I-PAC contains, and `DEV BUILD · REAL HARDWARE` never claims to be an installed
+candidate.
 The 4460 launcher owns a daemon/Studio pair from one artifact built by that
 invocation; do not open
 the installed shortcut beside it or call a Studio-only process healthy. Daily
 real-hardware iteration does not require reinstalling. A full candidate install
 is still required to test protected Program Files-only WinUSB/HIDMaestro paths.
+For daily iteration use `tools/studio-env/watch.ps1 -Environment real`; it
+keeps the last healthy 4460 pair on build failure and defers replacement while
+Play or panel programming owns the hardware boundary. Use
+`status.ps1 -Environment real -RequireHealthy -RequireCurrent` as the automation gate.
 
 | you want | it is here |
 |---|---|
@@ -162,14 +170,17 @@ caught dead code twice. Both crates, because `ksx-app` merely *forwards* those
 features to `ksx-backend`: `-p ksx-app --all-targets` compiles the backend's
 gated code but not the backend's tests, which is where most of it is tested.
 
-Touched `studio-ui/`? Also `cd studio-ui && node build.mjs`, commit the
+Touched `studio-ui/`? Run
+`powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/build-assets.ps1`
+through the machine-wide build-graph lock, then commit the
 regenerated assets **plus the committed outputs it writes —
 `studio-ui/src/zones.gen.ts`, `studio-ui/src/tokens.gen.css` and
 `crates/ksx-studio/src/theme_tokens.rs`** — and confirm a fresh rebuild is
-byte-identical. If the Rust vocabulary or mapper art tables changed, first run
-`cargo test -p ksx-studio write_generated_zone_tokens_json -- --ignored` and
-commit its `studio-ui/tokens/zones.json` handoff too. (The Node rebuild is cheap
-and local; it is not rustc.)
+byte-identical. The wrapper itself runs the ignored Rust vocabulary writer and
+owns `studio-ui/tokens/zones.json` under the same lock. Never invoke either that
+writer or `node build.mjs` directly in a shared checkout: the wrapper marks
+partial output, performs two byte-identical Node builds, and excludes Cargo
+readers until the entire handoff is verified.
 
 ## Landmines — each one has already cost a day
 
@@ -183,9 +194,9 @@ and local; it is not rustc.)
 - **Never hand-merge generated assets** (`ksx-studio/assets/*`, `manifest.json`,
   `sw.js`, hashed bundles, `studio-ui/tokens/zones.json`,
   `studio-ui/src/zones.gen.ts`, `studio-ui/src/tokens.gen.css`, and
-  `crates/ksx-studio/src/theme_tokens.rs`). Regenerate `zones.json` with its
-  ignored Rust writer test, then regenerate its TypeScript projection and the
-  other Studio outputs with `studio-ui/build.mjs`. A hand-resolved manifest
+  `crates/ksx-studio/src/theme_tokens.rs`). Regenerate the complete graph only
+  with `tools/studio-env/build-assets.ps1`; it owns the Rust handoff and both
+  Node passes under one machine-wide lock. A hand-resolved manifest
   yields a page whose HTML and JS disagree — it fails in a browser and in no
   Rust test; a hand-resolved generated handoff can silently ship a vocabulary
   or palette no one chose.

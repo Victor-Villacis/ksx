@@ -214,7 +214,9 @@ performance and it is never required for the product to work.
   tokio dependency**. `render_page(&PageConfig) -> PageOutput` is a *synchronous pure
   function*. Our daemon keeps its own runtime and listener. MIT, crates.io, MSRV 1.70.
 - **`rust-embed`-only asset serving** — one `.exe` shipping its own UI is Forma's
-  default path, not a workaround. No Node at runtime (Node ≥18 at build time only).
+  default path, not a workaround. The upstream floor at this decision point was
+  Node ≥18; current deterministic regeneration uses the exact version pinned in
+  `.node-version` (24.19.0). Node is never required at runtime.
 - **⚠️ No server push anywhere in the Rust half** — no SSE, no WebSocket. The live
   monitor is ours to build in plain axum 0.8 (kmd proves the pattern but shares no code).
 - **⚠️ Hardcoded CSP** (`connect-src 'self'`, no extension API) — collides with LAN

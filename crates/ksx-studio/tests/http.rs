@@ -912,6 +912,9 @@ struct ScriptedMachine {
     /// page used to render for it — and distinct from [`Self::refuse`], which
     /// is the DEVICE scan refusing.
     reads_refuse: bool,
+    /// The production managed-dev fence, scripted without touching this
+    /// process's environment or Windows Task Scheduler.
+    autostart_dev_refuse: bool,
     /// Every Saved Games writer refuses with deliberately hostile internal
     /// vocabulary. Presentation tests prove none of it reaches a redirect.
     hostile_profile_writes: bool,
@@ -968,6 +971,7 @@ impl Default for ScriptedMachine {
             deleted_profile: Mutex::new(None),
             created_preset: Mutex::new(None),
             reads_refuse: false,
+            autostart_dev_refuse: false,
             hostile_profile_writes: false,
             prepared_with: Mutex::new(Vec::new()),
             released_with: Mutex::new(Vec::new()),
@@ -1024,6 +1028,13 @@ impl ScriptedMachine {
     fn reads_refusing() -> Self {
         Self {
             reads_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn managed_dev_runtime() -> Self {
+        Self {
+            autostart_dev_refuse: true,
             ..Self::default()
         }
     }
@@ -1900,6 +1911,20 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 "run `ksx doctor`",
             ));
         }
+        if self.autostart_dev_refuse {
+            return Ok(ksx_api::AutostartView {
+                registered: true,
+                line: "registered — installed ksx daemon".into(),
+                mode: Some("daemon".into()),
+                read_only: true,
+                read_only_detail: Some(
+                    "This managed development build shows the installed sign-in task read-only. \
+                     Install a complete candidate to test startup."
+                        .into(),
+                ),
+                ..ksx_api::AutostartView::default()
+            });
+        }
         Ok(ksx_api::AutostartView {
             registered: false,
             line: "not registered".into(),
@@ -1912,6 +1937,13 @@ impl ksx_api::MachineSource for ScriptedMachine {
         &self,
         spec: &ksx_api::AutostartSpec,
     ) -> Result<ksx_api::AutostartView, Refusal> {
+        if self.autostart_dev_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::MANAGED_DEV_RUNTIME,
+                "this is a managed development runtime",
+                "install the complete candidate",
+            ));
+        }
         Ok(ksx_api::AutostartView {
             registered: spec.enable,
             line: if spec.enable {
@@ -10686,6 +10718,73 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
         via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
         "{via_workspace}"
     );
+}
+
+#[test]
+fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::managed_dev_runtime());
+    let addr = start_server_with_machine(control, machine);
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["autostart_read"]["registered"], true, "{api}");
+    assert_eq!(api["autostart_read"]["read_only"], true, "{api}");
+    assert!(
+        api["view"]["auto_line"]
+            .as_str()
+            .is_some_and(|line| line.contains("starts by itself")),
+        "{api}"
+    );
+    assert!(
+        api["view"]["auto_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Install a complete candidate to test startup")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["auto_form_cls"], "n-capform none", "{api}");
+
+    let start_api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    assert_eq!(start_api["autostart"]["readable"], true, "{start_api}");
+    assert_eq!(start_api["autostart"]["registered"], true, "{start_api}");
+    assert_eq!(start_api["autostart"]["read_only"], true, "{start_api}");
+    assert!(
+        start_api["autostart"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("Install a complete candidate to test startup")),
+        "{start_api}"
+    );
+
+    let start_page = rendered_body(&get(addr, "/start"));
+    assert!(
+        start_page.contains("ksx starts by itself when you sign in"),
+        "{start_page}"
+    );
+    assert!(
+        start_page.contains("Install a complete candidate to test startup"),
+        "{start_page}"
+    );
+    assert!(
+        !start_page.contains(r#"action="/start/autostart""#),
+        "{start_page}"
+    );
+    assert!(
+        !start_page.contains(r#"name="confirm_autostart""#),
+        "{start_page}"
+    );
+
+    let response = post_form(
+        addr,
+        "/nocturne/autostart",
+        "enable=yes&confirm_autostart=yes",
+    );
+    assert!(
+        response
+            .contains("development%20build%20cannot%20change%20the%20installed%20sign-in%20task"),
+        "{response}"
+    );
+    assert!(response.contains("Nothing%20was%20changed"), "{response}");
 }
 
 /// The Builder's hardware card is an explicit read, not another participant

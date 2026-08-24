@@ -93,6 +93,11 @@ fn read_doc(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
 }
 
+fn read_repo_file(name: &str) -> String {
+    let path = repo_root().join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
+}
+
 /// Every `§N` cited within a few characters of `doc`'s filename, and who cites
 /// it.
 ///
@@ -254,4 +259,93 @@ fn the_setup_docs_name_the_picker_wherever_they_show_a_devnode() {
              that is what the picker writes and what a reader should copy"
         );
     }
+}
+
+/// **The managed real-QA lifecycle contract.**
+///
+/// Port 4460 is useful only when Studio and the daemon share one matched
+/// managed artifact. These assertions intentionally guard the small set of
+/// script tokens that prove that relationship: an idle daemon, a reachable draft, exact ownership of
+/// both global pipes, same-handle shutdown, and a paired schema-v2 record.
+#[test]
+fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
+    let start = read_repo_file("tools/studio-env/start-real.ps1");
+    let probe = read_repo_file("tools/studio-env/runtime-probe.ps1");
+    let teardown = read_repo_file("tools/studio-env/teardown.ps1");
+    let status = read_repo_file("tools/studio-env/status.ps1");
+
+    assert!(
+        start.contains(r#"-ArgumentList @("daemon", "--console")"#),
+        "real QA must launch the managed daemon in the foreground logging mode"
+    );
+    assert!(
+        !start.contains(r#"-ArgumentList @("daemon", "--start")"#),
+        "opening real QA must not start an emulation session"
+    );
+    assert!(
+        start.contains("$Payload.staged.reachable"),
+        "the real-QA health gate must require Studio's draft channel to reach the daemon"
+    );
+    for pipe in [r#"-PipeName "ksx-daemon""#, r#"-PipeName "ksx-live""#] {
+        assert!(
+            start.matches(pipe).count() >= 2,
+            "the startup and post-Studio health gates must both verify ownership of {pipe}"
+        );
+        assert!(
+            status.contains(pipe),
+            "status must verify ownership of {pipe} before calling real QA healthy"
+        );
+    }
+
+    assert!(
+        probe.contains("GetNamedPipeServerProcessId(pipe.SafePipeHandle"),
+        "pipe identity must come from the connected handle"
+    );
+    assert!(
+        probe.matches("TokenImpersonationLevel.Anonymous").count() >= 2
+            && probe.matches("HandleInheritability.None").count() >= 2,
+        "identity and quit probes must use anonymous, non-inheritable pipe handles"
+    );
+    let quit_start = probe
+        .find("public static void RequestExactDaemonQuit")
+        .expect("runtime probe must expose an exact-daemon quit operation");
+    let quit_end = probe[quit_start..]
+        .find("function Stop-KsxDaemonGracefully")
+        .map(|offset| quit_start + offset)
+        .expect("the C# exact-quit helper must end before its PowerShell wrapper");
+    let exact_quit = &probe[quit_start..quit_end];
+    assert_eq!(
+        exact_quit.matches("new NamedPipeClientStream(").count(),
+        1,
+        "exact quit must validate and write through one connected pipe handle"
+    );
+    assert!(
+        exact_quit.contains("GetNamedPipeServerProcessId(pipe.SafePipeHandle")
+            && exact_quit.contains("new StreamWriter(\n                    pipe,")
+            && exact_quit.contains(r#"writer.WriteLine("{\"verb\":\"quit\"}")"#),
+        "exact quit must check the server PID and send quit on that same handle"
+    );
+
+    assert!(
+        start.contains("schema_version = 2") && start.contains("processes = @("),
+        "the real launcher must persist its daemon and Studio as a schema-v2 process pair"
+    );
+    for (name, script) in [("teardown", &teardown), ("status", &status)] {
+        assert!(
+            script.contains(r#"PSObject.Properties.Name -contains "processes""#)
+                && script.contains(r#"role -eq "studio""#)
+                && script.contains(r#"role -eq "daemon""#)
+                && script.contains(r#"PSObject.Properties.Name -contains "schema_version""#),
+            "{name} must understand both roles in the paired schema-v2 record"
+        );
+    }
+    assert!(
+        teardown.contains("Stop-KsxDaemonGracefully -ExpectedProcessId $ManagedProcessId"),
+        "teardown must use the identity-checked same-handle daemon quit"
+    );
+    assert!(
+        status.contains("$DaemonReachable = [bool]$Payload.staged.reachable")
+            && status.contains("$DaemonPipesValid"),
+        "status must require both draft reachability and exact pipe ownership"
+    );
 }

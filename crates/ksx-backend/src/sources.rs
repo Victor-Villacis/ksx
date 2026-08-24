@@ -489,6 +489,25 @@ fn autostart_line() -> String {
 /// Windows boot: the USB tree is still settling, and a ksx that enumerates
 /// devices into that finds a panel that is not there yet.
 const DEFAULT_AUTOSTART_DELAY_SECS: u32 = 10;
+/// Set only by the managed source-tree launcher. A process bearing this marker
+/// is intentionally disposable and must never register its temporary path as
+/// the machine's durable logon command (or remove the installed command while
+/// pretending that is ordinary development QA).
+const MANAGED_DEV_RUNTIME_ENV: &str = "KSX_MANAGED_DEV_RUNTIME";
+
+fn managed_dev_runtime(marker: Option<&std::ffi::OsStr>) -> bool {
+    marker.is_some_and(|value| !value.is_empty())
+}
+
+fn managed_dev_autostart_refusal(marker: Option<&std::ffi::OsStr>) -> Option<Refusal> {
+    managed_dev_runtime(marker).then(|| {
+        Refusal::with_remedy(
+            ksx_api::codes::MANAGED_DEV_RUNTIME,
+            "this is a managed development runtime, so it cannot change the installed sign-in task",
+            "install the complete candidate and change sign-in behavior from that installed copy",
+        )
+    })
+}
 
 /// A scheduler failure, as a refusal a surface can show.
 ///
@@ -506,6 +525,12 @@ fn autostart_refusal(err: autostart::AutostartError) -> Refusal {
 }
 
 fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
+    let managed_dev = managed_dev_runtime(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref());
+    let read_only_detail = managed_dev.then(|| {
+        "This managed development build shows the installed sign-in task read-only. Install a \
+         complete candidate to test startup."
+            .to_owned()
+    });
     let status = autostart::query(autostart::DEFAULT_TASK_NAME).map_err(|err| {
         Refusal::new(
             ksx_api::codes::REFUSED,
@@ -517,15 +542,30 @@ fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
         return Ok(ksx_api::AutostartView {
             registered: false,
             line,
+            read_only: managed_dev,
+            read_only_detail,
             ..ksx_api::AutostartView::default()
         });
     };
 
     // Best effort: a process that cannot name its own exe has nothing to
     // compare against, and "could not check" must never render as "stale".
-    let staleness = std::env::current_exe()
-        .ok()
-        .map(|exe| autostart::check_staleness(task, &exe, |path| path.exists()));
+    // The managed QA executable is disposable by design, so comparing the
+    // installed task against that path would make every healthy installation
+    // look stale. In that runtime, validate the registered command itself:
+    // missing/no-command remain broken, while an existing installed command
+    // is the installed task's honest truth.
+    let staleness = if managed_dev {
+        Some(autostart::check_staleness(
+            task,
+            std::path::Path::new(task.command.as_deref().unwrap_or_default()),
+            |path| path.exists(),
+        ))
+    } else {
+        std::env::current_exe()
+            .ok()
+            .map(|exe| autostart::check_staleness(task, &exe, |path| path.exists()))
+    };
     let stale_detail = match &staleness {
         None | Some(autostart::Staleness::Current) => None,
         Some(autostart::Staleness::MissingExe { .. }) => Some(
@@ -552,6 +592,8 @@ fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
         profile: task.game(),
         stale: stale_detail.is_some(),
         stale_detail,
+        read_only: managed_dev,
+        read_only_detail,
     })
 }
 
@@ -1285,6 +1327,11 @@ impl ksx_api::MachineSource for LocalMachine {
                 "changing what happens at sign-in was not confirmed".to_owned(),
                 "tick the box, then try again",
             ));
+        }
+        if let Some(refusal) =
+            managed_dev_autostart_refusal(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref())
+        {
+            return Err(refusal);
         }
         if spec.enable {
             // The DEFAULTS, spelled once: the tray daemon, so the cabinet comes
@@ -2376,6 +2423,25 @@ mod tests {
     }
     use super::*;
     use ksx_api::MacroWrite;
+
+    #[test]
+    fn a_disposable_managed_runtime_cannot_rewrite_the_installed_logon_task() {
+        assert!(!managed_dev_runtime(None));
+        assert!(!managed_dev_runtime(Some(std::ffi::OsStr::new(""))));
+        assert!(managed_dev_runtime(Some(std::ffi::OsStr::new(
+            "launch-123"
+        ))));
+        assert!(managed_dev_autostart_refusal(None).is_none());
+        assert!(managed_dev_autostart_refusal(Some(std::ffi::OsStr::new(""))).is_none());
+        let refusal = managed_dev_autostart_refusal(Some(std::ffi::OsStr::new("launch-123")))
+            .expect("a managed development marker must fence the write");
+        assert_eq!(refusal.code, ksx_api::codes::MANAGED_DEV_RUNTIME);
+        assert!(refusal.message.contains("managed development runtime"));
+        assert!(refusal
+            .remedy
+            .as_deref()
+            .is_some_and(|remedy| remedy.contains("complete candidate")));
+    }
 
     #[test]
     fn the_production_collector_explicitly_claims_live_machine_provenance() {

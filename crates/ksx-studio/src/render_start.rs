@@ -123,7 +123,14 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         "autostartDetail": payload.autostart.detail,
         "autostartButton": payload.autostart.button,
         "autostartStaleDetail": payload.autostart.stale_detail,
-        "autostartError": payload.autostart.error,
+        // Reuse the card's non-form explanation branch for a readable but
+        // deliberately immutable managed-development view. The API still says
+        // `readable: true`; this scalar only decides what that branch says.
+        "autostartError": if payload.autostart.read_only {
+            &payload.autostart.detail
+        } else {
+            &payload.autostart.error
+        },
         "autostartEnable": if payload.autostart.enable { "yes" } else { "no" },
         "controllerLine": lines.controller_line,
         "xinputLine": lines.xinput_line,
@@ -395,8 +402,14 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:capturePrepare", f.capture_prepare),
         ("show:captureRelease", f.capture_release),
         ("show:captureBlocked", f.capture_blocked),
-        ("show:autostartReadable", payload.autostart.readable),
-        ("show:autostartUnreadable", !payload.autostart.readable),
+        (
+            "show:autostartReadable",
+            payload.autostart.readable && !payload.autostart.read_only,
+        ),
+        (
+            "show:autostartUnreadable",
+            !payload.autostart.readable || payload.autostart.read_only,
+        ),
         ("show:autostartStale", payload.autostart.stale),
         ("show:hasBoards", f.has_boards),
         ("show:hasBoards#2", f.has_boards),
@@ -2397,6 +2410,54 @@ mod tests {
             api
         );
         assert!(out.html.contains(r#"id="__ksx-payload""#), "{}", out.html);
+    }
+
+    /// A source-tree QA runtime may inspect the durable installed task, but it
+    /// must never offer to repoint that task at its disposable executable.
+    /// The state remains a successful read; only the mutation affordance is
+    /// absent, with the install-lane remedy visible in its place.
+    #[test]
+    fn managed_dev_start_shows_installed_autostart_truth_without_a_mutation_form() {
+        let page = EmbeddedPage::load("/start").unwrap();
+        let mut p = fresh();
+        p.autostart_read = Some(ksx_api::AutostartView {
+            registered: true,
+            line: "registered — installed ksx daemon".into(),
+            mode: Some("daemon".into()),
+            read_only: true,
+            read_only_detail: Some(
+                "This managed development build shows the installed sign-in task read-only. \
+                 Install a complete candidate to test startup."
+                    .into(),
+            ),
+            ..ksx_api::AutostartView::default()
+        });
+        let p = p.composed();
+        assert!(p.autostart.readable);
+        assert!(p.autostart.read_only);
+
+        let out = render_start(&page, &p, None);
+        assert!(
+            out.html.contains("ksx starts by itself when you sign in"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains("Install a complete candidate to test startup"),
+            "{}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"action="/start/autostart""#),
+            "a read-only runtime rendered the forbidden form: {}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"name="confirm_autostart""#),
+            "a read-only runtime rendered mutation consent: {}",
+            out.html
+        );
     }
 
     /// The first-run header is the four-stage customer journey; the compact

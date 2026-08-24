@@ -50,6 +50,10 @@ pub mod codes {
     /// one that has it. This is the honest answer a defaulted trait method
     /// gives, and it is never a silent no-op.
     pub const NOT_HERE: &str = "not-here";
+    /// A disposable, source-tree-managed runtime refused an installed-machine
+    /// lifecycle write. The complete installed candidate is the authority for
+    /// autostart and other paths that must survive removal of a dev artifact.
+    pub const MANAGED_DEV_RUNTIME: &str = "managed-dev-runtime";
     /// The change is real but cannot happen in place: applying it means
     /// replugging the pads (`stage-apply` on a structurally different draft).
     /// The message names WHAT differs; the surface's honest next offer is the

@@ -3106,6 +3106,10 @@ pub struct StartAutostartView {
     /// Why - composed by the provider, never `Staleness::message`, whose
     /// remedy names a CLI command.
     pub stale_detail: String,
+    /// The state is a real scheduler read, but this runtime has no authority
+    /// to mutate the durable installed task.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl StartAutostartView {
@@ -3129,6 +3133,7 @@ impl StartAutostartView {
 
         let stale = view.stale;
         let stale_detail = view.stale_detail.clone().unwrap_or_default();
+        let read_only = view.read_only;
         // A stale registration offers the REPAIR, not the removal: turning it
         // on again rewrites the task to point here, which is the whole fix. An
         // "off" button would leave the cabinet in the state it is already
@@ -3147,7 +3152,11 @@ impl StartAutostartView {
             } else {
                 "ksx starts by itself when you sign in.".to_owned()
             },
-            detail: if enable && !view.registered {
+            detail: if read_only {
+                view.read_only_detail.clone().unwrap_or_else(|| {
+                    "This sign-in state is read-only in the current runtime.".to_owned()
+                })
+            } else if enable && !view.registered {
                 "Turn this on and the cabinet comes up ready on its own - no keyboard, no mouse, \
                  nobody standing at it."
                     .to_owned()
@@ -3165,6 +3174,7 @@ impl StartAutostartView {
             enable,
             stale,
             stale_detail,
+            read_only,
         }
     }
 }
@@ -4501,8 +4511,9 @@ pub struct NocturneDerived {
     pub auto_dir: String,
     pub auto_btn: String,
     pub auto_note: String,
-    /// Hides the consent form when the sign-in state could not be read — a
-    /// verb whose precondition is unknown is not offered.
+    /// Hides the consent form when the sign-in state could not be read or the
+    /// runtime is explicitly read-only — an unknown or unavailable verb is
+    /// not offered.
     pub auto_form_cls: String,
 }
 
@@ -5741,6 +5752,8 @@ impl NocturneDerived {
         });
         let auto_note = if !auto.readable {
             format!("{} {}", auto.error, auto.detail)
+        } else if auto.read_only {
+            auto.detail.clone()
         } else if auto.stale && !auto.stale_detail.is_empty() {
             format!("{} {}", auto.stale_detail, auto.detail)
         } else {
@@ -5758,11 +5771,11 @@ impl NocturneDerived {
         } else {
             String::new()
         };
-        let auto_form_cls = if auto.readable {
+        let auto_form_cls = if auto.readable && !auto.read_only {
             "n-capform".to_owned()
         } else {
-            // A verb whose precondition could not be read is not offered;
-            // the next poll retries the read.
+            // An unreadable precondition or an explicitly read-only provider
+            // cannot license a mutation; the next poll still retries reads.
             "n-capform none".to_owned()
         };
 

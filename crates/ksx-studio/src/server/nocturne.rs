@@ -201,10 +201,12 @@ pub(super) const N_AUTOSTART_STILL_STALE: &str =
 pub(super) const N_AUTOSTART_ERROR: &str =
     "error: What happens at sign-in could not be changed. Nothing was changed; try again.";
 
+pub(super) const N_AUTOSTART_DEV_RUNTIME: &str = "error: This development build cannot change the installed sign-in task. Nothing was changed; install the complete candidate to test startup behavior.";
+
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 60] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 61] = [
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
@@ -230,6 +232,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 60] = [
     N_AUTOSTART_CONSENT,
     N_AUTOSTART_STILL_STALE,
     N_AUTOSTART_ERROR,
+    N_AUTOSTART_DEV_RUNTIME,
     N_TURBO_OK,
     N_TURBO_INPUT_ERROR,
     N_TURBO_UNBOUND_ERROR,
@@ -3749,6 +3752,9 @@ pub(super) async fn nocturne_form_autostart(
             Ok(view) if view.registered && !view.stale => N_AUTOSTART_ON,
             Ok(view) if view.registered => N_AUTOSTART_STILL_STALE,
             Ok(_) => N_AUTOSTART_OFF,
+            Err(refusal) if refusal.code == ksx_api::codes::MANAGED_DEV_RUNTIME => {
+                N_AUTOSTART_DEV_RUNTIME
+            }
             Err(_) => N_AUTOSTART_ERROR,
         }
     })

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "d75ec847dbeede69c67ec5943d09d105532df52dceb7c22e551fa6e7fb79e46c",
+  "build_hash": "7122b36298c0f19d3355ff9e426973792cdbd2854ad77cc82c667f64cf2918b7",
   "assets": {
     "check.ir": "check.33266fab.ir",
     "check.js": "check.462901ec.js",
@@ -17,7 +17,7 @@
     "setup.ir": "setup.f6d65c98.ir",
     "setup.js": "setup.4aa4c8d3.js",
     "start.ir": "start.b0a4715d.ir",
-    "start.js": "start.a5f93f92.js",
+    "start.js": "start.3290c99c.js",
     "status.ir": "status.cee9d0b7.ir",
     "status.js": "status.fa50ec52.js",
     "studio.css": "studio.2415f5d3.css",
@@ -27,13 +27,13 @@
   "routes": {
     "/start": {
       "js": [
-        "start.a5f93f92.js"
+        "start.3290c99c.js"
       ],
       "css": [
         "studio.2415f5d3.css"
       ],
       "fonts": [],
-      "total_size_br": 93105,
+      "total_size_br": 93164,
       "budget_warn_threshold": 282500,
       "ir": "start.b0a4715d.ir"
     },

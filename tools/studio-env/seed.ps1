@@ -30,10 +30,15 @@ if ($Port -eq 4460 -or $AutomatedTestPorts -contains $Port) {
 
 New-Item -ItemType Directory -Force -Path $BinRoot, $LogRoot | Out-Null
 
-$TransitionMutex = [System.Threading.Mutex]::new(
-    $false,
-    "Local\KSXStudioEnvironment-$Environment-transition"
-)
+$TransitionMutex = $null
+try {
+    $TransitionMutex = [System.Threading.Mutex]::new(
+        $false,
+        "Global\KSXStudioEnvironment-$Environment-transition"
+    )
+} catch [System.UnauthorizedAccessException] {
+    throw "The machine-wide '$Environment' transition lock is owned by another Windows identity. Refusing to race that environment."
+}
 $TransitionLockHeld = $false
 $LocationPushed = $false
 try {

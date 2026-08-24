@@ -281,6 +281,9 @@ export interface StartAutostartView {
   enable: boolean;
   stale: boolean;
   stale_detail: string;
+  /** A real scheduler read whose durable mutation belongs to an installed
+   *  candidate, not this disposable development runtime. */
+  read_only: boolean;
 }
 
 export interface StartPayload {
@@ -422,12 +425,15 @@ export function applyStart(p: StartPayload): void {
   setAutostartDetail(p.autostart.detail);
   setAutostartButton(p.autostart.button);
   setAutostartStaleDetail(p.autostart.stale_detail);
-  setAutostartError(p.autostart.error);
+  // Keep the installed state visible in a managed development runtime, but
+  // route its capability explanation through the existing non-form branch.
+  // `readable` remains true in the API: only the mutation affordance is gone.
+  setAutostartError(p.autostart.read_only ? p.autostart.detail : p.autostart.error);
   // "yes" is the only value the server's `checked()` accepts, so the OFF
   // direction posts a value that can never be mistaken for consent.
   setAutostartEnable(p.autostart.enable ? "yes" : "no");
-  setAutostartReadable(p.autostart.readable);
-  setAutostartUnreadable(!p.autostart.readable);
+  setAutostartReadable(p.autostart.readable && !p.autostart.read_only);
+  setAutostartUnreadable(!p.autostart.readable || p.autostart.read_only);
   setAutostartStale(p.autostart.stale);
   setCaptureHeading(l.capture_heading);
   setCaptureLine(l.capture_line);

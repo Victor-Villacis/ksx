@@ -2760,6 +2760,16 @@ pub struct AutostartView {
     /// exact thing `FIRST-RUN.md` §6 says a surface must never be reduced to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_detail: Option<String>,
+    /// The scheduler state is readable, but this runtime deliberately cannot
+    /// change it. Managed source-tree QA uses this to show the installed
+    /// task's truth without offering to repoint that task at a disposable
+    /// executable.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Why mutation is unavailable, phrased for a product surface rather than
+    /// as a failed action. `None` when [`read_only`](Self::read_only) is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_detail: Option<String>,
 }
 
 /// What a first-run surface may ask of the logon task: on, or off.

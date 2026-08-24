@@ -33,6 +33,11 @@ The default Playwright ports and ranges recorded in that document are test-owned
 seed/status/teardown scripts under `tools/studio-env` rather than starting an
 anonymous fixture by hand. The persistent title-bar banner is the provenance
 authority: fixture evidence never proves what Victor's physical I-PAC contains.
+The 4460 launcher owns a daemon/Studio pair from one artifact built by that
+invocation; do not open
+the installed shortcut beside it or call a Studio-only process healthy. Daily
+real-hardware iteration does not require reinstalling. A full candidate install
+is still required to test protected Program Files-only WinUSB/HIDMaestro paths.
 
 | you want | it is here |
 |---|---|

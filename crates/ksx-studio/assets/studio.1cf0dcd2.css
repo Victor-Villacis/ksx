@@ -8363,6 +8363,37 @@ a.wsrow-title:hover {
   opacity: 0.62;
 }
 
+/* A firmware chart can place a useful provisional path before Teach proves the
+   cabinet wiring. Keep it traceable but unmistakably quieter. A mismatch routes
+   from the observed key and turns red at the source instead of drawing the
+   expected key as though Windows had emitted it. */
+.n-flow-layer
+  .n-flow-edge:is(
+    [data-flow-source-authority="configured"],
+    [data-flow-source-authority="expected"],
+    [data-flow-source-authority="planned"]
+  ):not(.is-live):not(.is-related) {
+  opacity: 0.38;
+}
+
+.n-flow-edge:is(
+  [data-flow-source-authority="configured"],
+  [data-flow-source-authority="expected"],
+  [data-flow-source-authority="planned"]
+) .n-flow-port-source {
+  stroke-dasharray: 2 2;
+  opacity: 0.58;
+}
+
+.n-flow-edge[data-flow-source-authority="mismatch"] .n-flow-core,
+.n-flow-edge[data-flow-source-authority="mismatch"] .n-flow-port-source {
+  stroke: color-mix(in srgb, #ff5364 72%, var(--n-flow-color));
+}
+
+.n-flow-edge[data-flow-source-authority="mismatch"] .n-flow-port-source {
+  fill: color-mix(in srgb, #ff5364 28%, var(--n-bg));
+}
+
 .n-flow-edge.is-unresolved {
   display: none;
 }
@@ -8748,10 +8779,60 @@ a.wsrow-title:hover {
   text-align: center;
 }
 
+.n-ipac-signal-roster-shell {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 34%, var(--n-line));
+  border-radius: 9px;
+  background: rgba(6, 8, 14, 0.25);
+}
+
+.n-ipac-signal-roster-shell > summary {
+  display: flex;
+  min-height: 34px;
+  padding: 7px 9px;
+  align-items: center;
+  gap: 8px;
+  color: var(--n-text-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.n-ipac-signal-roster-shell > summary::-webkit-details-marker {
+  display: none;
+}
+
+.n-ipac-signal-roster-shell > summary::before {
+  content: "›";
+  flex: 0 0 auto;
+  color: var(--n-accent-2);
+  font-size: 15px;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.n-ipac-signal-roster-shell[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.n-ipac-signal-roster-shell > summary strong {
+  font-size: 9px;
+}
+
+.n-ipac-signal-roster-shell > summary span {
+  margin-inline-start: auto;
+  color: var(--n-text-3);
+  font-size: 8px;
+}
+
+.n-ipac-signal-roster-shell[data-panel-fallback="true"] > summary {
+  background: color-mix(in srgb, var(--n-accent-dim) 16%, transparent);
+}
+
 .n-ipac-signal-roster {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  padding: 0 8px 8px;
 }
 
 .n-ipac-signal-player {
@@ -17291,13 +17372,12 @@ a.nm-link {
   border-color: color-mix(in srgb, var(--n-warn) 44%, var(--n-line));
 }
 
-/* The hardware workspace is a causal journey, not a settings form. Keep the
-   five boundaries visible at once so "I-PAC" and "keyboard" cannot be read
-   as two physical devices: terminals emit Windows keys, which KSX then routes
-   into a virtual pad that a game receives. */
+/* The hardware workspace is a causal journey, not a settings form. Keep every
+   boundary visible so the cabinet control, I-PAC terminal, and Windows key can
+   never be mistaken for one object. */
 .n-panel-signal-journey {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
   padding: 8px;
@@ -18625,15 +18705,171 @@ a.nm-link {
 }
 
 .n-surface-control-signal {
-  right: 2px;
-  bottom: -15px;
-  left: 2px;
-  overflow: hidden;
+  top: calc(100% + 4px);
+  left: 50%;
+  display: grid;
+  width: max-content;
+  min-width: 100%;
+  gap: 2px;
+  overflow: visible;
   color: var(--n-text-3);
-  font: 700 8.5px/1.2 ui-monospace, Menlo, Consolas, monospace;
+  font: 700 7px/1 ui-monospace, Menlo, Consolas, monospace;
   text-align: center;
-  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+/* The physical face may use the complete 1200×720 design surface. Dock its
+   terminal/key annotation inward at an edge so a resolved cord can never
+   originate from content clipped outside the rounded panel. */
+.n-surface-control[data-signal-v="above"] .n-surface-control-signal {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.n-surface-control[data-signal-h="left"] .n-surface-control-signal {
+  left: 0;
+  justify-items: start;
+  transform: none;
+}
+
+.n-surface-control[data-signal-h="right"] .n-surface-control-signal {
+  right: 0;
+  left: auto;
+  justify-items: end;
+  transform: none;
+}
+
+.n-surface-signal-chain {
+  --surface-signal-state: var(--n-text-3);
+
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--surface-signal-state);
   white-space: nowrap;
+}
+
+.n-surface-signal-chain:is(
+  [data-verification="configured"],
+  [data-verification="expected"],
+  [data-verification="planned"]
+) {
+  --surface-signal-state: color-mix(in srgb, var(--n-warn) 82%, white);
+}
+
+.n-surface-signal-chain[data-verification="matched"],
+.n-surface-signal-chain[data-verification="observed"] {
+  --surface-signal-state: color-mix(in srgb, var(--n-accent-2) 82%, white);
+}
+
+.n-surface-signal-chain[data-verification="mismatch"] {
+  --surface-signal-state: #ff8793;
+}
+
+.n-surface-signal-stem {
+  width: 7px;
+  height: 1px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--surface-signal-state) 48%, transparent);
+}
+
+.n-surface-signal-direction {
+  display: grid;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--surface-color) 46%, var(--n-line));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--n-panel-2) 88%, black);
+  color: color-mix(in srgb, var(--surface-color) 68%, white);
+  font-size: 6px;
+}
+
+.n-surface-terminal-chip {
+  display: inline-grid;
+  min-width: 25px;
+  height: 13px;
+  padding: 0 3px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--surface-signal-state) 42%, var(--n-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-panel-2) 88%, #06080e);
+  color: color-mix(in srgb, var(--surface-signal-state) 78%, white);
+  font-size: 5.8px;
+  letter-spacing: 0.02em;
+}
+
+.n-surface-signal-arrow {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--surface-signal-state) 55%, transparent);
+  font-size: 7px;
+}
+
+.n-surface-signal-keycap {
+  position: relative;
+  z-index: 4;
+  display: inline-flex;
+  min-width: 24px;
+  max-width: 52px;
+  height: 15px;
+  padding: 0 4px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--surface-signal-state) 55%, #05070c);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--n-kb-key-face-top) 88%, white), var(--n-kb-key-face-bottom));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+    0 2px 3px rgba(0, 0, 0, 0.42);
+  color: color-mix(in srgb, var(--surface-signal-state) 64%, white);
+  font: inherit;
+  font-style: normal;
+  text-overflow: ellipsis;
+}
+
+.n-surface-signal-keycap strong {
+  overflow: hidden;
+  font-size: 6.8px;
+  text-overflow: ellipsis;
+}
+
+.n-surface-signal-keycap small,
+.n-surface-key-expected,
+.n-surface-key-current,
+.n-surface-key-divider {
+  flex: 0 0 auto;
+  font-size: 5.4px;
+}
+
+.n-surface-key-expected,
+.n-surface-key-current {
+  max-width: 22px;
+  overflow: hidden;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+}
+
+.n-surface-key-expected {
+  text-decoration: line-through;
+}
+
+.n-surface-signal-chain[data-verification="planned"] .n-surface-signal-keycap {
+  max-width: 80px;
+}
+
+.n-surface-signal-keycap[data-selected="true"] {
+  outline: 1px solid color-mix(in srgb, var(--surface-color) 76%, white);
+  outline-offset: 1px;
 }
 
 .n-surface-control.unassigned .n-surface-control-signal {
@@ -18730,24 +18966,8 @@ a.nm-link {
 }
 
 .n-surface-channel-anchor {
-  position: absolute;
-  z-index: 4;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
+  pointer-events: auto;
 }
-
-.n-surface-control.kind-joystick .n-surface-channel-anchor {
-  inset: auto;
-  width: 28%;
-  height: 28%;
-  border-radius: 50%;
-}
-
-.n-surface-control.kind-joystick .channel-up { top: 4%; left: 36%; }
-.n-surface-control.kind-joystick .channel-right { top: 36%; right: 4%; }
-.n-surface-control.kind-joystick .channel-down { right: 36%; bottom: 4%; }
-.n-surface-control.kind-joystick .channel-left { top: 36%; left: 4%; }
 
 .n-surface-inspector {
   position: sticky;
@@ -19381,7 +19601,7 @@ a.nm-link {
   }
 
   .n-panel-signal-journey {
-    grid-template-columns: repeat(5, minmax(124px, 1fr));
+    grid-template-columns: repeat(6, minmax(124px, 1fr));
     overflow-x: auto;
     overscroll-behavior-inline: contain;
     scrollbar-width: thin;

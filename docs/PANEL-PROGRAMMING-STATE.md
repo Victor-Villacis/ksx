@@ -57,7 +57,7 @@ source substrate. The persistent board chart answers “what key does this
 terminal emit?” KSX still owns the dynamic path:
 
 ```text
-physical terminal → persistent I-PAC key → KSX transform/macro → virtual pad → game
+physical control → I-PAC terminal → persistent Windows key → KSX transform/macro → virtual pad → game
 ```
 
 The completed UX lets a cabinet owner select the exact encoder, load the
@@ -352,16 +352,44 @@ The user-facing sequence is:
 The focused setup names and exposes the causal journey as:
 
 ```text
-I-PAC terminal → Windows key → KSX macro/transform → virtual controller → game
+physical arcade control → I-PAC terminal → Windows key → KSX macro/transform → virtual controller → game
 ```
 
 While an I-PAC is selected, the ordinary QWERTY source art becomes an
-**I-PAC Signals** source. Its player-grouped `terminal → key` chips are the
-actual mapping-cord anchors. This is only a representation change: the I-PAC
-still speaks HID keyboard signals, and the same staged bindings remain the
-runtime authority. The capture choices are correspondingly worded as
+**I-PAC Signals** source. Its player-grouped `terminal → key` chips remain a
+recoverable fallback. When an open chart-linked physical panel covers every
+relevant key-and-player route, that shelf folds and every drawn control carries
+a compact terminal chip plus Windows-keycap token; mapping cords begin on that
+keycap. Partial player coverage keeps the shelf open, and closing the Builder
+immediately reopens it so a route cannot be stranded on an invisible source.
+This is only a representation change: the I-PAC still speaks HID keyboard
+signals, and the same staged bindings remain the runtime authority. The capture
+choices are correspondingly worded as
 **Dedicated arcade panel**, **Share unused outputs with Windows**, and
 **Observe and pass through**; ordinary keyboards retain their original copy.
+
+An all-Unassigned chart also offers **Design physical panel first**. It leaves
+the backend-owned chart and recovery point intact, sends no report, and opens
+the blank/arcade/leverless/four-player templates. That supports the first-time
+cabinet order without making it mandatory: design physical controls, link them
+to terminals, assign Windows-key outputs, review/program/read back, Teach the
+wiring, then route through KSX. Physical design is available before keys, but
+an unqualified writer keeps full key authoring locked until the reversible
+one-terminal qualification write and exact restore both verify. Existing
+configured boards can still generate their physical panel directly from the
+current chart.
+
+Configured firmware and observed wiring remain separate authorities on the
+panel itself. Before Teach, the key from the last complete board read can carry
+a dim provisional KSX path but never a `data-key` observation. An unwritten
+edit renders `current → planned`; its cord remains on `current`, and `planned`
+cannot become a live source until program plus readback verifies it. A matching
+Teach promotes the same origin without moving the path to another widget. A
+mismatch renders `configured ≠ observed`, marks the channel red, and resolves
+that physical control's route from the observed Windows key. Every successful
+write invalidates prior Teach authority, even when retained text happens to
+match, so the fresh readback returns to configured/provisional until Teach runs
+again.
 
 One physical board terminal is one shared hardware channel. Multiple drawn
 panel views may reference that channel, but they cannot carry divergent
@@ -637,13 +665,18 @@ referenced note describes an instant mode-switch button, not an NKRO addition.
 | 2026-08-23 17:04–17:05 UTC / 13:04–13:05 EDT | same | Opened real Studio against the connected board, reread the final chart into the full editor, saved it as portable profile `KSX Recommended — I-PAC 4`, closed final UI/review findings and fixed the Windows PE main-thread reserve. | `[MEASURED]` Real UI showed 56/56, Qualified and one saved layout; no EEPROM write occurred. Full canvas 50/50, app-with-Studio 105 tests, focused Rust/HTTP suites, clippy, deterministic assets and independent P0–P2 review all passed. |
 | 2026-08-23 16:51 EDT | `codex/ipac-signal-journey` / `edf8fdf` baseline | Completed the encoder-as-hardware UX audit: causal five-stage journey, terminal-owned I-PAC Signals, availability-gated route truth, exact-board draft recovery, shared-terminal invariants, passive wiring test, readable focused setup, keyboard-revealed terminal controls and unobstructed writer actions. Retained the original traceable lasso route projection. | `[MEASURED]` API 107/107, backend panel programming 48/48, Studio render 8/8 and HTTP 139/139 passed. The final complete canvas suite passed 51/51 after the focus-coordinate, capture-lifecycle and navigator-obstruction corrections; its focused blank-board, 56-terminal and writer-qualification gate passed 3/3. Assets rebuilt byte-identically twice at `01092be57893`. Final live browser QA showed 68%, steps I-PAC → Windows keys → KSX → Controller → Game, I-PAC Signals instead of fake QWERTY, no covering graph, macro or navigator layer and no page alert. Independent final review reported no remaining P0–P2 findings. No HID/EEPROM write occurred in this UX slice. |
 | 2026-08-23 20:14 EDT | `codex/ipac-signal-journey` / `6f4bcfa` baseline | Added backend-owned friendly I-PAC facts and a compact five-cell Hardware Setup strip: board, firmware, observed input, chart outputs and KSX routes. Firmware `1.56` exists only on the exact registered release-0056 profile; raw USB identity remains visible, vendor mode remains explicitly unqueried, and the WinIPAC `Multi-Mode` label is not inferred. Shared writer constants own release and 56-terminal capacity. | `[MEASURED]` API 108/108, Studio HTTP 139/139 and the complete canvas suite 51/51 passed before final review; after both P2 review fixes, backend panel status passed 8/8, focused HTTP passed 1/1 and focused blank/56-terminal browser flows passed 2/2. Two final Studio builds were byte-identical at build hash `c5e58b8a8a81`. No HID report or EEPROM write occurred. |
+| 2026-08-23 22:48 EDT | `codex/panel-encoder-ecosystem` / `6a6de8a` baseline | Completed the six-stage panel flow: design-first blank encoders, chart-generated physical panels, terminal and Windows-key tokens on every channel, truthful current/planned/Teach states, observed-key route authority, and a slot-safe recoverable signal shelf whenever panel endpoints are hidden or incomplete. | `[MEASURED]` Canvas 55/55, SSR/visual 102/102, Studio HTTP 139/139 and docs 3/3 passed. Consecutive Studio builds were byte-identical at build hash `5a41f6c456d5`; independent P0–P2 re-review found no remaining issue. No HID report or EEPROM write occurred in this UX slice. |
 
 ## Current pickup
 
 The end-to-end writer, Clear/Recommended plans, full terminal editor, portable
-saved-layout model and final signal-journey UX are integrated on
-`codex/ipac-signal-journey`. The exact connected I-PAC is already qualified and
-currently carries the fully readback-verified Recommended chart at
+saved-layout model and six-stage signal journey are integrated on
+`codex/panel-encoder-ecosystem`. The canvas now supports design-first blank
+boards and chart-generated panels, renders each physical channel as
+`control → terminal → Windows key`, distinguishes current/draft/Teach truth,
+and keeps slot-safe fallback sources available whenever the panel cannot own a
+visible route. The exact connected I-PAC is already qualified and currently
+carries the fully readback-verified Recommended chart at
 `43CAD3F30B900416531D3A65A3799405F3094E34BE0E37E467079D163C8C1D87`.
 The next agent must not rerun qualification or restore the original chart as
 if the hardware gate were still pending. This UX audit issued no hardware
@@ -662,6 +695,6 @@ signals. NKRO/saturation and deliberate mode-switch behavior are separate
 measurements. The final browser/fixture rerun and independent P0–P2 code review
 are complete; neither is allowed to stand in for those remaining physical
 measurements. The implementation contract to preserve is one causal pipeline:
-physical terminal → Windows key → KSX transform/macro → virtual controller →
-game. A control-surface drawing is optional metadata, never a substitute for
-the board chart or the Windows signal.
+physical control → I-PAC terminal → Windows key → KSX transform/macro → virtual
+controller → game. A control-surface drawing is optional metadata, never a
+substitute for the board chart or the Windows signal.

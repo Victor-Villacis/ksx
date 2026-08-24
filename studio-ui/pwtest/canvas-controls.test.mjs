@@ -5328,18 +5328,27 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /I-PAC 4X Hardware Setup.*I-PAC 4X terminal.*Windows key.*KSX mapping.*virtual controller.*game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
+        /I-PAC 4X Hardware Setup.*Panel control.*I-PAC 4X.*Windows key.*KSX.*Controller.*Game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["I-PAC 4X", "Windows keys", "KSX", "Controller", "Game"],
-        "the workspace teaches the complete physical-terminal-to-game signal chain",
+        ["Panel control", "I-PAC 4X", "Windows key", "KSX", "Controller", "Game"],
+        "the workspace teaches the complete physical-control-to-game signal chain",
+      );
+      assert.equal(
+        await setup.locator('[data-panel-journey-step="physical"]').getAttribute("data-state"),
+        "active",
+        "an empty board offers the physical cabinet as the honest first design step",
       );
       assert.equal(
         await setup.locator('[data-panel-journey-step="keys"]').getAttribute("data-state"),
-        "active",
-        "an empty chart stops visibly at Windows key output rather than pretending the encoder is ready",
+        "upcoming",
+        "the empty board does not pretend that a Windows key exists before the panel and terminal are assigned",
       );
+      const designPanelFirst = setup.locator('[data-nx="surface-encoder-design-panel"]');
+      assert.equal(await designPanelFirst.isVisible(), true);
+      assert.equal(await designPanelFirst.isEnabled(), true);
+      assert.match((await designPanelFirst.textContent()).trim(), /Design physical panel first/i);
       assert.match(
         (await setup.locator("[data-surface-programming-device]").textContent()).replace(/\s+/g, " "),
         /Windows key outputs\s*0 of 2.*KSX routes\s*0 hardware keys mapped/i,
@@ -5447,6 +5456,37 @@ describe("the canvas navigation controls", () => {
       );
       assert.deepEqual(hardwareWrites, [], "reviewing a plan does not write persistent hardware");
       assert.deepEqual(signalWrites, []);
+      await dialog.locator('[data-panel-dialog-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      await designPanelFirst.click();
+      const surface = page.locator('.n-widget-surface');
+      await surface.locator('.n-surface-starters').waitFor({ state: 'visible' });
+      assert.equal(await surface.locator('.n-surface-control').count(), 0,
+        "design-first leaves the empty hardware chart and physical canvas genuinely blank");
+      await surface.locator('[data-surface-template="blank"]').click();
+      assert.equal(await surface.locator('.n-surface-control').count(), 0);
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface')?.getAttribute('data-entry') === 'encoder-setup'
+      );
+      assert.equal(
+        await surface.locator('[data-panel-journey-step="physical"]').getAttribute('data-state'),
+        'active',
+        "a started blank template is still awaiting its first real physical component",
+      );
+      await surface.locator('[data-nx="surface-encoder-close"]').click();
+      await surface.locator('[data-nx="surface-new"]').click();
+      const arcade = surface.locator('[data-surface-template="arcade-stick"]');
+      await arcade.click();
+      await arcade.click();
+      assert.equal(await surface.locator('.n-surface-control').count(), 11,
+        "the user can now model the wired cabinet before assigning any firmware output");
+      assert.equal(chartReads, 1,
+        "entering physical design preserves the complete chart already read from the board");
+      assert.deepEqual(hardwareWrites, [],
+        "choosing the panel shape never writes persistent I-PAC configuration");
+      assert.deepEqual(signalWrites, [],
+        "choosing the panel shape never fabricates a learned Windows signal");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -5523,12 +5563,18 @@ describe("the canvas navigation controls", () => {
         "the rail resumes with an outcome-oriented action instead of calling every board first-run",
       );
       assert.equal(
+        await setup.locator('[data-panel-journey-step="physical"]').getAttribute("data-state"),
+        "active",
+        "a configured firmware chart does not invent a drawn or observed cabinet control",
+      );
+      assert.equal(await setup.locator(".n-surface-control").count(), 0);
+      assert.equal(
         await setup.locator('[data-panel-journey-step="keys"]').getAttribute("data-state"),
         "complete",
       );
       assert.equal(
         await setup.locator('[data-panel-journey-step="mapping"]').getAttribute("data-state"),
-        "active",
+        "upcoming",
       );
       assert.equal(
         await setup.locator('[data-panel-journey-step="controller"]').getAttribute("data-state"),
@@ -5761,7 +5807,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["I-PAC 4X", "Windows keys", "KSX", "Controller", "Game"],
+        ["Panel control", "I-PAC 4X", "Windows key", "KSX", "Controller", "Game"],
       );
       assert.match(
         (await setup.locator(".n-surface-programming-modes").textContent()).replace(/\s+/g, " "),
@@ -6161,6 +6207,20 @@ describe("the canvas navigation controls", () => {
         await page.locator('.n-widget-surface .n-surface-encoder-verification').textContent(),
         /different key|check the wiring|restore the chart/i,
       );
+      const plannedKeycap = page.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          '[data-verification="planned"] .n-surface-signal-keycap',
+      ).first();
+      assert.equal(await plannedKeycap.getAttribute("data-configured-key"), "B");
+      assert.equal(await plannedKeycap.getAttribute("data-planned-key"), "A");
+      assert.equal(await plannedKeycap.getAttribute("data-flow-key"), "B",
+        "an unwritten draft keeps the route on the key the current chart actually emits");
+      assert.equal(await plannedKeycap.getAttribute("data-flow-authority"), "configured");
+      assert.equal(await plannedKeycap.getAttribute("data-key"), null,
+        "the invalidated historical Teach value is not exposed as current route evidence");
+      assert.match((await plannedKeycap.textContent()).replace(/\s+/g, " "), /B.*→.*A.*PLAN/i);
+      assert.doesNotMatch(await plannedKeycap.textContent(), /✓/,
+        "equal-looking retained strings can never recreate verification after invalidation");
 
       const terminalTableKey = page.locator(
         '.n-widget-surface [data-nx="surface-terminal-key"][data-panel-terminal="1sw1"][data-panel-field="normal"]',
@@ -6254,6 +6314,17 @@ describe("the canvas navigation controls", () => {
         '.n-widget-surface [data-nx="surface-encoder-open"]',
       )?.getAttribute("aria-expanded") === "false");
       assert.ok(chartReads >= 2, "a verified write triggers a fresh complete chart read");
+      const refreshedKeycap = page.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          '[data-verification="configured"] .n-surface-signal-keycap',
+      ).first();
+      await refreshedKeycap.waitFor({ state: "visible" });
+      assert.equal(await refreshedKeycap.getAttribute("data-flow-key"), "A");
+      assert.equal(await refreshedKeycap.getAttribute("data-last-observed-key"), "B");
+      assert.equal(await refreshedKeycap.getAttribute("data-key"), null);
+      assert.match((await refreshedKeycap.textContent()).replace(/\s+/g, " "), /A.*\?/i);
+      assert.doesNotMatch(await refreshedKeycap.textContent(), /✓/,
+        "post-write readback establishes firmware truth but still requires a new physical Teach");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       releaseApply();
@@ -7063,7 +7134,22 @@ describe("the canvas navigation controls", () => {
     let physicalGeneration = 1200;
     let physicalHitReady = false;
     let physicalDevice = "";
+    let physicalKey = "W";
     const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const response = await route.fetch();
+        if (response.status() !== 200) {
+          await route.fulfill({ response });
+          return;
+        }
+        const payload = await response.json();
+        for (const pad of payload.view?.pads ?? []) {
+          if (pad.slot === 1) continue;
+          pad.mapping_available = false;
+          pad.macro_available = false;
+        }
+        await route.fulfill({ response, json: payload });
+      });
       candidate.on("request", (request) => {
         const pathname = new URL(request.url()).pathname;
         if (request.method() !== "GET" &&
@@ -7096,7 +7182,7 @@ describe("the canvas navigation controls", () => {
           generation: physicalGeneration,
           remaining_ms: physicalHitReady ? null : 10_000,
           device: physicalHitReady ? physicalDevice : null,
-          key: physicalHitReady ? "W" : null,
+          key: physicalHitReady ? physicalKey : null,
           error: null,
         }),
       }));
@@ -7180,30 +7266,185 @@ describe("the canvas navigation controls", () => {
       assert.equal(await surface.locator('.n-surface-control.taught').count(), 0);
       assert.match(
         (await surface.locator('.n-surface-control').allTextContents()).join(" "),
-        /1SW1\s*→\s*J/i,
+        /P1\s+SW1\s*→\s*J\s*\?/i,
         "a physical action shows the board terminal and configured Windows key",
       );
+      const buttonOneSignal = surface.locator(
+        '.n-surface-signal-chain[data-terminal-id="1sw1"]',
+      );
+      assert.equal(await buttonOneSignal.count(), 1);
+      assert.equal(
+        (await buttonOneSignal.locator('.n-surface-terminal-chip').textContent()).trim(),
+        "P1 SW1",
+      );
+      const buttonOneKeycap = buttonOneSignal.locator('.n-surface-signal-keycap');
+      assert.equal(await buttonOneKeycap.getAttribute("data-expected-key"), "J");
+      assert.equal(await buttonOneKeycap.getAttribute("data-flow-key"), "J");
+      assert.equal(await buttonOneKeycap.getAttribute("data-flow-authority"), "configured");
+      assert.equal(await buttonOneKeycap.getAttribute("data-key"), null,
+        "the configured keycap is useful to the provisional graph without claiming a Windows observation");
       assert.equal(await surface.locator('.n-surface-channel-anchor').count(), 12);
       assert.equal(await surface.locator('.n-surface-channel-anchor[data-key]').count(), 0,
         "configured expectations do not impersonate a Teach-observed Windows signal");
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-kb .n-ipac-signal-roster-shell')
+          ?.getAttribute('data-panel-fallback') === 'true'
+      );
+      const generatedSignalOwnership = await page.evaluate(() => {
+        const surface = document.querySelector('.n-widget-surface');
+        const workarea = surface?.querySelector('.n-surface-workarea');
+        const shelf = document.querySelector('.n-widget-kb .n-ipac-signal-roster-shell');
+        return {
+          surfaceOpen: surface?.getAttribute('data-entry') ?? null,
+          workareaHidden: workarea?.hidden ?? null,
+          panelFallback: shelf?.getAttribute('data-panel-fallback') ?? null,
+          shelfOpen: shelf?.hasAttribute('open') ?? null,
+          flowKeys: Array.from(
+            surface?.querySelectorAll('.n-surface-signal-keycap[data-flow-key]') ?? [],
+            (node) => `${node.getAttribute('data-flow-key')}:${node.closest('.n-surface-control')?.getAttribute('data-player-slot') ?? '0'}`,
+          ),
+          pads: (JSON.parse(document.getElementById('__ksx-payload')?.textContent ?? '{}')
+            .view?.pads ?? []).map((pad) => ({
+              slot: pad.slot,
+              mapping: pad.mapping_available,
+              macros: pad.macro_available,
+            })),
+        };
+      });
+      assert.equal(
+        generatedSignalOwnership.panelFallback,
+        "true",
+        `the complete chart-derived panel takes over the visible signal layer: ${JSON.stringify(generatedSignalOwnership)}`,
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
+        null,
+        "the original terminal roster remains recoverable but folds once visible panel keycaps own every routed slot",
+      );
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface')?.getAttribute('data-entry') === 'encoder-setup' &&
+        document.querySelector('.n-widget-surface .n-surface-workarea')?.hidden === true
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
+        "",
+        "Hardware Setup reopens the fallback while its physical keycaps are contextually hidden",
+      );
+      await surface.locator('[data-nx="surface-encoder-close"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface')?.getAttribute('data-entry') === 'builder' &&
+        document.querySelector('.n-widget-surface .n-surface-workarea')?.hidden === false
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
+        null,
+        "returning to the visible panel restores its compact source ownership",
+      );
+      await page.selectOption('[data-nx="mapping-paths"]', "selected");
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"][data-flow-source-authority="configured"]',
+        ) && document.querySelector('#n-mapping-paths')?.getAttribute('data-flow-count') !== '0');
+      const provisionalOrigin = await page.evaluate(() => {
+        const edge = document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"]',
+        );
+        const port = edge?.getAttribute('data-flow-id')
+          ? document.querySelector(
+            `#n-mapping-ports [data-flow-id="${CSS.escape(edge.getAttribute('data-flow-id'))}"] .n-flow-port-source`,
+          )
+          : null;
+        const keycap = document.querySelector(
+          '.n-widget-surface .n-surface-signal-keycap[data-flow-key="W"]',
+        );
+        const face = keycap?.closest('.n-surface-control')?.querySelector('.n-surface-control-face');
+        const portRect = port?.getBoundingClientRect();
+        const keyRect = keycap?.getBoundingClientRect();
+        const faceRect = face?.getBoundingClientRect();
+        const point = portRect
+          ? { x: portRect.left + portRect.width / 2, y: portRect.top + portRect.height / 2 }
+          : null;
+        const onKeycap = Boolean(point && keyRect) &&
+          point.x >= keyRect.left - 1 && point.x <= keyRect.right + 1 &&
+          point.y >= keyRect.top - 1 && point.y <= keyRect.bottom + 1 &&
+          Math.min(
+            Math.abs(point.x - keyRect.left),
+            Math.abs(point.x - keyRect.right),
+            Math.abs(point.y - keyRect.top),
+            Math.abs(point.y - keyRect.bottom),
+          ) <= 1.5;
+        const onPhysicalFace = Boolean(point && faceRect) &&
+          point.x >= faceRect.left && point.x <= faceRect.right &&
+          point.y >= faceRect.top && point.y <= faceRect.bottom;
+        return {
+          onKeycap,
+          onPhysicalFace,
+          path: edge?.querySelector('.n-flow-core')?.getAttribute('d') ?? '',
+        };
+      });
+      assert.equal(provisionalOrigin.onKeycap, true,
+        "the provisional route begins on the visible Windows-key token");
+      assert.equal(provisionalOrigin.onPhysicalFace, false,
+        "the route does not skip the encoder/key boundary and start on the arcade control");
+      const firstStick = surface.locator('.n-surface-control.kind-joystick').first();
+      const upKeycap = firstStick.locator(
+        '.n-surface-signal-chain[data-terminal-id="1up"] .n-surface-signal-keycap',
+      );
+      const rightKeycap = firstStick.locator(
+        '.n-surface-signal-chain[data-terminal-id="1right"] .n-surface-signal-keycap',
+      );
+      await upKeycap.dispatchEvent("click");
+      assert.equal(await upKeycap.getAttribute("data-selected"), "true",
+        "a joystick keycap selects its own physical channel without becoming a drag gesture");
+      await rightKeycap.dispatchEvent("pointerover", { bubbles: true });
+      await page.waitForFunction(() => Boolean(document.querySelector(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="D"].is-related',
+      )));
+      assert.equal(await page.locator(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"].is-related',
+      ).count(), 0, "hover inspection follows the visible direction keycap, not the stick's selected channel");
+      await page.mouse.move(1, 1);
       physicalDevice = await page.evaluate(() => JSON.parse(
         document.getElementById("__ksx-payload")?.textContent ?? "{}",
       ).view?.cap_instance ?? "");
       assert.ok(physicalDevice, "Teach remains pinned to the exact selected Windows device");
-      const firstStick = surface.locator('.n-surface-control.kind-joystick').first();
-      await firstStick.click();
       await surface.locator('[data-nx="surface-teach"]').evaluate((button) => button.click());
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
       physicalHitReady = true;
       await page.waitForFunction(() => document.querySelector(
         '.n-widget-surface .n-surface-control.kind-joystick .n-surface-channel-anchor[data-key="W"]',
       ));
+      assert.equal(
+        await firstStick.locator('.n-surface-signal-keycap[data-key="W"]')
+          .getAttribute('data-flow-authority'),
+        'matched',
+      );
+      await page.waitForFunction(() => document.querySelector(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"][data-flow-source-authority="matched"]',
+      ));
+      const verifiedPath = await page.locator(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"] .n-flow-core',
+      ).getAttribute('d');
+      const pathStart = (value) => (value ?? '').match(/^M\s+(-?[\d.]+)\s+(-?[\d.]+)/)
+        ?.slice(1).map(Number) ?? [];
+      const provisionalStart = pathStart(provisionalOrigin.path);
+      const verifiedStart = pathStart(verifiedPath);
+      assert.equal(provisionalStart.length, 2);
+      assert.equal(verifiedStart.length, 2);
+      assert.ok(
+        Math.hypot(
+          provisionalStart[0] - verifiedStart[0],
+          provisionalStart[1] - verifiedStart[1],
+        ) < 1,
+        "Teach promotes the same keycap origin instead of making the cord jump to another source widget",
+      );
       assert.equal(await firstStick.evaluate((element) => element.classList.contains("taught")), false,
         "one observed direction never claims that the whole four-channel stick is taught");
       assert.equal(await firstStick.evaluate((element) => element.classList.contains("partially-taught")), true);
       assert.match(
         (await firstStick.locator(".n-surface-control-signal").textContent()).replace(/\s+/g, " "),
-        /Up:\s*W ✓.*Right:\s*D \?.*Down:\s*S \?.*Left:\s*A \?/i,
+        /U.*P1 UP.*W.*✓.*R.*P1 RIGHT.*D.*\?.*D.*P1 DOWN.*S.*\?.*L.*P1 LEFT.*A.*\?/i,
         "the taught direction and every still-unverified configured direction stay visible",
       );
       const stored = await page.evaluate(() => {
@@ -7219,7 +7460,184 @@ describe("the canvas navigation controls", () => {
       assert.equal(stored.filter((channel) => channel.input === "keyboard").length, 1);
       assert.equal(stored.filter((channel) => channel.verification === "matched").length, 1);
       assert.ok(stored.every((channel) => channel.expected));
+
+      physicalKey = "K";
+      const mismatchedButton = surface.locator(
+        '.n-surface-control:has(.n-surface-signal-chain[data-terminal-id="1sw1"])',
+      );
+      await mismatchedButton.click();
+      await surface.locator('[data-nx="surface-teach"]').evaluate((button) => button.click());
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      physicalHitReady = true;
+      await page.waitForFunction(() => document.querySelector(
+        '.n-surface-signal-chain[data-terminal-id="1sw1"][data-verification="mismatch"] ' +
+          '.n-surface-signal-keycap[data-expected-key="J"][data-key="K"][data-flow-key="K"]',
+      ));
+      assert.match(
+        (await mismatchedButton.locator('.n-surface-control-signal').textContent()).replace(/\s+/g, ' '),
+        /P1 SW1.*J.*≠.*K/i,
+        "a stale chart expectation and the observed Windows key remain visibly distinct",
+      );
+      await page.waitForFunction(() => document.querySelector(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="K"]' +
+          '[data-flow-source-authority="mismatch"]',
+      ));
+      const configuredDuplicate = surface.locator(
+        '.n-surface-signal-chain[data-terminal-id="1sw2"] ' +
+          '.n-surface-signal-keycap[data-flow-key="K"][data-flow-authority="configured"]',
+      );
+      await configuredDuplicate.click();
+      assert.equal(await configuredDuplicate.getAttribute("data-selected"), "true");
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() =>
+        requestAnimationFrame(resolve)
+      )));
+      await page.waitForFunction(() => Boolean(document.querySelector(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="1"][data-flow-key="K"]' +
+          '[data-flow-source-authority="mismatch"]',
+      )), undefined, { timeout: 3_000 });
+      const mismatchOrigin = await page.evaluate(() => {
+        const edge = document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="1"][data-flow-key="K"]',
+        );
+        const id = edge?.getAttribute('data-flow-id') ?? '';
+        const port = id
+          ? document.querySelector(
+            `#n-mapping-ports [data-flow-id="${CSS.escape(id)}"] .n-flow-port-source`,
+          )
+          : null;
+        const keycap = document.querySelector(
+          '.n-surface-signal-keycap[data-expected-key="J"][data-key="K"]',
+        );
+        const portRect = port?.getBoundingClientRect();
+        const keyRect = keycap?.getBoundingClientRect();
+        const point = portRect
+          ? { x: portRect.left + portRect.width / 2, y: portRect.top + portRect.height / 2 }
+          : null;
+        return Boolean(point && keyRect) &&
+          point.x >= keyRect.left - 1 && point.x <= keyRect.right + 1 &&
+          point.y >= keyRect.top - 1 && point.y <= keyRect.bottom + 1;
+      });
+      assert.equal(mismatchOrigin, true,
+        "a selected configured duplicate cannot steal the route from the key Windows observed");
+      await surface.locator('[data-nx="surface-close"]').click();
+      await surface.waitFor({ state: "detached" });
+      const fallback = page.locator('.n-widget-kb .n-ipac-signal-roster-shell');
+      assert.equal(await fallback.getAttribute("data-panel-fallback"), "false");
+      assert.equal(await fallback.getAttribute("open"), "",
+        "closing the physical panel immediately restores the visible signal shelf");
+      const fallbackOriginHandle = await page.waitForFunction(() => {
+        const edge = document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="1"][data-flow-key="W"]',
+        );
+        const id = edge?.getAttribute('data-flow-id') ?? '';
+        const port = id
+          ? document.querySelector(
+            `#n-mapping-ports [data-flow-id="${CSS.escape(id)}"] .n-flow-port-source`,
+          )
+          : null;
+        const source = document.querySelector(
+          '.n-widget-kb .n-ipac-signal[data-key="W"][data-player-slot="1"]',
+        );
+        const portRect = port?.getBoundingClientRect();
+        const sourceRect = source?.getBoundingClientRect();
+        if (!edge || edge.classList.contains('is-unresolved') || !portRect || !sourceRect ||
+            portRect.width < 1 || portRect.height < 1) return null;
+        const center = {
+          x: portRect.left + portRect.width / 2,
+          y: portRect.top + portRect.height / 2,
+        };
+        return center.x >= sourceRect.left - 1 && center.x <= sourceRect.right + 1 &&
+          center.y >= sourceRect.top - 1 && center.y <= sourceRect.bottom + 1
+          ? { source: source.textContent, authority: edge.getAttribute('data-flow-source-authority') }
+          : null;
+      });
+      const fallbackOrigin = await fallbackOriginHandle.jsonValue();
+      assert.match(fallbackOrigin.source.replace(/\s+/g, " "), /1UP.*Player 1.*Up.*W/i,
+        "post-close layout moves the source port onto the restored terminal/key shelf");
       assert.deepEqual(writes, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a partial player panel keeps the slot-safe I-PAC signal fallback visible", async () => {
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelStatusPayload({
+          driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+          chartState: "not-read",
+          chartLabel: "Chart not read — explicit action required",
+          configurationState: "available-unopened",
+          configurationDetail: "The exact configuration collection is ready for a guarded read.",
+        })),
+      }));
+      await candidate.route("**/api/panel/chart", async (route) => {
+        const payload = panelChartPayload();
+        payload.view.terminals[0] = {
+          ...payload.view.terminals[0],
+          terminal_id: "1sw1",
+          terminal_label: "Player 1 · Button 1",
+          player: 1,
+          normal: { code: 26, key: "W", label: "W", supported: true },
+        };
+        payload.view.terminals[1] = {
+          ...payload.view.terminals[1],
+          terminal_id: "2sw1",
+          terminal_label: "Player 2 · Button 1",
+          player: 2,
+          normal: { code: 89, key: "Numpad1", label: "Numpad1", supported: true },
+        };
+        payload.view.recommended_terminals = payload.view.terminals;
+        payload.view.key_options = [
+          { key: "W", label: "W", code: 26, safe_for_qualification: false },
+          { key: "Numpad1", label: "Numpad1", code: 89, safe_for_qualification: false },
+        ];
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      const surface = page.locator('.n-widget-surface');
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-hardware')
+          ?.getAttribute('data-state') === 'ready'
+      );
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-programming')
+          ?.getAttribute('data-qualification') === 'qualified'
+      );
+      await surface.locator('[data-nx="surface-encoder-build-panel"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-deck')
+          ?.getAttribute('data-template') === 'encoder-current'
+      );
+
+      assert.equal(await surface.locator(
+        '.n-surface-signal-keycap[data-flow-key="W"][data-player-slot="1"]',
+      ).count(), 1);
+      assert.equal(await surface.locator(
+        '.n-surface-signal-keycap[data-flow-key="W"][data-player-slot="2"]',
+      ).count(), 0);
+      const fallback = page.locator('.n-widget-kb .n-ipac-signal-roster-shell');
+      assert.equal(await fallback.getAttribute('data-panel-fallback'), 'false');
+      assert.equal(await fallback.getAttribute('open'), '',
+        "a P1 W token cannot hide the only slot-compatible fallback for P2 W");
+      await page.selectOption('[data-nx="mapping-paths"]', 'all');
+      await page.waitForFunction(() => {
+        const edge = document.querySelector(
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="2"][data-flow-key="W"]',
+        );
+        return Boolean(edge) && !edge.classList.contains('is-unresolved');
+      });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -7449,8 +7867,14 @@ describe("the canvas navigation controls", () => {
               `#n-mapping-ports [data-flow-id="${CSS.escape(flowId)}"] .n-flow-port-source`,
             )
           : null;
-        if (!control || !port) return null;
+        const keycap = control?.querySelector(
+          '.n-surface-signal-keycap[data-key="G"]',
+        );
+        const face = control?.querySelector('.n-surface-control-face');
+        if (!control || !keycap || !face || !port) return null;
         const controlRect = control.getBoundingClientRect();
+        const keycapRect = keycap.getBoundingClientRect();
+        const faceRect = face.getBoundingClientRect();
         const portRect = port.getBoundingClientRect();
         if (portRect.width < 1 || portRect.height < 1) return null;
         const center = {
@@ -7458,23 +7882,27 @@ describe("the canvas navigation controls", () => {
           y: portRect.top + portRect.height / 2,
         };
         return {
-          inside: center.x >= controlRect.left - 1 && center.x <= controlRect.right + 1 &&
-            center.y >= controlRect.top - 1 && center.y <= controlRect.bottom + 1,
+          insideKeycap: center.x >= keycapRect.left - 1 && center.x <= keycapRect.right + 1 &&
+            center.y >= keycapRect.top - 1 && center.y <= keycapRect.bottom + 1,
+          insideFace: center.x >= faceRect.left && center.x <= faceRect.right &&
+            center.y >= faceRect.top && center.y <= faceRect.bottom,
           rim: Math.min(
-            Math.abs(center.x - controlRect.left),
-            Math.abs(center.x - controlRect.right),
-            Math.abs(center.y - controlRect.top),
-            Math.abs(center.y - controlRect.bottom),
-          ),
-          ellipseRadius: Math.sqrt(
-            ((center.x - (controlRect.left + controlRect.width / 2)) / (controlRect.width / 2)) ** 2 +
-            ((center.y - (controlRect.top + controlRect.height / 2)) / (controlRect.height / 2)) ** 2,
+            Math.abs(center.x - keycapRect.left),
+            Math.abs(center.x - keycapRect.right),
+            Math.abs(center.y - keycapRect.top),
+            Math.abs(center.y - keycapRect.bottom),
           ),
           controlRect: {
             left: controlRect.left,
             top: controlRect.top,
             right: controlRect.right,
             bottom: controlRect.bottom,
+          },
+          keycapRect: {
+            left: keycapRect.left,
+            top: keycapRect.top,
+            right: keycapRect.right,
+            bottom: keycapRect.bottom,
           },
           portRect: {
             left: portRect.left,
@@ -7488,13 +7916,15 @@ describe("the canvas navigation controls", () => {
       });
       const cordOrigin = await cordOriginHandle.jsonValue();
       assert.equal(
-        cordOrigin.inside,
+        cordOrigin.insideKeycap,
         true,
-        `the source port stays inside the selected component (${JSON.stringify(cordOrigin)})`,
+        `the source port stays inside the selected control's Windows-key token (${JSON.stringify(cordOrigin)})`,
       );
+      assert.equal(cordOrigin.insideFace, false,
+        "the signal cord does not imply that a physical arcade button is itself a Windows key");
       assert.ok(
-        cordOrigin.ellipseRadius >= 0.9 && cordOrigin.ellipseRadius <= 1.05,
-        `the cord begins on the selected physical component rim (${cordOrigin.ellipseRadius})`,
+        cordOrigin.rim <= 1.5,
+        `the cord begins on the visible keycap rim (${cordOrigin.rim})`,
       );
 
       await page.click('.n-widget-surface [data-nx="surface-resolve-mirror"]');
@@ -7615,10 +8045,54 @@ describe("the canvas navigation controls", () => {
         },
         { id: controlId, x: before.x, y: before.y },
       );
-      const moved = await storedControl(controlId);
+      let moved = await storedControl(controlId);
       assert.ok(moved.x > before.x && moved.y > before.y, "dragging persists both panel coordinates");
       assert.equal(moved.playerSlot, null, "movement never derives semantic ownership from a quadrant");
       assert.equal(await control.getAttribute("data-player-slot"), null);
+
+      const movedBox = await control.boundingBox();
+      const deckBox = await page.locator('.n-widget-surface .n-surface-deck').boundingBox();
+      assert.ok(movedBox && deckBox);
+      await page.mouse.move(movedBox.x + movedBox.width / 2, movedBox.y + movedBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(deckBox.x + deckBox.width - 3, deckBox.y + deckBox.height - 3, {
+        steps: 6,
+      });
+      await page.mouse.up();
+      await page.waitForFunction(
+        ({ id, previousY }) => {
+          const store = JSON.parse(
+            localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+          );
+          const surface = Object.values(store?.devices ?? {})[0];
+          const edge = surface?.controls?.find((candidate) => candidate.id === id);
+          const view = document.querySelector(
+            `.n-widget-surface .n-surface-control[data-surface-control-id="${CSS.escape(id)}"]`,
+          );
+          return edge && edge.y > previousY && view?.getAttribute("data-signal-v") === "above";
+        },
+        { id: controlId, previousY: moved.y },
+      );
+      moved = await storedControl(controlId);
+      const inwardDock = await control.evaluate((element) => {
+        const deck = element.closest('.n-surface-deck');
+        const keycap = element.querySelector('.n-surface-signal-keycap');
+        const deckRect = deck?.getBoundingClientRect();
+        const faceRect = element.getBoundingClientRect();
+        const keyRect = keycap?.getBoundingClientRect();
+        return {
+          signalV: element.getAttribute('data-signal-v'),
+          faceAtBottom: Boolean(deckRect) && Math.abs((deckRect?.bottom ?? 0) - faceRect.bottom) <= 2,
+          keycapInside: Boolean(deckRect && keyRect) &&
+            keyRect.left >= deckRect.left - 1 && keyRect.right <= deckRect.right + 1 &&
+            keyRect.top >= deckRect.top - 1 && keyRect.bottom <= deckRect.bottom + 1,
+        };
+      });
+      assert.equal(inwardDock.signalV, "above");
+      assert.equal(inwardDock.faceAtBottom, true,
+        "edge docking preserves the full physical placement range");
+      assert.equal(inwardDock.keycapInside, true,
+        "the Windows-key token docks inward instead of becoming a hidden route endpoint");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForSelector(

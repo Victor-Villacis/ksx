@@ -2355,13 +2355,28 @@ function syncPanelProgrammingJourneyAndTest(): void {
     "[data-panel-journey-encoder-label]",
   );
   if (encoderJourneyLabel) encoderJourneyLabel.textContent = encoderName;
-  const states: Record<string, "active" | "complete" | "upcoming"> = {
-    encoder: chart ? "complete" : "active",
-    keys: !chart ? "upcoming" : assigned > 0 ? "complete" : "active",
-    mapping: assigned === 0 ? "upcoming" : mapped > 0 ? "complete" : "active",
-    controller: mapped > 0 ? "complete" : "upcoming",
-    game: "upcoming",
+  const journeyOrder = ["physical", "encoder", "keys", "mapping", "controller", "game"] as const;
+  const actualCompletion: Record<(typeof journeyOrder)[number], boolean> = {
+    // A firmware assignment proves an encoder output, not that a cabinet
+    // button exists or is wired. Physical is complete only when the user has
+    // drawn the panel or an exact-device output test observed a chart terminal.
+    physical: controlSurfaceState.controls.length > 0 ||
+      Boolean(panelProgrammingLastTest?.terminalIds.length),
+    encoder: Boolean(chart),
+    keys: assigned > 0,
+    mapping: mapped > 0,
+    controller: mapped > 0,
+    // A saved route proves the virtual destination, not that a particular game
+    // is currently receiving it. Game remains the honest open end of the chain.
+    game: false,
   };
+  const currentStep = journeyOrder.find((step) => !actualCompletion[step]) ?? "game";
+  const states: Record<string, "active" | "complete" | "upcoming"> = Object.fromEntries(
+    journeyOrder.map((step) => [
+      step,
+      actualCompletion[step] ? "complete" : step === currentStep ? "active" : "upcoming",
+    ]),
+  );
   for (const step of Array.from(item.querySelectorAll<HTMLElement>(
     "[data-panel-journey-step]",
   ))) {
@@ -2382,6 +2397,9 @@ function syncPanelProgrammingJourneyAndTest(): void {
   const test = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-test"]');
   const buildPanel = item.querySelector<HTMLButtonElement>(
     '[data-nx="surface-encoder-build-panel"]',
+  );
+  const designPanel = item.querySelector<HTMLButtonElement>(
+    '[data-nx="surface-encoder-design-panel"]',
   );
   const route = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-route"]');
   const routeCopy = item.querySelector<HTMLElement>("[data-panel-route-copy]");
@@ -2424,6 +2442,13 @@ function syncPanelProgrammingJourneyAndTest(): void {
       ? `Replace the current physical panel only after confirming a chart-derived ${encoderName} layout`
       : `Draw physical joysticks and buttons from the terminal-to-key chart currently stored on ${encoderName}`;
   }
+  if (designPanel) {
+    designPanel.hidden = assigned > 0;
+    designPanel.disabled = !chart || panelProgrammingTransactionActive();
+    designPanel.title = chart
+      ? `Design the physical cabinet first, then link its controls to ${encoderName} terminals and choose the Windows keys the board will emit`
+      : `Read ${encoderName} before designing a terminal-linked physical panel`;
+  }
   if (routeCopy) {
     routeCopy.textContent = panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0
       ? `${panelProgrammingLastTest.key} came from this device but is absent from the chart KSX read. Read the board again before routing.`
@@ -2431,7 +2456,7 @@ function syncPanelProgrammingJourneyAndTest(): void {
       ? `${mapped} ${encoderName} ${mapped === 1 ? "signal is" : "signals are"} already routed in KSX. Continue to inspect or extend those routes.`
       : assigned > 0
       ? "Hardware output is only the source. Build a physical panel view for this cabinet, or continue directly to KSX routing."
-      : `Routing starts after the ${encoderName} has at least one Windows key output.`;
+      : `Start with the physical cabinet or assign the ${encoderName} outputs first. Both paths meet at terminal → Windows key, before KSX routing.`;
   }
   if (!grid) return;
   grid.replaceChildren();
@@ -2607,6 +2632,62 @@ function syncIpacSignalSource(): void {
   const groups = [...byKey.values()].sort((left, right) =>
     left.key.localeCompare(right.key, undefined, { numeric: true, sensitivity: "base" })
   );
+  const routedSlotsByKey = new Map<string, Set<number>>();
+  const noteRoutedKey = (value: string, slot: number): void => {
+    const key = value.trim().toLocaleUpperCase();
+    if (!key) return;
+    let slots = routedSlotsByKey.get(key);
+    if (!slots) {
+      slots = new Set<number>();
+      routedSlotsByKey.set(key, slots);
+    }
+    slots.add(slot);
+  };
+  for (const pad of lastBindView?.pads ?? []) {
+    if (pad.mapping_available !== false) {
+      for (const control of pad.controls ?? []) {
+        for (const key of control.keys) noteRoutedKey(key, pad.slot);
+      }
+      for (const joinedKeys of Object.values(pad.fn_keys ?? {})) {
+        for (const key of joinedKeys.split(/\s*·\s*/u)) noteRoutedKey(key, pad.slot);
+      }
+    }
+    if (pad.macro_available !== false) {
+      for (const macro of pad.macros) {
+        for (const key of macro.triggers) noteRoutedKey(key, pad.slot);
+      }
+    }
+  }
+  const surfaceFlowTokens = new Set(
+    controlSurfaceState.controls.flatMap((control) =>
+      control.channels
+        .filter((channel) => !chart || channel.encoder?.boardFingerprint === chart.board_fingerprint)
+        .flatMap((channel) => {
+          const key = controlSurfaceSignalTruth(channel).flowKey.trim().toLocaleUpperCase();
+          return key ? [`${key}\u0000${control.playerSlot ?? 0}`] : [];
+        })
+    ),
+  );
+  const surfaceCovers = (key: string, slot: number): boolean =>
+    surfaceFlowTokens.has(`${key}\u00000`) || surfaceFlowTokens.has(`${key}\u0000${slot}`);
+  const surfaceWorkarea = controlSurfaceItem?.querySelector<HTMLElement>(
+    ".n-surface-workarea",
+  );
+  const panelOwnsSignalLayer = Boolean(
+    chart && controlSurfaceState.open && controlSurfaceItem?.isConnected &&
+      surfaceWorkarea && !surfaceWorkarea.hidden &&
+      controlSurfaceState.started && groups.length > 0,
+  ) && groups.every((signal) => {
+    const key = signal.key.trim().toLocaleUpperCase();
+    const requiredSlots = new Set([
+      ...signal.players,
+      ...(routedSlotsByKey.get(key) ?? []),
+    ]);
+    if (requiredSlots.size === 0) {
+      return [...surfaceFlowTokens].some((token) => token.startsWith(`${key}\u0000`));
+    }
+    return [...requiredSlots].every((slot) => surfaceCovers(key, slot));
+  });
   const fingerprint = JSON.stringify({
     selector: panelProgrammingTarget(),
     image: chart?.image_sha256 ?? "unread",
@@ -2616,6 +2697,8 @@ function syncIpacSignalSource(): void {
       [...signal.terminalLabels],
       [...signal.players],
     ]),
+    panelOwnsSignalLayer,
+    surfaceFlowKeys: [...surfaceFlowTokens].sort(),
   });
   if (source?.isConnected && fingerprint === ipacSignalSourceFingerprint) return;
   if (!source) {
@@ -2639,7 +2722,7 @@ function syncIpacSignalSource(): void {
   head.append(heading, badge);
   const copy = document.createElement("p");
   copy.textContent = chart
-    ? `The ${encoderName} emits these Windows key signals. KSX paths leave from each terminal/key signal below; shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
+    ? `The ${encoderName} emits these Windows key signals. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
     : `KSX routes currently reference these Windows key names. Hardware Setup has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read Hardware Setup to establish terminal → Windows key ownership.`;
   source.append(head, copy);
   if (groups.length === 0) {
@@ -2656,6 +2739,21 @@ function syncIpacSignalSource(): void {
     mappingFlowLayer?.scheduleLayout();
     return;
   }
+  const rosterShell = document.createElement("details");
+  rosterShell.className = "n-ipac-signal-roster-shell";
+  rosterShell.dataset.panelFallback = String(panelOwnsSignalLayer);
+  rosterShell.open = !panelOwnsSignalLayer;
+  const rosterSummary = document.createElement("summary");
+  const rosterTitle = document.createElement("strong");
+  rosterTitle.textContent = panelOwnsSignalLayer
+    ? "Fallback signal shelf"
+    : "Terminal signal shelf";
+  const rosterNote = document.createElement("span");
+  rosterNote.textContent = panelOwnsSignalLayer
+    ? `${groups.length} ${groups.length === 1 ? "key is" : "keys are"} attached to the physical panel · open to inspect`
+    : `${groups.length} ${groups.length === 1 ? "Windows output" : "Windows outputs"}`;
+  rosterSummary.append(rosterTitle, rosterNote);
+  rosterShell.append(rosterSummary);
   const roster = document.createElement("div");
   roster.className = "n-ipac-signal-roster";
   const sections = chart ? [1, 2, 3, 4, 0] : [0];
@@ -2702,7 +2800,8 @@ function syncIpacSignalSource(): void {
     group.append(groupHead, rows);
     roster.append(group);
   }
-  source.append(roster);
+  rosterShell.append(roster);
+  source.append(rosterShell);
   mappingFlowLayer?.scheduleLayout();
 }
 
@@ -2967,6 +3066,114 @@ async function reopenPanelQualificationAfterRecovery(): Promise<void> {
 function samePanelKey(left: string | null | undefined, right: string | null | undefined): boolean {
   return (left ?? "").trim().toLocaleUpperCase() ===
     (right ?? "").trim().toLocaleUpperCase();
+}
+
+type ControlSurfaceFlowAuthority =
+  | "unassigned"
+  | "expected"
+  | "configured"
+  | "planned"
+  | "observed"
+  | "matched"
+  | "mismatch";
+
+type ControlSurfaceSignalTruth = {
+  authority: ControlSurfaceFlowAuthority;
+  flowAuthority: ControlSurfaceFlowAuthority;
+  configuredKnown: boolean;
+  configuredKey: string;
+  plannedKey: string;
+  observedKey: string;
+  flowKey: string;
+};
+
+/** Keep the three signal lifetimes visually honest:
+ *
+ *  - the complete chart read owns what firmware emits now;
+ *  - the editor owns an unwritten plan;
+ *  - Teach owns what Windows actually observed from this physical channel.
+ *
+ * A successful program intentionally invalidates Teach evidence while retaining
+ * the historical observation. Never infer a fresh match merely because those
+ * two retained strings happen to be equal. */
+function controlSurfaceSignalTruth(
+  channel: ControlSurfaceChannel,
+): ControlSurfaceSignalTruth {
+  const encoder = channel.encoder;
+  const observedKey = channel.input.kind === "keyboard" ? channel.input.key.trim() : "";
+  if (!encoder) {
+    return {
+      authority: observedKey ? "observed" : "unassigned",
+      flowAuthority: observedKey ? "observed" : "unassigned",
+      configuredKnown: false,
+      configuredKey: "",
+      plannedKey: "",
+      observedKey,
+      flowKey: observedKey,
+    };
+  }
+
+  const plannedKey = encoder.expectedKey.trim();
+  const chart = panelProgrammingState.inspection.chart;
+  const configuredTerminal = chart?.board_fingerprint === encoder.boardFingerprint
+    ? chart.terminals.find((terminal) => terminal.terminal_id === encoder.terminalId)
+    : undefined;
+  const configuredKnown = Boolean(configuredTerminal);
+  const configuredKey = configuredTerminal?.normal.supported
+    ? configuredTerminal.normal.key?.trim() ?? ""
+    : "";
+
+  // Editing the future chart changes expectedKey before any USB write. While
+  // that plan is pending, routes must continue to leave from the current chart
+  // output and the keycap must say that the new value is only planned.
+  if (configuredKnown && !samePanelKey(plannedKey, configuredKey)) {
+    return {
+      authority: "planned",
+      // The visible route still represents the firmware key from the last
+      // complete read; the plan is separately labelled and is not live yet.
+      flowAuthority: configuredKey ? "configured" : "planned",
+      configuredKnown,
+      configuredKey,
+      plannedKey,
+      observedKey,
+      flowKey: configuredKey,
+    };
+  }
+
+  if (observedKey &&
+      (encoder.verification === "matched" || encoder.verification === "mismatch")) {
+    return {
+      authority: encoder.verification,
+      flowAuthority: encoder.verification,
+      configuredKnown,
+      configuredKey,
+      plannedKey,
+      observedKey,
+      flowKey: observedKey,
+    };
+  }
+
+  if (configuredKnown) {
+    return {
+      authority: configuredKey ? "configured" : "unassigned",
+      flowAuthority: configuredKey ? "configured" : "unassigned",
+      configuredKnown,
+      configuredKey,
+      plannedKey,
+      observedKey,
+      flowKey: configuredKey,
+    };
+  }
+
+  return {
+    authority: plannedKey ? "expected" : "unassigned",
+    flowAuthority: plannedKey ? "expected" : "unassigned",
+    configuredKnown,
+    configuredKey,
+    plannedKey,
+    observedKey,
+    flowKey: plannedKey,
+  };
 }
 
 /** Reconcile every linked physical channel from the complete chart, including
@@ -4484,6 +4691,28 @@ function buildPhysicalPanelFromEncoderChart(): void {
   chooseControlSurfaceTemplate("encoder-current");
 }
 
+/** Start with the cabinet the user is physically building, even when a new
+ * encoder has no key chart yet. The chart remains loaded and untouched; after
+ * choosing a panel template, Hardware Setup can link each control to a real
+ * terminal and program the Windows-key layer. */
+function designPhysicalPanelBeforeEncoderKeys(): void {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart || panelProgrammingTransactionActive()) return;
+  if (learnRow?.purpose === "panel-test") void cancelLearn();
+  closePanelProgrammingSetup(false, "surface");
+  controlSurfaceChoosingTemplate = true;
+  controlSurfacePendingTemplate = null;
+  syncControlSurfaceChrome();
+  keyboardWorkbenchAnnounce(
+    `Choose the physical cabinet first. Then link each control to a ${selectedEncoderShortName()} terminal and choose the Windows key that terminal will emit. The board has not been changed.`,
+  );
+  window.requestAnimationFrame(() => {
+    controlSurfaceItem
+      ?.querySelector<HTMLButtonElement>("[data-surface-template]")
+      ?.focus({ preventScroll: true });
+  });
+}
+
 function enterPanelProgrammingWorkspace(): void {
   if (panelProgrammingWorkspacePreviousRightRail === null) {
     panelProgrammingWorkspacePreviousRightRail = ui.rightRail;
@@ -4850,8 +5079,8 @@ function assignSelectedPanelKey(key: string): void {
     )
   ).length;
   const message = linkedViews > 1
-    ? `${terminal.terminal_label} now emits ${key} for all ${linkedViews} linked controls.`
-    : `${terminal.terminal_label} now emits ${key} in this draft.`;
+    ? `Draft: ${terminal.terminal_label} will emit ${key} for all ${linkedViews} linked controls after a verified program.`
+    : `Draft: ${terminal.terminal_label} will emit ${key} after a verified program.`;
   panelProgrammingDropPlan();
   panelProgrammingSetMessage(message);
 }
@@ -7530,6 +7759,7 @@ function syncControlSurfaceInspector(): void {
 
     const verification = document.createElement("div");
     verification.className = "n-surface-encoder-verification";
+    const signalTruth = controlSurfaceSignalTruth(channel);
     const verificationTone = encoderMatchesChart
       ? channel.encoder?.verification ?? "unverified"
       : "unverified";
@@ -7539,11 +7769,15 @@ function syncControlSurfaceInspector(): void {
       ? "Link a terminal before preparing a custom chart."
       : qualificationTerminalIneligible
       ? "This terminal stays visible as part of the complete chart, but it cannot be the first writer check. Choose an ordinary SW action button whose Shift state is explicitly disabled."
+      : signalTruth.authority === "planned"
+      ? `Board currently emits ${signalTruth.configuredKey || "Disabled"}. Draft plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
       : verificationTone === "matched"
       ? `Teach verified ${expected || "the programmed signal"} on this physical channel.`
       : verificationTone === "mismatch"
       ? `Teach observed a different key than ${expected || "the programmed chart"}. Check the wiring or restore the chart.`
-      : `Expected ${expected || "key will be shown after review"} · verify it in Teach after programming.`;
+      : signalTruth.observedKey
+      ? `Board is configured for ${signalTruth.configuredKey || expected || "Disabled"}. Last Teach observed ${signalTruth.observedKey}, but that evidence no longer verifies this chart; Teach again.`
+      : `Configured ${signalTruth.configuredKey || expected || "Disabled"} · verify it in Teach after programming.`;
     encoderAssignment.append(
       encoderAssignmentTitle,
       encoderCopy,
@@ -7694,19 +7928,18 @@ function renderControlSurfaceControls(): void {
     existing.delete(control.id);
     const relationship = controlSurfaceRelationship(control);
     const selected = control.id === controlSurfaceState.selectedControlId;
-    const expectedChannels = control.channels.filter(
-      (channel) => Boolean(channel.encoder?.expectedKey),
-    );
-    const observedExpectedChannels = expectedChannels.filter(
-      (channel) => channel.input.kind === "keyboard",
-    );
-    const expected = expectedChannels.length > 0;
+    const encoderChannels = control.channels.filter((channel) => Boolean(channel.encoder));
+    const verifiedEncoderChannels = encoderChannels.filter((channel) => {
+      const authority = controlSurfaceSignalTruth(channel).authority;
+      return authority === "matched" || authority === "mismatch";
+    });
+    const expected = encoderChannels.length > 0;
     const taught = expected
-      ? observedExpectedChannels.length === expectedChannels.length
+      ? verifiedEncoderChannels.length === encoderChannels.length
       : control.channels.some((channel) => channel.input.kind === "keyboard");
-    const partiallyTaught = expected && observedExpectedChannels.length > 0 && !taught;
+    const partiallyTaught = expected && verifiedEncoderChannels.length > 0 && !taught;
     const encoderMismatch = control.channels.some(
-      (channel) => channel.encoder?.verification === "mismatch",
+      (channel) => controlSurfaceSignalTruth(channel).authority === "mismatch",
     );
     const teaching = learnRow?.purpose === "surface" &&
       learnRow.surfaceIdentity === controlSurfaceIdentity &&
@@ -7724,14 +7957,40 @@ function renderControlSurfaceControls(): void {
     button.style.top = `${(control.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
     button.style.width = `${(control.width / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
     button.style.height = `${(control.height / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
+    const signalBlockHeight = 4 + control.channels.length * 17;
+    button.dataset.signalV = control.y + control.height + signalBlockHeight >
+        CONTROL_SURFACE_BOUNDS.height
+      ? "above"
+      : "below";
+    button.dataset.signalH = control.x < 96
+      ? "left"
+      : control.x + control.width > CONTROL_SURFACE_BOUNDS.width - 96
+      ? "right"
+      : "center";
     const inputCopy = control.channels
-      .map((channel) => channel.input.kind === "keyboard" && channel.encoder?.expectedKey
-        ? `${channel.label}: ${channel.encoder.terminalId.toLocaleUpperCase()} is configured for ${channel.encoder.expectedKey}; Windows observed ${channel.input.key}`
-        : channel.input.kind === "keyboard"
-        ? `${channel.label}: Windows observed ${channel.input.key}`
-        : channel.encoder?.expectedKey
-        ? `${channel.label}: ${channel.encoder.terminalId.toLocaleUpperCase()} is configured for ${channel.encoder.expectedKey}, not Teach-verified`
-        : `${channel.label}: unassigned`)
+      .map((channel) => {
+        const truth = controlSurfaceSignalTruth(channel);
+        const terminal = channel.encoder?.terminalId.toLocaleUpperCase() ?? "";
+        if (truth.authority === "planned") {
+          return `${channel.label}: ${terminal} currently emits ${truth.configuredKey || "Disabled"}; draft plans ${truth.plannedKey || "Disabled"}, not written`;
+        }
+        if (truth.authority === "matched") {
+          return `${channel.label}: ${terminal} is configured for ${truth.configuredKey || truth.plannedKey}; Windows Teach verified ${truth.observedKey}`;
+        }
+        if (truth.authority === "mismatch") {
+          return `${channel.label}: ${terminal} is configured for ${truth.configuredKey || truth.plannedKey}; Windows Teach observed ${truth.observedKey}`;
+        }
+        if (truth.authority === "configured") {
+          return `${channel.label}: ${terminal} is configured for ${truth.configuredKey}, not Teach-verified`;
+        }
+        if (truth.authority === "expected") {
+          return `${channel.label}: ${terminal} is expected to emit ${truth.plannedKey}; read the board to confirm`;
+        }
+        if (truth.authority === "observed") {
+          return `${channel.label}: Windows observed ${truth.observedKey}`;
+        }
+        return `${channel.label}: unassigned`;
+      })
       .join(" · ");
     const kindCopy = control.kind === "button30"
       ? "30 millimeter arcade button"
@@ -7756,24 +8015,124 @@ function renderControlSurfaceControls(): void {
     const relation = button.querySelector<HTMLElement>(".n-surface-control-relation");
     if (label) label.textContent = control.label;
     if (signal) {
-      const assigned = control.channels.filter((channel) => channel.input.kind === "keyboard");
-      const configured = control.channels.filter((channel) => Boolean(channel.encoder?.expectedKey));
-      signal.textContent = configured.length > 0
-        ? configured.map((channel) => {
-            const expectedKey = channel.encoder?.expectedKey ?? "";
-            const observedKey = channel.input.kind === "keyboard" ? channel.input.key : "";
-            const keyCopy = observedKey
-              ? observedKey.toLocaleUpperCase() === expectedKey.toLocaleUpperCase()
-                ? `${observedKey} ✓`
-                : `${expectedKey} ≠ ${observedKey}`
-              : `${expectedKey} ?`;
-            return control.kind === "joystick"
-              ? `${channel.label}: ${keyCopy}`
-              : `${channel.encoder?.terminalId.toLocaleUpperCase()} → ${keyCopy}`;
-          }).join(" / ")
-        : assigned.length > 0
-        ? assigned.map((channel) => channel.input.key).join(" / ")
-        : "Teach";
+      signal.replaceChildren();
+      signal.dataset.channelCount = String(control.channels.length);
+      for (const channel of control.channels) {
+        const encoder = channel.encoder;
+        const truth = controlSurfaceSignalTruth(channel);
+        const expectedKey = truth.plannedKey;
+        const observedKey = truth.observedKey;
+        const verification = truth.authority;
+        const flowKey = truth.flowKey;
+        const chain = document.createElement("span");
+        chain.className = `n-surface-signal-chain channel-${channel.id}`;
+        chain.dataset.surfaceChannelId = channel.id;
+        chain.dataset.verification = verification;
+        if (encoder?.terminalId) chain.dataset.terminalId = encoder.terminalId;
+
+        const stem = document.createElement("span");
+        stem.className = "n-surface-signal-stem";
+        stem.setAttribute("aria-hidden", "true");
+        if (control.kind === "joystick") {
+          const direction = document.createElement("span");
+          direction.className = "n-surface-signal-direction";
+          direction.textContent = channel.label.slice(0, 1).toLocaleUpperCase();
+          direction.title = channel.label;
+          chain.append(direction);
+        }
+        if (encoder?.terminalId || !observedKey) {
+          const terminal = document.createElement("span");
+          terminal.className = "n-surface-terminal-chip";
+          terminal.textContent = encoder?.terminalId
+            ? encoder.terminalId.toLocaleUpperCase().replace(/^([1-4])/, "P$1 ")
+            : "UNLINKED";
+          terminal.title = encoder
+            ? `${selectedEncoderShortName()} ${encoder.terminalId.toLocaleUpperCase()} · ${encoder.terminalLabel}`
+            : "No encoder terminal is linked to this physical channel";
+          chain.append(stem, terminal);
+          const arrow = document.createElement("span");
+          arrow.className = "n-surface-signal-arrow";
+          arrow.textContent = "→";
+          arrow.setAttribute("aria-hidden", "true");
+          chain.append(arrow);
+        } else {
+          chain.append(stem);
+        }
+
+        const keycap = document.createElement("kbd");
+        keycap.className = `n-surface-signal-keycap n-surface-channel-anchor channel-${channel.id}`;
+        keycap.dataset.surfaceChannelId = channel.id;
+        keycap.dataset.surfaceControlId = control.id;
+        keycap.dataset.controlKind = control.kind;
+        keycap.dataset.selected = String(
+          selected && channel.id === controlSurfaceState.selectedChannelId,
+        );
+        keycap.dataset.flowAuthority = truth.flowAuthority;
+        if (control.playerSlot !== null) keycap.dataset.playerSlot = String(control.playerSlot);
+        if (expectedKey) keycap.dataset.expectedKey = expectedKey;
+        if (truth.configuredKnown) keycap.dataset.configuredKey = truth.configuredKey;
+        if (verification === "planned") keycap.dataset.plannedKey = expectedKey;
+        if (flowKey) keycap.dataset.flowKey = flowKey;
+        if (observedKey) keycap.dataset.lastObservedKey = observedKey;
+        if (observedKey &&
+            (verification === "matched" || verification === "mismatch" ||
+              verification === "observed")) {
+          keycap.dataset.key = observedKey;
+        }
+        if (verification === "mismatch") {
+          const expected = document.createElement("span");
+          expected.className = "n-surface-key-expected";
+          expected.textContent = truth.configuredKey || expectedKey;
+          const divider = document.createElement("span");
+          divider.className = "n-surface-key-divider";
+          divider.textContent = "≠";
+          const observed = document.createElement("strong");
+          observed.textContent = observedKey;
+          keycap.append(expected, divider, observed);
+        } else if (verification === "planned") {
+          const current = document.createElement("span");
+          current.className = "n-surface-key-current";
+          current.textContent = truth.configuredKey || "OFF";
+          const divider = document.createElement("span");
+          divider.className = "n-surface-key-divider";
+          divider.textContent = "→";
+          const planned = document.createElement("strong");
+          planned.textContent = expectedKey || "OFF";
+          const state = document.createElement("small");
+          state.textContent = "PLAN";
+          keycap.append(current, divider, planned, state);
+        } else {
+          const key = document.createElement("strong");
+          key.textContent = flowKey || "?";
+          const state = document.createElement("small");
+          state.textContent = verification === "matched"
+            ? "✓"
+            : verification === "configured"
+            ? "?"
+            : verification === "expected"
+            ? "PLAN?"
+            : verification === "observed"
+            ? "LIVE"
+            : "TEACH";
+          keycap.append(key, state);
+        }
+        keycap.title = verification === "planned" && encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} currently emits ${truth.configuredKey || "Disabled"}; the draft proposes ${expectedKey || "Disabled"}. Nothing changes until Program board verifies the write.`
+          : verification === "matched" && encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach verified the same key`
+          : verification === "mismatch" && encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach observed ${observedKey}`
+          : verification === "configured" && encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey}; ${observedKey ? `last Teach saw ${observedKey}, but that evidence is stale` : "press the wired control to verify it in Windows"}`
+          : verification === "expected" && encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is expected to emit ${expectedKey}; read the complete hardware chart to confirm it`
+          : verification === "observed"
+          ? `Windows Teach observed ${observedKey}`
+          : "Link an encoder terminal or Teach this physical control";
+        keycap.setAttribute("aria-hidden", "true");
+        chain.append(keycap);
+        signal.append(chain);
+      }
     }
     if (relation) {
       relation.textContent = relationship === "mirror"
@@ -7785,24 +8144,6 @@ function renderControlSurfaceControls(): void {
         : "";
     }
 
-    for (const old of Array.from(button.querySelectorAll(".n-surface-channel-anchor"))) old.remove();
-    for (const channel of control.channels) {
-      const anchor = document.createElement("span");
-      anchor.className = `n-surface-channel-anchor channel-${channel.id}`;
-      anchor.dataset.surfaceChannelId = channel.id;
-      anchor.dataset.surfaceControlId = control.id;
-      anchor.dataset.controlKind = control.kind;
-      anchor.dataset.selected = String(
-        selected && channel.id === controlSurfaceState.selectedChannelId,
-      );
-      if (control.playerSlot !== null) anchor.dataset.playerSlot = String(control.playerSlot);
-      if (channel.input.kind === "keyboard") {
-        anchor.dataset.key = channel.input.key;
-        anchor.title = `${channel.label} · ${channel.input.key}`;
-      }
-      anchor.setAttribute("aria-hidden", "true");
-      button.append(anchor);
-    }
     deck.append(button);
   }
   for (const button of existing.values()) button.remove();
@@ -7813,6 +8154,10 @@ function renderControlSurfaceControls(): void {
   item.dataset.keyboardTheme = controlSurfaceState.theme;
   liveKeyNodes = null;
   syncControlSurfaceInspector();
+  // Once a chart-linked physical panel owns every signal, fold the separate
+  // encoder roster into its recoverable fallback shelf. Re-run when Teach or a
+  // panel edit changes ownership so unresolved keys never disappear.
+  syncIpacSignalSource();
   mappingFlowLayer?.scheduleLayout();
 }
 
@@ -8079,13 +8424,14 @@ function createControlSurfaceItem(): HTMLElement {
   programming.hidden = true;
   const signalJourney = document.createElement("ol");
   signalJourney.className = "n-panel-signal-journey";
-  signalJourney.setAttribute("aria-label", "Encoder to game signal journey");
+  signalJourney.setAttribute("aria-label", "Physical control to game signal journey");
   ([
-    ["encoder", "1", "I-PAC", "Physical terminal"],
-    ["keys", "2", "Windows keys", "Hardware output"],
-    ["mapping", "3", "KSX", "Macro or transform"],
-    ["controller", "4", "Controller", "Virtual target"],
-    ["game", "5", "Game", "Receives when running"],
+    ["physical", "1", "Panel control", "Button, stick, or key"],
+    ["encoder", "2", "I-PAC", "Wired terminal"],
+    ["keys", "3", "Windows key", "Hardware output"],
+    ["mapping", "4", "KSX", "Macro or transform"],
+    ["controller", "5", "Controller", "Virtual target"],
+    ["game", "6", "Game", "Receives when running"],
   ] as const).forEach(([step, number, label, detail]) => {
     const item = document.createElement("li");
     item.dataset.panelJourneyStep = step;
@@ -8315,12 +8661,19 @@ function createControlSurfaceItem(): HTMLElement {
     "Draw physical joysticks and buttons from the terminal-to-key chart stored on this encoder",
   );
   buildPanelButton.classList.add("primary");
+  const designPanelButton = makeKeyboardWorkbenchButton(
+    "Design physical panel first",
+    "surface-encoder-design-panel",
+    "Choose the cabinet shape and physical controls before assigning I-PAC terminal outputs",
+  );
+  designPanelButton.classList.add("primary");
+  designPanelButton.hidden = true;
   const routeButton = makeKeyboardWorkbenchButton(
     "Continue to KSX routing",
     "surface-encoder-route",
     "Leave hardware setup and open the KSX mapping inspector",
   );
-  routeActions.append(routeCopy, buildPanelButton, routeButton);
+  routeActions.append(routeCopy, designPanelButton, buildPanelButton, routeButton);
   outputTest.append(outputTestHead, outputTestCopy, outputSignalGrid, routeActions);
   const programmingActions = document.createElement("div");
   programmingActions.className = "n-surface-programming-actions";
@@ -8744,6 +9097,10 @@ function closeControlSurfaceBuilder(preservePanelChart = true): void {
   controlSurfacePendingTemplate = null;
   controlSurfaceEncoderSetupEntry = false;
   applyControlSurfaceState({ ...controlSurfaceState, open: false }, true);
+  // Once the physical panel leaves the canvas its keycap endpoints no longer
+  // exist. Re-open the keyboard widget's fallback shelf immediately so no
+  // saved route is stranded on an invisible source.
+  syncIpacSignalSource();
   keyboardWorkbenchAnnounce(
     controlSurfaceSaveFailed
       ? "Control Surface Builder closed. Browser storage is unavailable, so this draft lasts only for this session."
@@ -9079,12 +9436,21 @@ function nudgeControlSurfaceControl(controlId: string, dx: number, dy: number): 
 
 function controlSurfacePointerDown(event: PointerEvent): void {
   if (event.button !== 0 || !event.isPrimary) return;
-  const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(".n-surface-control");
+  const target = event.target as HTMLElement | null;
+  const button = target?.closest<HTMLButtonElement>(".n-surface-control");
   const deck = button?.closest<HTMLElement>(".n-surface-deck");
   const controlId = button?.dataset.surfaceControlId ?? "";
   const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
   const rect = deck?.getBoundingClientRect();
   if (!button || !deck || !control || !rect || rect.width <= 0 || rect.height <= 0) return;
+  const channelId = target?.closest<HTMLElement>(".n-surface-channel-anchor")
+    ?.dataset.surfaceChannelId ?? "";
+  // The terminal/keycap is a channel picker, not a drag handle. Leave it in
+  // the DOM until the delegated click reads its exact joystick channel.
+  if (channelId) {
+    event.stopPropagation();
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   selectControlSurfaceChannel(controlId);
@@ -9129,6 +9495,16 @@ function controlSurfacePointerMove(event: PointerEvent): void {
   if (moved && button) {
     button.style.left = `${(moved.x / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
     button.style.top = `${(moved.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
+    const signalBlockHeight = 4 + moved.channels.length * 17;
+    button.dataset.signalV = moved.y + moved.height + signalBlockHeight >
+        CONTROL_SURFACE_BOUNDS.height
+      ? "above"
+      : "below";
+    button.dataset.signalH = moved.x < 96
+      ? "left"
+      : moved.x + moved.width > CONTROL_SURFACE_BOUNDS.width - 96
+      ? "right"
+      : "center";
   }
   mappingFlowLayer?.scheduleLayout();
 }
@@ -12420,6 +12796,8 @@ export function nocturneWire(root: HTMLElement): void {
       togglePanelProgrammingOutputTest();
     } else if (hit === "surface-encoder-build-panel") {
       buildPhysicalPanelFromEncoderChart();
+    } else if (hit === "surface-encoder-design-panel") {
+      designPhysicalPanelBeforeEncoderKeys();
     } else if (hit === "surface-encoder-route") {
       continueFromPanelHardwareToRouting();
     } else if (hit === "surface-encoder-mode") {

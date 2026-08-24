@@ -105,7 +105,7 @@ pretending those operations are panel-chart programming.
 A recognized family without an admitted profile is identify-only. An unknown
 board stays visible through generic HID metadata and live input learning. No
 probe may write. Studio should render an encoder panel and the causal chain
-`terminal → onboard action → Windows HID event → KSX route → virtual control`,
+`physical control → encoder terminal → Windows HID event → KSX route → virtual control → game`,
 not invent a QWERTY keyboard as the hardware.
 
 ## Implemented now
@@ -152,12 +152,29 @@ persistence remain separate acceptance checks.
   are both present. A missing mode, missing/ambiguous collection, or stale
   topology stays visibly blocked until refresh.
 - Hardware Setup keeps the causal journey visible:
-  `terminal → Windows key → KSX transform/macro → virtual controller → game`.
+  `physical control → encoder terminal → Windows key → KSX transform/macro → virtual controller → game`.
+- A new all-Unassigned board offers **Design physical panel first**. It opens
+  blank/arcade/leverless/four-player templates without changing the chart or
+  sending a report; terminal links and emitted keys can then be assigned from
+  that physical model before the guarded hardware review. On an unqualified
+  writer, the physical design may proceed but full key authoring stays locked
+  until the reversible one-terminal qualification write and exact restore have
+  both verified.
 - **Build physical panel** generates joysticks and buttons from the chart read
-  from the board. Each physical component shows its terminal and configured
-  Windows key, but remains unverified until Teach observes that real signal.
+  from the board. Every channel renders `control — terminal chip → keycap`, and
+  KSX mapping cords start on the visible keycap rather than the arcade-button
+  body. A configured key is a dim provisional source. An unwritten edit shows
+  `current → planned`, while the cord stays on the key from the last complete
+  chart read; the planned key cannot become live before verified program and
+  readback. Teach promotes a match, while a mismatch keeps both values visible
+  and routes from the observed key. A verified write invalidates earlier Teach
+  authority until the physical control is taught again.
   A four-channel stick stays partially taught until all expected directions
-  have been observed.
+  have been observed. The original terminal roster remains available in a
+  collapsible fallback shelf. It folds only while the Builder is open and its
+  chart-linked keycaps cover every relevant key-and-player route; partial
+  coverage or closing the Builder keeps/reopens the shelf so routes cannot be
+  stranded on invisible endpoints.
 - Recognition-only families still receive the independent panel Builder,
   live Teach, and Route workflows. They do not receive chart actions.
 - Studio's generated panel and capability boundaries are pinned in

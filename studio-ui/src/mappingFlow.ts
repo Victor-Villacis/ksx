@@ -539,14 +539,11 @@ function elementPerimeterPoint(
   ) {
     return center;
   }
-  // Arcade presentation turns the rectangular workbench hit target into a
-  // round button. Intersect its ellipse rather than its bounding box so a
-  // diagonal cord never appears to float outside the visible cap.
-  const roundSurface = element.localName === "circle" || element.localName === "ellipse" ||
-    element.matches(
-    '.n-surface-channel-anchor[data-control-kind="button30"], ' +
-    '.n-surface-channel-anchor[data-control-kind="button24"]',
-  );
+  // Arcade presentation turns a loose workbench key into a round button. A
+  // control-surface route now starts at its visible Windows-key token, which is
+  // intentionally rectangular even when the physical control beside it is
+  // round.
+  const roundSurface = element.localName === "circle" || element.localName === "ellipse";
   const distance = roundSurface || (
     element.matches(".n-deck-key") &&
       element.closest<HTMLElement>('.n-keylab-deck[data-render-mode="arcade"]')
@@ -1666,6 +1663,13 @@ export class MappingFlowLayer {
       entry.sourceElement = sourceElement;
       entry.targetElement = targetElement;
       const visible = sourceElement !== null && targetElement !== null;
+      const sourceAuthority = entry.route.source.kind === "key"
+        ? sourceElement?.getAttribute("data-flow-authority")?.trim() ?? ""
+        : "";
+      for (const group of [entry.lineGroup, entry.portGroup]) {
+        if (sourceAuthority) group.dataset.flowSourceAuthority = sourceAuthority;
+        else delete group.dataset.flowSourceAuthority;
+      }
       entry.lineGroup.classList.toggle("is-unresolved", !visible);
       entry.portGroup.classList.toggle("is-unresolved", !visible);
       if (!visible) continue;
@@ -2150,11 +2154,21 @@ export class MappingFlowLayer {
   #resolveKey(keyName: string, slotNumber: number): Element | null {
     const key = CSS.escape(keyName);
     const slot = String(slotNumber);
+    const observedAuthority = ':is([data-flow-authority="matched"], [data-flow-authority="mismatch"], [data-flow-authority="observed"])';
+    const provisionalAuthority = ':is([data-flow-authority="configured"], [data-flow-authority="expected"], [data-flow-authority="planned"])';
     const selectors = [
-      `.n-surface-channel-anchor[data-key="${key}"][data-selected="true"][data-player-slot="${slot}"]`,
-      `.n-surface-channel-anchor[data-key="${key}"][data-selected="true"]:not([data-player-slot])`,
-      `.n-surface-channel-anchor[data-key="${key}"][data-player-slot="${slot}"]`,
-      `.n-surface-channel-anchor[data-key="${key}"]:not([data-player-slot])`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
+      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
       `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
       `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
       `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
@@ -2228,11 +2242,17 @@ export class MappingFlowLayer {
         slot: Number(macro.dataset.flowSlot ?? this.#selectedSlot),
       };
     }
+    const pointedSurfaceAnchor = target.closest<HTMLElement>(
+      ".n-surface-channel-anchor[data-flow-key]",
+    );
     const surface = target.closest<HTMLElement>(".n-surface-control");
-    const surfaceAnchor = surface?.querySelector<HTMLElement>(
-      '.n-surface-channel-anchor[data-key][data-selected="true"]',
-    ) ?? surface?.querySelector<HTMLElement>(".n-surface-channel-anchor[data-key]");
-    const surfaceKey = surfaceAnchor?.dataset.key?.trim();
+    const surfaceAnchor = pointedSurfaceAnchor ?? surface?.querySelector<HTMLElement>(
+      '.n-surface-channel-anchor[data-flow-key][data-selected="true"]',
+    ) ?? surface?.querySelector<HTMLElement>(".n-surface-channel-anchor[data-flow-key]") ??
+      surface?.querySelector<HTMLElement>(
+        '.n-surface-channel-anchor[data-key][data-selected="true"]',
+      ) ?? surface?.querySelector<HTMLElement>(".n-surface-channel-anchor[data-key]");
+    const surfaceKey = surfaceAnchor?.dataset.flowKey?.trim() ?? surfaceAnchor?.dataset.key?.trim();
     if (surfaceKey) return { key: surfaceKey };
     const key = target.closest<HTMLElement>("[data-key]")?.dataset.key?.trim();
     if (key) return { key };

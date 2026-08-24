@@ -1,5 +1,10 @@
 Set-StrictMode -Version Latest
 
+# A detached Windows PowerShell child can inherit PowerShell 7 module paths.
+# Load this host's module explicitly so Get-FileHash cannot resolve through an
+# incompatible sibling installation.
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1") -ErrorAction Stop
+
 function Get-KsxSourceGraphFiles {
     [CmdletBinding()]
     param(

@@ -6131,6 +6131,7 @@ a.wsrow-title:hover {
 /* ── Title bar ── */
 
 .n-tbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -6159,6 +6160,54 @@ a.wsrow-title:hover {
 .n-ver {
   font-size: 11px;
   color: var(--n-text-3);
+}
+
+.n-environment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid rgba(114, 214, 174, 0.35);
+  border-radius: 999px;
+  background: rgba(42, 110, 83, 0.16);
+  color: #a9efd2;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.105em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.n-environment.fixture {
+  border-color: rgba(255, 190, 90, 0.48);
+  background: rgba(139, 85, 25, 0.2);
+  color: #ffd493;
+}
+
+.n-environment.unknown {
+  border-color: rgba(231, 154, 166, 0.56);
+  background: rgba(122, 42, 58, 0.24);
+  color: #ffc0ca;
+}
+
+.n-environment-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #66dbad;
+  box-shadow: 0 0 8px rgba(102, 219, 173, 0.58);
+}
+
+.n-environment.fixture .n-environment-dot {
+  background: #ffb84a;
+  box-shadow: 0 0 8px rgba(255, 184, 74, 0.62);
+}
+
+.n-environment.unknown .n-environment-dot {
+  background: #ef8799;
+  box-shadow: 0 0 8px rgba(239, 135, 153, 0.62);
 }
 
 .n-chip {

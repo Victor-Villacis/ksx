@@ -297,10 +297,10 @@ try {
     // chart-derived panels, visible control → terminal → key handoffs, the
     // fallback signal shelf, semantic route index, and shared simultaneous-
     // input diagnostic live in Nocturne's one island. Exact-generation recovery
-    // for lost Start/Poll/Cancel responses adds the final bounded slice; keep a
-    // narrow 282,000-byte ceiling so that safety cost remains deliberate rather
-    // than an open-ended bump.
-    budgetThreshold: 282_000,
+    // for lost Start/Poll/Cancel responses and fail-closed environment/reseed
+    // provenance add the final bounded slice; keep a narrow 282,500-byte ceiling
+    // so that safety cost remains deliberate rather than an open-ended bump.
+    budgetThreshold: 282_500,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

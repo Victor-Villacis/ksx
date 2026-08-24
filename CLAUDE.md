@@ -23,6 +23,17 @@ performs it on**. There is no "egui first or web first" question.
 
 ## Where things are
 
+### Studio ports are evidence boundaries
+
+Before opening, restarting, or judging a Nocturne page, read
+[`docs/STUDIO-ENVIRONMENTS.md`](docs/STUDIO-ENVIRONMENTS.md). Port 4460 is the
+real-machine QA process; 4476, 4520, and 4521 are distinct synthetic fixtures.
+The default Playwright ports and ranges recorded in that document are test-owned
+(notably 4478, 4479, 4488–4490, 4496, 4500, and 4510–4512). Use the checked-in
+seed/status/teardown scripts under `tools/studio-env` rather than starting an
+anonymous fixture by hand. The persistent title-bar banner is the provenance
+authority: fixture evidence never proves what Victor's physical I-PAC contains.
+
 | you want | it is here |
 |---|---|
 | domain model, engine, keys, personas, `MAX_SLOTS`, `DeviceSelector` | `crates/ksx-core` |

@@ -37,6 +37,7 @@ const targetDir = process.env.CARGO_TARGET_DIR
 let server;
 let browser;
 let fixtureExe;
+let fixtureGeneration = "";
 
 async function waitForServer(base = BASE, deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
@@ -73,6 +74,13 @@ before(async () => {
   );
   server = spawn(fixtureExe, [String(PORT)], { cwd: repoRoot, stdio: "ignore" });
   await waitForServer(BASE);
+  const provenance = await fetch(`${BASE}/api/nocturne`).then((response) => response.json());
+  fixtureGeneration = provenance.environment?.generation ?? "";
+  assert.match(
+    fixtureGeneration,
+    /^pid-\d+-[0-9a-f]+$/,
+    "a directly launched fixture exposes a process-start generation, not a reusable PID alone",
+  );
   browser = await chromium.launch();
 });
 
@@ -94,6 +102,10 @@ async function openCanvas(options = {}, prepare = async () => {}) {
     colorScheme: "dark",
     ...options,
   });
+  await page.addInitScript(({ expectedOrigin, generation }) => {
+    if (location.origin !== expectedOrigin) return;
+    localStorage.setItem("ksx-studio-fixture-generation-v1", generation);
+  }, { expectedOrigin: BASE, generation: fixtureGeneration });
   await prepare(page);
   const noise = [];
   page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
@@ -117,6 +129,10 @@ async function openCanvas(options = {}, prepare = async () => {}) {
  * the shared storage context that owns its surviving peer. */
 async function openCanvasInContext(context, prepare = async () => {}) {
   const page = await context.newPage();
+  await page.addInitScript(({ expectedOrigin, generation }) => {
+    if (location.origin !== expectedOrigin) return;
+    localStorage.setItem("ksx-studio-fixture-generation-v1", generation);
+  }, { expectedOrigin: BASE, generation: fixtureGeneration });
   await prepare(page);
   const noise = [];
   page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
@@ -440,6 +456,124 @@ async function restoreFixturePanelSource() {
 }
 
 describe("the canvas navigation controls", () => {
+  test("a new fixture generation clears browser-only drafts before the wire loads", async () => {
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const page = await context.newPage();
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.addInitScript((expectedOrigin) => {
+      if (location.origin !== expectedOrigin) return;
+      localStorage.removeItem("ksx-studio-fixture-generation-v1");
+      localStorage.setItem("ksx-reseed-probe", "stale browser draft");
+    }, BASE);
+    try {
+      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+        null,
+        { timeout: 20_000 },
+      );
+      assert.equal(await page.evaluate(() => localStorage.getItem("ksx-reseed-probe")), null);
+      assert.equal(
+        await page.evaluate(() => localStorage.getItem("ksx-studio-fixture-generation-v1")),
+        fixtureGeneration,
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("a storage-refusing live tab still reloads out of stale fixture memory", async () => {
+    const page = await openCanvas();
+    let replaceGeneration = true;
+    const blockStorage = () => {
+      const refuse = () => {
+        throw new DOMException("fixture storage intentionally blocked", "SecurityError");
+      };
+      Storage.prototype.getItem = refuse;
+      Storage.prototype.setItem = refuse;
+      Storage.prototype.clear = refuse;
+    };
+    await page.addInitScript(blockStorage);
+    await page.evaluate(blockStorage);
+    await page.evaluate(() => {
+      window.fixtureMemoryBeforeReseed = "stale";
+    });
+    await page.route("**/api/nocturne*", async (route) => {
+      if (!replaceGeneration) {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      if (response.status() !== 200) {
+        await route.fulfill({ response });
+        return;
+      }
+      replaceGeneration = false;
+      const payload = await response.json();
+      payload.environment.generation = `${payload.environment.generation}-replacement`;
+      payload.view.environment_generation = payload.environment.generation;
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.locator("a.n-slot-sel").first().click();
+      await page.waitForFunction(
+        () => window.fixtureMemoryBeforeReseed === undefined,
+        null,
+        { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        () => document.querySelector(".n-tbar .n-environment")?.textContent?.includes("FIXTURE"),
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForLoadState("networkidle");
+      assert.equal(
+        await page.evaluate(() => window.fixtureMemoryBeforeReseed),
+        undefined,
+        "the stale in-memory document was replaced even though storage refused the generation write",
+      );
+      assert.equal(replaceGeneration, false, "the live document observed the replacement generation");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.unrouteAll({ behavior: "wait" }).catch(() => {});
+      await page.close();
+    }
+  });
+
+  test("the seeded fixture is unmistakably labeled as synthetic", async () => {
+    const page = await openCanvas();
+    try {
+      const environment = page.locator(".n-tbar .n-environment");
+      await environment.waitFor({ state: "visible" });
+      assert.equal((await environment.textContent()).trim(), "FIXTURE · SEEDED DEMO");
+      assert.equal(
+        await environment.getAttribute("data-runtime-environment"),
+        "fixture-seeded-demo",
+      );
+      assert.equal(await environment.evaluate((element) => element.classList.contains("fixture")), true);
+      assert.equal(await environment.evaluate((element) => element.classList.contains("live")), false);
+      assert.match(
+        await environment.getAttribute("title"),
+        /Synthetic seeded demo state.*no physical devices are read or written/i,
+        "fixture provenance names both its synthetic state and its hardware boundary",
+      );
+      assert.equal(await environment.getAttribute("aria-describedby"), "n-environment-detail");
+      assert.match(
+        await page.locator("#n-environment-detail").textContent(),
+        /Synthetic seeded demo state.*no physical devices are read or written/i,
+        "the hardware boundary is exposed without relying on a mouse tooltip",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("mapping actions keep their controller truth after the legacy pane is absent", async () => {
     const page = await openCanvas();
     let bindCommitted = false;
@@ -3283,7 +3417,7 @@ describe("the canvas navigation controls", () => {
       assert.match(
         (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent())
           .replace(/\s+/g, " "),
-        /has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them/i,
+        /has not read the I-PAC(?: 4X?)? hardware-output chart yet.*has not proven which physical terminals emit them/i,
         "the source distinguishes a macro's routed key name from a proven hardware-terminal output",
       );
       await macroSignal.click();
@@ -6709,7 +6843,7 @@ describe("the canvas navigation controls", () => {
       assert.match(cardCopy, /Inspection only\. KSX did not program or change this encoder\./);
       assert.equal(await card.locator("form").count(), 0);
       assert.equal(await card.locator("button").count(), 2, "the hardware card offers passive Refresh and explicit Encoder setup");
-      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Configure device…");
+      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Open hardware outputs…");
       assert.equal(await card.locator('[data-nx*="program"], [data-nx*="write"]').count(), 0);
       const hardwareDetails = card.locator("details.n-surface-hardware-details");
       assert.equal(await hardwareDetails.getAttribute("open"), null);
@@ -6880,7 +7014,7 @@ describe("the canvas navigation controls", () => {
         "the fixture's exact I-PAC is already the daemon-staged hardware authority",
       );
       assert.equal(
-        await encoderLane.getByRole("button", { name: "Open Ultimarc I-PAC 4" }).count(),
+        await encoderLane.getByRole("button", { name: "Open outputs Ultimarc I-PAC 4" }).count(),
         1,
         "each encoder action names the exact board it will configure",
       );
@@ -6899,10 +7033,10 @@ describe("the canvas navigation controls", () => {
       await encoderLane.locator("button.n-dev").click();
       await page.waitForFunction(() =>
         document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent
-          ?.includes("Configure device has not read the I-PAC"));
+          ?.includes("KSX has not read the I-PAC"));
       assert.match(
         (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent()).replace(/\s+/g, " "),
-        /KSX routes currently reference these keyboard host signals.*Configure device has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them.*terminal → host-signal ownership/i,
+        /KSX routes currently reference these keyboard host signals.*KSX has not read the I-PAC(?: 4X?)? hardware-output chart yet.*has not proven which physical terminals emit them.*terminal → host-signal ownership/i,
         "before chart read, mapped names are references rather than proven I-PAC emissions",
       );
 
@@ -6958,7 +7092,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /I-PAC 4X.*Configure device.*Panel control.*I-PAC 4X.*Host signal.*KSX transform.*Virtual controller.*Game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
+        /I-PAC 4X.*Hardware outputs.*Panel control.*I-PAC 4X.*Host signal.*KSX transform.*Virtual controller.*Game.*No assigned hardware outputs.*Verify this I-PAC writer.*Test wiring/i,
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
@@ -7123,7 +7257,7 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("I-PAC setup names a partial hardware chart as work to finish", async () => {
+  test("I-PAC hardware outputs treat unused terminals as an intentional partial chart", async () => {
     const page = await openCanvas({}, async (candidate) => {
       await candidate.route("**/api/nocturne*", async (route) => {
         const response = await route.fetch();
@@ -7181,16 +7315,16 @@ describe("the canvas navigation controls", () => {
           ?.getAttribute("data-qualification") === "qualified");
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /Partially configured I-PAC.*Finish the terminal-to-key chart.*1 of 2 terminals currently emit a supported Windows key/i,
+        /Hardware outputs assigned.*Review the terminal-to-key chart and test the controls you wired.*1 of 2 terminals currently have a supported Windows key assignment.*Unused terminals may remain unassigned by design/i,
       );
       assert.match(
         (await encoderLane.locator(".n-dev-meta").textContent()).replace(/\s+/g, " "),
-        /Partially configured.*1\/2 outputs/i,
+        /1\/2 outputs assigned/i,
       );
       assert.equal(
-        await encoderLane.getByRole("button", { name: /Finish setup.*Ultimarc I-PAC 4/i }).count(),
+        await encoderLane.getByRole("button", { name: /Return to outputs.*Ultimarc I-PAC 4/i }).count(),
         1,
-        "the rail resumes with an outcome-oriented action instead of calling every board first-run",
+        "the rail returns to the already-open hardware-output workspace without judging unused terminals",
       );
       assert.equal(
         await setup.locator('[data-panel-journey-step="physical"]').getAttribute("data-state"),
@@ -7439,7 +7573,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator(".n-surface-terminal-player").count(), 4);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /Configured I-PAC.*Use, test, or reconfigure the outputs.*All 56 terminals currently have supported Windows key outputs/i,
+        /All hardware outputs assigned.*Use, test, or reconfigure the outputs.*All 56 terminals currently have supported Windows key outputs/i,
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
@@ -9426,7 +9560,7 @@ describe("the canvas navigation controls", () => {
           assert.match(
             (await page.locator('.n-widget-kb .n-ipac-signal-source > p').first().textContent())
               .replace(/\s+/g, ' '),
-            /Configure device has not read/i,
+            /KSX has not read.*hardware-output chart/i,
             "settled status repaints ordinary shelf copy even while the Builder remains closed",
           );
 
@@ -10344,7 +10478,7 @@ describe("the canvas navigation controls", () => {
         document.querySelector(".n-widget-surface .n-surface-hardware")
           ?.getAttribute("data-state") === "ready");
       assert.equal(await setup.isEnabled(), true);
-      assert.equal((await setup.textContent()).trim(), "Configure device…");
+      assert.equal((await setup.textContent()).trim(), "Open hardware outputs…");
       assert.equal(chartCalls, 0, "status recovery remains passive until the user opens setup");
       assert.deepEqual(page.ksxNoise, []);
     } finally {

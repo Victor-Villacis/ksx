@@ -21,6 +21,16 @@ use serde::{Deserialize, Serialize};
 pub trait StatusSource: Send + Sync {
     fn snapshot(&self) -> StatusSnapshot;
 
+    /// Identifies whether a surface is reading the live machine or a
+    /// deliberately synthetic fixture.  This is presentation metadata, not a
+    /// security boundary: its job is to keep screenshots and manual QA from
+    /// mistaking seeded data for physical hardware.
+    fn environment(&self) -> RuntimeEnvironmentView {
+        // Fail closed. A new fixture/provider that forgets to classify itself
+        // must never inherit authority to call its answers real hardware.
+        RuntimeEnvironmentView::default()
+    }
+
     /// The mapper page's data: slots with their presets and bindings. The
     /// default is an honest "no data" so existing sources keep compiling;
     /// ksx-backend overrides it with the config-store reader.
@@ -41,6 +51,75 @@ pub trait StatusSource: Send + Sync {
     /// looks like "this preset has no macros".
     fn macros(&self, _preset: &str) -> MacroSnapshot {
         MacroSnapshot::unavailable("this status source supplies no macro data")
+    }
+}
+
+/// Human-facing provenance for the state a surface is rendering.
+///
+/// [`Default`] is deliberately unknown. Production providers must return
+/// [`RuntimeEnvironmentView::live`], while test/demo providers must return a
+/// fixture-specific id and explanation. Forgetting either classification is
+/// therefore conspicuous instead of silently granting live-hardware authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEnvironmentView {
+    /// Stable machine token (`live-machine`, `fixture-seeded`, ...).
+    pub id: String,
+    /// Compact title-bar label.
+    pub label: String,
+    /// Tooltip/help copy that states what this process may read or mutate.
+    pub detail: String,
+    /// True only when every machine/device answer is synthetic.
+    pub fixture: bool,
+    /// Stable for one fixture process and empty for live providers. A fixture
+    /// origin uses this to discard browser-only drafts when its seed process
+    /// is deliberately restarted.
+    #[serde(default)]
+    pub generation: String,
+}
+
+impl RuntimeEnvironmentView {
+    #[must_use]
+    pub fn live() -> Self {
+        Self {
+            id: "live-machine".to_owned(),
+            label: "LIVE MACHINE · REAL HARDWARE".to_owned(),
+            detail: "Live providers read this computer's devices and saved KSX state; confirmed hardware actions can affect the selected physical device.".to_owned(),
+            fixture: false,
+            generation: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn fixture(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            detail: detail.into(),
+            fixture: true,
+            generation: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_generation(mut self, generation: impl Into<String>) -> Self {
+        self.generation = generation.into();
+        self
+    }
+}
+
+impl Default for RuntimeEnvironmentView {
+    fn default() -> Self {
+        Self {
+            id: "unknown-environment".to_owned(),
+            label: "UNKNOWN ENVIRONMENT · NOT QA EVIDENCE".to_owned(),
+            detail: "This provider did not declare whether its data is live or synthetic. Do not use this page as evidence about physical hardware.".to_owned(),
+            fixture: false,
+            generation: String::new(),
+        }
     }
 }
 
@@ -444,6 +523,35 @@ mod tests {
         let json = serde_json::to_string(&snap).unwrap();
         let back: StatusSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, back);
+    }
+
+    #[test]
+    fn runtime_environment_defaults_unknown_and_requires_explicit_authority() {
+        let unknown = RuntimeEnvironmentView::default();
+        assert_eq!(unknown.id, "unknown-environment");
+        assert!(!unknown.fixture);
+        assert!(unknown.generation.is_empty());
+
+        let live = RuntimeEnvironmentView::live();
+        assert_eq!(live.id, "live-machine");
+        assert!(!live.fixture);
+        assert!(live.generation.is_empty());
+
+        let fixture = RuntimeEnvironmentView::fixture(
+            "fixture-first-run",
+            "FIXTURE · FIRST RUN",
+            "Synthetic machine; no physical device is read.",
+        )
+        .with_generation("pid-4242");
+        assert!(fixture.fixture);
+        assert_eq!(fixture.generation, "pid-4242");
+        assert_eq!(
+            serde_json::from_str::<RuntimeEnvironmentView>(
+                &serde_json::to_string(&fixture).unwrap(),
+            )
+            .unwrap(),
+            fixture,
+        );
     }
 
     #[test]

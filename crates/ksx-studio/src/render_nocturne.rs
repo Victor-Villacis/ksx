@@ -92,6 +92,10 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nCapSelector": payload.view.cap_selector,
         "nCapInstance": payload.view.cap_instance,
         "nVersion": payload.view.version,
+        "nEnvironmentId": payload.view.environment_id,
+        "nEnvironmentLabel": payload.view.environment_label,
+        "nEnvironmentDetail": payload.view.environment_detail,
+        "nEnvironmentCls": payload.view.environment_cls,
         "nChipText": payload.view.chip_text,
         "nSaveText": payload.view.save_text,
         "nEscapeLine": payload.view.escape_line,
@@ -758,6 +762,7 @@ mod tests {
             ..Default::default()
         };
         NocturnePayload {
+            environment: ksx_api::RuntimeEnvironmentView::default(),
             staged,
             scan,
             macro_selected: None,
@@ -865,7 +870,11 @@ mod tests {
             "list:nLayoutOpts:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 107] = [
+        const SERVED_SLOTS: [&str; 111] = [
+            "nEnvironmentId",
+            "nEnvironmentLabel",
+            "nEnvironmentDetail",
+            "nEnvironmentCls",
             "nKeysNote",
             "nAvailMainHead",
             "nAvailNavHead",

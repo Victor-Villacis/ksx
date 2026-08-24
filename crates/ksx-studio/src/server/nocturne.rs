@@ -297,6 +297,11 @@ pub(super) async fn collect_nocturne(
     macro_selected: Option<String>,
 ) -> NocturnePayload {
     let state = Arc::clone(state);
+    // Provenance is the one fact a failed collection must retain. Capturing it
+    // before the blocking task means a fixture-side panic keeps its exact
+    // fixture id instead of degrading to unknown provenance in the title bar.
+    let environment = state.source.environment();
+    let fallback_environment = environment.clone();
     tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let session = state.control.session();
@@ -338,6 +343,7 @@ pub(super) async fn collect_nocturne(
             })
         };
         NocturnePayload {
+            environment,
             staged,
             scan,
             session,
@@ -359,6 +365,7 @@ pub(super) async fn collect_nocturne(
     .await
     .unwrap_or_else(|_| {
         NocturnePayload {
+            environment: fallback_environment,
             staged: ksx_api::StagedSetupView::unreachable("the nocturne collection panicked"),
             scan: ksx_api::DeviceScanView::default(),
             session: SessionView::unreachable("the nocturne collection panicked"),

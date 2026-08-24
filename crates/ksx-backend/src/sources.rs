@@ -51,6 +51,10 @@ pub fn configured_profile() -> Option<String> {
 pub struct CollectorSource;
 
 impl StatusSource for CollectorSource {
+    fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
+        ksx_api::RuntimeEnvironmentView::live()
+    }
+
     fn snapshot(&self) -> StatusSnapshot {
         collect_snapshot()
     }
@@ -2372,6 +2376,14 @@ mod tests {
     }
     use super::*;
     use ksx_api::MacroWrite;
+
+    #[test]
+    fn the_production_collector_explicitly_claims_live_machine_provenance() {
+        let environment = StatusSource::environment(&CollectorSource);
+        assert_eq!(environment.id, "live-machine");
+        assert!(!environment.fixture);
+        assert!(environment.generation.is_empty());
+    }
 
     /// A pointer, not a test: the request SHAPES this file used to pin
     /// (`map` with `"key"` / `"keys"` / `"clear"`, `map-macro` with the whole

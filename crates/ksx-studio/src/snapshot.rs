@@ -3862,6 +3862,11 @@ fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceCh
 /// no keyboards".
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NocturnePayload {
+    /// Provenance of every machine/device answer in this payload. Fixtures
+    /// must name themselves so manual QA can never confuse synthetic state
+    /// with an attached cabinet.
+    #[serde(default)]
+    pub environment: ksx_api::RuntimeEnvironmentView,
     pub staged: ksx_api::StagedSetupView,
     pub scan: ksx_api::DeviceScanView,
     pub session: crate::control::SessionView,
@@ -4338,6 +4343,15 @@ pub struct NocturneDerived {
     /// The title bar: real version, the draft's origin + dirty answer, the
     /// backend-owned escape hatch, and the session verbs' visibility.
     pub version: String,
+    /// Persistent title-bar provenance. `environment_id` is the stable token;
+    /// the label is presentation copy. `environment_cls` distinguishes live,
+    /// fixture, and fail-closed unknown providers.
+    pub environment_id: String,
+    pub environment_label: String,
+    pub environment_detail: String,
+    pub environment_cls: String,
+    pub environment_fixture: bool,
+    pub environment_generation: String,
     pub chip_text: String,
     pub save_text: String,
     pub escape_line: String,
@@ -4857,6 +4871,19 @@ impl NocturneDerived {
         };
 
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let environment_id = p.environment.id.clone();
+        let environment_label = p.environment.label.clone();
+        let environment_detail = p.environment.detail.clone();
+        let environment_cls = if p.environment.fixture {
+            "n-environment fixture"
+        } else if p.environment.id == "live-machine" {
+            "n-environment live"
+        } else {
+            "n-environment unknown"
+        }
+        .to_owned();
+        let environment_fixture = p.environment.fixture;
+        let environment_generation = p.environment.generation.clone();
         let chip_text = if !staged.reachable {
             "Draft unavailable".to_owned()
         } else if staged.origin == "config" {
@@ -5999,6 +6026,12 @@ impl NocturneDerived {
 
         Self {
             version,
+            environment_id,
+            environment_label,
+            environment_detail,
+            environment_cls,
+            environment_fixture,
+            environment_generation,
             chip_text,
             save_text,
             escape_line,
@@ -6131,6 +6164,31 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nocturne_environment_provenance_survives_derivation() {
+        let payload = NocturnePayload {
+            environment: ksx_api::RuntimeEnvironmentView::fixture(
+                "fixture-first-run",
+                "FIXTURE · FIRST RUN",
+                "Synthetic first-run state; no physical device is read.",
+            )
+            .with_generation("seed-42"),
+            ..NocturnePayload::default()
+        }
+        .derived();
+
+        assert_eq!(payload.environment.id, "fixture-first-run");
+        assert_eq!(payload.view.environment_id, "fixture-first-run");
+        assert_eq!(payload.view.environment_label, "FIXTURE · FIRST RUN");
+        assert_eq!(payload.view.environment_cls, "n-environment fixture");
+        assert!(payload.view.environment_fixture);
+        assert_eq!(payload.view.environment_generation, "seed-42");
+        assert!(payload
+            .view
+            .environment_detail
+            .contains("no physical device"));
+    }
 
     /// **The saved answer is marked, and an unconfigured machine claims
     /// nothing.**

@@ -125,7 +125,7 @@ pub use stage::{
 };
 pub use status::{
     MacroSnapshot, MacroStepView, MacroView, MapperSlot, MapperSnapshot, PadRow, ProfileRow,
-    StatusSnapshot, StatusSource,
+    RuntimeEnvironmentView, StatusSnapshot, StatusSource,
 };
 pub use wire::{
     macro_body, ActionResponse, BackupView, BackupsRequest, BackupsResponse, ClearAllRequest,

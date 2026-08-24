@@ -388,6 +388,12 @@ export interface NocturneView {
   cap_prepare: boolean;
   cap_release: boolean;
   version: string;
+  environment_id: string;
+  environment_label: string;
+  environment_detail: string;
+  environment_cls: string;
+  environment_fixture: boolean;
+  environment_generation: string;
   chip_text: string;
   save_text: string;
   escape_line: string;
@@ -630,6 +636,49 @@ const [nCapInstance, setNCapInstance] = createSignal("");
 const [nCapPrep, setNCapPrep] = createSignal(false);
 const [nCapRel, setNCapRel] = createSignal(false);
 const [nVersion, setNVersion] = createSignal("");
+const [nEnvironmentId, setNEnvironmentId] = createSignal("unknown-environment");
+const [nEnvironmentLabel, setNEnvironmentLabel] = createSignal(
+  "UNKNOWN ENVIRONMENT · NOT QA EVIDENCE",
+);
+const [nEnvironmentDetail, setNEnvironmentDetail] = createSignal(
+  "This provider did not declare whether its data is live or synthetic.",
+);
+const [nEnvironmentCls, setNEnvironmentCls] = createSignal("n-environment unknown");
+const FIXTURE_GENERATION_KEY = "ksx-studio-fixture-generation-v1";
+
+/** Return true when an already-wired document is reloading into a new seed. */
+function reconcileFixtureGeneration(v: NocturneView): boolean {
+  if (!v.environment_fixture || !v.environment_generation.trim()) return false;
+  try {
+    if (window.localStorage.getItem(FIXTURE_GENERATION_KEY) === v.environment_generation) {
+      return false;
+    }
+    // Fixture ports are dedicated synthetic origins. Restarting a seed must
+    // reset both its in-memory backend and browser-only canvas drafts, or a
+    // supposedly clean first-run walkthrough inherits yesterday's layout.
+    window.localStorage.clear();
+    window.localStorage.setItem(FIXTURE_GENERATION_KEY, v.environment_generation);
+    // On first navigation applyNocturne runs before nocturneWire, so the wire
+    // will load the now-clean stores. During a live reseed this document has
+    // already loaded those stores into memory; reload once before they can be
+    // persisted over the clean generation.
+    if (learnRoot?.isConnected) {
+      window.location.reload();
+      return true;
+    }
+  } catch {
+    // A browser that blocks storage also blocks stale drafts from being read
+    // after a reload. An already-wired document must still discard its
+    // in-memory stores; otherwise a reseed can keep yesterday's canvas alive
+    // merely because storage access was refused. On the fresh module pass
+    // learnRoot is not connected yet, so this cannot become a reload loop.
+    if (learnRoot?.isConnected) {
+      window.location.reload();
+      return true;
+    }
+  }
+  return false;
+}
 const [nChipText, setNChipText] = createSignal("");
 const [nSaveText, setNSaveText] = createSignal("");
 const [nEscapeLine, setNEscapeLine] = createSignal("");
@@ -1013,6 +1062,7 @@ export function applyNocturne(p: NocturnePayload): void {
     ? { slot: nMacSlot(), macro: nMacName() }
     : null;
   const v = p.view;
+  if (reconcileFixtureGeneration(v)) return;
   setNDevCount(v.dev_count);
   setNEncoderCount(v.encoder_count);
   setNEncoderHead(v.encoder_head);
@@ -1036,6 +1086,10 @@ export function applyNocturne(p: NocturnePayload): void {
   setNCapPrep(v.cap_prepare);
   setNCapRel(v.cap_release);
   setNVersion(v.version);
+  setNEnvironmentId(v.environment_id);
+  setNEnvironmentLabel(v.environment_label);
+  setNEnvironmentDetail(v.environment_detail);
+  setNEnvironmentCls(v.environment_cls);
   setNChipText(v.chip_text);
   setNSaveText(v.save_text);
   setNEscapeLine(v.escape_line);
@@ -1960,7 +2014,7 @@ function panelBoardChartAccessGuidance(board: PanelStatusRowView | null): string
   }
   const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
   if (mode !== "keyboard-compatible" && mode !== "keyboard") {
-    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh status before Configure device.`;
+    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh its hardware outputs.`;
   }
   return `${name} has a measured chart driver, but one exact configuration collection is not currently available. Reconnect or resolve the reported HID collection issue, then refresh status.`;
 }
@@ -2134,7 +2188,7 @@ function syncControlSurfaceHardwareCard(): void {
     !chartAccessReady;
   setup.textContent = chartAccessReady
     ? canWriteChart
-      ? "Configure device…"
+      ? "Open hardware outputs…"
       : "Read device…"
     : canReadChart
     ? "Resolve hardware first"
@@ -2146,7 +2200,7 @@ function syncControlSurfaceHardwareCard(): void {
       ? `Open the complete hardware chart for ${selectedEncoderDisplayName()}, including reviewed persistent programming`
       : `Open the read-only hardware chart for ${selectedEncoderDisplayName()}`
     : canReadChart
-    ? `Configure device requires keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
+    ? `Hardware outputs require keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
     : board?.family_id
     ? `${selectedEncoderDisplayName()} is recognized, but this exact model and firmware do not have a measured chart driver yet. Teach, Route, and Control Surface Builder remain available.`
     : "Inspect this exact encoder before opening hardware configuration";
@@ -2433,31 +2487,31 @@ function panelProgrammingTaskCopy(chart: PanelChartView | null): {
   switch (panelProgrammingChartCoverage(chart)) {
     case "empty":
       return {
-        kicker: "Unconfigured I-PAC",
+        kicker: "No assigned hardware outputs",
         title: "Assign keyboard outputs so cabinet controls can reach KSX",
-        action: "Set up",
+        action: "Open outputs",
         summary: `This chart has ${assigned} of ${total} Windows key outputs. Initialize it with a complete layout before testing or routing controls.`,
       };
     case "partial":
       return {
-        kicker: "Partially configured I-PAC",
-        title: "Finish the terminal-to-key chart, then test every wired control",
-        action: "Finish setup",
-        summary: `${assigned} of ${total} terminals currently emit a supported Windows key.`,
+        kicker: "Hardware outputs assigned",
+        title: "Review the terminal-to-key chart and test the controls you wired",
+        action: "Open outputs",
+        summary: `${assigned} of ${total} terminals currently have a supported Windows key assignment. Unused terminals may remain unassigned by design.`,
       };
     case "configured":
       return {
-        kicker: "Configured I-PAC",
+        kicker: "All hardware outputs assigned",
         title: "Use, test, or reconfigure the outputs already on this board",
-        action: "Reconfigure",
+        action: "Open outputs",
         summary: `All ${total} terminals currently have supported Windows key outputs. Hardware can stay unchanged while you test and route them in KSX.`,
       };
     default:
       return {
-        kicker: "I-PAC hardware outputs",
+        kicker: "Hardware outputs not read",
         title: "Read the board before choosing what to change",
-        action: "Set up",
-        summary: "KSX is reading the persistent terminal-to-key chart from this encoder.",
+        action: "Open outputs",
+        summary: "KSX has not read the persistent terminal-to-key chart in this browser session.",
       };
   }
 }
@@ -2479,9 +2533,10 @@ function syncPanelEncoderRailStatus(): void {
   const canOpenChart = panelBoardChartAccessReady(board);
   if (setup) {
     const label = Array.from(setup.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
-    if (label) label.textContent = canOpenChart ? task.action : "Open";
+    const returning = controlSurfaceState.open && controlSurfaceEncoderSetupEntry;
+    if (label) label.textContent = returning ? "Return to outputs" : "Open outputs";
     setup.title = canOpenChart
-      ? `${task.action} this ${selectedEncoderShortName()}: read its hardware outputs, test wiring, then route its Windows keys through KSX`
+      ? `${returning ? "Return to" : "Open"} this ${selectedEncoderShortName()}'s hardware outputs. ${task.summary}`
       : panelBoardCanReadChart(board)
       ? panelBoardChartAccessGuidance(board)
       : board?.family_id
@@ -2502,17 +2557,11 @@ function syncPanelEncoderRailStatus(): void {
     return;
   }
   if (!chart) {
-    meta.textContent = `${transport} · Connected · outputs not checked`;
+    meta.textContent = `${transport} · Connected · outputs not read`;
     return;
   }
   const assigned = panelProgrammingAssignedCount(chart);
-  const coverage = panelProgrammingChartCoverage(chart);
-  const label = coverage === "empty"
-    ? "Unconfigured"
-    : coverage === "partial"
-    ? "Partially configured"
-    : "Configured";
-  meta.textContent = `${transport} · ${label} · ${assigned}/${chart.terminals.length} outputs${panelProgrammingLastTest?.terminalIds.length ? " · signal observed" : ""}`;
+  meta.textContent = `${transport} · ${assigned}/${chart.terminals.length} outputs assigned${panelProgrammingLastTest?.terminalIds.length ? " · signal observed" : ""}`;
 }
 
 function panelProgrammingMappedKeyCount(chart: PanelChartView | null): number {
@@ -2908,18 +2957,19 @@ function syncIpacSignalSource(): void {
   heading.append(kicker, title);
   const badge = document.createElement("span");
   badge.className = "n-ipac-source-badge";
-  badge.textContent = "HID keyboard mode";
+  badge.textContent = selectedPanelStatusBoard()?.observed_mode_label?.trim() ||
+    "Keyboard-compatible input";
   head.append(heading, badge);
   const copy = document.createElement("p");
   copy.textContent = routingAuthoritySuspended
     ? panelRecoveryProbeState === "checking"
       ? `KSX is checking this exact ${encoderName} against its machine recovery journal. Routes stay unresolved until that passive check finishes.`
       : panelRecoveryProbeState === "indeterminate"
-      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open Configure device or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
+      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open hardware outputs or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
       : `KSX cannot prove which keys the ${encoderName} emits after the interrupted hardware transaction. Routes stay unresolved until the complete chart is read again or a verified backup is restored.`
     : chart
     ? `The ${encoderName} emits these keyboard host signals to Windows. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
-    : `KSX routes currently reference these keyboard host signals. Configure device has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read the device chart to establish terminal → host-signal ownership.`;
+    : `KSX routes currently reference these keyboard host signals. KSX has not read the ${encoderName} hardware-output chart yet, so it has not proven which physical terminals emit them. Read the device chart to establish terminal → host-signal ownership.`;
   source.append(head, copy);
   if (groups.length === 0) {
     const empty = document.createElement("div");
@@ -2931,8 +2981,8 @@ function syncIpacSignalSource(): void {
         ? shiftedLayerState === "unknown"
           ? `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but opaque Shift state leaves their reachability unknown.`
           : `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but no enabled Shift terminal can emit them.`
-        : "This chart has no supported Windows key outputs."
-      : `No routed key signals are visible yet. Open ${encoderName} · Configure device to read the on-device output chart.`;
+        : "The chart KSX read contains 0 supported Windows key assignments. This is chart data, not a live-input observation."
+      : `No routed key signals are visible yet. Open ${encoderName} hardware outputs to read the on-device chart.`;
     source.append(empty);
     mappingFlowLayer?.scheduleLayout();
     return;
@@ -5150,7 +5200,7 @@ function syncPanelProgrammingUi(): void {
     setupButton.textContent = open
       ? `${selectedEncoderShortName()} hardware open`
       : canOpenChart
-      ? "Configure device…"
+      ? "Open hardware outputs…"
       : panelBoardCanReadChart(statusBoard)
       ? "Resolve hardware first"
       : statusBoard?.family_id
@@ -5159,7 +5209,7 @@ function syncPanelProgrammingUi(): void {
     setupButton.title = canOpenChart
       ? `Open ${selectedEncoderShortName()}'s complete hardware chart`
       : panelBoardCanReadChart(statusBoard)
-      ? `Configure device requires keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
+      ? `Hardware outputs require keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
       : statusBoard?.family_id
       ? `${selectedEncoderShortName()} is recognized, but this exact model and firmware do not have a measured chart driver yet`
       : "Inspect this exact encoder before opening hardware configuration";
@@ -5911,7 +5961,7 @@ async function openPanelProgrammingSetupFromGesture(): Promise<void> {
     return;
   }
   keyboardWorkbenchAnnounce(
-    `Confirming this exact ${selectedEncoderShortName()} before Configure device opens…`,
+    `Confirming this exact ${selectedEncoderShortName()} before Hardware outputs opens…`,
   );
   await refreshControlSurfaceHardwareStatus();
   if (openIfReady()) return;
@@ -10431,7 +10481,7 @@ function syncControlSurfaceChrome(): void {
   const note = item.querySelector<HTMLElement>("[data-surface-note]");
   const encoderName = selectedEncoderShortName();
   item.dataset.entry = hardwareWorkspace ? "encoder-setup" : "builder";
-  const widgetName = hardwareWorkspace ? `${encoderName} · Configure device` : "Control Surface Builder";
+  const widgetName = hardwareWorkspace ? `${encoderName} · Hardware outputs` : "Control Surface Builder";
   item.dataset.widgetName = widgetName;
   item.setAttribute("aria-label", widgetName);
   item.querySelector<HTMLElement>(".widget-drag-handle")
@@ -10476,7 +10526,7 @@ function syncControlSurfaceChrome(): void {
       card.disabled = encoderRecords.length === 0;
       card.title = encoderRecords.length > 0
         ? `Build a physical panel from ${encoderRecords.length} terminal-to-key assignments read from ${selectedEncoderDisplayName()}`
-        : "Read a supported encoder chart in Configure device before generating its physical panel";
+        : "Read a supported encoder chart in Hardware outputs before generating its physical panel";
     } else if (template === "mapping-selected") {
       card.disabled = !mappingRecords.some((record) => record.slot === selectedSlot);
     } else if (template === "mapping-four") {
@@ -11317,7 +11367,7 @@ function openControlSurfaceBuilder(encoderSetup = false): void {
       if (controlSurfaceHardwarePhase === "ready" && panelBoardChartAccessReady(board)) {
         openPanelProgrammingSetup();
         keyboardWorkbenchAnnounce(
-          `${selectedEncoderShortName()} · Configure device opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
+          `${selectedEncoderShortName()} hardware outputs opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
         );
         focusControlSurfacePrimary();
         return;
@@ -11403,7 +11453,7 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   }
   if (template === "encoder-current" && encoderRecords.length === 0) {
     keyboardWorkbenchAnnounce(
-      "No readable terminal-to-key chart is loaded for this encoder. Open Configure device and read a supported board first; the current panel was kept intact.",
+      "No readable terminal-to-key chart is loaded for this encoder. Open Hardware outputs and read a supported board first; the current panel was kept intact.",
     );
     return;
   }
@@ -15469,7 +15519,7 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "kb-workbench") {
       if (selectedInputIsPanelEncoder()) {
         keyboardWorkbenchAnnounce(
-          "Arcade encoder terminals belong in Configure device or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
+          "Arcade encoder terminals belong in Hardware outputs or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
         );
         return;
       }
@@ -15704,6 +15754,23 @@ export function NocturneIsland() {
       h("div", { class: "n-logo" }),
       h("span", { class: "n-brand" }, "KSX Studio"),
       h("span", { class: "n-ver" }, () => nVersion()),
+      h(
+        "span",
+        {
+          class: () => nEnvironmentCls(),
+          title: () => nEnvironmentDetail(),
+          role: "note",
+          "aria-describedby": "n-environment-detail",
+          "data-runtime-environment": () => nEnvironmentId(),
+        },
+        h("span", { class: "n-environment-dot", "aria-hidden": "true" }),
+        () => nEnvironmentLabel(),
+      ),
+      h(
+        "span",
+        { id: "n-environment-detail", class: "n-sr-description" },
+        () => nEnvironmentDetail(),
+      ),
       // The configuration menu: a NATIVE details, so every verb in it works
       // with scripting off and the served facts paint on the SSR pass. JS
       // adds only outside-click dismissal (and closes it after an action).
@@ -15908,10 +15975,10 @@ export function NocturneIsland() {
                   type: "button",
                   class: "n-encoder-setup",
                   "data-nx": "encoder-select-setup",
-                  title: "Open this exact encoder workspace; KSX inspects proven capabilities before offering hardware reads or writes",
+                  title: "Open this exact encoder's hardware outputs; KSX inspects proven capabilities before offering reads or writes",
                   "data-encoder-selector": r.selector,
                 },
-                "Open",
+                "Open outputs",
                 h("span", { class: "n-encoder-accessible-name" }, " ", r.name),
               ),
             ),

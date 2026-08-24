@@ -12,12 +12,13 @@
 //!
 //! Loopback only, and the port is an argument so it can never collide with the
 //! user's own `ksx studio` (4460):
-//! `4478` belongs to the automated macro-editor suite, while `4520` is the
-//! documented manual first-run workspace.
+//! `4478` belongs to the automated macro-editor suite, while `4520` and `4521`
+//! are the documented manual first-run and blank-encoder workspaces.
 //!
 //! ```text
 //! cargo run -p ksx-studio --example macro_fixture -- 4476
 //! cargo run -p ksx-studio --example macro_fixture -- 4520 --first-run
+//! cargo run -p ksx-studio --example macro_fixture -- 4521 --blank-panel
 //! ```
 
 use std::collections::BTreeMap;
@@ -36,37 +37,96 @@ const PRESET: &str = "Panel P1";
 ///
 /// Seeded remains the default because the browser suites rely on its authored
 /// controllers and macros. FirstRun is an explicit manual-QA scenario: the
-/// same attached synthetic hardware, but no config, profile, preset, staged
-/// controller, or running session exists yet.
+/// same attached synthetic hardware, carrying a believable existing key
+/// chart, but no KSX config, profile, preset, staged controller, or running
+/// session exists yet. BlankPanel keeps that empty KSX history while making
+/// the encoder EEPROM deliberately all-Unassigned for the rarer hardware-
+/// initialization path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum FixtureScenario {
     #[default]
     Seeded,
     FirstRun,
+    BlankPanel,
 }
 
-fn parse_fixture_args<I, S>(args: I) -> Result<(u16, FixtureScenario), String>
+impl FixtureScenario {
+    const fn starts_without_ksx_config(self) -> bool {
+        matches!(self, Self::FirstRun | Self::BlankPanel)
+    }
+
+    /// The default seeded browser fixture historically presents a blank chart
+    /// and its suites depend on that qualification flow. Keep that compatibility
+    /// while giving manual QA an honestly named blank-hardware scenario.
+    const fn panel_is_blank(self) -> bool {
+        matches!(self, Self::Seeded | Self::BlankPanel)
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Seeded => "seeded-demo",
+            Self::FirstRun => "first-run",
+            Self::BlankPanel => "blank-encoder",
+        }
+    }
+}
+
+fn parse_fixture_args<I, S>(args: I) -> Result<(u16, FixtureScenario, Option<String>), String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let mut port = None;
     let mut scenario = FixtureScenario::Seeded;
+    let mut scenario_selected = false;
+    let mut generation = None;
     for arg in args {
         let arg = arg.as_ref();
-        if arg == "--first-run" {
-            scenario = FixtureScenario::FirstRun;
+        if arg == "--first-run" || arg == "--blank-panel" {
+            if scenario_selected {
+                return Err(
+                    "choose exactly one fixture scenario: --first-run or --blank-panel".into(),
+                );
+            }
+            scenario = if arg == "--first-run" {
+                FixtureScenario::FirstRun
+            } else {
+                FixtureScenario::BlankPanel
+            };
+            scenario_selected = true;
+        } else if let Some(value) = arg.strip_prefix("--generation=") {
+            if value.is_empty()
+                || value.len() > 128
+                || !value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            {
+                return Err(
+                    "fixture generation must be 1-128 ASCII letters, digits, '.', '_', or '-'"
+                        .into(),
+                );
+            }
+            if generation.replace(value.to_owned()).is_some() {
+                return Err("the fixture accepts only one generation nonce".into());
+            }
         } else if let Ok(parsed) = arg.parse::<u16>() {
             if port.replace(parsed).is_some() {
                 return Err("the fixture accepts only one port".into());
             }
         } else {
             return Err(format!(
-                "unknown fixture argument '{arg}' (usage: macro_fixture [PORT] [--first-run])"
+                "unknown fixture argument '{arg}' (usage: macro_fixture [PORT] [--first-run|--blank-panel] [--generation=NONCE])"
             ));
         }
     }
-    Ok((port.unwrap_or(4476), scenario))
+    Ok((port.unwrap_or(4476), scenario, generation))
+}
+
+fn default_fixture_generation() -> String {
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("pid-{}-{started:x}", std::process::id())
 }
 
 fn mac(name: &str, steps: Vec<MacroStepView>) -> MacroView {
@@ -147,6 +207,7 @@ fn seed_macros() -> Vec<MacroView> {
 #[derive(Clone)]
 struct Store {
     scenario: FixtureScenario,
+    fixture_generation: Arc<str>,
     macros: Arc<Mutex<Vec<MacroView>>>,
     stage: Arc<Mutex<ksx_core::stage::StagedSetup>>,
     /// The configuration a successful Save made available to Load. `None` is
@@ -174,24 +235,26 @@ struct Store {
 }
 
 impl Store {
+    #[cfg(test)]
     fn new(scenario: FixtureScenario) -> Self {
+        Self::with_generation(scenario, default_fixture_generation())
+    }
+
+    fn with_generation(scenario: FixtureScenario, generation: impl Into<String>) -> Self {
         let seeded = (scenario == FixtureScenario::Seeded).then(seeded_stage);
+        let first_run = scenario.starts_without_ksx_config();
         Self {
             scenario,
+            fixture_generation: Arc::from(generation.into()),
             dirty: Arc::new(AtomicBool::new(false)),
             origin: Arc::new(Mutex::new(String::new())),
             session_on: Arc::new(AtomicBool::new(
-                scenario == FixtureScenario::Seeded
-                    && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
+                !first_run && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
             )),
-            active_slots: Arc::new(AtomicUsize::new(if scenario == FixtureScenario::Seeded {
-                2
-            } else {
-                0
-            })),
+            active_slots: Arc::new(AtomicUsize::new(if first_run { 0 } else { 2 })),
             macros: Arc::new(Mutex::new(match scenario {
                 FixtureScenario::Seeded => seed_macros(),
-                FixtureScenario::FirstRun => Vec::new(),
+                FixtureScenario::FirstRun | FixtureScenario::BlankPanel => Vec::new(),
             })),
             stage: Arc::new(Mutex::new(seeded.clone().unwrap_or_default())),
             saved_stage: Arc::new(Mutex::new(seeded)),
@@ -411,8 +474,30 @@ fn authored_preset(name: &str) -> ksx_config::PresetFile {
 }
 
 impl StatusSource for Store {
+    fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
+        let (id, label, detail) = match self.scenario {
+            FixtureScenario::Seeded => (
+                "fixture-seeded-demo",
+                "FIXTURE · SEEDED DEMO",
+                "Synthetic seeded demo state; no physical devices are read or written.",
+            ),
+            FixtureScenario::FirstRun => (
+                "fixture-first-run",
+                "FIXTURE · FIRST RUN",
+                "Synthetic first KSX visit with a preconfigured encoder chart; no physical devices are read or written.",
+            ),
+            FixtureScenario::BlankPanel => (
+                "fixture-blank-encoder",
+                "FIXTURE · BLANK ENCODER",
+                "Synthetic first KSX visit with an all-Unassigned encoder chart; no physical devices are read or written.",
+            ),
+        };
+        ksx_api::RuntimeEnvironmentView::fixture(id, label, detail)
+            .with_generation(self.fixture_generation.to_string())
+    }
+
     fn snapshot(&self) -> StatusSnapshot {
-        let first_run = self.scenario == FixtureScenario::FirstRun;
+        let first_run = self.scenario.starts_without_ksx_config();
         StatusSnapshot {
             generated_at: "fixture".into(),
             vigem: "installed".into(),
@@ -450,7 +535,7 @@ impl StatusSource for Store {
     }
 
     fn mapper(&self) -> MapperSnapshot {
-        if self.scenario == FixtureScenario::FirstRun {
+        if self.scenario.starts_without_ksx_config() {
             return MapperSnapshot {
                 generated_at: "fixture".into(),
                 source: "first-run fixture".into(),
@@ -934,7 +1019,7 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
 }
 
 fn main() {
-    let (port, scenario) = match parse_fixture_args(std::env::args().skip(1)) {
+    let (port, scenario, generation) = match parse_fixture_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}");
@@ -942,14 +1027,11 @@ fn main() {
         }
     };
     let bind: SocketAddr = ([127, 0, 0, 1], port).into();
-    let store = Store::new(scenario);
-    println!(
-        "macro fixture ({}) on http://{bind}/map",
-        match scenario {
-            FixtureScenario::Seeded => "seeded",
-            FixtureScenario::FirstRun => "first-run",
-        }
+    let store = Store::with_generation(
+        scenario,
+        generation.unwrap_or_else(default_fixture_generation),
     );
+    println!("macro fixture ({}) on http://{bind}/map", scenario.label());
     // The fixture drives the MAPPER, so the machine provider is the trait's
     // own defaults: every method refuses in words and names the CLI verb that
     // works. /devices, /profiles, /setup and /pads under this fixture
@@ -1091,7 +1173,7 @@ fn main() {
         ("F10", 0x43),
     ];
 
-    fn fixture_panel_image() -> [u8; 256] {
+    fn fixture_panel_image(scenario: FixtureScenario) -> [u8; 256] {
         let mut bytes = [0; 256];
         bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x00]);
         // PAC256 encodes an explicitly disabled shifted role as 0x01; 0x00 is
@@ -1099,6 +1181,21 @@ fn main() {
         // rows below byte-for-byte consistent so the one-byte plan is real.
         for (_, _, base) in FIXTURE_IPAC_TERMINALS {
             bytes[4 + usize::from(base) + 128] = 0x01;
+        }
+        // A first KSX visit is not a factory-reset board. Most customers
+        // arrive with usable firmware defaults or an old WinIPAC chart. The
+        // canonical collision-free key set is a deterministic, believable
+        // stand-in for that existing configuration; only --blank-panel (and
+        // the legacy seeded fixture retained for browser compatibility) has
+        // empty normal-plane assignments.
+        if !scenario.panel_is_blank() {
+            for ((_, _, base), (_, code)) in FIXTURE_IPAC_TERMINALS
+                .into_iter()
+                .zip(FIXTURE_CANONICAL_KEYS)
+            {
+                bytes[4 + usize::from(base)] =
+                    u8::try_from(code).expect("fixture key usage fits one byte");
+            }
         }
         bytes
     }
@@ -1126,11 +1223,20 @@ fn main() {
         (format!("P{player} {label}"), kind)
     }
 
-    fn fixture_panel_backup() -> ksx_api::PanelBackupRow {
-        let image = fixture_panel_image();
+    fn fixture_panel_backup(scenario: FixtureScenario) -> ksx_api::PanelBackupRow {
+        let blank = scenario.panel_is_blank();
+        let image = fixture_panel_image(scenario);
         ksx_api::PanelBackupRow {
-            backup_id: "fixture-blank-ipac-original".into(),
-            label: "Fixture preview · original all-Unassigned chart".into(),
+            backup_id: if blank {
+                "fixture-blank-ipac-original".into()
+            } else {
+                "fixture-preconfigured-ipac-original".into()
+            },
+            label: if blank {
+                "Fixture preview · original all-Unassigned chart".into()
+            } else {
+                "Fixture preview · original preconfigured 56-key chart".into()
+            },
             created_at: "fixture session".into(),
             board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
             image_sha256: fixture_sha256(&image),
@@ -1139,24 +1245,38 @@ fn main() {
         }
     }
 
-    /// A safe browser-only model of the customer's first boot: the encoder is
-    /// discoverable, every terminal is wired but Unassigned, and no Windows
-    /// key event exists yet. This fixture never sends an HID report; its plan
-    /// carries a blocker so even the confirmation dialog cannot issue a write.
-    fn fixture_blank_panel_chart(backup: bool) -> ksx_api::PanelChartView {
+    /// A safe browser-only model of two distinct customer histories. An
+    /// ordinary first KSX visit discovers a board whose terminals already
+    /// emit keys; --blank-panel models the exceptional cleared/new EEPROM.
+    /// This fixture never sends an HID report; every plan carries a blocker so
+    /// even its confirmation dialog cannot issue a physical write.
+    fn fixture_panel_chart(scenario: FixtureScenario, backup: bool) -> ksx_api::PanelChartView {
+        let blank = scenario.panel_is_blank();
         let mut terminals = Vec::with_capacity(56);
-        for (id, player, _) in FIXTURE_IPAC_TERMINALS {
+        for ((id, player, _), (key, code)) in FIXTURE_IPAC_TERMINALS
+            .into_iter()
+            .zip(FIXTURE_CANONICAL_KEYS)
+        {
             let (terminal_label, kind) = fixture_terminal_label(id, player);
             terminals.push(ksx_api::PanelTerminalRow {
                 terminal_id: id.into(),
                 terminal_label,
                 player,
                 kind: kind.into(),
-                normal: ksx_api::PanelKeyValue {
-                    code: 0,
-                    key: None,
-                    label: "Unassigned".into(),
-                    supported: true,
+                normal: if blank {
+                    ksx_api::PanelKeyValue {
+                        code: 0,
+                        key: None,
+                        label: "Unassigned".into(),
+                        supported: true,
+                    }
+                } else {
+                    ksx_api::PanelKeyValue {
+                        code,
+                        key: Some(key.into()),
+                        label: key.into(),
+                        supported: true,
+                    }
                 },
                 shifted: ksx_api::PanelKeyValue {
                     code: 0,
@@ -1193,10 +1313,15 @@ fn main() {
                 safe_for_qualification: index < 36,
             })
             .collect();
-        let image = fixture_panel_image();
+        let image = fixture_panel_image(scenario);
         ksx_api::PanelChartView {
             generated_at: "fixture session".into(),
-            summary: "Fixture preview: complete all-Unassigned I-PAC chart read safely.".into(),
+            summary: if blank {
+                "Fixture preview: complete all-Unassigned I-PAC chart read safely.".into()
+            } else {
+                "Fixture preview: complete preconfigured I-PAC chart read; 56 of 56 normal outputs are assigned."
+                    .into()
+            },
             board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
             board_name: "Ultimarc I-PAC 4".into(),
             board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
@@ -1207,13 +1332,31 @@ fn main() {
             programming_state: "supervised".into(),
             programming_detail: "The fixture models the guarded workflow but sends no hardware report.".into(),
             qualification_state: "required".into(),
-            qualification_detail: "Choose one SW terminal and temporary safe key to preview the reversible writer check.".into(),
+            qualification_detail: if blank {
+                "Choose one SW terminal and temporary safe key to preview the reversible writer check."
+                    .into()
+            } else {
+                "Choose one SW terminal and a different temporary safe key to preview changing and restoring an existing assignment."
+                    .into()
+            },
             qualification_restore_backup_id: None,
             terminals,
             recommended_terminals,
             key_options,
-            backup: backup.then(fixture_panel_backup),
-            notes: vec!["Fixture-only preview; no physical I-PAC was read or changed.".into()],
+            backup: backup.then(|| fixture_panel_backup(scenario)),
+            notes: vec![match scenario {
+                FixtureScenario::Seeded => {
+                    "Fixture-only preview; no physical I-PAC was read or changed.".into()
+                }
+                FixtureScenario::BlankPanel => {
+                    "Fixture-only blank-encoder preview; no physical I-PAC was read or changed."
+                        .into()
+                }
+                FixtureScenario::FirstRun => {
+                    "Fixture-only preconfigured-encoder preview; these deterministic assignments model an existing chart, not a claim about one exact factory image. No physical I-PAC was read or changed."
+                        .into()
+                }
+            }],
         }
     }
 
@@ -1236,7 +1379,7 @@ fn main() {
         /// exercise the server-stamped `data-theme` without a config file —
         /// this fixture fabricates state and reads no config.toml.
         fn setup_state(&self) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
-            if self.scenario == FixtureScenario::FirstRun {
+            if self.scenario.starts_without_ksx_config() {
                 let saved = self.saved_stage.lock().unwrap();
                 return Ok(first_run_setup_state(saved.as_ref()));
             }
@@ -1268,7 +1411,7 @@ fn main() {
         /// Two saved games: one ready, one with its program missing — the
         /// broken row is a real state of the menu and worth looking at.
         fn profiles(&self) -> Result<ksx_api::ProfilesView, ksx_api::Refusal> {
-            if self.scenario == FixtureScenario::FirstRun {
+            if self.scenario.starts_without_ksx_config() {
                 return Ok(ksx_api::ProfilesView {
                     generated_at: "fixture".into(),
                     config_root: "C:\\fixture".into(),
@@ -1452,6 +1595,23 @@ fn main() {
             spec: &ksx_api::PanelStatusSpec,
         ) -> Result<ksx_api::PanelStatusView, ksx_api::Refusal> {
             require_fixture_panel(spec.device.as_deref())?;
+            let (chart_detail, chart_label, recommendation) = match self.scenario {
+                FixtureScenario::Seeded => (
+                    "Open I-PAC Setup to load the fixture's all-Unassigned first-run chart; no physical report is sent",
+                    "All-Unassigned first-run preview available",
+                    "Choose Set up to QA the blank-board read, backup, qualification, and review flow without writing hardware",
+                ),
+                FixtureScenario::BlankPanel => (
+                    "Open I-PAC Setup to load the explicit all-Unassigned encoder chart; no physical report is sent",
+                    "Blank encoder preview available",
+                    "Choose Set up to QA initialization of an encoder whose terminals emit no keys yet",
+                ),
+                FixtureScenario::FirstRun => (
+                    "Open I-PAC Setup to load the fixture's existing 56-key chart; no physical report is sent",
+                    "Preconfigured encoder preview available",
+                    "Choose Set up to inspect and back up the existing terminal-to-key assignments before routing them through KSX",
+                ),
+            };
             Ok(ksx_api::PanelStatusView {
                 generated_at: "fixture".into(),
                 summary: "1 physical USB board matched; 6 HID collections were inspected".into(),
@@ -1489,14 +1649,14 @@ fn main() {
                     },
                     chart_state: "available-unopened".into(),
                     chart_attempted: false,
-                    chart_detail: "Open I-PAC Setup to load the fixture's all-Unassigned first-run chart; no physical report is sent".into(),
-                    chart_label: "All-Unassigned first-run preview available".into(),
+                    chart_detail: chart_detail.into(),
+                    chart_label: chart_label.into(),
                     configuration_collection_state: "available-unopened".into(),
                     configuration_collection: Some(
                         "HID\\VID_D209&PID_0430&MI_02&COL01\\FIXTURE".into(),
                     ),
                     configuration_collection_detail: "One exact 5-byte IN/OUT configuration collection is available in this synthetic fixture".into(),
-                    recommendation: "Choose Set up to QA the blank-board read, backup, qualification, and review flow without writing hardware".into(),
+                    recommendation: recommendation.into(),
                     programming_recovery_required: false,
                     programming_recovery_detail: String::new(),
                     interfaces: vec![ksx_api::PanelInterfaceRow {
@@ -1515,8 +1675,8 @@ fn main() {
                         vendor_id: Some(0xD209),
                         product_id: Some(0x0430),
                         version_number: Some(0x0056),
-                        usage_page: Some(0xFF00),
-                        usage: Some(1),
+                        usage_page: Some(0x0001),
+                        usage: Some(0x0000),
                         input_report_bytes: Some(5),
                         output_report_bytes: Some(5),
                         feature_report_bytes: Some(0),
@@ -1536,7 +1696,7 @@ fn main() {
                 self.panel_backup_created
                     .store(true, std::sync::atomic::Ordering::Release);
             }
-            Ok(fixture_blank_panel_chart(spec.backup))
+            Ok(fixture_panel_chart(self.scenario, spec.backup))
         }
 
         fn panel_backups(
@@ -1547,11 +1707,19 @@ fn main() {
             let backups = self
                 .panel_backup_created
                 .load(std::sync::atomic::Ordering::Acquire)
-                .then(fixture_panel_backup)
+                .then(|| fixture_panel_backup(self.scenario))
                 .into_iter()
                 .collect();
             Ok(ksx_api::PanelBackupsView {
-                summary: "Fixture-only first-run restore points.".into(),
+                summary: match self.scenario {
+                    FixtureScenario::Seeded => "Fixture-only first-run restore points.".into(),
+                    FixtureScenario::FirstRun => {
+                        "Fixture-only restore points for the preconfigured encoder chart.".into()
+                    }
+                    FixtureScenario::BlankPanel => {
+                        "Fixture-only restore points for the blank encoder chart.".into()
+                    }
+                },
                 board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
                 backups,
             })
@@ -1562,12 +1730,16 @@ fn main() {
             spec: &ksx_api::PanelProgramSpec,
         ) -> Result<ksx_api::PanelProgramPlanView, ksx_api::Refusal> {
             require_fixture_panel(spec.device.as_deref())?;
-            let baseline = fixture_panel_image();
+            let baseline = fixture_panel_image(self.scenario);
             let baseline_sha = fixture_sha256(&baseline);
             if spec.expected_base_sha256 != baseline_sha || spec.layout != "custom" {
                 return Err(ksx_api::Refusal::new(
                     ksx_api::codes::BAD_REQUEST,
-                    "the fixture review requires its current blank-chart hash and custom layout",
+                    if self.scenario == FixtureScenario::Seeded {
+                        "the fixture review requires its current blank-chart hash and custom layout"
+                    } else {
+                        "the fixture review requires its current chart hash and custom layout"
+                    },
                 ));
             }
             let [edit] = spec.edits.as_slice() else {
@@ -1589,7 +1761,7 @@ fn main() {
                 )
             })?;
             let terminal = edit.terminal_id.to_ascii_lowercase();
-            let chart = fixture_blank_panel_chart(false);
+            let chart = fixture_panel_chart(self.scenario, false);
             let terminal_row = chart
                 .terminals
                 .iter()
@@ -1612,6 +1784,15 @@ fn main() {
                         format!("the fixture chart cannot program key '{after}'"),
                     )
                 })?;
+            if terminal_row.normal.code == key.code {
+                return Err(ksx_api::Refusal::new(
+                    ksx_api::codes::BAD_REQUEST,
+                    format!(
+                        "choose a different temporary key; {terminal} already emits '{}'",
+                        terminal_row.normal.label
+                    ),
+                ));
+            }
             let base = FIXTURE_IPAC_TERMINALS
                 .iter()
                 .find_map(|(id, _, base)| (*id == terminal).then_some(*base as usize))
@@ -1620,7 +1801,14 @@ fn main() {
             let mut desired = baseline;
             desired[offset] = u8::try_from(key.code).expect("fixture key usage fits one byte");
             Ok(ksx_api::PanelProgramPlanView {
-                summary: "Preview one reversible terminal assignment while preserving the other 255 bytes.".into(),
+                summary: match self.scenario {
+                    FixtureScenario::Seeded => "Preview one reversible terminal assignment while preserving the other 255 bytes."
+                        .into(),
+                    FixtureScenario::BlankPanel => "Preview one reversible assignment on the blank encoder while preserving the other 255 bytes."
+                        .into(),
+                    FixtureScenario::FirstRun => "Preview one reversible change to the existing chart while preserving the other 255 bytes."
+                        .into(),
+                },
                 board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
                 board_name: "Ultimarc I-PAC 4".into(),
                 board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
@@ -1632,12 +1820,12 @@ fn main() {
                     terminal_id: terminal.clone(),
                     terminal_label: terminal_row.terminal_label.clone(),
                     layer: "normal".into(),
-                    before: "Unassigned".into(),
+                    before: terminal_row.normal.label.clone(),
                     after: key.label.clone(),
                 }],
                 byte_diff: vec![ksx_api::PanelByteDiffRow {
                     offset,
-                    before: 0,
+                    before: terminal_row.normal.code,
                     after: key.code,
                     meaning: format!("{terminal} normal"),
                 }],
@@ -1679,17 +1867,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixture_arguments_keep_seeded_default_and_require_an_explicit_first_run() {
+    fn fixture_arguments_keep_seeded_default_and_require_an_explicit_scenario() {
         assert_eq!(
             parse_fixture_args(std::iter::empty::<&str>()).unwrap(),
-            (4476, FixtureScenario::Seeded)
+            (4476, FixtureScenario::Seeded, None)
         );
         assert_eq!(
             parse_fixture_args(["4520", "--first-run"]).unwrap(),
-            (4520, FixtureScenario::FirstRun)
+            (4520, FixtureScenario::FirstRun, None)
         );
+        assert_eq!(
+            parse_fixture_args([
+                "--blank-panel",
+                "4521",
+                "--generation=launch-0123456789abcdef",
+            ])
+            .unwrap(),
+            (
+                4521,
+                FixtureScenario::BlankPanel,
+                Some("launch-0123456789abcdef".into()),
+            )
+        );
+        assert!(parse_fixture_args(["--first-run", "--blank-panel"]).is_err());
+        assert!(parse_fixture_args(["--blank-panel", "--blank-panel"]).is_err());
         assert!(parse_fixture_args(["4476", "4478"]).is_err());
+        assert!(parse_fixture_args(["--generation=one", "--generation=two"]).is_err());
+        assert!(parse_fixture_args(["--generation=bad value"]).is_err());
         assert!(parse_fixture_args(["--mystery"]).is_err());
+    }
+
+    #[test]
+    fn first_ksx_visit_and_blank_encoder_are_independent_fixture_facts() {
+        assert!(!FixtureScenario::Seeded.starts_without_ksx_config());
+        assert!(FixtureScenario::FirstRun.starts_without_ksx_config());
+        assert!(FixtureScenario::BlankPanel.starts_without_ksx_config());
+
+        assert!(FixtureScenario::Seeded.panel_is_blank());
+        assert!(!FixtureScenario::FirstRun.panel_is_blank());
+        assert!(FixtureScenario::BlankPanel.panel_is_blank());
+
+        assert_eq!(FixtureScenario::Seeded.label(), "seeded-demo");
+        assert_eq!(FixtureScenario::FirstRun.label(), "first-run");
+        assert_eq!(FixtureScenario::BlankPanel.label(), "blank-encoder");
+    }
+
+    #[test]
+    fn every_fixture_scenario_is_visibly_and_honestly_labeled() {
+        let cases = [
+            (
+                FixtureScenario::Seeded,
+                "fixture-seeded-demo",
+                "FIXTURE · SEEDED DEMO",
+            ),
+            (
+                FixtureScenario::FirstRun,
+                "fixture-first-run",
+                "FIXTURE · FIRST RUN",
+            ),
+            (
+                FixtureScenario::BlankPanel,
+                "fixture-blank-encoder",
+                "FIXTURE · BLANK ENCODER",
+            ),
+        ];
+
+        for (scenario, id, label) in cases {
+            let environment =
+                StatusSource::environment(&Store::with_generation(scenario, "launch-test-42"));
+            assert!(environment.fixture);
+            assert_eq!(environment.id, id);
+            assert_eq!(environment.label, label);
+            assert!(environment.detail.starts_with("Synthetic"));
+            assert!(environment
+                .detail
+                .contains("no physical devices are read or written"));
+            assert_eq!(environment.generation, "launch-test-42");
+        }
     }
 
     #[test]
@@ -1715,6 +1969,19 @@ mod tests {
         assert!(setup.slots.is_empty());
         assert!(setup.presets.is_empty());
         assert!(setup.profiles.is_empty());
+    }
+
+    #[test]
+    fn blank_panel_is_also_a_clean_ksx_visit() {
+        let store = Store::new(FixtureScenario::BlankPanel);
+        let staged = ControlSource::staged(&store);
+        assert!(staged.reachable);
+        assert!(staged.empty);
+        assert!(!staged.dirty);
+        assert!(staged.device.is_none());
+        assert!(staged.slots.is_empty());
+        assert!(StatusSource::mapper(&store).slots.is_empty());
+        assert!(ControlSource::start(&store, None).is_err());
     }
 
     #[test]

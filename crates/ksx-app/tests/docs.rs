@@ -95,7 +95,9 @@ fn read_doc(name: &str) -> String {
 
 fn read_repo_file(name: &str) -> String {
     let path = repo_root().join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
+        .replace("\r\n", "\n")
 }
 
 /// Every `§N` cited within a few characters of `doc`'s filename, and who cites

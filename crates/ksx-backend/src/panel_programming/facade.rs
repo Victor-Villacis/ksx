@@ -1806,14 +1806,30 @@ fn open_panel(selected: &SelectedPanel) -> Result<HidIo, Refusal> {
         },
     )
     .map(HidIo)
-    .map_err(|error| {
-        refused(
-            format!(
-                "the exact I-PAC configuration collection could not be opened: {error}; nothing was sent"
-            ),
-            "close WinIPAC or another hardware tool, reconnect the encoder if needed, then retry",
-        )
-    })
+    .map_err(panel_open_refusal)
+}
+
+fn panel_open_refusal(error: HidReportError) -> Refusal {
+    #[cfg(windows)]
+    if matches!(
+        &error,
+        HidReportError::Open(source)
+            if source.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32)
+    ) {
+        return Refusal::with_remedy(
+            ksx_api::codes::PANEL_INTERFACE_BUSY,
+            "Another app is using this I-PAC's configuration interface. KSX could not acquire the exclusive handle required for this step; no persistent chart write was started.",
+            "Close WinIPAC or the other encoder tool, then choose Read board again. KSX keyboard input can continue while the configuration interface is busy.",
+        );
+    }
+
+    refused(
+        format!(
+            "the exact I-PAC configuration collection could not be opened: {error}; no persistent chart write was started"
+        ),
+        "reconnect the encoder and confirm its configuration interface is available to this Windows account, then retry; if another hardware tool is open, close it first",
+    )
 }
 
 /// Prove that the pinned chart is stable across two independent HID sessions.
@@ -3384,6 +3400,43 @@ mod tests {
 
     fn test_profile() -> &'static PanelProtocolProfile {
         profile_for(0xD209, 0x0430, IPAC4_BCD_DEVICE).expect("measured I-PAC 4 profile")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sharing_violation_names_the_busy_configuration_interface() {
+        let refusal = panel_open_refusal(HidReportError::Open(std::io::Error::from_raw_os_error(
+            windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32,
+        )));
+
+        assert_eq!(refusal.code, ksx_api::codes::PANEL_INTERFACE_BUSY);
+        assert!(refusal.message.contains("Another app is using"));
+        assert!(refusal
+            .message
+            .contains("no persistent chart write was started"));
+        assert!(!refusal.message.contains("nothing was sent"));
+        assert!(refusal
+            .remedy
+            .as_deref()
+            .is_some_and(|line| line.contains("WinIPAC") && line.contains("keyboard input")));
+    }
+
+    #[test]
+    fn other_open_failures_do_not_claim_an_interface_owner() {
+        // Windows access denied is 5. Only sharing violation 32 proves that
+        // another process owns the exclusive configuration collection.
+        let refusal =
+            panel_open_refusal(HidReportError::Open(std::io::Error::from_raw_os_error(5)));
+
+        assert_eq!(refusal.code, ksx_api::codes::REFUSED);
+        assert!(!refusal.message.contains("open in another app"));
+        assert!(refusal
+            .message
+            .contains("no persistent chart write was started"));
+        assert!(refusal
+            .remedy
+            .as_deref()
+            .is_some_and(|line| line.contains("reconnect the encoder")));
     }
 
     fn status_row_for(vid: u16, pid: u16, bcd_device: u16) -> PanelStatusRow {

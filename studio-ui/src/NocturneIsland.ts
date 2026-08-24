@@ -2553,7 +2553,15 @@ function syncPanelEncoderRailStatus(): void {
     return;
   }
   if (panelProgrammingState.inspection.phase === "unavailable") {
-    meta.textContent = `${transport} · Outputs unavailable`;
+    const interfaceBusy = panelProgrammingState.inspection.refusal_code ===
+      "panel-interface-busy";
+    meta.textContent = interfaceBusy
+      ? `${transport} · Configuration interface busy`
+      : `${transport} · Outputs unavailable`;
+    if (setup && interfaceBusy) {
+      setup.title =
+        "Another app owns this I-PAC's configuration interface. Close WinIPAC or the other encoder tool, return to Hardware outputs, then choose Read board again. Keyboard input can continue.";
+    }
     return;
   }
   if (!chart) {
@@ -5314,6 +5322,8 @@ async function readPanelProgrammingChart(
       target_selector: selector,
       chart: null,
       error: "",
+      refusal_code: "",
+      remedy: "",
     },
     capability: panelProgrammingCapability(null),
     editor: {
@@ -5356,9 +5366,14 @@ async function readPanelProgrammingChart(
       return;
     }
     if (payload.unavailable || !payload.view) {
+      const remedy = payload.remedy?.trim() ?? "";
       panelProgrammingState.inspection.phase = "unavailable";
       panelProgrammingState.inspection.error = payload.unavailable || "The complete chart was unavailable.";
-      panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
+      panelProgrammingState.inspection.refusal_code = payload.refusal_code?.trim() ?? "";
+      panelProgrammingState.inspection.remedy = remedy;
+      panelProgrammingMessage = remedy
+        ? `${panelProgrammingState.inspection.error} ${remedy}`
+        : `${panelProgrammingState.inspection.error} Nothing was written.`;
       return;
     }
     const chart = payload.view;
@@ -5466,6 +5481,8 @@ async function readPanelProgrammingChart(
         target_selector: selector,
         chart,
         error: "",
+        refusal_code: "",
+        remedy: "",
       },
       capability: panelProgrammingCapability(panelProgrammingCapabilitiesFromChart(chart)),
       editor: {
@@ -5522,6 +5539,8 @@ async function readPanelProgrammingChart(
     }
     panelProgrammingState.inspection.phase = "unavailable";
     panelProgrammingState.inspection.error = error instanceof Error ? error.message : "Chart read failed.";
+    panelProgrammingState.inspection.refusal_code = "";
+    panelProgrammingState.inspection.remedy = "";
     panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
   } finally {
     if (generation === panelProgrammingGeneration) {
@@ -6765,7 +6784,9 @@ async function requestPanelProgrammingPlan(): Promise<void> {
     );
     if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
-      throw new Error(payload.unavailable || "A complete program plan was unavailable.");
+      const unavailable = payload.unavailable || "A complete program plan was unavailable.";
+      const remedy = payload.remedy?.trim() ?? "";
+      throw new Error(remedy ? `${unavailable} ${remedy}` : unavailable);
     }
     if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
       throw new Error("The encoder or its chart changed while the plan was prepared. Read it again.");
@@ -6844,7 +6865,9 @@ async function requestPanelRestorePlan(backupId: string): Promise<void> {
     );
     if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
-      throw new Error(payload.unavailable || "A complete restore plan was unavailable.");
+      const unavailable = payload.unavailable || "A complete restore plan was unavailable.";
+      const remedy = payload.remedy?.trim() ?? "";
+      throw new Error(remedy ? `${unavailable} ${remedy}` : unavailable);
     }
     if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
       throw new Error("The encoder or its chart changed while the restore was prepared. Read it again.");

@@ -44,6 +44,10 @@ pub mod codes {
     /// return a fully verified recovery outcome. Callers must not classify
     /// this by matching human-readable prose.
     pub const RECOVERY_REQUIRED: &str = "recovery-required";
+    /// Another application owns the panel encoder's exclusive configuration
+    /// collection. Keyboard input may still work, but chart reads and writes
+    /// must wait for that owner to release the hardware interface.
+    pub const PANEL_INTERFACE_BUSY: &str = "panel-interface-busy";
     /// A press was heard but could not be joined to exactly one selectable board.
     pub const IDENTIFY_UNMATCHED: &str = "identify-unmatched";
     /// The operation exists, but not on this surface — the remedy names the

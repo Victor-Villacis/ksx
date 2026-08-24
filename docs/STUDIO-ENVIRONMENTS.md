@@ -130,7 +130,13 @@ to quit gracefully, and only then falls back to stopping that exact recorded
 PID. The script warns when WinIPAC is open but never closes it: WinIPAC may
 continue to own the I-PAC configuration collection, in which case keyboard
 presses can be observed while chart reads correctly report that the collection
-is busy.
+is busy. That launch-time process warning is advisory only: an open WinIPAC
+window does not prove that it currently owns MI_02. Studio reports
+`Configuration interface busy` only when Windows rejects KSX's exclusive open
+with `ERROR_SHARING_VIOLATION`. The typed refusal and its Close/Retry remedy are
+preserved through chart reads and both program/restore planning routes; KSX
+does not guess an owner from a process name, close another tool, or imply that
+ordinary keyboard input has stopped.
 
 If start reports an unmanaged daemon, quit it from the tray belonging to the
 copy that launched it, or run that exact copy's `session quit`; verify

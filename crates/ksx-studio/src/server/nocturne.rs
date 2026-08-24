@@ -957,12 +957,50 @@ fn panel_envelope_json<T: serde::Serialize>(
         .into_response()
 }
 
+fn panel_refusal_envelope_json<T: serde::Serialize>(
+    target_selector: Option<String>,
+    refusal: ksx_api::Refusal,
+    field: &'static str,
+) -> Response {
+    let mut body = serde_json::Map::new();
+    for (key, value) in [
+        (
+            "target_selector",
+            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "unavailable",
+            serde_json::to_value(Some(refusal.message)).unwrap_or_else(|_| {
+                serde_json::Value::String("the panel response could not be encoded".to_owned())
+            }),
+        ),
+        (
+            "refusal_code",
+            serde_json::to_value(Some(refusal.code)).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "remedy",
+            serde_json::to_value(refusal.remedy).unwrap_or(serde_json::Value::Null),
+        ),
+        (field, serde_json::to_value(Option::<T>::None).unwrap()),
+    ] {
+        body.insert(key.to_owned(), value);
+    }
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(serde_json::Value::Object(body)),
+    )
+        .into_response()
+}
+
 /// A crash-recovery chart can retire the browser journal only when these two
 /// fields echo the exact epoch and prove the server ordered the read after any
 /// already-admitted mutation. Ordinary chart reads deliberately return nulls.
 fn panel_chart_envelope_json(
     target_selector: Option<String>,
     unavailable: Option<String>,
+    refusal_code: Option<String>,
+    remedy: Option<String>,
     view: Option<ksx_api::PanelChartView>,
     hardware_epoch: Option<String>,
     hardware_fence: Option<&'static str>,
@@ -978,6 +1016,14 @@ fn panel_chart_envelope_json(
             serde_json::to_value(unavailable).unwrap_or_else(|_| {
                 serde_json::Value::String("the panel response could not be encoded".to_owned())
             }),
+        ),
+        (
+            "refusal_code",
+            serde_json::to_value(refusal_code).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "remedy",
+            serde_json::to_value(remedy).unwrap_or(serde_json::Value::Null),
         ),
         (
             "view",
@@ -1282,7 +1328,15 @@ pub(super) async fn api_panel_chart(
             let hardware_epoch = match checked_hardware_epoch(raw_epoch) {
                 Ok(hardware_epoch) => hardware_epoch,
                 Err(unavailable) => {
-                    return panel_chart_envelope_json(None, Some(unavailable), None, None, None)
+                    return panel_chart_envelope_json(
+                        None,
+                        Some(unavailable),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                 }
             };
             let binding = match checked_hardware_fence_binding(
@@ -1294,6 +1348,8 @@ pub(super) async fn api_panel_chart(
                     return panel_chart_envelope_json(
                         None,
                         Some(unavailable),
+                        None,
+                        None,
                         None,
                         Some(hardware_epoch),
                         None,
@@ -1310,6 +1366,8 @@ pub(super) async fn api_panel_chart(
                         .to_owned(),
                 ),
                 None,
+                None,
+                None,
                 request
                     .hardware_epoch
                     .as_deref()
@@ -1324,13 +1382,29 @@ pub(super) async fn api_panel_chart(
     let selected = match selected_panel_target(&state).await {
         Ok(selected) => selected,
         Err(unavailable) => {
-            return panel_chart_envelope_json(None, Some(unavailable), None, response_epoch, None);
+            return panel_chart_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                None,
+                response_epoch,
+                None,
+            );
         }
     };
     let selector = match checked_panel_target(selected, &request.expected_selector) {
         Ok(selector) => selector,
         Err(unavailable) => {
-            return panel_chart_envelope_json(None, Some(unavailable), None, response_epoch, None);
+            return panel_chart_envelope_json(
+                None,
+                Some(unavailable),
+                None,
+                None,
+                None,
+                response_epoch,
+                None,
+            );
         }
     };
     let target = Some(selector.clone());
@@ -1368,18 +1442,28 @@ pub(super) async fn api_panel_chart(
         Ok(Ok(view)) => panel_chart_envelope_json(
             target,
             None,
+            None,
+            None,
             Some(view),
             response_epoch,
             recovery.as_ref().map(|_| "settled"),
         ),
-        Ok(Err(refusal)) => {
-            panel_chart_envelope_json(target, Some(refusal.message), None, response_epoch, None)
-        }
+        Ok(Err(refusal)) => panel_chart_envelope_json(
+            target,
+            Some(refusal.message),
+            Some(refusal.code),
+            refusal.remedy,
+            None,
+            response_epoch,
+            None,
+        ),
         Err(_) => panel_chart_envelope_json(
             target,
             Some(
                 "the encoder chart task stopped before completing; nothing was changed".to_owned(),
             ),
+            None,
+            None,
             None,
             response_epoch,
             None,
@@ -1574,12 +1658,9 @@ pub(super) async fn api_panel_program_plan(
     let result = tokio::task::spawn_blocking(move || state.machine.panel_program_plan(&spec)).await;
     match result {
         Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
-        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-            target,
-            Some(refusal.message),
-            "plan",
-            None,
-        ),
+        Ok(Err(refusal)) => {
+            panel_refusal_envelope_json::<ksx_api::PanelProgramPlanView>(target, refusal, "plan")
+        }
         Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
             target,
             Some("the hardware-diff plan could not be built; nothing was changed".to_owned()),
@@ -1788,12 +1869,9 @@ pub(super) async fn api_panel_restore_plan(
     let result = tokio::task::spawn_blocking(move || state.machine.panel_restore_plan(&spec)).await;
     match result {
         Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
-        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-            target,
-            Some(refusal.message),
-            "plan",
-            None,
-        ),
+        Ok(Err(refusal)) => {
+            panel_refusal_envelope_json::<ksx_api::PanelProgramPlanView>(target, refusal, "plan")
+        }
         Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
             target,
             Some("the restore diff could not be built; nothing was changed".to_owned()),

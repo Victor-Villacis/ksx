@@ -133,6 +133,11 @@ export interface PanelChartView {
 export interface PanelChartPayload {
   target_selector: string | null;
   unavailable: string | null;
+  /** Stable refusal identity and actionable recovery supplied by the backend.
+   * Older Studio/backend pairs may omit these fields, so absence remains a
+   * generic unavailable chart rather than guessed contention. */
+  refusal_code?: string | null;
+  remedy?: string | null;
   /** Echoed only for a recovery read that the backend ordered against the
    * matching hardware mutation token. */
   hardware_epoch?: string | null;
@@ -294,6 +299,8 @@ export type PanelPlanRequest = PanelProgramRequest;
 export interface PanelPlanPayload {
   target_selector: string | null;
   unavailable: string | null;
+  refusal_code?: string | null;
+  remedy?: string | null;
   plan: PanelPlanView | null;
 }
 
@@ -387,6 +394,8 @@ export interface PanelInspectionState {
   board: PanelProgrammingBoardView | null;
   chart: PanelChartView | null;
   error: string;
+  refusal_code?: string;
+  remedy?: string;
 }
 
 export interface PanelCapabilityState {
@@ -442,6 +451,8 @@ export function createPanelProgrammingState(): PanelProgrammingState {
       board: null,
       chart: null,
       error: "",
+      refusal_code: "",
+      remedy: "",
     },
     capability: {
       kind: "unsupported",

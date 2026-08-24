@@ -348,6 +348,25 @@ fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
             && status.contains("$DaemonPipesValid"),
         "status must require both draft reachability and exact pipe ownership"
     );
+    assert!(
+        start.contains("Get-Process WinIPAC -ErrorAction SilentlyContinue")
+            && start.contains("This script will not close it."),
+        "real QA may warn that WinIPAC can contend for MI_02, but must never close the user's configurator"
+    );
+    let winipac_start = start
+        .find("$WinIpac = Get-Process WinIPAC -ErrorAction SilentlyContinue")
+        .expect("real QA must retain its advisory WinIPAC probe");
+    let winipac_end = start[winipac_start..]
+        .find("$TransitionMutex = $null")
+        .map(|offset| winipac_start + offset)
+        .expect("the advisory WinIPAC block must end before environment transition work");
+    let winipac_block = &start[winipac_start..winipac_end];
+    for forbidden in ["Stop-Process", "CloseMainWindow", ".Kill("] {
+        assert!(
+            !winipac_block.contains(forbidden),
+            "the advisory WinIPAC block must not use {forbidden}"
+        );
+    }
 }
 
 /// The fast development loop and the release pipeline protect different

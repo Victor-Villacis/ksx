@@ -858,6 +858,7 @@ struct ScriptedMachine {
     panel_status_devices: Mutex<Vec<Option<String>>>,
     panel_status_refuse: bool,
     panel_chart_specs: Mutex<Vec<ksx_api::PanelChartSpec>>,
+    panel_chart_refusal: Option<Refusal>,
     panel_routing_specs: Mutex<Vec<ksx_api::PanelRoutingAuthoritySpec>>,
     /// 0 = ordinary/unwritable bypass; 1 = exact authority; 2 = recovery.
     panel_routing_mode: AtomicUsize,
@@ -869,6 +870,7 @@ struct ScriptedMachine {
     panel_profile_save_specs: Mutex<Vec<ksx_api::PanelHardwareProfileSaveSpec>>,
     panel_profile_delete_specs: Mutex<Vec<ksx_api::PanelHardwareProfileDeleteSpec>>,
     panel_program_plan_specs: Mutex<Vec<ksx_api::PanelProgramSpec>>,
+    panel_plan_refusal: Option<Refusal>,
     panel_program_specs: Mutex<Vec<ksx_api::PanelProgramApplySpec>>,
     /// Hermetic gate for the epoch-ordering tests. When held, the provider has
     /// already been entered (so the server fence is Running) but has not yet
@@ -942,6 +944,7 @@ impl Default for ScriptedMachine {
             panel_status_devices: Mutex::new(Vec::new()),
             panel_status_refuse: false,
             panel_chart_specs: Mutex::new(Vec::new()),
+            panel_chart_refusal: None,
             panel_routing_specs: Mutex::new(Vec::new()),
             panel_routing_mode: AtomicUsize::new(0),
             panel_routing_active: Arc::new(AtomicBool::new(false)),
@@ -952,6 +955,7 @@ impl Default for ScriptedMachine {
             panel_profile_save_specs: Mutex::new(Vec::new()),
             panel_profile_delete_specs: Mutex::new(Vec::new()),
             panel_program_plan_specs: Mutex::new(Vec::new()),
+            panel_plan_refusal: None,
             panel_program_specs: Mutex::new(Vec::new()),
             panel_program_hold: AtomicBool::new(false),
             panel_program_entered: AtomicBool::new(false),
@@ -1042,6 +1046,28 @@ impl ScriptedMachine {
     fn panel_status_refusing() -> Self {
         Self {
             panel_status_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn panel_chart_busy() -> Self {
+        Self {
+            panel_chart_refusal: Some(Refusal::with_remedy(
+                ksx_api::codes::PANEL_INTERFACE_BUSY,
+                "Another app is using this I-PAC's configuration interface.",
+                "Close WinIPAC or the other encoder tool, then choose Read board again. KSX keyboard input can continue and nothing was changed.",
+            )),
+            ..Self::default()
+        }
+    }
+
+    fn panel_plan_busy() -> Self {
+        Self {
+            panel_plan_refusal: Some(Refusal::with_remedy(
+                ksx_api::codes::PANEL_INTERFACE_BUSY,
+                "the I-PAC configuration interface became busy before the hardware diff was built",
+                "close WinIPAC or the other encoder tool, then retry this review; KSX keyboard input can continue",
+            )),
             ..Self::default()
         }
     }
@@ -1531,6 +1557,9 @@ impl ksx_api::MachineSource for ScriptedMachine {
         spec: &ksx_api::PanelChartSpec,
     ) -> Result<ksx_api::PanelChartView, Refusal> {
         self.panel_chart_specs.lock().unwrap().push(spec.clone());
+        if let Some(refusal) = &self.panel_chart_refusal {
+            return Err(refusal.clone());
+        }
         Ok(Self::panel_chart_view())
     }
 
@@ -1663,6 +1692,9 @@ impl ksx_api::MachineSource for ScriptedMachine {
             .lock()
             .unwrap()
             .push(spec.clone());
+        if let Some(refusal) = &self.panel_plan_refusal {
+            return Err(refusal.clone());
+        }
         Ok(Self::panel_plan_view())
     }
 
@@ -1686,6 +1718,9 @@ impl ksx_api::MachineSource for ScriptedMachine {
             .lock()
             .unwrap()
             .push(spec.clone());
+        if let Some(refusal) = &self.panel_plan_refusal {
+            return Err(refusal.clone());
+        }
         let mut plan = Self::panel_plan_view();
         plan.summary = "Restore 1 terminal assignment from the selected backup.".to_owned();
         Ok(plan)
@@ -10952,6 +10987,125 @@ fn panel_status_is_guarded_and_has_no_write_method() {
     let posted = post_json(addr, "/api/panel/status", "{}");
     assert!(posted.starts_with("HTTP/1.1 405"), "{posted}");
     assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+}
+
+/// A passive inventory can see MI_02 while another application owns its
+/// exclusive read/write handle. Preserve the typed refusal and recovery words
+/// so Studio can explain WinIPAC contention instead of printing a raw Windows
+/// error or pretending the encoder has no chart.
+#[test]
+fn panel_chart_preserves_configuration_owner_refusal_and_remedy() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_chart_busy());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0430:00","backup":true}"#,
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert_eq!(
+        payload["refusal_code"],
+        ksx_api::codes::PANEL_INTERFACE_BUSY,
+        "{payload}"
+    );
+    assert!(
+        payload["unavailable"]
+            .as_str()
+            .is_some_and(|line| line.contains("Another app is using")),
+        "{payload}"
+    );
+    assert!(
+        payload["remedy"]
+            .as_str()
+            .is_some_and(|line| line.contains("WinIPAC") && line.contains("Read board again")),
+        "{payload}"
+    );
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
+    assert!(machine.panel_program_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// A competing configurator can acquire MI_02 after Studio has read a chart
+/// but before either diff is prepared. Both pre-write routes must keep the
+/// stable refusal identity and recovery text; neither route may collapse that
+/// state into a generic failed-plan banner.
+#[test]
+fn panel_plan_routes_preserve_late_configuration_contention() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_plan_busy());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let program = post_json(
+        addr,
+        "/api/panel/program/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}}"#,
+            "A".repeat(64)
+        ),
+    );
+    assert!(program.starts_with("HTTP/1.1 200"), "{program}");
+    let program: serde_json::Value = serde_json::from_str(body_of(&program)).unwrap();
+
+    let restore = post_json(
+        addr,
+        "/api/panel/restore/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}}"#,
+            "B".repeat(64)
+        ),
+    );
+    assert!(restore.starts_with("HTTP/1.1 200"), "{restore}");
+    let restore: serde_json::Value = serde_json::from_str(body_of(&restore)).unwrap();
+
+    for payload in [&program, &restore] {
+        assert_eq!(
+            payload["refusal_code"],
+            ksx_api::codes::PANEL_INTERFACE_BUSY,
+            "{payload}"
+        );
+        assert!(
+            payload["unavailable"]
+                .as_str()
+                .is_some_and(|line| line.contains("became busy")),
+            "{payload}"
+        );
+        assert!(
+            payload["remedy"]
+                .as_str()
+                .is_some_and(|line| line.contains("WinIPAC") && line.contains("retry")),
+            "{payload}"
+        );
+        assert!(payload["plan"].is_null(), "{payload}");
+    }
+    assert_eq!(machine.panel_program_plan_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_restore_plan_specs.lock().unwrap().len(), 1);
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
 }
 
 /// Every panel POST can cause the machine provider to exchange HID reports,

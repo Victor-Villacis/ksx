@@ -6892,6 +6892,197 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("an occupied I-PAC configuration interface explains WinIPAC and retries in place", async () => {
+    let chartReads = 0;
+    let planReads = 0;
+    let restoreReads = 0;
+    const restoreBackup = panelBackup({
+      id: "20260823T002900Z-restore-BBBBBBBBBBBB",
+      imageSha256: PANEL_DESIRED_SHA,
+      reason: "manual-snapshot",
+    });
+    const hardwareWrites = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname === "/api/panel/program/apply" || pathname === "/api/panel/restore/apply") {
+          hardwareWrites.push(pathname);
+        }
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            configurationState: "available-unopened",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        chartReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(chartReads === 1
+            ? {
+              target_selector: PANEL_SELECTOR,
+              unavailable: "Another app is using this I-PAC's configuration interface. KSX could not acquire the exclusive handle required for this step; no persistent chart write was started.",
+              refusal_code: "panel-interface-busy",
+              remedy: "Close WinIPAC or the other encoder tool, then choose Read board again. KSX keyboard input can continue while the configuration interface is busy, and nothing was changed.",
+              hardware_epoch: null,
+              hardware_fence: null,
+              view: null,
+            }
+            : panelChartPayload()),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        planReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(planReads === 1
+            ? {
+              target_selector: PANEL_SELECTOR,
+              unavailable: "The I-PAC configuration interface became busy before the hardware diff was built.",
+              refusal_code: "panel-interface-busy",
+              remedy: "Close WinIPAC or the other encoder tool, then retry this review. KSX keyboard input can continue.",
+              plan: null,
+            }
+            : panelProgramPlan()),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One verified restore point.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [restoreBackup],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/restore/plan", async (route) => {
+        restoreReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(restoreReads === 1
+            ? {
+              target_selector: PANEL_SELECTOR,
+              unavailable: "The I-PAC configuration interface became busy before the restore diff was built.",
+              refusal_code: "panel-interface-busy",
+              remedy: "Close WinIPAC or the other encoder tool, then retry this restore. KSX keyboard input can continue.",
+              plan: null,
+            }
+            : panelProgramPlan()),
+        });
+      });
+    });
+
+    try {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.waitFor({ state: "visible" });
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      const setup = page.locator('.n-widget-surface[data-entry="encoder-setup"]');
+      await setup.waitFor({ state: "visible" });
+      const summary = setup.locator("[data-surface-programming-summary]");
+      await page.waitForFunction(() =>
+        document.querySelector("[data-surface-programming-summary]")?.textContent
+          ?.includes("Close WinIPAC"));
+
+      assert.equal(chartReads, 1);
+      assert.match(
+        (await summary.textContent()).replace(/\s+/g, " "),
+        /Another app is using.*configuration interface.*Close WinIPAC.*Read board again.*keyboard input can continue.*nothing was changed/i,
+        "the hardware workspace gives a useful recovery path without claiming keyboard input stopped",
+      );
+      assert.match(
+        (await encoderLane.locator(".n-dev-meta").textContent()).replace(/\s+/g, " "),
+        /Configuration interface busy/i,
+        "the collapsed encoder row keeps the failure discoverable",
+      );
+      assert.match(
+        await encoderLane.locator('[data-nx="encoder-select-setup"]').getAttribute("title"),
+        /Close WinIPAC.*Read board again.*Keyboard input can continue/i,
+      );
+      assert.equal(
+        await setup.locator('[data-nx="surface-encoder-review"]').isDisabled(),
+        true,
+        "an unread chart cannot expose a hardware write",
+      );
+      assert.deepEqual(hardwareWrites, []);
+
+      await setup.locator('[data-nx="surface-encoder-read"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-surface-programming")?.getAttribute("data-qualification") ===
+          "qualified");
+      assert.equal(chartReads, 2, "retry performs one fresh authoritative chart read");
+      assert.match(
+        (await encoderLane.locator(".n-dev-meta").textContent()).replace(/\s+/g, " "),
+        /2\/2 outputs assigned/i,
+      );
+      assert.doesNotMatch((await summary.textContent()).replace(/\s+/g, " "), /WinIPAC|busy/i);
+      assert.doesNotMatch(
+        await encoderLane.locator('[data-nx="encoder-select-setup"]').getAttribute("title"),
+        /WinIPAC|busy/i,
+        "a successful chart retry clears the busy-only recovery tooltip",
+      );
+      const review = setup.locator('[data-nx="surface-encoder-review"]');
+      await setup.locator('[data-surface-programming-mode="recommended"]').click();
+      assert.equal(await review.isEnabled(), true);
+      await review.click();
+      await page.waitForFunction(() =>
+        document.querySelector("[data-surface-programming-summary]")?.textContent
+          ?.includes("retry this review"));
+      assert.equal(planReads, 1);
+      assert.match(
+        (await summary.textContent()).replace(/\s+/g, " "),
+        /became busy.*Close WinIPAC.*retry this review.*keyboard input can continue.*Nothing was written/i,
+      );
+      assert.equal(await page.locator("dialog.n-panel-program-dialog").isVisible(), false);
+      assert.equal(await review.isEnabled(), true, "the same guarded review remains retryable");
+
+      await review.click();
+      const dialog = page.locator("dialog.n-panel-program-dialog");
+      await dialog.waitFor({ state: "visible" });
+      assert.equal(planReads, 2, "retry computes one fresh hardware diff");
+      await dialog.locator('[data-panel-dialog-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+
+      const restore = setup.locator('[data-nx="surface-encoder-restore"]');
+      await setup.locator(".n-surface-programming-recovery summary").click();
+      await setup.locator("[data-surface-backup]").selectOption(restoreBackup.backup_id);
+      assert.equal(await restore.isEnabled(), true);
+      await restore.click();
+      await page.waitForFunction(() =>
+        document.querySelector("[data-surface-programming-summary]")?.textContent
+          ?.includes("retry this restore"));
+      assert.equal(restoreReads, 1);
+      assert.match(
+        (await summary.textContent()).replace(/\s+/g, " "),
+        /busy.*restore diff.*Close WinIPAC.*retry this restore.*keyboard input can continue.*Nothing was written/i,
+      );
+      assert.equal(await restore.isEnabled(), true, "the guarded restore remains retryable");
+      await restore.click();
+      await dialog.waitFor({ state: "visible" });
+      assert.equal(restoreReads, 2, "restore retry computes one fresh hardware diff");
+      await dialog.locator('[data-panel-dialog-action="close"]').click();
+      await dialog.waitFor({ state: "hidden" });
+      assert.deepEqual(hardwareWrites, [], "read, planning, and retry never became a persistent operation");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a blank I-PAC enters guarded first-run setup before a panel or emitted key exists", async () => {
     let chartReads = 0;
     let capturedPlan = null;

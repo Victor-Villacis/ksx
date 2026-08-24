@@ -44,6 +44,13 @@ pub struct ResentStroke {
 /// released" with the pad log in one timeline.
 pub type CtlObserver = Box<dyn Fn(&CaptureCtl) + Send>;
 
+/// Hook invoked immediately before one scripted stroke is emitted.
+///
+/// This is a deterministic test rendezvous, not a production input callback:
+/// a pipeline test can hold a later stroke until a downstream worker has
+/// entered the exact state the stroke is meant to challenge.
+pub type BeforeStrokeHook = Box<dyn Fn(usize, &MockStroke) + Send>;
+
 /// Hook run **synchronously inside [`CaptureBackend::run`]**, before the capture
 /// thread is spawned and therefore before the supervisor's first loop
 /// iteration.
@@ -66,6 +73,7 @@ pub struct MockCaptureBackend {
     escapes: EscapeHandle,
     resent: Arc<Mutex<Vec<ResentStroke>>>,
     ctl_observer: Option<CtlObserver>,
+    before_stroke: Option<BeforeStrokeHook>,
     start_hook: Option<StartHook>,
 }
 
@@ -92,6 +100,7 @@ impl MockCaptureBackend {
             escapes: EscapeHandle::new(),
             resent: Arc::new(Mutex::new(Vec::new())),
             ctl_observer: None,
+            before_stroke: None,
             start_hook: None,
         }
     }
@@ -106,6 +115,12 @@ impl MockCaptureBackend {
     /// Call `observer` whenever the capture thread applies a [`CaptureCtl`].
     pub fn with_ctl_observer(mut self, observer: CtlObserver) -> Self {
         self.ctl_observer = Some(observer);
+        self
+    }
+
+    /// Run `hook` immediately before each scripted stroke is emitted.
+    pub fn with_before_stroke(mut self, hook: BeforeStrokeHook) -> Self {
+        self.before_stroke = Some(hook);
         self
     }
 
@@ -166,6 +181,7 @@ impl CaptureBackend for MockCaptureBackend {
             escapes,
             resent,
             ctl_observer,
+            before_stroke,
             start_hook,
         } = *self;
 
@@ -221,6 +237,10 @@ impl CaptureBackend for MockCaptureBackend {
                             CaptureCtl::SetPassthrough => set.passthrough = true,
                             CaptureCtl::Shutdown => return ExitReason::Shutdown,
                         }
+                    }
+
+                    if let Some(hook) = &before_stroke {
+                        hook(t, stroke);
                     }
 
                     let device = &devices[stroke.device].id;

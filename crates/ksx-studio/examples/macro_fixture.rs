@@ -12,14 +12,17 @@
 //!
 //! Loopback only, and the port is an argument so it can never collide with the
 //! user's own `ksx studio` (4460):
+//! `4478` belongs to the automated macro-editor suite, while `4520` is the
+//! documented manual first-run workspace.
 //!
 //! ```text
 //! cargo run -p ksx-studio --example macro_fixture -- 4476
+//! cargo run -p ksx-studio --example macro_fixture -- 4520 --first-run
 //! ```
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ksx_studio::{
@@ -28,6 +31,43 @@ use ksx_studio::{
 };
 
 const PRESET: &str = "Panel P1";
+
+/// Which cabinet history the browser fixture exposes.
+///
+/// Seeded remains the default because the browser suites rely on its authored
+/// controllers and macros. FirstRun is an explicit manual-QA scenario: the
+/// same attached synthetic hardware, but no config, profile, preset, staged
+/// controller, or running session exists yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FixtureScenario {
+    #[default]
+    Seeded,
+    FirstRun,
+}
+
+fn parse_fixture_args<I, S>(args: I) -> Result<(u16, FixtureScenario), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut port = None;
+    let mut scenario = FixtureScenario::Seeded;
+    for arg in args {
+        let arg = arg.as_ref();
+        if arg == "--first-run" {
+            scenario = FixtureScenario::FirstRun;
+        } else if let Ok(parsed) = arg.parse::<u16>() {
+            if port.replace(parsed).is_some() {
+                return Err("the fixture accepts only one port".into());
+            }
+        } else {
+            return Err(format!(
+                "unknown fixture argument '{arg}' (usage: macro_fixture [PORT] [--first-run])"
+            ));
+        }
+    }
+    Ok((port.unwrap_or(4476), scenario))
+}
 
 fn mac(name: &str, steps: Vec<MacroStepView>) -> MacroView {
     MacroView {
@@ -106,32 +146,123 @@ fn seed_macros() -> Vec<MacroView> {
 /// learner so identify-by-key completes a round-trip.
 #[derive(Clone)]
 struct Store {
+    scenario: FixtureScenario,
     macros: Arc<Mutex<Vec<MacroView>>>,
     stage: Arc<Mutex<ksx_core::stage::StagedSetup>>,
+    /// The configuration a successful Save made available to Load. `None` is
+    /// the actual first-install state, rather than an empty draft laid over a
+    /// fabricated config.toml.
+    saved_stage: Arc<Mutex<Option<ksx_core::stage::StagedSetup>>>,
     /// The session, STATEFUL: `KSX_FIXTURE_SESSION=running` seeds only the
     /// boot state; Play and Stop flip it, so a drive can watch the stage
     /// word, the title bar and the live license settle like the product's.
     session_on: Arc<AtomicBool>,
+    /// Number of controllers in the setup that most recently entered Play.
+    /// Kept apart from the editable draft so adding a controller while a
+    /// session runs does not rewrite what the live-session sentence claims.
+    active_slots: Arc<AtomicUsize>,
     /// Set by any HTTP-driven staging edit (the seed does not count), the
     /// way the daemon's StageMeta stamps `dirty` — so the Apply button's
     /// running+dirty visibility is drivable on this double.
     dirty: Arc<AtomicBool>,
+    /// `config`, `profile:<title>`, or empty for a new draft — the same origin
+    /// metadata the production daemon stamps around Save/Load/Start over.
+    origin: Arc<Mutex<String>>,
     /// `Some(generation)` while the scripted learner is "listening"; the next
     /// poll answers with a hit on the fixture I-PAC and clears it.
     listening: Arc<Mutex<Option<u64>>>,
 }
 
 impl Store {
-    fn new() -> Self {
+    fn new(scenario: FixtureScenario) -> Self {
+        let seeded = (scenario == FixtureScenario::Seeded).then(seeded_stage);
         Self {
+            scenario,
             dirty: Arc::new(AtomicBool::new(false)),
+            origin: Arc::new(Mutex::new(String::new())),
             session_on: Arc::new(AtomicBool::new(
-                std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
+                scenario == FixtureScenario::Seeded
+                    && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
             )),
-            macros: Arc::new(Mutex::new(seed_macros())),
-            stage: Arc::new(Mutex::new(seeded_stage())),
+            active_slots: Arc::new(AtomicUsize::new(if scenario == FixtureScenario::Seeded {
+                2
+            } else {
+                0
+            })),
+            macros: Arc::new(Mutex::new(match scenario {
+                FixtureScenario::Seeded => seed_macros(),
+                FixtureScenario::FirstRun => Vec::new(),
+            })),
+            stage: Arc::new(Mutex::new(seeded.clone().unwrap_or_default())),
+            saved_stage: Arc::new(Mutex::new(seeded)),
             listening: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn stamp_stage(&self, mut outcome: ksx_api::StageOutcome) -> ksx_api::StageOutcome {
+        outcome.setup.dirty = self.dirty.load(Ordering::SeqCst);
+        outcome.setup.origin = self.origin.lock().unwrap().clone();
+        outcome
+    }
+}
+
+/// The configuration menu for the explicit first-run scenario. It begins as
+/// a real absence (`config_exists == false`), then reflects a successful Save
+/// from the shared in-memory restore point so the same browser session can
+/// verify first boot → author → save → reload without a contradictory menu.
+fn first_run_setup_state(saved: Option<&ksx_core::stage::StagedSetup>) -> ksx_api::SetupView {
+    let staged = saved.map(ksx_api::StagedSetupView::of);
+    let devices = staged
+        .as_ref()
+        .and_then(|view| view.device.as_ref())
+        .map(|device| {
+            vec![ksx_api::SetupDeviceRow {
+                alias: device.alias.clone(),
+                id: device.selector.clone(),
+                backend: device.backend.clone(),
+            }]
+        })
+        .unwrap_or_default();
+    let device = staged
+        .as_ref()
+        .and_then(|view| view.device.as_ref())
+        .map_or_else(|| "(any)".to_owned(), |device| device.alias.clone());
+    let slots: Vec<ksx_api::SetupSlotRow> = staged
+        .as_ref()
+        .map(|view| {
+            view.slots
+                .iter()
+                .map(|slot| ksx_api::SetupSlotRow {
+                    number: slot.number,
+                    device: device.clone(),
+                    preset: slot.preset.clone(),
+                    persona: slot.persona_label.clone(),
+                    socd: slot.socd.clone(),
+                    source: "config.toml".into(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let presets = slots
+        .iter()
+        .map(|slot| slot.preset.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    ksx_api::SetupView {
+        generated_at: "fixture".into(),
+        blocking: staged
+            .as_ref()
+            .and_then(|view| view.blocking.clone())
+            .unwrap_or_default(),
+        theme: std::env::var("KSX_FIXTURE_THEME").unwrap_or_default(),
+        config_root: "C:\\fixture".into(),
+        config_exists: saved.is_some(),
+        devices,
+        slots,
+        presets,
+        profiles: Vec::new(),
+        ..ksx_api::SetupView::default()
     }
 }
 
@@ -281,6 +412,7 @@ fn authored_preset(name: &str) -> ksx_config::PresetFile {
 
 impl StatusSource for Store {
     fn snapshot(&self) -> StatusSnapshot {
+        let first_run = self.scenario == FixtureScenario::FirstRun;
         StatusSnapshot {
             generated_at: "fixture".into(),
             vigem: "installed".into(),
@@ -289,23 +421,44 @@ impl StatusSource for Store {
                 false,
                 Some("1.6.1".into()),
             ),
-            interception: "installed".into(),
+            interception: if first_run {
+                "not installed".into()
+            } else {
+                "installed".into()
+            },
             daemon_running: true,
             daemon_detail: "fixture".into(),
             autostart: "not registered".into(),
-            pads: vec![PadRow {
-                persona: "Xbox 360 pad".into(),
-                instance: "USB\\FIXTURE\\1".into(),
-            }],
-            profiles: vec![ProfileRow {
-                title: "Fixture".into(),
-                detail: "C:\\fixture.exe — 1 slot".into(),
-            }],
+            pads: if first_run {
+                Vec::new()
+            } else {
+                vec![PadRow {
+                    persona: "Xbox 360 pad".into(),
+                    instance: "USB\\FIXTURE\\1".into(),
+                }]
+            },
+            profiles: if first_run {
+                Vec::new()
+            } else {
+                vec![ProfileRow {
+                    title: "Fixture".into(),
+                    detail: "C:\\fixture.exe — 1 slot".into(),
+                }]
+            },
             config_root: "C:\\fixture".into(),
         }
     }
 
     fn mapper(&self) -> MapperSnapshot {
+        if self.scenario == FixtureScenario::FirstRun {
+            return MapperSnapshot {
+                generated_at: "fixture".into(),
+                source: "first-run fixture".into(),
+                profile: None,
+                config_root: "C:\\fixture".into(),
+                slots: Vec::new(),
+            };
+        }
         MapperSnapshot {
             generated_at: "fixture".into(),
             source: "fixture".into(),
@@ -340,12 +493,13 @@ impl StatusSource for Store {
 /// pillRunning/canStop/rowsPlain/sessionRunning/readOnly, and `down` flips the
 /// whole no-daemon surface. Those are the only states where a first paint
 /// could visibly disagree with what the client renders a moment later.
-fn fixture_session(running: bool) -> SessionView {
+fn fixture_session(running: bool, active_slots: usize) -> SessionView {
     // `KSX_FIXTURE_SESSION=down` stays a boot-wide override (the dead-pipe
     // state has no verbs to flip it with).
     if std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("down") {
         return SessionView::unreachable("no daemon control channel");
     }
+    let pad_word = if active_slots == 1 { "pad" } else { "pads" };
     match running {
         // The running fixture session is STAGED-origin: it "runs" the seeded
         // draft this fixture holds, which is what licenses the live echo to
@@ -353,13 +507,13 @@ fn fixture_session(running: bool) -> SessionView {
         true => SessionView {
             reachable: true,
             running: true,
-            line: "running — Fixture — 2 pad(s)".into(),
+            line: format!("running — Fixture — {active_slots} pad(s)"),
             profile: None,
             origin: ksx_api::SessionOrigin::Staged,
             active: Some(ksx_api::ActiveSessionView {
                 elapsed: "2m 07s".into(),
                 input: "one keyboard captured (fixture)".into(),
-                outputs: "2 virtual pads (fixture)".into(),
+                outputs: format!("{active_slots} virtual {pad_word} (fixture)"),
                 escape_hatch: ksx_api::stage::ESCAPE_HATCH_LINE.into(),
             }),
         },
@@ -382,10 +536,16 @@ impl ControlSource for Store {
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
-                self.dirty.store(true, Ordering::SeqCst);
-                ksx_api::StageOutcome::ok(&setup, "staged")
+                match edit {
+                    ksx_api::StageEdit::Discard => {
+                        self.dirty.store(false, Ordering::SeqCst);
+                        self.origin.lock().unwrap().clear();
+                    }
+                    _ => self.dirty.store(true, Ordering::SeqCst),
+                }
+                self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "staged"))
             }
-            Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
+            Err(refusal) => self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal)),
         }
     }
 
@@ -473,7 +633,10 @@ impl ControlSource for Store {
     }
 
     fn session(&self) -> SessionView {
-        fixture_session(self.session_on.load(Ordering::SeqCst))
+        fixture_session(
+            self.session_on.load(Ordering::SeqCst),
+            self.active_slots.load(Ordering::SeqCst),
+        )
     }
 
     /// Save, scripted like Play: the engine's readiness answers, and a
@@ -483,12 +646,14 @@ impl ControlSource for Store {
         let setup = self.stage.lock().unwrap();
         match setup.commit() {
             Ok(_) => {
+                *self.saved_stage.lock().unwrap() = Some(setup.clone());
                 self.dirty.store(false, Ordering::SeqCst);
-                ksx_api::StageOutcome::ok(&setup, "saved")
+                *self.origin.lock().unwrap() = "config".into();
+                self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "saved"))
             }
             Err(err) => {
                 let refusal = ksx_api::Refusal::new("not-ready", err.to_string());
-                ksx_api::StageOutcome::refused(&setup, &refusal)
+                self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal))
             }
         }
     }
@@ -505,6 +670,7 @@ impl ControlSource for Store {
     fn staged(&self) -> ksx_api::StagedSetupView {
         let mut view = ksx_api::StagedSetupView::of(&self.stage.lock().unwrap());
         view.dirty = self.dirty.load(Ordering::SeqCst);
+        view.origin = self.origin.lock().unwrap().clone();
         view
     }
 
@@ -516,12 +682,16 @@ impl ControlSource for Store {
         let setup = self.stage.lock().unwrap();
         match setup.commit() {
             Ok(_) => {
+                self.active_slots.store(
+                    ksx_api::StagedSetupView::of(&setup).slots.len(),
+                    Ordering::SeqCst,
+                );
                 self.session_on.store(true, Ordering::SeqCst);
-                ksx_api::StageOutcome::ok(&setup, "started")
+                self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "started"))
             }
             Err(err) => {
                 let refusal = ksx_api::Refusal::new("not-ready", err.to_string());
-                ksx_api::StageOutcome::refused(&setup, &refusal)
+                self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal))
             }
         }
     }
@@ -533,7 +703,7 @@ impl ControlSource for Store {
         if !self.session_on.load(Ordering::SeqCst) {
             let refusal =
                 ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
-            return ksx_api::StageOutcome::refused(&setup, &refusal);
+            return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
         }
         // KSX_FIXTURE_APPLY=restart scripts the structural-difference shape,
         // in a daemon-shaped sentence, so the quoting dialog is drivable.
@@ -542,10 +712,10 @@ impl ControlSource for Store {
                 "needs-restart",
                 "the draft adds controller P3 (Xbox 360), which the running session does not have — only a replaced session can plug it",
             );
-            return ksx_api::StageOutcome::refused(&setup, &refusal);
+            return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
         }
         self.dirty.store(false, Ordering::SeqCst);
-        ksx_api::StageOutcome::ok(&setup, "applied in place")
+        self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "applied in place"))
     }
 
     /// Adoption, with the daemon's exact refusal discipline: never over a
@@ -560,7 +730,7 @@ impl ControlSource for Store {
                 "stage-not-empty",
                 "this draft already has content; discard it before loading",
             );
-            return ksx_api::StageOutcome::refused(&setup, &refusal);
+            return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
         }
         if let Some(title) = profile {
             if !title.eq_ignore_ascii_case("Street Fighter 6")
@@ -570,16 +740,59 @@ impl ControlSource for Store {
                     "unknown-profile",
                     format!("no saved game named \"{title}\""),
                 );
-                return ksx_api::StageOutcome::refused(&setup, &refusal);
+                return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
             }
         }
-        *setup = seeded_stage();
-        ksx_api::StageOutcome::ok(&setup, "adopted")
+        // Preserve the browser suites' long-standing reset contract exactly:
+        // the seeded fixture always adopts its canonical seed, regardless of
+        // what an earlier test saved into the in-memory draft.
+        if self.scenario == FixtureScenario::Seeded {
+            *setup = seeded_stage();
+            self.dirty.store(false, Ordering::SeqCst);
+            *self.origin.lock().unwrap() =
+                profile.map_or_else(|| "config".to_owned(), |title| format!("profile:{title}"));
+            return self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "adopted"));
+        }
+        if profile.is_some() {
+            let refusal = ksx_api::Refusal::new(
+                "not-ready",
+                "this first-run fixture has no saved games to load",
+            );
+            return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
+        }
+        let Some(saved) = self.saved_stage.lock().unwrap().clone() else {
+            let refusal = ksx_api::Refusal::new(
+                "not-ready",
+                "this first-run fixture has no saved configuration to load",
+            );
+            return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
+        };
+        *setup = saved;
+        self.dirty.store(false, Ordering::SeqCst);
+        *self.origin.lock().unwrap() = "config".into();
+        self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "adopted"))
     }
 
     fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {
+        let saved_slots = self
+            .saved_stage
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|setup| ksx_api::StagedSetupView::of(setup).slots.len());
+        let Some(saved_slots) = saved_slots else {
+            return Err(ksx_api::Refusal::new(
+                "not-ready",
+                "this first-run fixture has no saved configuration to start",
+            ));
+        };
+        self.active_slots.store(saved_slots, Ordering::SeqCst);
         self.session_on.store(true, Ordering::SeqCst);
-        Ok("running (1 slot(s))".into())
+        Ok(if self.scenario == FixtureScenario::Seeded {
+            "running (1 slot(s))".into()
+        } else {
+            format!("running ({saved_slots} slot(s))")
+        })
     }
 
     fn stop(&self) -> Result<String, ksx_api::Refusal> {
@@ -588,6 +801,12 @@ impl ControlSource for Store {
     }
 
     fn reload(&self) -> Result<String, ksx_api::Refusal> {
+        if self.saved_stage.lock().unwrap().is_none() {
+            return Err(ksx_api::Refusal::new(
+                "not-ready",
+                "this first-run fixture has no saved configuration to reload",
+            ));
+        }
         Ok("running (1 slot(s))".into())
     }
 
@@ -715,13 +934,22 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
 }
 
 fn main() {
-    let port: u16 = std::env::args()
-        .nth(1)
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(4476);
+    let (port, scenario) = match parse_fixture_args(std::env::args().skip(1)) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
     let bind: SocketAddr = ([127, 0, 0, 1], port).into();
-    let store = Store::new();
-    println!("macro fixture on http://{bind}/map");
+    let store = Store::new(scenario);
+    println!(
+        "macro fixture ({}) on http://{bind}/map",
+        match scenario {
+            FixtureScenario::Seeded => "seeded",
+            FixtureScenario::FirstRun => "first-run",
+        }
+    );
     // The fixture drives the MAPPER, so the machine provider is the trait's
     // own defaults: every method refuses in words and names the CLI verb that
     // works. /devices, /profiles, /setup and /pads under this fixture
@@ -729,6 +957,8 @@ fn main() {
     // read the bus rather than inventing one — which are real states of those
     // pages and worth being able to look at.
     struct NoMachine {
+        scenario: FixtureScenario,
+        saved_stage: Arc<Mutex<Option<ksx_core::stage::StagedSetup>>>,
         /// The sign-in task's one bit, so the menu's toggle round-trips.
         autostart: std::sync::atomic::AtomicBool,
         /// The fixture exposes its synthetic restore point only after Studio
@@ -1006,6 +1236,10 @@ fn main() {
         /// exercise the server-stamped `data-theme` without a config file —
         /// this fixture fabricates state and reads no config.toml.
         fn setup_state(&self) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
+            if self.scenario == FixtureScenario::FirstRun {
+                let saved = self.saved_stage.lock().unwrap();
+                return Ok(first_run_setup_state(saved.as_ref()));
+            }
             Ok(ksx_api::SetupView {
                 config_exists: true,
                 theme: std::env::var("KSX_FIXTURE_THEME").unwrap_or_default(),
@@ -1034,6 +1268,15 @@ fn main() {
         /// Two saved games: one ready, one with its program missing — the
         /// broken row is a real state of the menu and worth looking at.
         fn profiles(&self) -> Result<ksx_api::ProfilesView, ksx_api::Refusal> {
+            if self.scenario == FixtureScenario::FirstRun {
+                return Ok(ksx_api::ProfilesView {
+                    generated_at: "fixture".into(),
+                    config_root: "C:\\fixture".into(),
+                    games_path: "C:\\fixture\\games.toml".into(),
+                    profiles: Vec::new(),
+                    notes: Vec::new(),
+                });
+            }
             Ok(ksx_api::ProfilesView {
                 generated_at: "fixture".into(),
                 config_root: "C:\\fixture".into(),
@@ -1408,11 +1651,14 @@ fn main() {
         }
     }
 
+    let saved_stage = Arc::clone(&store.saved_stage);
     if let Err(err) = ksx_studio::serve(
         bind,
         Box::new(store.clone()),
         Box::new(store),
         Box::new(NoMachine {
+            scenario,
+            saved_stage,
             autostart: std::sync::atomic::AtomicBool::new(false),
             panel_backup_created: std::sync::atomic::AtomicBool::new(false),
         }),
@@ -1425,5 +1671,113 @@ fn main() {
     ) {
         eprintln!("fixture failed: {err}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_arguments_keep_seeded_default_and_require_an_explicit_first_run() {
+        assert_eq!(
+            parse_fixture_args(std::iter::empty::<&str>()).unwrap(),
+            (4476, FixtureScenario::Seeded)
+        );
+        assert_eq!(
+            parse_fixture_args(["4520", "--first-run"]).unwrap(),
+            (4520, FixtureScenario::FirstRun)
+        );
+        assert!(parse_fixture_args(["4476", "4478"]).is_err());
+        assert!(parse_fixture_args(["--mystery"]).is_err());
+    }
+
+    #[test]
+    fn first_run_is_empty_everywhere_but_keeps_the_real_staging_engine() {
+        let store = Store::new(FixtureScenario::FirstRun);
+        let staged = ControlSource::staged(&store);
+        assert!(staged.reachable);
+        assert!(staged.empty);
+        assert!(!staged.dirty);
+        assert!(staged.device.is_none());
+        assert!(staged.slots.is_empty());
+        assert_eq!(staged.next_slot, Some(1));
+
+        assert!(StatusSource::snapshot(&store).pads.is_empty());
+        assert!(StatusSource::snapshot(&store).profiles.is_empty());
+        assert_eq!(StatusSource::snapshot(&store).interception, "not installed");
+        assert!(StatusSource::mapper(&store).slots.is_empty());
+        assert!(ControlSource::start(&store, None).is_err());
+
+        let setup = first_run_setup_state(None);
+        assert!(!setup.config_exists);
+        assert!(setup.devices.is_empty());
+        assert!(setup.slots.is_empty());
+        assert!(setup.presets.is_empty());
+        assert!(setup.profiles.is_empty());
+    }
+
+    #[test]
+    fn first_run_save_becomes_the_configuration_that_can_be_loaded() {
+        let store = Store::new(FixtureScenario::FirstRun);
+        *store.stage.lock().unwrap() = seeded_stage();
+        let saved = ControlSource::stage_commit(&store);
+        assert!(saved.ok, "{}", saved.message.as_deref().unwrap_or_default());
+        assert!(!saved.setup.dirty);
+        assert_eq!(saved.setup.origin, "config");
+
+        let held = store.saved_stage.lock().unwrap();
+        let setup = first_run_setup_state(held.as_ref());
+        assert!(setup.config_exists);
+        assert_eq!(setup.devices.len(), 1);
+        assert_eq!(setup.slots.len(), 2);
+        assert_eq!(setup.presets, ["Player 1", "Player 2"]);
+        drop(held);
+
+        let discarded = ControlSource::stage_edit(&store, &ksx_api::StageEdit::Discard);
+        assert!(discarded.ok);
+        assert!(discarded.setup.empty);
+        assert!(!discarded.setup.dirty);
+        assert!(discarded.setup.origin.is_empty());
+        let adopted = ControlSource::stage_adopt(&store, None);
+        assert!(
+            adopted.ok,
+            "{}",
+            adopted.error.as_deref().unwrap_or_default()
+        );
+        assert_eq!(adopted.setup.slots.len(), 2);
+        assert!(!adopted.setup.dirty);
+        assert_eq!(adopted.setup.origin, "config");
+    }
+
+    #[test]
+    fn seeded_adopt_still_resets_to_its_canonical_browser_test_state() {
+        let store = Store::new(FixtureScenario::Seeded);
+        *store.stage.lock().unwrap() = ksx_core::stage::StagedSetup::new();
+        *store.saved_stage.lock().unwrap() = None;
+
+        let adopted = ControlSource::stage_adopt(&store, None);
+        assert!(
+            adopted.ok,
+            "{}",
+            adopted.error.as_deref().unwrap_or_default()
+        );
+        assert_eq!(adopted.setup.slots.len(), 2);
+        assert_eq!(adopted.setup.device.unwrap().label, "Ultimarc I-PAC 4");
+    }
+
+    #[test]
+    fn first_run_play_reports_the_number_of_controllers_that_actually_started() {
+        let store = Store::new(FixtureScenario::FirstRun);
+        *store.stage.lock().unwrap() = seeded_stage();
+        let removed =
+            ControlSource::stage_edit(&store, &ksx_api::StageEdit::RemoveSlot { number: 2 });
+        assert!(removed.ok);
+
+        let played = ControlSource::stage_play(&store);
+        assert!(played.ok, "{}", played.error.as_deref().unwrap_or_default());
+        let session = ControlSource::session(&store);
+        assert_eq!(session.line, "running — Fixture — 1 pad(s)");
+        assert_eq!(session.active.unwrap().outputs, "1 virtual pad (fixture)");
     }
 }

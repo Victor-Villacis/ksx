@@ -88,6 +88,7 @@ is not the default, and v1 does not route those XInput pads back through KSX.
 | Restore / full readback verify | **implemented; live hardware-proven** | `[MEASURED 2026-08-23 16:26:48 UTC / 12:26:48 EDT]` Restore rewrote the qualification backup and reread the exact original hash `1FB3DFFBE64A85EC348873C80A5481B5CE75D6513BA634D9885697A2541901BB`. |
 | Typed machine API and CLI | **implemented; integration-verified** | `[SOURCE crates/ksx-api/src/machine.rs; crates/ksx-app/src/main.rs]` Typed chart/backups/plan/apply/restore plus saved-layout contracts, hardware-command human/JSON parity and plan-first consent. `[MEASURED 2026-08-23 17:05 UTC / 13:05 EDT]` Focused Rust and HTTP suites, warnings-denied all-target clippy, the complete Studio-feature app suite and the complete canvas suite were green. |
 | Studio editor | **implemented; real-board UI and automated flows verified** | `[SOURCE crates/ksx-studio/src/server/mod.rs; crates/ksx-studio/src/server/nocturne.rs; studio-ui/src/panelProgramming.ts; studio-ui/src/NocturneIsland.ts]` Selected-encoder authority, complete 4-by-14 terminal editor, Current/Recommended/Clear/saved-layout starts, normal and advanced shifted/Shift editing, deliberate shared keys, profile CRUD, dirty state, exact review/apply/recovery and post-write Teach handoff. `[MEASURED 2026-08-23 17:04 UTC / 13:04 EDT]` Real Studio read the connected board's final chart, rendered 56/56 and Qualified, and saved the complete current semantic chart as portable layout `KSX Recommended — I-PAC 4` without another EEPROM write. |
+| Reload- and cross-window-safe signal authority | **implemented; automated recovery-, crash-window- and two-document-verified** | `[SOURCE crates/ksx-api/src/machine.rs; crates/ksx-backend/src/panel.rs; crates/ksx-backend/src/panel_programming/facade.rs; crates/ksx-studio/src/server/nocturne.rs; studio-ui/src/NocturneIsland.ts]` Passive status joins the exact physical bus/port fingerprint to the machine recovery journal while holding the programming/Play lease. Busy leases, malformed or substituted recovery paths, missing wire fields and unresolved transactions all fail closed. Studio holds deterministically ordered Web Locks for both the exact Windows device and stable board fingerprint, then publishes a `pending` generation in one atomic per-device sidecar before any apply POST. It retires active Teach/assign work, invalidates every affected stored surface and refuses USB if the safe main document cannot be persisted. The apply token is registered by the server before any asynchronous target check. A recovery read carrying that same token either permanently cancels an unseen/queued apply or waits for a running apply, then reads the complete chart; only the exact token/selector/board response may settle the browser journal. The lock-held writer rechecks the ledger and its per-device write is a CAS, so it cannot overwrite another tab's crash-surviving intent. Other same-origin documents consume both `pending` and fresh `settled` generations through `storage`; synchronous action barriers cover the event-delivery gap, and stale whole-document saves are rebased so they cannot restore a retired key. |
 | Blank-board first-run entry | **implemented; writer path live-proven** | `[SOURCE crates/ksx-api/src/machine.rs; crates/ksx-backend/src/device_scan.rs; crates/ksx-studio/src/snapshot.rs; studio-ui/src/NocturneIsland.ts]` Exact registered hardware is served in an **Arcade encoders** lane. **Set up** opens chart programming without a Windows key event, selected component or panel template. `[MEASURED 2026-08-23 16:33:54 UTC]` The live board was successfully cleared to the resulting all-Unassigned semantic chart. |
 | Non-Ultimarc encoder families | **generic metadata only** | Unknown boards remain visible and refuse family-specific chart verbs. One universal writer is explicitly not inferred. |
 
@@ -362,6 +363,11 @@ relevant key-and-player route, that shelf folds and every drawn control carries
 a compact terminal chip plus Windows-keycap token; mapping cords begin on that
 keycap. Partial player coverage keeps the shelf open, and closing the Builder
 immediately reopens it so a route cannot be stranded on an invisible source.
+When that shelf is the only visible origin it is a non-collapsible section;
+only the redundant physical-panel fallback may fold. Closed fallback geometry
+is excluded from endpoint selection. On a multi-channel joystick, the complete
+terminal/stem/keycap row selects and inspects that exact direction, and an
+unassigned row cannot borrow a sibling direction's hover or route highlight.
 This is only a representation change: the I-PAC still speaks HID keyboard
 signals, and the same staged bindings remain the runtime authority. The capture
 choices are correspondingly worded as
@@ -382,14 +388,104 @@ current chart.
 Configured firmware and observed wiring remain separate authorities on the
 panel itself. Before Teach, the key from the last complete board read can carry
 a dim provisional KSX path but never a `data-key` observation. An unwritten
-edit renders `current → planned`; its cord remains on `current`, and `planned`
-cannot become a live source until program plus readback verifies it. A matching
-Teach promotes the same origin without moving the path to another widget. A
-mismatch renders `configured ≠ observed`, marks the channel red, and resolves
-that physical control's route from the observed Windows key. Every successful
-write invalidates prior Teach authority, even when retained text happens to
-match, so the fresh readback returns to configured/provisional until Teach runs
-again.
+edit renders `current → planned`; its cord remains on `current` until a fresh
+post-edit Teach result establishes what Windows actually received, and
+`planned` cannot become a live source until program plus readback verifies it.
+A matching Teach promotes the same origin without moving the path to another
+widget. A mismatch renders `configured ≠ observed`, marks the channel red,
+retains the unwritten plan as a separate draft fact and resolves that physical
+control's route from the observed Windows key. Every successful write
+invalidates prior Teach authority, even when retained text happens to match, so
+the fresh readback returns to configured/provisional until Teach runs again.
+
+That invalidation is a pre-write invariant rather than a response-time UI
+cleanup. Immediately before either program or restore apply, Studio clears the
+verification state of every browser-kept link for the reviewed board, removes
+unlinked Teach observations from that exact Windows device and proves the
+replacement document reached browser storage. If persistence fails, consent is
+cleared and no apply request is sent. This closes the crash window in which the
+backend could finish byte verification and settle its durable transaction
+journal while the tab disappeared before receiving the response. On reload, a
+retained `matched` or `mismatch` label is only a historical Windows observation
+until a fresh complete chart re-establishes the firmware side of that
+comparison.
+
+The selector-scoped drawing survives device re-enumeration, but Teach authority
+does not. A learner-reported Raw Input HID child is first resolved to its
+canonical selector; that selector is the primary source proof, while an exact
+raw MI_00 device match is only the narrow fallback when canonical resolution is
+unavailable. An unresolved or wrong-selector child fails closed. An accepted
+observation is persisted against the selected canonical MI_00 instance, so a
+byte-identical replacement instance leaves the old hit visible only as history
+until Teach runs again. Mapping-generated, unlinked projections remain
+separately identified by their staged selector and do not impersonate a Teach
+result.
+
+Programmable-encoder routing has a two-sided commit fence.
+`[SOURCE crates/ksx-studio/src/server/nocturne.rs;
+crates/ksx-api/src/stage.rs; crates/ksx-backend/src/daemon/pipe.rs;
+crates/ksx-backend/src/panel_programming/facade.rs;
+studio-ui/src/NocturneIsland.ts]` The source pin contains the staged selector,
+exact canonical MI_00 instance, board fingerprint and complete chart SHA-256.
+Before a bind can stage, the backend resolves one unique boot-keyboard MI_00,
+reads the complete chart twice, retains the final exclusive MI_02 session and
+holds the machine programming lease through `stage_bind`. This is a read-only
+hardware proof: it sends the chart-query reports required to read the encoder
+but never sends a chart-programming report or changes EEPROM.
+
+The target pin is an opaque per-slot revision containing the daemon draft
+incarnation, mutation generation and content revision. Studio rejects a stale
+revision before the slower source proof; the daemon checks it again while
+holding the staged-state lock. A source change, target mutation, or even a
+byte-identical remove/recreate invalidates the gesture. Conflict confirmation
+retains both original pins, while a successful chained bind waits for a newly
+served target revision. Key-first assignment keeps its encoder source pin when
+the controller endpoint is chosen, Control Surface routing carries the same
+target pin, and a process-local Studio fence orders ordinary mapping against
+programming and recovery in both directions.
+
+Once Studio publishes the exact-device `pending` generation, it never restores
+the pre-write observation snapshot. A refusal before the POST—for example, the
+main browser document cannot persist—is provably local while both Web Locks are
+held, so Studio may publish `settled` and retain that initiating tab's reviewed
+chart and draft; Teach evidence still remains retired. A backend
+`mutation_disposition: not-started` is different: it proves only that this
+request did not cross packet zero, not that another process holding the
+machine-global lease left the board unchanged. Studio therefore publishes the
+completion generation but keeps the chart authority locked until a fresh
+complete read. Detached, ambiguous, interrupted and completion-publication
+failures remain pending and fail-closed. Another tab always retires its old
+chart and draft on either generation and performs its own current-chart read.
+
+That recovery read is token-fenced, not merely fresh-looking. The Studio
+server registers an apply/restore epoch before its first asynchronous target
+check. A recovery chart carrying the same epoch and reviewed board identity
+atomically cancels an unseen or queued mutation, or waits until an admitted
+mutation has finished, before it reads the hardware. The browser accepts
+settlement only when the response echoes the exact epoch, selector and board
+fingerprint with `hardware_fence: settled`; an ordinary chart response can
+never clear a pending browser epoch. The writer repeats its ledger barrier
+inside both Web Locks and uses a per-device compare-and-set, so a second tab
+cannot replace the first tab's crash-surviving pending record after waiting for
+the locks.
+
+The passive source layer has its own fail-closed startup gate. For a selected
+encoder, Studio requests status even when Control Surface Builder is closed and
+no physical-panel document exists. Only an explicit `false` recovery result for
+the same selector and instance restores chartless mapping-derived signals;
+missing fields, a transiently missing device identity, request failure, a busy
+machine lease, an unreadable journal or an unresolved transaction keep those
+origins unavailable. The backend takes the same nonblocking lease used by
+Play/start and hardware maintenance, validates every recovery-tree level as an
+ordinary non-reparse object, then reads the exact board marker. It therefore
+cannot publish “settled” from the pre-journal interval of an active writer or
+from a redirected recovery store.
+
+After a complete authoritative read proves one physical board settled, Studio
+removes every obsolete selector-plus-instance alias which pointed at that same
+board fingerprint. Aliases for other boards remain locked independently; a
+Windows re-enumeration therefore cannot strand a settled board behind its old
+instance name or transfer authority to a replacement board.
 
 One physical board terminal is one shared hardware channel. Multiple drawn
 panel views may reference that channel, but they cannot carry divergent
@@ -666,6 +762,8 @@ referenced note describes an instant mode-switch button, not an NKRO addition.
 | 2026-08-23 16:51 EDT | `codex/ipac-signal-journey` / `edf8fdf` baseline | Completed the encoder-as-hardware UX audit: causal five-stage journey, terminal-owned I-PAC Signals, availability-gated route truth, exact-board draft recovery, shared-terminal invariants, passive wiring test, readable focused setup, keyboard-revealed terminal controls and unobstructed writer actions. Retained the original traceable lasso route projection. | `[MEASURED]` API 107/107, backend panel programming 48/48, Studio render 8/8 and HTTP 139/139 passed. The final complete canvas suite passed 51/51 after the focus-coordinate, capture-lifecycle and navigator-obstruction corrections; its focused blank-board, 56-terminal and writer-qualification gate passed 3/3. Assets rebuilt byte-identically twice at `01092be57893`. Final live browser QA showed 68%, steps I-PAC → Windows keys → KSX → Controller → Game, I-PAC Signals instead of fake QWERTY, no covering graph, macro or navigator layer and no page alert. Independent final review reported no remaining P0–P2 findings. No HID/EEPROM write occurred in this UX slice. |
 | 2026-08-23 20:14 EDT | `codex/ipac-signal-journey` / `6f4bcfa` baseline | Added backend-owned friendly I-PAC facts and a compact five-cell Hardware Setup strip: board, firmware, observed input, chart outputs and KSX routes. Firmware `1.56` exists only on the exact registered release-0056 profile; raw USB identity remains visible, vendor mode remains explicitly unqueried, and the WinIPAC `Multi-Mode` label is not inferred. Shared writer constants own release and 56-terminal capacity. | `[MEASURED]` API 108/108, Studio HTTP 139/139 and the complete canvas suite 51/51 passed before final review; after both P2 review fixes, backend panel status passed 8/8, focused HTTP passed 1/1 and focused blank/56-terminal browser flows passed 2/2. Two final Studio builds were byte-identical at build hash `c5e58b8a8a81`. No HID report or EEPROM write occurred. |
 | 2026-08-23 22:48 EDT | `codex/panel-encoder-ecosystem` / `6a6de8a` baseline | Completed the six-stage panel flow: design-first blank encoders, chart-generated physical panels, terminal and Windows-key tokens on every channel, truthful current/planned/Teach states, observed-key route authority, and a slot-safe recoverable signal shelf whenever panel endpoints are hidden or incomplete. | `[MEASURED]` Canvas 55/55, SSR/visual 102/102, Studio HTTP 139/139 and docs 3/3 passed. Consecutive Studio builds were byte-identical at build hash `5a41f6c456d5`; independent P0–P2 re-review found no remaining issue. No HID report or EEPROM write occurred in this UX slice. |
+| 2026-08-24 00:54 EDT | `codex/panel-encoder-ecosystem` / `e0bb205` baseline plus reviewed worktree | Closed the first signal-authority and recovery races: fresh Teach evidence outranks an unwritten plan, apply invalidation must persist before USB, transaction and Teach ownership are exact selector plus Windows instance, and settled reads clear obsolete aliases for only that physical board. A backend `not-started` response retires the request's browser epoch but deliberately keeps its target behind a fresh-read gate; it does not restore pre-write Teach evidence. Passive recovery checks share the programming/Play lease and reject unsafe recovery paths; transient probes retry finitely while durable recovery never polls. The served Input source shell now adopts one client-owned I-PAC signal shelf without duplicating keyboard geometry. | `[MEASURED]` Backend panel programming 54/54, API 108/108, Studio HTTP 139/139 and the complete browser suite 181/181 passed before the final ownership audit; the affected canvas suite then passed 58/58 and SSR/visual passed 102/102 after those review fixes. This row predates the later server-token fence recorded below. Backend and Studio all-target clippy passed with warnings denied; docs 3/3 and formatting passed. No HID/EEPROM report was sent during review. |
+| 2026-08-24 06:25 EDT | `codex/panel-encoder-ecosystem` / `e0bb205` baseline plus final reviewed worktree | Completed the mapping commit boundary: canonical learner resolution, exact source selector/MI_00/board/chart proof, retained exclusive MI_02 session plus programming lease, opaque per-slot incarnation/mutation/content revision, a second daemon lock-held target check, conflict and chained-action pin retention, key-first and Control Surface target fencing, and process-local ordering between binds and programming/recovery. Browser regression mocks now model successful writes with a new served revision; programmable-source tests establish chart authority, fixture device selection is isolated and hydration waits for distinct final SVG geometry. | `[MEASURED 2026-08-24 06:25 EDT]` API 110/110, focused panel programming 56/56, focused daemon pipe 75/75 and backend 707 passed / 1 ignored were green; the final touched-package run also passed API, backend and Studio tests. The complete browser matrix passed 189/189, docs passed 3/3, formatting and warnings-denied touched-package clippy passed, and two consecutive Studio builds were byte-identical across 48 assets at build hash `60bbe320730cb7e31d594813c279512f25890f11ace9b3ee36fb871809cf1e94`. Independent frontend, backend and documentation reviews found no remaining P0–P2 issue. No live HID chart query, programming report or EEPROM write was sent during this review. |
 
 ## Current pickup
 
@@ -675,8 +773,8 @@ saved-layout model and six-stage signal journey are integrated on
 boards and chart-generated panels, renders each physical channel as
 `control → terminal → Windows key`, distinguishes current/draft/Teach truth,
 and keeps slot-safe fallback sources available whenever the panel cannot own a
-visible route. The exact connected I-PAC is already qualified and currently
-carries the fully readback-verified Recommended chart at
+visible route. The exact connected I-PAC is already qualified; its last
+verified on-board image was the fully readback-verified Recommended chart at
 `43CAD3F30B900416531D3A65A3799405F3094E34BE0E37E467079D163C8C1D87`.
 The next agent must not rerun qualification or restore the original chart as
 if the hardware gate were still pending. This UX audit issued no hardware

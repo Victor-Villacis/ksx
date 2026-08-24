@@ -1091,7 +1091,19 @@ fn stamp_stage_meta(
 ) -> ksx_api::StageOutcome {
     outcome.setup.dirty = meta.dirty;
     outcome.setup.origin = meta.origin.clone();
+    stamp_stage_target_revisions(&mut outcome.setup, meta);
     outcome
+}
+
+/// Replace the content-only fallback tokens composed by `ksx-api` with the
+/// daemon-owned draft incarnation and mutation generation. The content hash
+/// remains useful for diagnostics, but the prefix is what makes an exact
+/// remove/recreate an ABA-safe new target.
+fn stamp_stage_target_revisions(setup: &mut ksx_api::StagedSetupView, meta: &super::StageMeta) {
+    for slot in &mut setup.slots {
+        let content = ksx_api::staged_slot_revision(slot);
+        slot.target_revision = format!("d1-{}-{:016x}-{content}", meta.incarnation, meta.revision);
+    }
 }
 
 /// The staged setup as it stands. **A read: it changes nothing.**
@@ -1148,12 +1160,10 @@ fn handle_stage_adopt(request: &serde_json::Value, deps: &PipeDeps) -> serde_jso
     match (deps.stage_adopt)(profile.as_deref()) {
         Ok(setup) => {
             s.staged = setup;
-            s.stage_meta = super::StageMeta {
-                dirty: false,
-                origin: profile
-                    .as_deref()
-                    .map_or_else(|| "config".to_owned(), |title| format!("profile:{title}")),
-            };
+            s.stage_meta = super::StageMeta::default();
+            s.stage_meta.origin = profile
+                .as_deref()
+                .map_or_else(|| "config".to_owned(), |title| format!("profile:{title}"));
             let message = profile.map_or_else(
                 || {
                     "Showing the saved setup. Edits stay on this screen until Save or Play."
@@ -1219,7 +1229,10 @@ fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_a
             // edit is a proposal the origin has not seen.
             match edit {
                 ksx_api::StageEdit::Discard => state.stage_meta = super::StageMeta::default(),
-                _ => state.stage_meta.dirty = true,
+                _ => {
+                    state.stage_meta.dirty = true;
+                    state.stage_meta.bump_revision();
+                }
             }
             stamp_stage_meta(
                 ksx_api::StageOutcome::ok(&state.staged, describe(edit)),
@@ -1264,7 +1277,8 @@ fn stage_bind(request: &ksx_api::StagedBindRequest, state: &SharedState) -> ksx_
             "the daemon's state lock is poisoned, so the staged binding could not be edited",
         );
     };
-    let setup = ksx_api::StagedSetupView::of(&state.staged);
+    let mut setup = ksx_api::StagedSetupView::of(&state.staged);
+    stamp_stage_target_revisions(&mut setup, &state.stage_meta);
     let prepared = match ksx_api::staged_bind_edit(&setup, request) {
         Ok(prepared) => prepared,
         Err(outcome) => return outcome,
@@ -1422,10 +1436,8 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
             s.cabinet_ready = true;
             // The draft now IS the saved config: clean, and its origin is the
             // file it just became.
-            s.stage_meta = super::StageMeta {
-                dirty: false,
-                origin: "config".to_owned(),
-            };
+            s.stage_meta.dirty = false;
+            s.stage_meta.origin = "config".to_owned();
             let mut outcome = ksx_api::StageOutcome::ok(&s.staged, written.message());
             outcome.saved = Some(written.config.display().to_string());
             outcome.backup = written.backup.map(|path| path.display().to_string());
@@ -3541,6 +3553,105 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             before,
             "neither stale target may be redirected to the first slot"
         );
+    }
+
+    #[test]
+    fn served_stage_target_revisions_track_incarnation_device_and_each_successful_bind() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_blank_slots(&deps, 1);
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let first = served["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .expect("served target revision")
+            .to_owned();
+        assert!(first.starts_with("d1-"), "{served}");
+
+        let bound = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": first.clone(),
+                "preset": "P1",
+                "function": "A",
+                "keys": ["G"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(bound["ok"], true, "{bound}");
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let second = served["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .expect("post-bind target revision")
+            .to_owned();
+        assert_ne!(second, first, "a chain needs a fresh post-write token");
+        let chained = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": second.clone(),
+                "preset": "P1",
+                "function": "B",
+                "keys": ["H"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(chained["ok"], true, "{chained}");
+
+        let before_device = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let before_device = before_device["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let changed = handle_request(
+            r#"{"verb":"stage-edit","edit":"choose-device","selector":"usb:1234:5678:00",
+                "alias":"replacement","label":"Keyboard B"}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(changed["ok"], true, "{changed}");
+        assert_ne!(
+            changed["setup"]["slots"][0]["target_revision"], before_device,
+            "a device-only draft mutation must stale an armed mapping"
+        );
+
+        let removed = handle_request(
+            r#"{"verb":"stage-edit","edit":"remove-slot","number":1}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(removed["ok"], true, "{removed}");
+        let recreated = handle_request(
+            r#"{"verb":"stage-edit","edit":"add-slot","number":1,
+                "persona":"playstation","preset":"P1"}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(recreated["ok"], true, "{recreated}");
+        assert_ne!(
+            recreated["setup"]["slots"][0]["target_revision"], before_device,
+            "an identical slot incarnation must never reuse its old token"
+        );
+        let stale = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": before_device.clone(),
+                "preset": "P1",
+                "function": "X",
+                "keys": ["J"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(stale["ok"], false, "{stale}");
+        assert_eq!(stale["code"], ksx_api::codes::BAD_SLOT, "{stale}");
     }
 
     #[test]

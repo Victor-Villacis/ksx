@@ -16,7 +16,7 @@ import {
 } from "./keyboardWorkbench";
 
 export const CONTROL_SURFACE_STORAGE_KEY = "ksx-nocturne-control-surfaces1";
-export const CONTROL_SURFACE_STORE_VERSION = 2 as const;
+export const CONTROL_SURFACE_STORE_VERSION = 3 as const;
 export const CONTROL_SURFACE_BOUNDS = { width: 1200, height: 720 } as const;
 
 export const CONTROL_SURFACE_TEMPLATE_SLUGS = [
@@ -109,6 +109,10 @@ export interface ControlSurfaceStore {
   devices: Record<string, ControlSurfaceState>;
   /** One-way migration marker; the old workbench remains readable and recoverable. */
   migratedWorkbench: Record<string, true>;
+  /** Last cross-document hardware invalidation incorporated by each exact
+   * Windows device. The matching epoch ledger lives in a separate storage
+   * record so an older tab cannot overwrite both facts with one stale save. */
+  hardwareEpochs: Record<string, string>;
 }
 
 export interface ControlSurfaceMappingRecord {
@@ -448,7 +452,12 @@ export function sanitizeControlSurfaceState(value: unknown): ControlSurfaceState
 }
 
 function emptyStore(): ControlSurfaceStore {
-  return { version: CONTROL_SURFACE_STORE_VERSION, devices: {}, migratedWorkbench: {} };
+  return {
+    version: CONTROL_SURFACE_STORE_VERSION,
+    devices: {},
+    migratedWorkbench: {},
+    hardwareEpochs: {},
+  };
 }
 
 export function sanitizeControlSurfaceStore(value: unknown): ControlSurfaceStore {
@@ -462,7 +471,8 @@ export function sanitizeControlSurfaceStore(value: unknown): ControlSurfaceStore
   }
   if (
     !isRecord(candidate) ||
-    (candidate.version !== 1 && candidate.version !== CONTROL_SURFACE_STORE_VERSION)
+    (candidate.version !== 1 && candidate.version !== 2 &&
+      candidate.version !== CONTROL_SURFACE_STORE_VERSION)
   ) return emptyStore();
   const devices: Record<string, ControlSurfaceState> = {};
   if (isRecord(candidate.devices)) {
@@ -481,7 +491,24 @@ export function sanitizeControlSurfaceStore(value: unknown): ControlSurfaceStore
       if (Object.keys(migratedWorkbench).length >= MAX_DEVICE_IDENTITIES) break;
     }
   }
-  return { version: CONTROL_SURFACE_STORE_VERSION, devices, migratedWorkbench };
+  const hardwareEpochs: Record<string, string> = {};
+  if (isRecord(candidate.hardwareEpochs)) {
+    for (const [rawDevice, rawEpoch] of Object.entries(candidate.hardwareEpochs)) {
+      const device = cleanString(rawDevice, 240).toLocaleUpperCase();
+      const epoch = cleanString(rawEpoch, 160);
+      if (!device || !epoch || FORBIDDEN_RECORD_KEYS.has(device) || hardwareEpochs[device]) {
+        continue;
+      }
+      hardwareEpochs[device] = epoch;
+      if (Object.keys(hardwareEpochs).length >= MAX_DEVICE_IDENTITIES) break;
+    }
+  }
+  return {
+    version: CONTROL_SURFACE_STORE_VERSION,
+    devices,
+    migratedWorkbench,
+    hardwareEpochs,
+  };
 }
 
 export function controlSurfaceStateForDevice(
@@ -1283,6 +1310,43 @@ export function invalidateControlSurfaceEncoderVerification(
           ? { ...channel, encoder: { ...channel.encoder, verification: "unverified" as const } }
           : channel
       ),
+    })),
+  });
+}
+
+/** Persist the pre-write loss of signal authority for one exact Windows
+ * device. Linked encoder channels can retain their last observation as
+ * labelled history because `verification` gates routing. An unlinked taught
+ * channel has no such gate, so its observation must be cleared before the
+ * hardware request: otherwise a browser crash after a successful EEPROM write
+ * could make that pre-write key authoritative again on reload. */
+export function invalidateControlSurfaceHardwareObservations(
+  state: ControlSurfaceState,
+  boardFingerprint: string,
+  device: string,
+): ControlSurfaceState {
+  const safe = sanitizeControlSurfaceState(state);
+  const normalizedBoard = cleanString(boardFingerprint, 240).toLocaleUpperCase();
+  const normalizedDevice = cleanString(device, 240).toLocaleUpperCase();
+  return sanitizeControlSurfaceState({
+    ...safe,
+    controls: safe.controls.map((control) => ({
+      ...control,
+      channels: control.channels.map((channel) => {
+        const exactBoard = Boolean(normalizedBoard &&
+          channel.encoder?.boardFingerprint.trim().toLocaleUpperCase() === normalizedBoard);
+        if (exactBoard && channel.encoder) {
+          return {
+            ...channel,
+            encoder: { ...channel.encoder, verification: "unverified" as const },
+          };
+        }
+        const exactDevice = Boolean(normalizedDevice && channel.input.kind === "keyboard" &&
+          channel.input.device.trim().toLocaleUpperCase() === normalizedDevice);
+        return exactDevice
+          ? { ...channel, input: { kind: "unassigned" as const, key: "", device: "" } }
+          : channel;
+      }),
     })),
   });
 }

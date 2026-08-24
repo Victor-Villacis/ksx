@@ -8702,6 +8702,14 @@ a.wsrow-title:hover {
   display: none !important;
 }
 
+.n-widget-kb[data-input-kind="panel-encoder"] .n-kbbuild {
+  display: none !important;
+}
+
+.n-ipac-signal-source:empty {
+  display: none;
+}
+
 .n-ipac-signal-source {
   --kb1: var(--pcs1-key);
   --kb2: var(--pcs2-key);
@@ -8786,7 +8794,7 @@ a.wsrow-title:hover {
   background: rgba(6, 8, 14, 0.25);
 }
 
-.n-ipac-signal-roster-shell > summary {
+.n-ipac-signal-roster-summary {
   display: flex;
   min-height: 34px;
   padding: 7px 9px;
@@ -8797,11 +8805,11 @@ a.wsrow-title:hover {
   list-style: none;
 }
 
-.n-ipac-signal-roster-shell > summary::-webkit-details-marker {
+.n-ipac-signal-roster-summary::-webkit-details-marker {
   display: none;
 }
 
-.n-ipac-signal-roster-shell > summary::before {
+.n-ipac-signal-roster-summary::before {
   content: "›";
   flex: 0 0 auto;
   color: var(--n-accent-2);
@@ -8810,21 +8818,30 @@ a.wsrow-title:hover {
   transition: transform 120ms ease;
 }
 
-.n-ipac-signal-roster-shell[open] > summary::before {
+.n-ipac-signal-roster-shell[open] > .n-ipac-signal-roster-summary::before {
   transform: rotate(90deg);
 }
 
-.n-ipac-signal-roster-shell > summary strong {
+.n-ipac-signal-roster-shell[data-panel-fallback="false"] > .n-ipac-signal-roster-summary {
+  cursor: default;
+}
+
+.n-ipac-signal-roster-shell[data-panel-fallback="false"] > .n-ipac-signal-roster-summary::before {
+  content: "•";
+  transform: none;
+}
+
+.n-ipac-signal-roster-summary strong {
   font-size: 9px;
 }
 
-.n-ipac-signal-roster-shell > summary span {
+.n-ipac-signal-roster-summary span {
   margin-inline-start: auto;
   color: var(--n-text-3);
   font-size: 8px;
 }
 
-.n-ipac-signal-roster-shell[data-panel-fallback="true"] > summary {
+.n-ipac-signal-roster-shell[data-panel-fallback="true"] > .n-ipac-signal-roster-summary {
   background: color-mix(in srgb, var(--n-accent-dim) 16%, transparent);
 }
 
@@ -18751,6 +18768,7 @@ a.nm-link {
   justify-content: center;
   gap: 2px;
   color: var(--surface-signal-state);
+  cursor: pointer;
   white-space: nowrap;
 }
 

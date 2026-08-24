@@ -511,6 +511,397 @@ pub(super) struct PanelStatusPayload {
     view: Option<ksx_api::PanelStatusView>,
 }
 
+/// A browser Web Lock ends when its document dies; the blocking hardware task
+/// it dispatched does not. This bounded, process-local table closes that gap.
+///
+/// Entries are intentionally never evicted or reused during this Studio
+/// process. In particular, a recovery read can install a `Canceled` tombstone
+/// before a delayed apply handler arrives, and that apply must keep refusing
+/// forever rather than become admissible after an LRU pass. At capacity the
+/// next operation fails closed and asks for a Studio restart.
+const PANEL_HARDWARE_FENCE_CAPACITY: usize = 1024;
+const PANEL_HARDWARE_EPOCH_MAX_BYTES: usize = 128;
+const PANEL_HARDWARE_IDENTITY_MAX_BYTES: usize = 480;
+const PANEL_HARDWARE_FENCE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PanelHardwareFenceBinding {
+    selector: String,
+    board_fingerprint: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PanelHardwareFencePhase {
+    Queued,
+    Running,
+    Routing,
+    Finished,
+    Canceled,
+}
+
+#[derive(Debug)]
+struct PanelHardwareFenceEntry {
+    binding: PanelHardwareFenceBinding,
+    phase: PanelHardwareFencePhase,
+}
+
+struct PanelHardwareFenceRefusal {
+    message: String,
+    mutation_disposition: &'static str,
+}
+
+/// Shared by every route in one Studio process. This is not a replacement for
+/// the backend's machine-wide lease: it orders an admitted HTTP mutation
+/// against a crash-recovery chart read *before* either blocking task can race
+/// to that lease.
+pub(super) struct PanelHardwareFence {
+    entries: std::sync::Mutex<std::collections::BTreeMap<String, PanelHardwareFenceEntry>>,
+    next_route: std::sync::atomic::AtomicU64,
+    changed: std::sync::Condvar,
+}
+
+impl PanelHardwareFence {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            next_route: std::sync::atomic::AtomicU64::new(1),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        hardware_epoch: String,
+        binding: PanelHardwareFenceBinding,
+    ) -> Result<PanelHardwareReservation, PanelHardwareFenceRefusal> {
+        let mut entries = self.entries.lock().map_err(|_| PanelHardwareFenceRefusal {
+            message: "the Studio hardware-ordering fence is unavailable; restart Studio before changing this encoder"
+                .to_owned(),
+            mutation_disposition: "unknown",
+        })?;
+        if entries.values().any(|entry| {
+            entry.binding == binding && entry.phase == PanelHardwareFencePhase::Routing
+        }) {
+            return Err(PanelHardwareFenceRefusal {
+                message: "this encoder is committing a key route; the hardware transaction was not started"
+                    .to_owned(),
+                mutation_disposition: "not-started",
+            });
+        }
+        if let Some(existing) = entries.get(&hardware_epoch) {
+            let detail = if existing.binding == binding {
+                "this hardware transaction epoch was already admitted or retired"
+            } else {
+                "this hardware transaction epoch is already bound to a different encoder"
+            };
+            let mutation_disposition = if matches!(
+                existing.phase,
+                PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
+            ) {
+                // A different request carrying this token is still capable of
+                // writing. Calling this duplicate "not-started" would let its
+                // browser settle the shared epoch underneath that writer.
+                "unknown"
+            } else {
+                "not-started"
+            };
+            return Err(PanelHardwareFenceRefusal {
+                message: format!("{detail}; nothing was changed from this request"),
+                mutation_disposition,
+            });
+        }
+        if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
+            return Err(PanelHardwareFenceRefusal {
+                message: "the Studio hardware-ordering fence is full; restart Studio before changing this encoder; nothing was changed"
+                    .to_owned(),
+                // The server could not retain a permanent token tombstone, so
+                // the browser must keep its durable pending record.
+                mutation_disposition: "unknown",
+            });
+        }
+        entries.insert(
+            hardware_epoch.clone(),
+            PanelHardwareFenceEntry {
+                binding,
+                phase: PanelHardwareFencePhase::Queued,
+            },
+        );
+        drop(entries);
+        Ok(PanelHardwareReservation {
+            fence: Arc::clone(self),
+            hardware_epoch,
+            armed: true,
+        })
+    }
+
+    /// Reserve one exact encoder for a route commit before acquiring the
+    /// cross-process programming lease. This closes the in-process queue gap:
+    /// an already admitted writer wins, while a route admitted first prevents
+    /// a later writer from overtaking it before `stage_bind` settles.
+    fn register_route(
+        self: &Arc<Self>,
+        binding: PanelHardwareFenceBinding,
+    ) -> Result<PanelHardwareRouteReservation, String> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            "the Studio hardware-ordering fence is unavailable; this encoder key was not mapped"
+                .to_owned()
+        })?;
+        if entries.values().any(|entry| {
+            entry.binding == binding
+                && matches!(
+                    entry.phase,
+                    PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
+                )
+        }) {
+            return Err(
+                "this encoder is being programmed or recovered; its key was not mapped".to_owned(),
+            );
+        }
+        if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
+            return Err(
+                "the Studio hardware-ordering fence is full; restart Studio before mapping this encoder"
+                    .to_owned(),
+            );
+        }
+        let id = self
+            .next_route
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let route_id = format!("route:{id}");
+        entries.insert(
+            route_id.clone(),
+            PanelHardwareFenceEntry {
+                binding,
+                phase: PanelHardwareFencePhase::Routing,
+            },
+        );
+        Ok(PanelHardwareRouteReservation {
+            fence: Arc::clone(self),
+            route_id,
+        })
+    }
+
+    fn begin(
+        self: &Arc<Self>,
+        mut reservation: PanelHardwareReservation,
+    ) -> Result<PanelHardwareRunning, String> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            "the Studio hardware-ordering fence became unavailable before programming; nothing was changed"
+                .to_owned()
+        })?;
+        let entry = entries
+            .get_mut(&reservation.hardware_epoch)
+            .ok_or_else(|| {
+                "the Studio lost the admitted hardware transaction; nothing was changed".to_owned()
+            })?;
+        match entry.phase {
+            PanelHardwareFencePhase::Queued => {
+                entry.phase = PanelHardwareFencePhase::Running;
+                reservation.armed = false;
+                Ok(PanelHardwareRunning {
+                    fence: Arc::clone(self),
+                    hardware_epoch: reservation.hardware_epoch.clone(),
+                })
+            }
+            PanelHardwareFencePhase::Canceled => Err(
+                "a recovery read retired this hardware transaction before it started; nothing was changed"
+                    .to_owned(),
+            ),
+            PanelHardwareFencePhase::Running
+            | PanelHardwareFencePhase::Routing
+            | PanelHardwareFencePhase::Finished => Err(
+                "this hardware transaction epoch was already used; nothing was changed".to_owned(),
+            ),
+        }
+    }
+
+    /// Establish recovery order for one exact token+selector+board. An unseen
+    /// epoch becomes a permanent cancel tombstone; a queued one is canceled;
+    /// and a running one is waited out before the caller is allowed to read.
+    fn settle_for_recovery_read(
+        &self,
+        hardware_epoch: &str,
+        binding: &PanelHardwareFenceBinding,
+    ) -> Result<(), String> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            "the Studio hardware-ordering fence is unavailable; the recovery read was not trusted"
+                .to_owned()
+        })?;
+        if !entries.contains_key(hardware_epoch) {
+            if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
+                return Err(
+                    "the Studio hardware-ordering fence is full; restart Studio before recovering this encoder"
+                        .to_owned(),
+                );
+            }
+            entries.insert(
+                hardware_epoch.to_owned(),
+                PanelHardwareFenceEntry {
+                    binding: binding.clone(),
+                    phase: PanelHardwareFencePhase::Canceled,
+                },
+            );
+            self.changed.notify_all();
+            return Ok(());
+        }
+
+        let deadline = std::time::Instant::now() + PANEL_HARDWARE_FENCE_WAIT;
+        loop {
+            let entry = entries.get_mut(hardware_epoch).ok_or_else(|| {
+                "the Studio lost the recovery fence entry; the chart was not read".to_owned()
+            })?;
+            if entry.binding != *binding {
+                return Err(
+                    "the hardware transaction epoch belongs to a different encoder; the chart was not read"
+                        .to_owned(),
+                );
+            }
+            match entry.phase {
+                PanelHardwareFencePhase::Queued => {
+                    entry.phase = PanelHardwareFencePhase::Canceled;
+                    self.changed.notify_all();
+                    return Ok(());
+                }
+                PanelHardwareFencePhase::Canceled | PanelHardwareFencePhase::Finished => {
+                    return Ok(())
+                }
+                PanelHardwareFencePhase::Running | PanelHardwareFencePhase::Routing => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        return Err(
+                            "the admitted encoder transaction is still running; the recovery chart was not read"
+                                .to_owned(),
+                        );
+                    }
+                    let remaining = deadline.saturating_duration_since(now);
+                    let (next, timeout) = self.changed.wait_timeout(entries, remaining).map_err(|_| {
+                        "the Studio hardware-ordering fence became unavailable while waiting; the recovery chart was not read"
+                            .to_owned()
+                    })?;
+                    entries = next;
+                    if timeout.timed_out() {
+                        return Err(
+                            "the admitted encoder transaction is still running; the recovery chart was not read"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish(&self, hardware_epoch: &str) {
+        // A poisoned fence already makes every new operation fail closed, but
+        // waking a recovery waiter is still the least surprising shutdown path
+        // for the mutation which owned this guard.
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = entries.get_mut(hardware_epoch) {
+            if matches!(
+                entry.phase,
+                PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
+            ) {
+                entry.phase = PanelHardwareFencePhase::Finished;
+            }
+        }
+        self.changed.notify_all();
+    }
+
+    fn finish_route(&self, route_id: &str) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.remove(route_id);
+        self.changed.notify_all();
+    }
+}
+
+/// Owns the Studio-process side of one encoder route transaction. The backend
+/// guard nested inside it owns the machine-wide side.
+struct PanelHardwareRouteReservation {
+    fence: Arc<PanelHardwareFence>,
+    route_id: String,
+}
+
+impl Drop for PanelHardwareRouteReservation {
+    fn drop(&mut self) {
+        self.fence.finish_route(&self.route_id);
+    }
+}
+
+/// Owns an admitted-but-not-yet-running epoch across all async validation.
+/// Dropping the handler cannot leave it queued forever.
+struct PanelHardwareReservation {
+    fence: Arc<PanelHardwareFence>,
+    hardware_epoch: String,
+    armed: bool,
+}
+
+impl Drop for PanelHardwareReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.fence.finish(&self.hardware_epoch);
+        }
+    }
+}
+
+/// Once this guard exists the machine call may start. Its drop is the wake-up
+/// edge a recovery chart waits for, including refusal and panic unwinding.
+struct PanelHardwareRunning {
+    fence: Arc<PanelHardwareFence>,
+    hardware_epoch: String,
+}
+
+impl Drop for PanelHardwareRunning {
+    fn drop(&mut self) {
+        self.fence.finish(&self.hardware_epoch);
+    }
+}
+
+fn checked_hardware_epoch(raw: &str) -> Result<String, String> {
+    let value = raw.trim();
+    if value.is_empty()
+        || value.len() > PANEL_HARDWARE_EPOCH_MAX_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "the hardware transaction epoch is missing or malformed; nothing was changed"
+                .to_owned(),
+        );
+    }
+    Ok(value.to_owned())
+}
+
+fn checked_hardware_fence_binding(
+    selector: &str,
+    board_fingerprint: &str,
+) -> Result<PanelHardwareFenceBinding, String> {
+    let selector = selector.trim();
+    let board_fingerprint = board_fingerprint.trim();
+    if selector.is_empty()
+        || board_fingerprint.is_empty()
+        || selector.len() > PANEL_HARDWARE_IDENTITY_MAX_BYTES
+        || board_fingerprint.len() > PANEL_HARDWARE_IDENTITY_MAX_BYTES
+        || !selector.bytes().all(|byte| byte.is_ascii_graphic())
+        || !board_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(
+            "the hardware transaction identity is missing or malformed; nothing was changed"
+                .to_owned(),
+        );
+    }
+    Ok(PanelHardwareFenceBinding {
+        selector: selector.to_ascii_uppercase(),
+        board_fingerprint: board_fingerprint.to_ascii_uppercase(),
+    })
+}
+
 fn panel_status_json(payload: PanelStatusPayload) -> Response {
     let body = serde_json::to_string(&payload).unwrap_or_else(|_| {
         "{\"target_selector\":null,\"unavailable\":\"panel status could not be encoded\",\"view\":null}".to_owned()
@@ -556,6 +947,50 @@ fn panel_envelope_json<T: serde::Serialize>(
         .into_response()
 }
 
+/// A crash-recovery chart can retire the browser journal only when these two
+/// fields echo the exact epoch and prove the server ordered the read after any
+/// already-admitted mutation. Ordinary chart reads deliberately return nulls.
+fn panel_chart_envelope_json(
+    target_selector: Option<String>,
+    unavailable: Option<String>,
+    view: Option<ksx_api::PanelChartView>,
+    hardware_epoch: Option<String>,
+    hardware_fence: Option<&'static str>,
+) -> Response {
+    let mut body = serde_json::Map::new();
+    for (key, value) in [
+        (
+            "target_selector",
+            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "unavailable",
+            serde_json::to_value(unavailable).unwrap_or_else(|_| {
+                serde_json::Value::String("the panel response could not be encoded".to_owned())
+            }),
+        ),
+        (
+            "view",
+            serde_json::to_value(view).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "hardware_epoch",
+            serde_json::to_value(hardware_epoch).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "hardware_fence",
+            serde_json::to_value(hardware_fence).unwrap_or(serde_json::Value::Null),
+        ),
+    ] {
+        body.insert(key.to_owned(), value);
+    }
+    (
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        axum::Json(serde_json::Value::Object(body)),
+    )
+        .into_response()
+}
+
 /// Mutation responses carry a machine-readable disposition. The island must
 /// never decide whether packet zero was crossed by matching refusal prose.
 fn panel_mutation_envelope_json(
@@ -563,6 +998,7 @@ fn panel_mutation_envelope_json(
     unavailable: Option<String>,
     refusal_code: Option<String>,
     remedy: Option<String>,
+    hardware_epoch: Option<String>,
     mutation_disposition: &'static str,
     outcome: Option<ksx_api::PanelProgramOutcome>,
 ) -> Response {
@@ -587,6 +1023,10 @@ fn panel_mutation_envelope_json(
             serde_json::to_value(remedy).unwrap_or(serde_json::Value::Null),
         ),
         (
+            "hardware_epoch",
+            serde_json::to_value(hardware_epoch).unwrap_or(serde_json::Value::Null),
+        ),
+        (
             "mutation_disposition",
             serde_json::Value::String(mutation_disposition.to_owned()),
         ),
@@ -607,6 +1047,7 @@ fn panel_mutation_envelope_json(
 fn panel_mutation_refusal_json(
     target_selector: Option<String>,
     refusal: ksx_api::Refusal,
+    hardware_epoch: Option<String>,
 ) -> Response {
     let disposition = if refusal.code == ksx_api::codes::RECOVERY_REQUIRED {
         "recovery-required"
@@ -618,6 +1059,7 @@ fn panel_mutation_refusal_json(
         Some(refusal.message),
         Some(refusal.code),
         refusal.remedy,
+        hardware_epoch,
         disposition,
         None,
     )
@@ -751,6 +1193,12 @@ pub(super) struct PanelChartRequest {
     expected_selector: String,
     #[serde(default)]
     backup: bool,
+    /// Present only when a browser is recovering a durable pending hardware
+    /// journal. Both recovery fields are required together.
+    #[serde(default)]
+    hardware_epoch: Option<String>,
+    #[serde(default)]
+    expected_board_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -764,6 +1212,7 @@ pub(super) struct PanelProgramPlanRequest {
 
 #[derive(Deserialize)]
 pub(super) struct PanelProgramApplyRequest {
+    hardware_epoch: String,
     expected_selector: String,
     program: PanelProgramBody,
     expected_board_fingerprint: String,
@@ -792,6 +1241,7 @@ pub(super) struct PanelRestorePlanRequest {
 
 #[derive(Deserialize)]
 pub(super) struct PanelRestoreApplyRequest {
+    hardware_epoch: String,
     expected_selector: String,
     restore: PanelRestoreBody,
     expected_board_fingerprint: String,
@@ -813,50 +1263,115 @@ pub(super) async fn api_panel_chart(
     State(state): State<Arc<AppState>>,
     axum::Json(request): axum::Json<PanelChartRequest>,
 ) -> Response {
+    let recovery = match (
+        request.hardware_epoch.as_deref(),
+        request.expected_board_fingerprint.as_deref(),
+    ) {
+        (None, None) => None,
+        (Some(raw_epoch), Some(board_fingerprint)) => {
+            let hardware_epoch = match checked_hardware_epoch(raw_epoch) {
+                Ok(hardware_epoch) => hardware_epoch,
+                Err(unavailable) => {
+                    return panel_chart_envelope_json(None, Some(unavailable), None, None, None)
+                }
+            };
+            let binding = match checked_hardware_fence_binding(
+                &request.expected_selector,
+                board_fingerprint,
+            ) {
+                Ok(binding) => binding,
+                Err(unavailable) => {
+                    return panel_chart_envelope_json(
+                        None,
+                        Some(unavailable),
+                        None,
+                        Some(hardware_epoch),
+                        None,
+                    )
+                }
+            };
+            Some((hardware_epoch, binding))
+        }
+        _ => {
+            return panel_chart_envelope_json(
+                None,
+                Some(
+                    "a recovery chart requires both hardware_epoch and expected_board_fingerprint; the chart was not read"
+                        .to_owned(),
+                ),
+                None,
+                request
+                    .hardware_epoch
+                    .as_deref()
+                    .and_then(|value| checked_hardware_epoch(value).ok()),
+                None,
+            )
+        }
+    };
+    let response_epoch = recovery
+        .as_ref()
+        .map(|(hardware_epoch, _)| hardware_epoch.clone());
     let selected = match selected_panel_target(&state).await {
         Ok(selected) => selected,
         Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelChartView>(
-                None,
-                Some(unavailable),
-                "view",
-                None,
-            );
+            return panel_chart_envelope_json(None, Some(unavailable), None, response_epoch, None);
         }
     };
     let selector = match checked_panel_target(selected, &request.expected_selector) {
         Ok(selector) => selector,
         Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelChartView>(
-                None,
-                Some(unavailable),
-                "view",
-                None,
-            );
+            return panel_chart_envelope_json(None, Some(unavailable), None, response_epoch, None);
         }
     };
     let target = Some(selector.clone());
+    let recovery_task = recovery.clone();
+    let fence = Arc::clone(&state.panel_hardware_fence);
     let result = tokio::task::spawn_blocking(move || {
-        state.machine.panel_chart(&ksx_api::PanelChartSpec {
+        if let Some((hardware_epoch, binding)) = &recovery_task {
+            fence
+                .settle_for_recovery_read(hardware_epoch, binding)
+                .map_err(|message| {
+                    ksx_api::Refusal::with_remedy(
+                        ksx_api::codes::REFUSED,
+                        message,
+                        "wait for the hardware transaction to finish, then read the complete chart again",
+                    )
+                })?;
+        }
+        let view = state.machine.panel_chart(&ksx_api::PanelChartSpec {
             device: Some(selector),
             backup: request.backup,
-        })
+        })?;
+        if let Some((_, binding)) = &recovery_task {
+            if view.board_fingerprint.trim().to_ascii_uppercase() != binding.board_fingerprint {
+                return Err(ksx_api::Refusal::with_remedy(
+                    ksx_api::codes::REFUSED,
+                    "the recovery chart identified a different physical encoder; the pending hardware epoch remains unsettled",
+                    "reconnect the encoder named by the pending transaction, then read its complete chart",
+                ));
+            }
+        }
+        Ok(view)
     })
     .await;
     match result {
-        Ok(Ok(view)) => panel_envelope_json(target, None, "view", Some(view)),
-        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelChartView>(
+        Ok(Ok(view)) => panel_chart_envelope_json(
             target,
-            Some(refusal.message),
-            "view",
             None,
+            Some(view),
+            response_epoch,
+            recovery.as_ref().map(|_| "settled"),
         ),
-        Err(_) => panel_envelope_json::<ksx_api::PanelChartView>(
+        Ok(Err(refusal)) => {
+            panel_chart_envelope_json(target, Some(refusal.message), None, response_epoch, None)
+        }
+        Err(_) => panel_chart_envelope_json(
             target,
             Some(
                 "the encoder chart task stopped before completing; nothing was changed".to_owned(),
             ),
-            "view",
+            None,
+            response_epoch,
             None,
         ),
     }
@@ -1068,6 +1583,59 @@ pub(super) async fn api_panel_program_apply(
     State(state): State<Arc<AppState>>,
     axum::Json(request): axum::Json<PanelProgramApplyRequest>,
 ) -> Response {
+    let hardware_epoch = match checked_hardware_epoch(&request.hardware_epoch) {
+        Ok(hardware_epoch) => hardware_epoch,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some("rebuild and reconfirm the hardware diff before retrying".to_owned()),
+                None,
+                "not-started",
+                None,
+            )
+        }
+    };
+    let fence_binding = match checked_hardware_fence_binding(
+        &request.expected_selector,
+        &request.expected_board_fingerprint,
+    ) {
+        Ok(binding) => binding,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some("rebuild and reconfirm the hardware diff before retrying".to_owned()),
+                None,
+                "not-started",
+                None,
+            )
+        }
+    };
+    // Claim the epoch before any await. If this handler is canceled while it
+    // checks the staged target, the reservation's Drop makes the epoch
+    // terminal; a recovery read or delayed duplicate can never overtake it.
+    let reservation =
+        match state
+            .panel_hardware_fence
+            .register(hardware_epoch.clone(), fence_binding)
+        {
+            Ok(reservation) => reservation,
+            Err(refusal) => return panel_mutation_envelope_json(
+                None,
+                Some(refusal.message),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some(
+                    "read the complete encoder chart before starting another hardware transaction"
+                        .to_owned(),
+                ),
+                Some(hardware_epoch),
+                refusal.mutation_disposition,
+                None,
+            ),
+        };
     let selected = match selected_panel_target(&state).await {
         Ok(selected) => selected,
         Err(unavailable) => {
@@ -1076,6 +1644,7 @@ pub(super) async fn api_panel_program_apply(
                 Some(unavailable),
                 None,
                 None,
+                Some(hardware_epoch),
                 "not-started",
                 None,
             );
@@ -1089,6 +1658,7 @@ pub(super) async fn api_panel_program_apply(
                 Some(unavailable),
                 None,
                 None,
+                Some(hardware_epoch),
                 "not-started",
                 None,
             );
@@ -1108,7 +1678,15 @@ pub(super) async fn api_panel_program_apply(
         confirm: request.confirm,
         supervised: request.supervised,
     };
+    let fence = Arc::clone(&state.panel_hardware_fence);
     let result = tokio::task::spawn_blocking(move || {
+        let _running = fence.begin(reservation).map_err(|message| {
+            ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                message,
+                "read the complete encoder chart before starting another hardware transaction",
+            )
+        })?;
         let session = state.control.session();
         if !session.reachable {
             return Err(ksx_api::Refusal::with_remedy(
@@ -1142,11 +1720,14 @@ pub(super) async fn api_panel_program_apply(
                 None,
                 None,
                 None,
+                Some(hardware_epoch),
                 disposition,
                 Some(outcome),
             )
         }
-        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal),
+        Ok(Err(refusal)) => {
+            panel_mutation_refusal_json(target, refusal, Some(hardware_epoch))
+        }
         Err(_) => panel_mutation_envelope_json(
             target,
             Some(
@@ -1155,6 +1736,7 @@ pub(super) async fn api_panel_program_apply(
             ),
             Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
             Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
+            Some(hardware_epoch),
             "unknown",
             None,
         ),
@@ -1215,6 +1797,56 @@ pub(super) async fn api_panel_restore_apply(
     State(state): State<Arc<AppState>>,
     axum::Json(request): axum::Json<PanelRestoreApplyRequest>,
 ) -> Response {
+    let hardware_epoch = match checked_hardware_epoch(&request.hardware_epoch) {
+        Ok(hardware_epoch) => hardware_epoch,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some("rebuild and reconfirm the restore diff before retrying".to_owned()),
+                None,
+                "not-started",
+                None,
+            )
+        }
+    };
+    let fence_binding = match checked_hardware_fence_binding(
+        &request.expected_selector,
+        &request.expected_board_fingerprint,
+    ) {
+        Ok(binding) => binding,
+        Err(unavailable) => {
+            return panel_mutation_envelope_json(
+                None,
+                Some(unavailable),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some("rebuild and reconfirm the restore diff before retrying".to_owned()),
+                None,
+                "not-started",
+                None,
+            )
+        }
+    };
+    let reservation =
+        match state
+            .panel_hardware_fence
+            .register(hardware_epoch.clone(), fence_binding)
+        {
+            Ok(reservation) => reservation,
+            Err(refusal) => return panel_mutation_envelope_json(
+                None,
+                Some(refusal.message),
+                Some(ksx_api::codes::REFUSED.to_owned()),
+                Some(
+                    "read the complete encoder chart before starting another hardware transaction"
+                        .to_owned(),
+                ),
+                Some(hardware_epoch),
+                refusal.mutation_disposition,
+                None,
+            ),
+        };
     let selected = match selected_panel_target(&state).await {
         Ok(selected) => selected,
         Err(unavailable) => {
@@ -1223,6 +1855,7 @@ pub(super) async fn api_panel_restore_apply(
                 Some(unavailable),
                 None,
                 None,
+                Some(hardware_epoch),
                 "not-started",
                 None,
             );
@@ -1236,6 +1869,7 @@ pub(super) async fn api_panel_restore_apply(
                 Some(unavailable),
                 None,
                 None,
+                Some(hardware_epoch),
                 "not-started",
                 None,
             );
@@ -1254,7 +1888,15 @@ pub(super) async fn api_panel_restore_apply(
         confirm: request.confirm,
         supervised: request.supervised,
     };
+    let fence = Arc::clone(&state.panel_hardware_fence);
     let result = tokio::task::spawn_blocking(move || {
+        let _running = fence.begin(reservation).map_err(|message| {
+            ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                message,
+                "read the complete encoder chart before starting another hardware transaction",
+            )
+        })?;
         let session = state.control.session();
         if !session.reachable {
             return Err(ksx_api::Refusal::with_remedy(
@@ -1283,9 +1925,17 @@ pub(super) async fn api_panel_restore_apply(
             } else {
                 "recovery-required"
             };
-            panel_mutation_envelope_json(target, None, None, None, disposition, Some(outcome))
+            panel_mutation_envelope_json(
+                target,
+                None,
+                None,
+                None,
+                Some(hardware_epoch),
+                disposition,
+                Some(outcome),
+            )
         }
-        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal),
+        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal, Some(hardware_epoch)),
         Err(_) => panel_mutation_envelope_json(
             target,
             Some(
@@ -1294,6 +1944,7 @@ pub(super) async fn api_panel_restore_apply(
             ),
             Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
             Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
+            Some(hardware_epoch),
             "unknown",
             None,
         ),
@@ -2045,6 +2696,16 @@ pub(super) async fn nocturne_form_key_clear(
             };
             let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
                 number: slot.number,
+                expected_device: staged
+                    .device
+                    .as_ref()
+                    .map(|device| device.selector.clone())
+                    .unwrap_or_default(),
+                // This action intentionally performs several serial edits
+                // from one snapshot. Each edit still carries the exact input
+                // selector; the API route below adds the stronger per-target
+                // revision around its slow hardware proof.
+                expected_target_revision: String::new(),
                 preset: slot.preset.clone(),
                 function,
                 keys,
@@ -2130,12 +2791,65 @@ pub(super) async fn nocturne_form_duplicate(
 // same generation-stamped learner, so no two of them can mistake each
 // other's key press for their own.
 
+/// Studio's learner answer adds the canonical selector resolved from the raw
+/// input device path. Raw Input normally reports a HID child while the staged
+/// setup and device picker name its USB MI_00 parent, so comparing `device`
+/// directly to the selected interface rejects the correct physical keyboard.
+///
+/// Keep the daemon-owned view flattened for wire compatibility. `selector` is
+/// additive and deliberately nullable: an unresolved HID child is not proof
+/// that a press came from the selected input.
+#[derive(serde::Serialize)]
+struct NocturneLearnApiView {
+    #[serde(flatten)]
+    learn: crate::control::LearnView,
+    selector: Option<String>,
+}
+
+fn resolved_learn_view(
+    machine: &dyn ksx_api::MachineSource,
+    learn: crate::control::LearnView,
+) -> NocturneLearnApiView {
+    let selector = (learn.state == "hit")
+        .then_some(learn.device.as_deref())
+        .flatten()
+        .filter(|device| !device.trim().is_empty())
+        .and_then(|device| machine.device_identify(device).ok())
+        .map(|identified| identified.selector)
+        .filter(|selector| !selector.trim().is_empty());
+    NocturneLearnApiView { learn, selector }
+}
+
+async fn learn_json(state: Arc<AppState>, start: bool) -> Response {
+    let value = tokio::task::spawn_blocking(move || {
+        let learn = if start {
+            state.control.learn_start()
+        } else {
+            state.control.learn_poll()
+        };
+        resolved_learn_view(state.machine.as_ref(), learn)
+    })
+    .await;
+    match value {
+        Ok(value) => (
+            [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+            axum::Json(value),
+        )
+            .into_response(),
+        Err(_) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "the learner call panicked",
+        )
+            .into_response(),
+    }
+}
+
 pub(super) async fn api_learn_poll(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_poll()).await
+    learn_json(state, false).await
 }
 
 pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_start()).await
+    learn_json(state, true).await
 }
 
 #[derive(Deserialize)]
@@ -2237,14 +2951,33 @@ pub(super) async fn nocturne_api_macro_edit(
 }
 
 #[derive(Deserialize)]
+pub(super) struct NocturneEncoderRoutingAuthorityBody {
+    #[serde(default)]
+    expected_selector: Option<String>,
+    #[serde(default)]
+    expected_instance: Option<String>,
+    #[serde(default)]
+    expected_board_fingerprint: Option<String>,
+    #[serde(default)]
+    expected_chart_sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct NocturneBindBody {
     slot: u8,
+    /// Opaque revision from the exact controller row the browser acted on.
+    /// The server never derives this at POST arrival: doing so would bless a
+    /// stale tab's request for whichever controller now occupies the seat.
+    #[serde(default)]
+    expected_target_revision: String,
     function: String,
     key: String,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    encoder_authority: Option<NocturneEncoderRoutingAuthorityBody>,
 }
 
 pub(super) async fn nocturne_api_bind(
@@ -2264,6 +2997,20 @@ pub(super) async fn nocturne_api_bind(
                 ..BindOutcome::default()
             };
         };
+        let expected_target_revision = body.expected_target_revision.trim().to_owned();
+        if expected_target_revision.is_empty()
+            || expected_target_revision != slot.target_revision
+        {
+            return BindOutcome {
+                ok: false,
+                error: Some(format!(
+                    "Player {} changed since this mapping action was opened. Nothing changed. Refresh the canvas and try again.",
+                    body.slot
+                )),
+                code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
+                ..BindOutcome::default()
+            };
+        }
         let key = body.key.trim();
         if key.is_empty() {
             return BindOutcome {
@@ -2273,6 +3020,97 @@ pub(super) async fn nocturne_api_bind(
                 ..BindOutcome::default()
             };
         }
+        let expected_device = staged
+            .device
+            .as_ref()
+            .map(|device| device.selector.clone())
+            .unwrap_or_default();
+        // `expected_target_revision` came from the browser-observed row and
+        // was checked above before the potentially slow HID proof. Carry the
+        // exact same token into `stage_bind`, where the daemon checks it again
+        // while holding the staged-state lock.
+        let routing_spec = ksx_api::PanelRoutingAuthoritySpec {
+            device: expected_device.clone(),
+            expected_selector: body
+                .encoder_authority
+                .as_ref()
+                .and_then(|authority| authority.expected_selector.clone()),
+            expected_instance: body
+                .encoder_authority
+                .as_ref()
+                .and_then(|authority| authority.expected_instance.clone()),
+            expected_board_fingerprint: body
+                .encoder_authority
+                .as_ref()
+                .and_then(|authority| authority.expected_board_fingerprint.clone()),
+            expected_chart_sha256: body
+                .encoder_authority
+                .as_ref()
+                .and_then(|authority| authority.expected_chart_sha256.clone()),
+        };
+        // Studio's process fence is acquired first, then the backend's
+        // cross-process machine lease, and only then the daemon state lock in
+        // `stage_bind`. Never invert this order: the hardware packet-zero
+        // guard may query the daemon while a programmer owns the machine
+        // lease.
+        let _route_reservation = if let Some(authority) = body.encoder_authority.as_ref() {
+            if !authority
+                .expected_selector
+                .as_deref()
+                .is_some_and(|selector| selector.trim().eq_ignore_ascii_case(&expected_device))
+            {
+                return BindOutcome {
+                    ok: false,
+                    error: Some(
+                        "The encoder authority belongs to a different staged input. Nothing changed."
+                            .to_owned(),
+                    ),
+                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
+                    ..BindOutcome::default()
+                };
+            }
+            let binding = match checked_hardware_fence_binding(
+                authority.expected_selector.as_deref().unwrap_or_default(),
+                authority
+                    .expected_board_fingerprint
+                    .as_deref()
+                    .unwrap_or_default(),
+            ) {
+                Ok(binding) => binding,
+                Err(message) => {
+                    return BindOutcome {
+                        ok: false,
+                        error: Some(message),
+                        code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
+                        ..BindOutcome::default()
+                    }
+                }
+            };
+            match state.panel_hardware_fence.register_route(binding) {
+                Ok(reservation) => Some(reservation),
+                Err(message) => {
+                    return BindOutcome {
+                        ok: false,
+                        error: Some(message),
+                        code: Some(ksx_api::codes::REFUSED.to_owned()),
+                        ..BindOutcome::default()
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let _machine_guard = match state.machine.panel_routing_guard(&routing_spec) {
+            Ok(guard) => guard,
+            Err(refusal) => {
+                return BindOutcome {
+                    ok: false,
+                    error: Some(refusal.message),
+                    code: Some(refusal.code),
+                    ..BindOutcome::default()
+                }
+            }
+        };
         let (keys, force) = if body.mode.as_deref() == Some("add") {
             let current = nocturne_current_keys(&staged, slot, &body.function);
             if current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
@@ -2318,6 +3156,8 @@ pub(super) async fn nocturne_api_bind(
         // authored customer copy and pass through untouched.
         consumerize_bind(state.control.stage_bind(&ksx_api::StagedBindRequest {
             number: slot.number,
+            expected_device,
+            expected_target_revision,
             preset: slot.preset.clone(),
             function: body.function,
             keys,
@@ -2417,6 +3257,12 @@ pub(super) async fn nocturne_form_bind_turbo(
         }
         let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
             number: slot.number,
+            expected_device: staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.clone())
+                .unwrap_or_default(),
+            expected_target_revision: slot.target_revision.clone(),
             preset: slot.preset.clone(),
             function: form.function,
             keys: current,
@@ -2472,6 +3318,12 @@ pub(super) async fn nocturne_form_bind_toggle(
         let function = form.function.clone();
         let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
             number: slot.number,
+            expected_device: staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.clone())
+                .unwrap_or_default(),
+            expected_target_revision: slot.target_revision.clone(),
             preset: slot.preset.clone(),
             function: form.function,
             keys: current,
@@ -2725,6 +3577,12 @@ pub(super) async fn nocturne_form_bind_clear(
             .control
             .stage_bind(&ksx_api::StagedBindRequest {
                 number: form.slot,
+                expected_device: staged
+                    .device
+                    .as_ref()
+                    .map(|device| device.selector.clone())
+                    .unwrap_or_default(),
+                expected_target_revision: slot.target_revision.clone(),
                 preset: slot.preset.clone(),
                 function: form.function,
                 keys: vec!["none".to_owned()],

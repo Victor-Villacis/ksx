@@ -786,6 +786,30 @@ fn refusal_of(code: &'static str, message: String, remedy: Option<String>) -> Re
 /// is told "not here, run this" for the rest — on screen, per press.
 pub struct LocalMachine;
 
+#[cfg(windows)]
+fn catalogued_panel_selector(selector: &str) -> bool {
+    let identity = match ksx_core::DeviceSelector::parse(selector.trim()) {
+        Ok(ksx_core::DeviceSelector::Usb {
+            vendor_id,
+            product_id,
+            ..
+        }) => Some((vendor_id, product_id)),
+        Ok(ksx_core::DeviceSelector::InstancePath(path))
+        | Ok(ksx_core::DeviceSelector::HardwareId(path)) => {
+            let upper = path.to_ascii_uppercase();
+            let field = |name: &str| {
+                let start = upper.find(name)? + name.len();
+                u16::from_str_radix(upper.get(start..start + 4)?, 16).ok()
+            };
+            field("VID_").zip(field("PID_"))
+        }
+        Err(_) => None,
+    };
+    identity.is_some_and(|(vendor_id, product_id)| {
+        crate::panel_catalog::family_for(vendor_id, product_id).is_some()
+    })
+}
+
 impl ksx_api::MachineSource for LocalMachine {
     /// Passive USB/HID panel inventory. The HID survey opens metadata handles
     /// with desired access zero and sends no report transaction; exact vendor
@@ -795,9 +819,7 @@ impl ksx_api::MachineSource for LocalMachine {
         &self,
         spec: &ksx_api::PanelStatusSpec,
     ) -> Result<ksx_api::PanelStatusView, Refusal> {
-        let report = crate::devices::collect();
-        let hid = ksx_platform::hid::survey();
-        crate::panel::view(&report, &hid, spec)
+        crate::panel::status(spec)
     }
 
     #[cfg(windows)]
@@ -806,6 +828,22 @@ impl ksx_api::MachineSource for LocalMachine {
         spec: &ksx_api::PanelChartSpec,
     ) -> Result<ksx_api::PanelChartView, Refusal> {
         crate::panel_programming::chart(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_routing_guard(
+        &self,
+        spec: &ksx_api::PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+        // The staged selector is server-owned. Exact catalog recognition is
+        // enough to decide whether a fresh hardware classification is needed;
+        // the facade then resolves that selector against current inventory and
+        // bypasses recognized profiles which cannot persistently rewrite a
+        // chart. Ordinary keyboards never pay for a HID chart read.
+        if !catalogued_panel_selector(&spec.device) {
+            return Ok(None);
+        }
+        crate::panel_programming::routing_guard_if_needed(spec)
     }
 
     #[cfg(windows)]

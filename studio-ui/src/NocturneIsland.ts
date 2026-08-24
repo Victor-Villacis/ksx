@@ -78,6 +78,7 @@ import {
   setControlSurfaceStage,
   teachControlSurfaceChannel,
   invalidateControlSurfaceEncoderVerification,
+  invalidateControlSurfaceHardwareObservations,
   withControlSurfaceState,
   withControlSurfaceWorkbenchMigrated,
   type ControlSurfaceChannel,
@@ -465,6 +466,7 @@ export interface NocturneView {
   solo_label: string;
   pads: {
     slot: number;
+    target_revision?: string;
     family: string;
     preset: string;
     title: string;
@@ -580,6 +582,8 @@ interface PanelStatusRowView {
   configuration_collection?: string | null;
   configuration_collection_detail: string;
   recommendation: string;
+  programming_recovery_required?: boolean;
+  programming_recovery_detail?: string;
   interfaces: unknown[];
   hid_collections: unknown[];
 }
@@ -1161,6 +1165,7 @@ export function applyNocturne(p: NocturnePayload): void {
     if (assignKey) markAssignTargets(assignKey);
   }
   lastBindView = v;
+  reconcileBindingActionAuthority();
   refreshInspectorCopy();
   if (learnRoot) {
     reconcileKeyboardWorkbenchIdentity();
@@ -1388,7 +1393,36 @@ let controlSurfaceStore: ControlSurfaceStore = {
   version: CONTROL_SURFACE_STORE_VERSION,
   devices: {},
   migratedWorkbench: {},
+  hardwareEpochs: {},
 };
+const CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX =
+  "ksx-nocturne-control-surface-hardware-epoch2:";
+const CONTROL_SURFACE_HARDWARE_EPOCH_VERSION = 2 as const;
+const CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT = 64;
+type ControlSurfaceHardwareEpochPhase = "pending" | "settled";
+interface ControlSurfaceHardwareEpochRecord {
+  epoch: string;
+  boardFingerprint: string;
+  selector: string;
+  phase: ControlSurfaceHardwareEpochPhase;
+}
+interface ControlSurfaceHardwareEpochLedger {
+  version: typeof CONTROL_SURFACE_HARDWARE_EPOCH_VERSION;
+  devices: Record<string, ControlSurfaceHardwareEpochRecord>;
+}
+interface ControlSurfaceHardwareEpochMutation {
+  device: string;
+  epoch: string;
+  boardFingerprint: string;
+  selector: string;
+}
+let controlSurfaceStorageSyncInstalled = false;
+/** Epochs actually consumed by this document's in-memory surface. Keep this
+ * separate from incoming localStorage: a stale whole-store event is data to
+ * reconcile, never proof that this tab already retired its own observations. */
+let controlSurfaceAppliedHardwareEpochs: Record<string, string> = {};
+let controlSurfaceLocallyOwnedHardwareEpoch: ControlSurfaceHardwareEpochMutation | null = null;
+let controlSurfaceActiveHardwareEpoch: ControlSurfaceHardwareEpochMutation | null = null;
 let controlSurfaceState = cloneControlSurfaceState(DEFAULT_CONTROL_SURFACE_STATE);
 let controlSurfaceIdentity = canonicalKeyboardDeviceIdentity("");
 let controlSurfaceItem: HTMLElement | null = null;
@@ -1414,11 +1448,27 @@ let controlSurfaceHardwareError = "";
 let controlSurfaceHardwareRequestGeneration = 0;
 let controlSurfaceHardwareAbort: AbortController | null = null;
 let controlSurfaceHardwareTargetFingerprint = "";
+type PanelRecoveryProbeState =
+  | "checking"
+  | "indeterminate"
+  | "settled"
+  | "recovery-required";
+let panelRecoveryProbeState: PanelRecoveryProbeState = "indeterminate";
+let panelRecoveryProbeTarget = "";
+let panelRecoveryProbeDetail = "";
+const PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS = [750, 1500] as const;
+let panelRecoveryProbeRetryTimer: number | undefined;
 let panelProgrammingState = createPanelProgrammingState();
 let panelProgrammingBackups: PanelBackupView[] = [];
 let panelProgrammingMessage = "";
 let panelProgrammingBusy = false;
 let panelProgrammingGeneration = 0;
+// Selector strings are staging handles, not physical-device identities. Keep
+// every reviewed plan and in-flight outcome pinned to the selector + live
+// Windows instance that owned it so a re-enumerated replacement cannot inherit
+// the first board's UI authority.
+let panelProgrammingPlanTargetFingerprint = "";
+let panelProgrammingTransactionTargetFingerprint = "";
 let panelProgrammingProgramRequest: PanelProgramRequest | null = null;
 let panelProgrammingRestoreRequest: {
   expected_selector: string;
@@ -1429,6 +1479,12 @@ let panelProgrammingDialog: HTMLDialogElement | null = null;
 let panelProgrammingReturnFocus: HTMLElement | null = null;
 let panelProgrammingConfirmed = false;
 let panelProgrammingRecoveryReady = false;
+// Hardware transactions can finish after the user selects another device.
+// Key recovery by selector + Windows instance (never selector alone), and keep
+// invalidation outside the single visible editor state so returning to that
+// exact encoder cannot resurrect pre-write Teach evidence before a fresh read.
+const panelProgrammingRecoveryTargets = new Map<string, string>();
+const panelProgrammingUntrustedBoards = new Set<string>();
 type PanelProgrammingDraftSource = "current" | "recommended" | "blank" | "saved" | "panel-links";
 interface PanelProgrammingCachedDraft {
   chartIdentity: string;
@@ -1854,6 +1910,10 @@ function cancelControlSurfaceHardwareStatus(clear: boolean): void {
   controlSurfaceHardwareRequestGeneration += 1;
   controlSurfaceHardwareAbort?.abort();
   controlSurfaceHardwareAbort = null;
+  if (panelRecoveryProbeRetryTimer !== undefined) {
+    window.clearTimeout(panelRecoveryProbeRetryTimer);
+    panelRecoveryProbeRetryTimer = undefined;
+  }
   if (clear) {
     controlSurfaceHardwarePhase = "idle";
     controlSurfaceHardwarePayload = null;
@@ -2090,10 +2150,18 @@ function syncControlSurfaceHardwareCard(): void {
     : board?.family_id
     ? `${selectedEncoderDisplayName()} is recognized, but this exact model and firmware do not have a measured chart driver yet. Teach, Route, and Control Surface Builder remain available.`
     : "Inspect this exact encoder before opening hardware configuration";
-  if (panelProgrammingState.transaction.phase === "recovery-required" &&
-      panelProgrammingTransactionBelongsToCurrentTarget()) {
-    card.dataset.state = "error";
-    note.textContent = "The last hardware transaction was not verified. New programming is locked; read the chart again or restore a verified backup.";
+  if (panelProgrammingRoutingAuthoritySuspended()) {
+    // Recovery authority is a second, fail-closed dimension. Do not erase a
+    // more specific inspection result (unavailable, stale HTTP error, active
+    // loading, and so on) merely because routes are also withheld. A settled
+    // hardware card can still take the error tone for a real recovery lock.
+    if (!["loading", "error", "unavailable", "empty", "missing", "unsupported"]
+      .includes(cardState)) {
+      card.dataset.state = "error";
+    }
+    note.textContent = board?.programming_recovery_detail?.trim() ||
+      panelRecoveryProbeDetail ||
+      "This encoder's saved signal evidence predates a hardware transaction. Routes and chart-derived actions stay locked until KSX reads the complete current chart or verifies a restore.";
   } else if (panelProgrammingState.transaction.phase === "recovery-required") {
     note.textContent =
       "A transaction for the previously selected encoder needs recovery. This currently selected encoder was not changed.";
@@ -2109,10 +2177,12 @@ function syncControlSurfaceHardwareCard(): void {
   syncPanelProgrammingUi();
 }
 
-async function refreshControlSurfaceHardwareStatus(): Promise<void> {
+async function refreshControlSurfaceHardwareStatus(retryAttempt = 0): Promise<void> {
   cancelControlSurfaceHardwareStatus(false);
   const generation = controlSurfaceHardwareRequestGeneration;
   const selector = nCapSelector().trim();
+  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
+  if (panelRecoveryProbePossible()) beginPanelRecoveryProbe();
   const controller = new AbortController();
   controlSurfaceHardwareAbort = controller;
   controlSurfaceHardwarePhase = "loading";
@@ -2135,6 +2205,7 @@ async function refreshControlSurfaceHardwareStatus(): Promise<void> {
     controlSurfaceHardwareAbort = null;
     const currentSelector = nCapSelector().trim();
     const targetSelector = payload.target_selector?.trim() ?? "";
+    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     if (currentSelector !== selector || targetSelector !== selector) {
       if (currentSelector === selector) {
         controlSurfaceHardwarePhase = "error";
@@ -2147,15 +2218,48 @@ async function refreshControlSurfaceHardwareStatus(): Promise<void> {
     }
     controlSurfaceHardwarePayload = payload;
     controlSurfaceHardwarePhase = "ready";
+    if (panelRecoveryProbePossible() &&
+        requestTargetFingerprint === currentControlSurfaceHardwareFingerprint()) {
+      const board = payload.view?.panels[0] ?? null;
+      const recoveryRequired = board?.programming_recovery_required;
+      const recoveryDetail = board?.programming_recovery_detail?.trim() ?? "";
+      const leaseBusy = recoveryRequired === true && /hardware lease/i.test(recoveryDetail);
+      if (recoveryRequired === false) {
+        setPanelRecoveryProbe(requestTargetFingerprint, "settled");
+      } else if (recoveryRequired === true && !leaseBusy) {
+        setPanelRecoveryProbe(
+          requestTargetFingerprint,
+          "recovery-required",
+          recoveryDetail,
+        );
+      } else {
+        const detail = recoveryRequired === undefined
+          ? "This KSX server did not report recovery authority for the selected encoder."
+          : recoveryDetail ||
+            "Another hardware operation temporarily owns this encoder's recovery check.";
+        schedulePanelRecoveryProbeRetry(requestTargetFingerprint, retryAttempt);
+        setPanelRecoveryProbe(requestTargetFingerprint, "indeterminate", detail);
+      }
+    }
     syncControlSurfaceHardwareCard();
   } catch (error) {
     if (controller.signal.aborted || generation !== controlSurfaceHardwareRequestGeneration) return;
     controlSurfaceHardwareAbort = null;
+    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     controlSurfaceHardwarePayload = null;
     controlSurfaceHardwarePhase = "error";
     controlSurfaceHardwareError = error instanceof Error
       ? `${error.message} Nothing was changed.`
       : "Hardware status could not be read. Nothing was changed.";
+    if (panelRecoveryProbePossible() &&
+        requestTargetFingerprint === currentControlSurfaceHardwareFingerprint()) {
+      schedulePanelRecoveryProbeRetry(requestTargetFingerprint, retryAttempt);
+      setPanelRecoveryProbe(
+        requestTargetFingerprint,
+        "indeterminate",
+        controlSurfaceHardwareError,
+      );
+    }
     syncControlSurfaceHardwareCard();
   }
 }
@@ -2166,9 +2270,106 @@ function panelProgrammingTransactionActive(): boolean {
 }
 
 function panelProgrammingTransactionBelongsToCurrentTarget(): boolean {
-  const transactionTarget = panelProgrammingState.transaction.target_selector.trim();
-  return Boolean(transactionTarget) && transactionTarget.toLocaleUpperCase() ===
-    panelProgrammingTarget().toLocaleUpperCase();
+  return Boolean(panelProgrammingTransactionTargetFingerprint) &&
+    panelProgrammingTransactionTargetFingerprint === currentControlSurfaceHardwareFingerprint();
+}
+
+function panelRecoveryAuthorityRelevant(): boolean {
+  return selectedInputIsPanelEncoder();
+}
+
+function panelRecoveryProbePossible(): boolean {
+  return panelRecoveryAuthorityRelevant() && Boolean(
+    nCapSelector().trim() && nCapInstance().trim(),
+  );
+}
+
+function setPanelRecoveryProbe(
+  target: string,
+  state: PanelRecoveryProbeState,
+  detail = "",
+): void {
+  if (state !== "indeterminate" &&
+      panelRecoveryProbeRetryTimer !== undefined) {
+    window.clearTimeout(panelRecoveryProbeRetryTimer);
+    panelRecoveryProbeRetryTimer = undefined;
+  }
+  panelRecoveryProbeTarget = target;
+  panelRecoveryProbeState = state;
+  panelRecoveryProbeDetail = detail;
+  // The compatibility mapper can already be listening, or can be holding a
+  // key for a controller click, when a machine-scoped recovery probe changes
+  // underneath it. Those are routing intents just as surely as the Builder's
+  // Route button. Retire them before repainting the source as unavailable so
+  // neither can commit an unproven encoder signal after this transition.
+  if (state !== "settled" && panelRecoveryAuthorityRelevant()) {
+    if (learnRow && (learnRow.purpose ?? "binding") === "binding") {
+      autoMap = null;
+      void cancelLearn();
+    }
+    if (assignKey) cancelAssign();
+  }
+  // Recovery authority changes source availability, not merely the hardware
+  // card. Repaint even when the Builder is closed and that card does not
+  // exist, then let the flow layer re-measure the shelf endpoints.
+  syncIpacSignalSource();
+  if (controlSurfaceItem) syncControlSurfaceWidget(false);
+  else mappingFlowLayer?.scheduleLayout();
+}
+
+function beginPanelRecoveryProbe(): void {
+  const target = currentControlSurfaceHardwareFingerprint();
+  if (panelRecoveryProbePossible()) {
+    setPanelRecoveryProbe(target, "checking");
+  } else {
+    setPanelRecoveryProbe(
+      target,
+      "indeterminate",
+      "KSX is waiting for the selected encoder's exact device identity before checking recovery.",
+    );
+  }
+}
+
+function schedulePanelRecoveryProbeRetry(target: string, retryAttempt: number): void {
+  if (retryAttempt >= PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS.length) return;
+  const delay = PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS[retryAttempt];
+  panelRecoveryProbeRetryTimer = window.setTimeout(() => {
+    panelRecoveryProbeRetryTimer = undefined;
+    if (
+      panelRecoveryProbeState !== "indeterminate" ||
+      panelRecoveryProbeTarget !== target ||
+      currentControlSurfaceHardwareFingerprint() !== target ||
+      !panelRecoveryProbePossible()
+    ) return;
+    void refreshControlSurfaceHardwareStatus(retryAttempt + 1);
+  }, delay);
+}
+
+function panelProgrammingRoutingAuthoritySuspended(): boolean {
+  const targetFingerprint = currentControlSurfaceHardwareFingerprint();
+  const chartBoard = panelProgrammingState.inspection.chart?.board_fingerprint
+    .trim().toLocaleUpperCase() ?? "";
+  const pendingHardware = pendingControlSurfaceHardwareEpochs();
+  const pendingHardwareSuspends = selectedInputIsPanelEncoder() && (
+    pendingHardware === null ? true : pendingHardware.length > 0
+  );
+  // A selected encoder is not allowed to become a keyboard source during the
+  // page-load gap before passive status has checked this exact selector and
+  // instance against the durable journal. This also covers a brand-new I-PAC
+  // with no surface links yet but pre-existing mapping-derived key sources.
+  const probeRelevant = panelRecoveryAuthorityRelevant();
+  const recoveryProbeSuspends = probeRelevant && (
+    panelRecoveryProbeTarget !== currentControlSurfaceHardwareFingerprint() ||
+    panelRecoveryProbeState !== "settled"
+  );
+  return Boolean(targetFingerprint && panelProgrammingRecoveryTargets.has(targetFingerprint)) ||
+    Boolean(chartBoard && panelProgrammingUntrustedBoards.has(chartBoard)) ||
+    pendingHardwareSuspends ||
+    selectedPanelStatusBoard()?.programming_recovery_required === true ||
+    recoveryProbeSuspends ||
+    (panelProgrammingTransactionActive() && panelProgrammingTransactionBelongsToCurrentTarget()) ||
+    (panelProgrammingState.transaction.phase === "recovery-required" &&
+      panelProgrammingTransactionBelongsToCurrentTarget());
 }
 
 function panelProgrammingTarget(): string {
@@ -2347,9 +2548,10 @@ function syncPanelProgrammingJourneyAndTest(): void {
   const item = controlSurfaceItem;
   if (!item) return;
   const chart = panelProgrammingState.inspection.chart;
-  const assigned = panelProgrammingAssignedCount(chart);
-  const signalCount = panelProgrammingSignalCount(chart);
-  const mapped = panelProgrammingMappedKeyCount(chart);
+  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
+  const assigned = routingAuthoritySuspended ? 0 : panelProgrammingAssignedCount(chart);
+  const signalCount = routingAuthoritySuspended ? 0 : panelProgrammingSignalCount(chart);
+  const mapped = routingAuthoritySuspended ? 0 : panelProgrammingMappedKeyCount(chart);
   const encoderName = selectedEncoderShortName();
   const encoderJourneyLabel = item.querySelector<HTMLElement>(
     "[data-panel-journey-encoder-label]",
@@ -2425,16 +2627,19 @@ function syncPanelProgrammingJourneyAndTest(): void {
       : `This ${encoderName} currently emits no supported Windows keys, so wired controls cannot reach KSX yet. Choose a hardware layout above first.`;
   }
   if (test) {
-    test.disabled = assigned === 0 || panelProgrammingBusy || panelProgrammingTransactionActive();
+    test.disabled = assigned === 0 || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      routingAuthoritySuspended;
     test.textContent = listening ? "Stop listening" : draftPending ? "Test current board" : "Test wiring";
     test.setAttribute("aria-pressed", String(listening));
   }
   if (route) {
     route.disabled = assigned === 0 || panelProgrammingTransactionActive() ||
+      routingAuthoritySuspended ||
       Boolean(panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0);
   }
   if (buildPanel) {
-    buildPanel.disabled = assigned === 0 || panelProgrammingTransactionActive();
+    buildPanel.disabled = assigned === 0 || panelProgrammingTransactionActive() ||
+      routingAuthoritySuspended;
     buildPanel.textContent = controlSurfaceState.started
       ? "Replace panel from chart…"
       : "Build physical panel";
@@ -2444,7 +2649,8 @@ function syncPanelProgrammingJourneyAndTest(): void {
   }
   if (designPanel) {
     designPanel.hidden = assigned > 0;
-    designPanel.disabled = !chart || panelProgrammingTransactionActive();
+    designPanel.disabled = !chart || panelProgrammingTransactionActive() ||
+      routingAuthoritySuspended;
     designPanel.title = chart
       ? `Design the physical cabinet first, then link its controls to ${encoderName} terminals and choose the Windows keys the board will emit`
       : `Read ${encoderName} before designing a terminal-linked physical panel`;
@@ -2509,6 +2715,12 @@ function syncPanelProgrammingJourneyAndTest(): void {
 }
 
 function syncIpacSignalSource(): void {
+  // nocturneWire runs against the served tree before Forma adopts it. The
+  // passive recovery request may answer during that window; inserting the
+  // client-only signal shelf then shifts hydration anchors and duplicates the
+  // keyboard case. Cache the probe state, but do not mutate this subtree until
+  // initNocturneCanvas confirms adoption is complete.
+  if (!nCanvas) return;
   const keyboard = learnRoot?.querySelector<HTMLElement>(
     '.n-canvas [data-instance-id="keyboard"]',
   );
@@ -2516,33 +2728,12 @@ function syncIpacSignalSource(): void {
   const isEncoder = selectedInputIsPanelEncoder();
   keyboard.dataset.inputKind = isEncoder ? "panel-encoder" : "keyboard";
   const encoderName = selectedEncoderShortName();
-  const name = isEncoder ? `${encoderName} Signals` : "Keyboard";
-  keyboard.dataset.widgetName = name;
-  keyboard.setAttribute("aria-label", name);
-  keyboard.querySelector<HTMLElement>(".widget-drag-handle")
-    ?.setAttribute("aria-label", `Move ${name}`);
   // The navigator exists outside the widget subtree, so keep its identity in
   // lockstep with the source layer whenever device selection changes.
   labelCanvasMarkers();
-  const parkedTitle = keyboard.querySelector<HTMLElement>(".n-source-parked-copy strong");
-  const parkedDetail = keyboard.querySelector<HTMLElement>(".n-source-parked-copy small");
-  const show = keyboard.querySelector<HTMLButtonElement>('[data-nx="keylab-source-show"]');
-  const arrange = keyboard.querySelector<HTMLButtonElement>('[data-nx="kb-workbench"]');
-  if (parkedTitle) parkedTitle.textContent = isEncoder ? `${encoderName} signals hidden` : "Source keyboard hidden";
-  if (parkedDetail) parkedDetail.textContent = isEncoder
-    ? "Terminal assignments, routes, and canvas position are preserved."
-    : "Art, mappings, and canvas position are preserved.";
-  if (show) show.textContent = isEncoder ? `Show ${encoderName} signals` : "Show keyboard";
-  if (arrange) {
-    arrange.hidden = isEncoder;
-    arrange.disabled = isEncoder;
-    arrange.title = isEncoder
-      ? "Encoder terminals belong in Hardware Setup or Control Surface Builder, not Keyboard Arranger"
-      : "Arrange real keycaps from this detected keyboard without changing their identities or mappings";
-  }
-  let source = keyboard.querySelector<HTMLElement>(".n-ipac-signal-source");
+  const source = keyboard.querySelector<HTMLElement>(".n-ipac-signal-source");
   if (!isEncoder) {
-    source?.remove();
+    source?.replaceChildren();
     ipacSignalSourceFingerprint = "";
     syncKeyboardSourceCaps();
     mappingFlowLayer?.scheduleLayout();
@@ -2557,6 +2748,7 @@ function syncIpacSignalSource(): void {
     players: Set<number>;
   };
   const chart = panelProgrammingState.inspection.chart;
+  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
   const shiftedLayerState = panelProgrammingShiftLayerState(chart);
   const shiftedLayerActive = shiftedLayerState === "active";
   const unavailableShiftedAssignments = chart?.terminals.filter(
@@ -2587,7 +2779,7 @@ function syncIpacSignalSource(): void {
     if (terminalLabel) signal.terminalLabels.add(terminalLabel);
     if (player > 0) signal.players.add(player);
   };
-  if (chart) {
+  if (chart && !routingAuthoritySuspended) {
     for (const terminal of chart.terminals) {
       if (terminal.normal.key) {
         addSignal(
@@ -2608,7 +2800,7 @@ function syncIpacSignalSource(): void {
         );
       }
     }
-  } else {
+  } else if (!routingAuthoritySuspended) {
     for (const pad of lastBindView?.pads ?? []) {
       if (pad.mapping_available !== false) {
         for (const control of pad.controls ?? []) {
@@ -2699,14 +2891,12 @@ function syncIpacSignalSource(): void {
     ]),
     panelOwnsSignalLayer,
     surfaceFlowKeys: [...surfaceFlowTokens].sort(),
+    routingAuthoritySuspended,
+    recoveryProbeState: panelRecoveryProbeState,
+    recoveryProbeDetail: panelRecoveryProbeDetail,
   });
   if (source?.isConnected && fingerprint === ipacSignalSourceFingerprint) return;
-  if (!source) {
-    source = document.createElement("section");
-    source.className = "n-ipac-signal-source";
-    source.setAttribute("aria-label", `${encoderName} terminal and Windows key signals`);
-    keyboard.querySelector<HTMLElement>(".n-widget-body")?.prepend(source);
-  }
+  if (!source) return;
   ipacSignalSourceFingerprint = fingerprint;
   source.replaceChildren();
   const head = document.createElement("header");
@@ -2721,14 +2911,22 @@ function syncIpacSignalSource(): void {
   badge.textContent = "HID keyboard mode";
   head.append(heading, badge);
   const copy = document.createElement("p");
-  copy.textContent = chart
+  copy.textContent = routingAuthoritySuspended
+    ? panelRecoveryProbeState === "checking"
+      ? `KSX is checking this exact ${encoderName} against its machine recovery journal. Routes stay unresolved until that passive check finishes.`
+      : panelRecoveryProbeState === "indeterminate"
+      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open Hardware Setup or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
+      : `KSX cannot prove which keys the ${encoderName} emits after the interrupted hardware transaction. Routes stay unresolved until the complete chart is read again or a verified backup is restored.`
+    : chart
     ? `The ${encoderName} emits these Windows key signals. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
     : `KSX routes currently reference these Windows key names. Hardware Setup has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read Hardware Setup to establish terminal → Windows key ownership.`;
   source.append(head, copy);
   if (groups.length === 0) {
     const empty = document.createElement("div");
     empty.className = "n-ipac-source-empty";
-    empty.textContent = chart
+    empty.textContent = routingAuthoritySuspended
+      ? `Current ${encoderName} outputs are intentionally hidden until hardware recovery establishes a complete verified chart.`
+      : chart
       ? unavailableShiftedAssignments > 0
         ? shiftedLayerState === "unknown"
           ? `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but opaque Shift state leaves their reachability unknown.`
@@ -2739,11 +2937,14 @@ function syncIpacSignalSource(): void {
     mappingFlowLayer?.scheduleLayout();
     return;
   }
-  const rosterShell = document.createElement("details");
+  // The primary shelf is the only visible source layer, so it cannot be
+  // collapsible. Only the redundant fallback shelf uses native <details>.
+  const rosterShell = document.createElement(panelOwnsSignalLayer ? "details" : "section");
   rosterShell.className = "n-ipac-signal-roster-shell";
   rosterShell.dataset.panelFallback = String(panelOwnsSignalLayer);
-  rosterShell.open = !panelOwnsSignalLayer;
-  const rosterSummary = document.createElement("summary");
+  rosterShell.toggleAttribute("open", !panelOwnsSignalLayer);
+  const rosterSummary = document.createElement(panelOwnsSignalLayer ? "summary" : "header");
+  rosterSummary.className = "n-ipac-signal-roster-summary";
   const rosterTitle = document.createElement("strong");
   rosterTitle.textContent = panelOwnsSignalLayer
     ? "Fallback signal shelf"
@@ -2833,6 +3034,7 @@ function resetPanelProgramming(targetChanged: boolean): void {
   panelProgrammingMessage = targetChanged
     ? "The selected encoder changed. Read its complete chart before reviewing hardware changes."
     : "";
+  panelProgrammingPlanTargetFingerprint = "";
   panelProgrammingProgramRequest = null;
   panelProgrammingRestoreRequest = null;
   panelProgrammingConfirmed = false;
@@ -2850,6 +3052,7 @@ function resetPanelProgramming(targetChanged: boolean): void {
     exitPanelProgrammingWorkspace();
   }
   if (!panelProgrammingTransactionActive()) {
+    panelProgrammingTransactionTargetFingerprint = "";
     panelProgrammingCloseDialog(false);
     panelProgrammingState = createPanelProgrammingState();
     if (targetChanged) panelProgrammingState.inspection.phase = "changed";
@@ -3101,15 +3304,43 @@ function controlSurfaceSignalTruth(
 ): ControlSurfaceSignalTruth {
   const encoder = channel.encoder;
   const observedKey = channel.input.kind === "keyboard" ? channel.input.key.trim() : "";
-  if (!encoder) {
+  const selectedDevice = nCapInstance().trim().toLocaleUpperCase();
+  const observedDevice = channel.input.kind === "keyboard"
+    ? channel.input.device.trim().toLocaleUpperCase()
+    : "";
+  // The selector owns the reusable drawing, not the physical Windows
+  // instance. When an encoder re-enumerates, retain its old Teach value as
+  // labelled history but never let that value route the replacement device.
+  const observationBelongsToSelectedDevice = !selectedInputIsPanelEncoder() || Boolean(
+    selectedDevice && observedDevice && selectedDevice === observedDevice,
+  );
+  // Mapping-generated panels predate Teach and intentionally store the staged
+  // selector as their source marker. Preserve those unlinked projections;
+  // actual Teach hits always carry the exact learner device instance.
+  const isSelectorProjection = !encoder && Boolean(
+    observedDevice && observedDevice === nCapSelector().trim().toLocaleUpperCase(),
+  );
+  const observationCanRoute = observationBelongsToSelectedDevice || isSelectorProjection;
+  if (panelProgrammingRoutingAuthoritySuspended()) {
     return {
-      authority: observedKey ? "observed" : "unassigned",
-      flowAuthority: observedKey ? "observed" : "unassigned",
+      authority: "unassigned",
+      flowAuthority: "unassigned",
       configuredKnown: false,
       configuredKey: "",
       plannedKey: "",
       observedKey,
-      flowKey: observedKey,
+      flowKey: "",
+    };
+  }
+  if (!encoder) {
+    return {
+      authority: observedKey && observationCanRoute ? "observed" : "unassigned",
+      flowAuthority: observedKey && observationCanRoute ? "observed" : "unassigned",
+      configuredKnown: false,
+      configuredKey: "",
+      plannedKey: "",
+      observedKey,
+      flowKey: observationCanRoute ? observedKey : "",
     };
   }
 
@@ -3118,14 +3349,48 @@ function controlSurfaceSignalTruth(
   const configuredTerminal = chart?.board_fingerprint === encoder.boardFingerprint
     ? chart.terminals.find((terminal) => terminal.terminal_id === encoder.terminalId)
     : undefined;
+  // A known-different board/terminal disproves the persisted physical link,
+  // while an ambiguous write disproves every pre-write chart byte. Retain the
+  // historical observation for recovery copy, but expose no current route.
+  if (chart && !configuredTerminal) {
+    return {
+      authority: "unassigned",
+      flowAuthority: "unassigned",
+      configuredKnown: false,
+      configuredKey: "",
+      plannedKey: "",
+      observedKey,
+      flowKey: "",
+    };
+  }
   const configuredKnown = Boolean(configuredTerminal);
   const configuredKey = configuredTerminal?.normal.supported
     ? configuredTerminal.normal.key?.trim() ?? ""
     : "";
 
-  // Editing the future chart changes expectedKey before any USB write. While
-  // that plan is pending, routes must continue to leave from the current chart
-  // output and the keycap must say that the new value is only planned.
+  // Draft edits invalidate prior verification in assignControlSurfaceTerminal,
+  // so matched/mismatch here means Teach observed this physical channel after
+  // the current draft was prepared. That live Windows evidence outranks the
+  // unwritten plan for routing, while plannedKey remains available separately.
+  // Recompute the label against the complete current chart: the persisted enum
+  // is the freshness marker, not permission to compare against a future byte.
+  if (configuredKnown && observedKey && observationBelongsToSelectedDevice &&
+      (encoder.verification === "matched" || encoder.verification === "mismatch")) {
+    const verification = samePanelKey(configuredKey, observedKey) ? "matched" : "mismatch";
+    return {
+      authority: verification,
+      flowAuthority: verification,
+      configuredKnown,
+      configuredKey,
+      plannedKey,
+      observedKey,
+      flowKey: observedKey,
+    };
+  }
+
+  // Editing the future chart changes expectedKey before any USB write. With no
+  // fresh post-edit Teach observation, routes continue to leave from the
+  // current chart output and the keycap says that the new value is only planned.
   if (configuredKnown && !samePanelKey(plannedKey, configuredKey)) {
     return {
       authority: "planned",
@@ -3140,11 +3405,16 @@ function controlSurfaceSignalTruth(
     };
   }
 
-  if (observedKey &&
+  // A prior Teach observation survives a browser reload, but its comparison
+  // cannot remain authoritative while this session has no complete chart for
+  // the exact board. Keep routing from what Windows observed and promote the
+  // retained match/mismatch only after a fresh chart read proves the firmware
+  // side of that comparison again.
+  if (observedKey && observationBelongsToSelectedDevice &&
       (encoder.verification === "matched" || encoder.verification === "mismatch")) {
     return {
-      authority: encoder.verification,
-      flowAuthority: encoder.verification,
+      authority: "observed",
+      flowAuthority: "observed",
       configuredKnown,
       configuredKey,
       plannedKey,
@@ -3172,8 +3442,19 @@ function controlSurfaceSignalTruth(
     configuredKey,
     plannedKey,
     observedKey,
-    flowKey: plannedKey,
+    // expectedKey is a planning hint until a complete current-board read
+    // proves it. It may have come from an abandoned draft, so it never owns a
+    // cord without either chart authority or a Windows observation.
+    flowKey: "",
   };
+}
+
+function controlSurfaceRouteKey(channel: ControlSurfaceChannel): string {
+  const truth = controlSurfaceSignalTruth(channel);
+  return truth.authority === "observed" || truth.authority === "matched" ||
+      truth.authority === "mismatch"
+    ? truth.observedKey
+    : "";
 }
 
 /** Reconcile every linked physical channel from the complete chart, including
@@ -3548,6 +3829,7 @@ function panelProgrammingQualificationTerminalIsEligible(
 }
 
 function panelProgrammingDropPlan(): void {
+  panelProgrammingPlanTargetFingerprint = "";
   panelProgrammingProgramRequest = null;
   panelProgrammingRestoreRequest = null;
   panelProgrammingConfirmed = false;
@@ -3842,6 +4124,10 @@ function syncPanelHardwareProfilesUi(): void {
 }
 
 function syncPanelProgrammingUi(): void {
+  // A chart reread can reveal a same-selector replacement or different image
+  // without changing the ordinary Nocturne poll payload. Mapping gestures are
+  // pinned to that exact hardware proof, so reconcile them here too.
+  reconcileBindingActionAuthority();
   const item = controlSurfaceItem;
   if (!item) return;
   const section = item.querySelector<HTMLElement>(".n-surface-programming");
@@ -4263,11 +4549,85 @@ function syncPanelProgrammingUi(): void {
   syncControlSurfaceInspector();
 }
 
-async function readPanelProgrammingChart(backup: boolean): Promise<void> {
+async function readPanelProgrammingChart(
+  backup: boolean,
+  browserLockHeld = false,
+): Promise<void> {
+  if (!browserLockHeld) {
+    if (panelProgrammingBusy || panelProgrammingTransactionActive()) return;
+    const preferredDevice = nCapInstance().trim();
+    const preferredBoard = panelProgrammingState.inspection.chart?.board_fingerprint ?? "";
+    const lockIdentities = controlSurfaceHardwareLockIdentities(preferredDevice, preferredBoard);
+    if (lockIdentities.length === 0 || !navigator.locks) {
+      panelProgrammingSetMessage(
+        "KSX cannot safely coordinate this encoder across browser windows. Close other KSX windows or use a browser with Web Locks support, then read the complete chart again. Nothing was changed.",
+      );
+      return;
+    }
+    let acquired = false;
+    try {
+      acquired = await withControlSurfaceHardwareLocks(
+        lockIdentities,
+        async () => readPanelProgrammingChart(backup, true),
+      );
+    } catch (error) {
+      panelProgrammingSetMessage(
+        `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was changed.`,
+      );
+      return;
+    }
+    if (!acquired) {
+      panelProgrammingSetMessage(
+        "Another KSX window is changing or reading this encoder. Wait for it to finish, then read the complete chart again. Nothing was changed.",
+      );
+    }
+    return;
+  }
   const selector = panelProgrammingTarget();
   if (!selector || panelProgrammingBusy || panelProgrammingTransactionActive()) return;
+  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
+  const hardwareAuthoritySignature = controlSurfaceHardwareEpochAuthoritySignature();
+  if (hardwareAuthoritySignature === null) {
+    panelProgrammingSetMessage(
+      "KSX could not verify the cross-window hardware journal, so it refused the chart read. Restore browser storage access and try again. Nothing was changed.",
+    );
+    return;
+  }
+  // A pending browser intent is not settled by an ordinary chart read. Carry
+  // its exact token to the backend so the server can order this recovery read
+  // against an apply whose initiating document may already have disappeared:
+  // recovery-first permanently cancels that token; apply-first is awaited.
+  const pendingAtRequest = pendingControlSurfaceHardwareEpochs();
+  if (pendingAtRequest === null) {
+    panelProgrammingSetMessage(
+      "KSX could not verify the cross-window hardware journal, so it refused the chart read. Restore browser storage access and try again. Nothing was changed.",
+    );
+    return;
+  }
+  const normalizedSelector = selector.trim().toLocaleUpperCase();
+  const normalizedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const recoveryBoard = (panelProgrammingRecoveryTargets.get(requestTargetFingerprint) ??
+    panelProgrammingState.inspection.chart?.board_fingerprint ?? "")
+    .trim().toLocaleUpperCase();
+  let recoveryCandidates = pendingAtRequest.filter(
+    (mutation) => mutation.selector === normalizedSelector,
+  );
+  if (recoveryBoard) {
+    recoveryCandidates = recoveryCandidates.filter(
+      (mutation) => mutation.boardFingerprint === recoveryBoard,
+    );
+  } else {
+    const exactDevice = recoveryCandidates.filter(
+      (mutation) => mutation.device === normalizedDevice,
+    );
+    if (exactDevice.length > 0) recoveryCandidates = exactDevice;
+  }
+  const recoveryMutation = recoveryCandidates.length === 1
+    ? recoveryCandidates[0]
+    : null;
   panelProgrammingLastTest = null;
   const generation = ++panelProgrammingGeneration;
+  panelProgrammingPlanTargetFingerprint = "";
   panelProgrammingBusy = true;
   panelProgrammingMessage = backup
     ? "Reading the complete encoder chart and creating a lossless backup…"
@@ -4294,11 +4654,30 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
     const payload = await panelProgrammingJSON<PanelChartPayload>(
       "/api/panel/chart",
       "POST",
-      { expected_selector: selector, backup },
+      {
+        expected_selector: selector,
+        backup,
+        hardware_epoch: recoveryMutation?.epoch ?? null,
+        expected_board_fingerprint: recoveryMutation?.boardFingerprint ?? null,
+      },
     );
     if (generation !== panelProgrammingGeneration) return;
+    if (controlSurfaceHardwareEpochAuthoritySignature() !== hardwareAuthoritySignature) {
+      const reconciled = reconcileControlSurfaceHardwareEpoch(
+        controlSurfaceState,
+        controlSurfaceStore,
+        controlSurfaceAppliedHardwareEpochs,
+      );
+      consumeControlSurfaceHardwareReconciliation(reconciled);
+      saveControlSurfacePrefs();
+      panelProgrammingSetMessage(
+        "Another KSX window changed this encoder while its chart was being read. That stale response was ignored; read the complete chart again after the transaction finishes.",
+      );
+      return;
+    }
     const current = panelProgrammingTarget();
-    if (!payload.target_selector || payload.target_selector !== selector || current !== selector) {
+    if (!payload.target_selector || payload.target_selector !== selector || current !== selector ||
+        currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
       resetPanelProgramming(true);
       return;
     }
@@ -4315,6 +4694,78 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         "The complete chart did not include stable board and image hashes.";
       panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
       return;
+    }
+    const readBoard = chart.board_fingerprint.trim().toLocaleUpperCase();
+    const chartStillNeedsRecovery = chart.programming_state === "recovery-required";
+    let browserEpochRecoveryDetail = "";
+    const pendingBeforeSettlement = pendingControlSurfaceHardwareEpochs();
+    if (pendingBeforeSettlement === null) {
+      browserEpochRecoveryDetail =
+        "KSX read the board but could not verify its cross-window hardware journal. Restore browser storage access, then read the complete chart again.";
+    } else if (pendingBeforeSettlement.length > 0) {
+      const matchingPending = pendingBeforeSettlement.filter(
+        (mutation) => mutation.boardFingerprint === readBoard,
+      );
+      if (matchingPending.length === 1 && pendingBeforeSettlement.length === 1) {
+        const matchingRecovery = recoveryMutation &&
+          matchingPending[0].device === recoveryMutation.device &&
+          matchingPending[0].epoch === recoveryMutation.epoch &&
+          matchingPending[0].selector === recoveryMutation.selector &&
+          payload.hardware_epoch === recoveryMutation.epoch &&
+          payload.hardware_fence === "settled";
+        if (matchingRecovery) {
+          const settled = settleControlSurfaceHardwareEpoch(matchingPending[0]);
+          if (settled) consumeLocallyPublishedControlSurfaceHardwareEpoch(settled);
+          else {
+            browserEpochRecoveryDetail =
+              "KSX read the board but could not publish cross-window completion. The pending hardware lock remains; restore browser storage access, then read again.";
+          }
+        } else {
+          browserEpochRecoveryDetail =
+            "KSX read the board, but the backend did not return the matching ordered recovery proof. The pending hardware lock remains so a delayed write cannot make this chart stale.";
+        }
+      } else {
+        browserEpochRecoveryDetail =
+          "The complete chart belongs to a different or ambiguous pending encoder transaction. Reconnect the affected board and read it before routing.";
+      }
+    }
+    const pendingAfterSettlement = pendingControlSurfaceHardwareEpochs();
+    const browserEpochStillPending = pendingAfterSettlement === null ||
+      pendingAfterSettlement.length > 0;
+    if (chartStillNeedsRecovery || browserEpochStillPending) {
+      panelProgrammingRecoveryTargets.set(requestTargetFingerprint, readBoard);
+      panelProgrammingUntrustedBoards.add(readBoard);
+    } else {
+      // Selector+instance keys are transient aliases. A complete authoritative
+      // read which says this physical board has no unresolved journal settles
+      // every stale alias for that same board, including the instance which
+      // existed before Windows re-enumerated it.
+      for (const [target, board] of panelProgrammingRecoveryTargets) {
+        if (board === readBoard) panelProgrammingRecoveryTargets.delete(target);
+      }
+      panelProgrammingUntrustedBoards.delete(readBoard);
+    }
+    const statusBoard = selectedPanelStatusBoard();
+    if (statusBoard) {
+      statusBoard.programming_recovery_required = chartStillNeedsRecovery;
+      statusBoard.programming_recovery_detail = chartStillNeedsRecovery
+        ? chart.programming_detail
+        : "";
+    }
+    if (panelRecoveryProbePossible()) {
+      setPanelRecoveryProbe(
+        requestTargetFingerprint,
+        chartStillNeedsRecovery
+          ? "recovery-required"
+          : browserEpochStillPending
+          ? "checking"
+          : "settled",
+        chartStillNeedsRecovery
+          ? chart.programming_detail
+          : browserEpochStillPending
+          ? browserEpochRecoveryDetail
+          : "",
+      );
     }
     const qualificationState = panelProgrammingQualificationState(chart);
     const cachedDraft = cachedPanelProgrammingDraft(chart);
@@ -4353,10 +4804,14 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
         plan_expected_selector: "",
         plan: null,
       },
-      transaction: panelProgrammingState.transaction.phase === "recovery-required"
+      transaction: panelProgrammingState.transaction.phase === "recovery-required" &&
+          !chartStillNeedsRecovery
         ? { phase: "idle", operation: null, target_selector: "", outcome: null }
         : panelProgrammingState.transaction,
     };
+    if (panelProgrammingState.transaction.phase === "idle") {
+      panelProgrammingTransactionTargetFingerprint = "";
+    }
     const currentDraft = panelProgrammingDraftFromChart(chart);
     panelProgrammingTerminalDraft = cachedDraft
       ? clonePanelProgrammingDraft(cachedDraft.draft)
@@ -4377,13 +4832,20 @@ async function readPanelProgrammingChart(backup: boolean): Promise<void> {
       panelProgrammingState.transaction.phase === "verified",
     );
     if (cachedDraft) synchronizePanelProgrammingDraftKeys();
-    panelProgrammingMessage = cachedDraft
+    panelProgrammingMessage = browserEpochStillPending
+      ? browserEpochRecoveryDetail ||
+        "This encoder still has a pending cross-window hardware transaction. Read it again after that transaction finishes."
+      : cachedDraft
       ? `Recovered your unsaved ${cachedDraft.draft.length}-terminal draft for this exact I-PAC. The fresh read did not change the board; review the recovered draft against its current chart before programming.`
       : panelProgrammingTaskCopy(chart).summary;
     void loadPanelProgrammingBackups();
     void loadPanelHardwareProfiles();
   } catch (error) {
     if (generation !== panelProgrammingGeneration) return;
+    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
+      resetPanelProgramming(true);
+      return;
+    }
     panelProgrammingState.inspection.phase = "unavailable";
     panelProgrammingState.inspection.error = error instanceof Error ? error.message : "Chart read failed.";
     panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
@@ -4610,9 +5072,11 @@ function togglePanelProgrammingOutputTest(): void {
   }
   const chart = panelProgrammingState.inspection.chart;
   if (!chart || panelProgrammingAssignedCount(chart) === 0 ||
-      panelProgrammingBusy || panelProgrammingTransactionActive()) return;
-  const expectedDevice = nCapInstance().trim();
-  if (!expectedDevice) {
+      panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingRoutingAuthoritySuspended()) return;
+  const expectedSelector = nCapSelector().trim();
+  const expectedInstance = nCapInstance().trim();
+  if (!expectedSelector || !expectedInstance) {
     panelProgrammingLastTest = null;
     panelProgrammingMessage =
       "KSX cannot test this wiring until the selected I-PAC has one exact Windows device identity. Refresh the hardware status; nothing was changed.";
@@ -4628,14 +5092,16 @@ function togglePanelProgrammingOutputTest(): void {
     slot: "",
     mode: "replace",
     purpose: "panel-test",
-    expectedDevice,
+    expectedDevice: expectedSelector,
+    expectedInstance,
   });
   syncPanelProgrammingUi();
 }
 
 function continueFromPanelHardwareToRouting(): void {
   const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingAssignedCount(chart) === 0) return;
+  if (!chart || panelProgrammingAssignedCount(chart) === 0 ||
+      panelProgrammingRoutingAuthoritySuspended()) return;
   if (panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0) {
     panelProgrammingSetMessage(
       `${panelProgrammingLastTest.key} was observed from this I-PAC but is absent from the chart KSX read. Read the board again before routing so the hardware source cannot be silently retargeted.`,
@@ -4676,7 +5142,7 @@ function continueFromPanelHardwareToRouting(): void {
 function buildPhysicalPanelFromEncoderChart(): void {
   const chart = panelProgrammingState.inspection.chart;
   const records = controlSurfaceEncoderRecords();
-  if (!chart || records.length === 0) {
+  if (!chart || records.length === 0 || panelProgrammingRoutingAuthoritySuspended()) {
     panelProgrammingSetMessage(
       `The ${selectedEncoderShortName()} chart has no assigned terminal-to-key outputs to draw yet. Configure or load at least one hardware output first.`,
     );
@@ -4697,7 +5163,8 @@ function buildPhysicalPanelFromEncoderChart(): void {
  * terminal and program the Windows-key layer. */
 function designPhysicalPanelBeforeEncoderKeys(): void {
   const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingTransactionActive()) return;
+  if (!chart || panelProgrammingTransactionActive() ||
+      panelProgrammingRoutingAuthoritySuspended()) return;
   if (learnRow?.purpose === "panel-test") void cancelLearn();
   closePanelProgrammingSetup(false, "surface");
   controlSurfaceChoosingTemplate = true;
@@ -4823,6 +5290,13 @@ function closePanelProgrammingSetup(
   }
   syncControlSurfaceChrome();
   syncPanelProgrammingUi();
+  if (focusExit === "surface") {
+    // Hardware Setup hides the corner navigator while it owns the focused
+    // workspace. When that map returns it reduces the usable viewport; frame
+    // the panel again after layout so its controls cannot be stranded beneath
+    // the navigator and become impossible to click.
+    window.requestAnimationFrame(() => syncControlSurfaceWidget(true));
+  }
   if (restoreFocus) {
     const target = leavingFirstRun
       ? controlSurfaceItem?.querySelector<HTMLElement>(
@@ -5531,6 +6005,7 @@ function openPanelProgrammingDialog(): void {
 async function requestPanelProgrammingPlan(): Promise<void> {
   const chart = panelProgrammingState.inspection.chart;
   const authority = currentPanelChartAuthority();
+  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
   const conflicts = panelProgrammingConflicts();
   const qualificationState = panelProgrammingQualificationState(chart);
@@ -5580,6 +6055,7 @@ async function requestPanelProgrammingPlan(): Promise<void> {
       "POST",
       request,
     );
+    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
       throw new Error(payload.unavailable || "A complete program plan was unavailable.");
     }
@@ -5588,6 +6064,7 @@ async function requestPanelProgrammingPlan(): Promise<void> {
     }
     panelProgrammingProgramRequest = request;
     panelProgrammingRestoreRequest = null;
+    panelProgrammingPlanTargetFingerprint = requestTargetFingerprint;
     panelProgrammingState = {
       ...panelProgrammingState,
       editor: {
@@ -5616,6 +6093,7 @@ async function requestPanelProgrammingPlan(): Promise<void> {
 
 async function requestPanelRestorePlan(backupId: string): Promise<void> {
   const authority = currentPanelChartAuthority();
+  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   if (!authority || !backupId || panelProgrammingBusy || panelProgrammingTransactionActive() ||
       panelProgrammingState.capability.kind !== "programmable") return;
   const qualificationState = panelProgrammingQualificationState();
@@ -5656,6 +6134,7 @@ async function requestPanelRestorePlan(backupId: string): Promise<void> {
       "POST",
       request,
     );
+    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
     if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
       throw new Error(payload.unavailable || "A complete restore plan was unavailable.");
     }
@@ -5664,6 +6143,7 @@ async function requestPanelRestorePlan(backupId: string): Promise<void> {
     }
     panelProgrammingProgramRequest = null;
     panelProgrammingRestoreRequest = request;
+    panelProgrammingPlanTargetFingerprint = requestTargetFingerprint;
     panelProgrammingState = {
       ...panelProgrammingState,
       editor: {
@@ -5729,16 +6209,160 @@ function reconcilePanelProgrammingOutcome(
   );
 }
 
-async function applyPanelProgrammingPlan(): Promise<void> {
+async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void> {
+  if (!browserLockHeld) {
+    const candidatePlan = panelProgrammingState.editor.plan;
+    if (!candidatePlan || panelProgrammingBusy || panelProgrammingTransactionActive()) return;
+    if (panelProgrammingRoutingAuthoritySuspended()) {
+      panelProgrammingSetMessage(
+        "This encoder is still being changed or recovered. Read its complete chart before reviewing another hardware write.",
+      );
+      renderPanelProgrammingDialog();
+      return;
+    }
+    const preferredDevice = nCapInstance().trim();
+    const lockIdentities = controlSurfaceHardwareLockIdentities(
+      preferredDevice,
+      candidatePlan.board_fingerprint,
+    );
+    if (lockIdentities.length === 0 || !navigator.locks) {
+      panelProgrammingSetMessage(
+        "KSX cannot safely coordinate this persistent write across browser windows. Close other KSX windows or use a browser with Web Locks support, then review again. Nothing was written.",
+      );
+      renderPanelProgrammingDialog();
+      return;
+    }
+    let acquired = false;
+    try {
+      acquired = await withControlSurfaceHardwareLocks(
+        lockIdentities,
+        async () => applyPanelProgrammingPlan(true),
+      );
+    } catch (error) {
+      panelProgrammingSetMessage(
+        `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was written.`,
+      );
+      renderPanelProgrammingDialog();
+      return;
+    }
+    if (!acquired) {
+      panelProgrammingSetMessage(
+        "Another KSX window owns this encoder's hardware transaction. Wait for it to finish, read the complete chart, then review again. Nothing was written.",
+      );
+      renderPanelProgrammingDialog();
+    }
+    return;
+  }
+  // The outer authority check happened before waiting for the Web Locks. A
+  // different document may have published its pending epoch and then died
+  // while this callback was queued. Reconcile again *inside* both locks and
+  // refuse rather than replacing that writer's durable intent with ours.
+  if (!controlSurfaceHardwareAuthorityCurrentForAction() ||
+      panelProgrammingRoutingAuthoritySuspended()) {
+    panelProgrammingSetMessage(
+      "Another encoder transaction began while this review was waiting. Its pending hardware lock was preserved; read the complete chart after that transaction finishes, then review again. Nothing was written from this window.",
+    );
+    renderPanelProgrammingDialog();
+    return;
+  }
   const plan = panelProgrammingState.editor.plan;
   if (!plan || !panelProgrammingConfirmed || !panelProgrammingRecoveryReady || panelProgrammingBusy ||
       panelProgrammingTransactionActive() || plan.blockers.length > 0 ||
-      !panelProgrammingPlanIsCurrent(plan)) return;
+      !panelProgrammingPlanIsCurrent(plan) || !panelProgrammingPlanTargetFingerprint ||
+      panelProgrammingPlanTargetFingerprint !== currentControlSurfaceHardwareFingerprint() ||
+      !nCapInstance().trim()) return;
   const operation = panelProgrammingRestoreRequest ? "restore" : "program";
   if (operation === "program" && !panelProgrammingProgramRequest) return;
   const expectedSelector = panelProgrammingState.editor.plan_expected_selector;
+  const requestTargetFingerprint = panelProgrammingPlanTargetFingerprint;
+  const requestDeviceInstance = nCapInstance().trim();
+  // This document does not receive its own storage event. Retire every local
+  // action that could finish with pre-write signal authority before publishing
+  // the epoch other documents consume.
+  if (learnRow?.purpose === "surface" || learnRow?.purpose === "panel-test") {
+    void cancelLearn();
+  }
+  if (assignKey) cancelAssign();
+  // This sidecar is written before either the main browser document or USB.
+  // Unlike the selector-scoped layout store, an exact-device epoch cannot be
+  // resurrected by another open tab saving an older whole-document snapshot.
+  const hardwareEpochMutation = beginControlSurfaceHardwareEpoch(
+    requestDeviceInstance,
+    plan.board_fingerprint,
+    expectedSelector,
+  );
+  if (!hardwareEpochMutation) {
+    panelProgrammingConfirmed = false;
+    panelProgrammingRecoveryReady = false;
+    panelProgrammingMessage =
+      "KSX could not publish the cross-window hardware invalidation because browser storage is unavailable or its 64-device safety ledger is full. Nothing was written. Restore storage access or clear this site's saved KSX data, then review and confirm again.";
+    renderPanelProgrammingDialog();
+    syncPanelProgrammingUi();
+    keyboardWorkbenchAnnounce(panelProgrammingMessage);
+    return;
+  }
+  controlSurfaceActiveHardwareEpoch = hardwareEpochMutation;
+  panelProgrammingRecoveryTargets.set(
+    requestTargetFingerprint,
+    hardwareEpochMutation.boardFingerprint,
+  );
+  panelProgrammingUntrustedBoards.add(hardwareEpochMutation.boardFingerprint);
   let refreshVerifiedTarget = false;
+  // Close the browser/backend crash window before the request can mutate the
+  // encoder. A verified backend response also settles its durable journal, so
+  // a reload that loses that response must not be able to revive pre-write
+  // Teach evidence from this browser's saved Control Surface document.
+  controlSurfaceLocallyOwnedHardwareEpoch = hardwareEpochMutation;
+  try {
+    applyControlSurfaceState(
+      invalidateControlSurfaceHardwareObservations(
+        controlSurfaceState,
+        plan.board_fingerprint,
+        requestDeviceInstance,
+      ),
+      true,
+    );
+  } catch (error) {
+    controlSurfaceActiveHardwareEpoch = null;
+    throw error;
+  } finally {
+    controlSurfaceLocallyOwnedHardwareEpoch = null;
+  }
+  if (controlSurfaceSaveFailed) {
+    // The old main document may still be durable, but the independent epoch
+    // makes it stale. Do not restore observations in memory: another tab may
+    // already own the backend lease and mutate this board after our refusal.
+    panelProgrammingConfirmed = false;
+    panelProgrammingRecoveryReady = false;
+    const browserEpochSettled = publishNoWriteControlSurfaceHardwareSettlement(
+      hardwareEpochMutation,
+      requestTargetFingerprint,
+    );
+    panelProgrammingMessage =
+      "KSX could not save the pre-write Teach invalidation because browser storage is unavailable. Nothing was written from this window. The earlier Teach evidence remains retired; restore browser storage access, then Teach and review again.";
+    if (!browserEpochSettled) {
+      panelProgrammingMessage +=
+        " KSX also could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
+    }
+    renderPanelProgrammingDialog();
+    syncPanelProgrammingUi();
+    keyboardWorkbenchAnnounce(panelProgrammingMessage);
+    controlSurfaceActiveHardwareEpoch = null;
+    return;
+  }
+  if (!controlSurfaceHardwareEpochIsCurrent(hardwareEpochMutation)) {
+    panelProgrammingConfirmed = false;
+    panelProgrammingRecoveryReady = false;
+    panelProgrammingMessage =
+      "Another KSX window began changing this encoder before the USB request. Nothing was written from this window; wait for that operation, then inspect and review again.";
+    renderPanelProgrammingDialog();
+    syncPanelProgrammingUi();
+    keyboardWorkbenchAnnounce(panelProgrammingMessage);
+    controlSurfaceActiveHardwareEpoch = null;
+    return;
+  }
   panelProgrammingBusy = true;
+  panelProgrammingTransactionTargetFingerprint = requestTargetFingerprint;
   panelProgrammingState = {
     ...panelProgrammingState,
     transaction: { phase: "writing", operation, target_selector: expectedSelector, outcome: null },
@@ -5748,12 +6372,14 @@ async function applyPanelProgrammingPlan(): Promise<void> {
     : "Programming the I-PAC and verifying every chart byte…";
   renderPanelProgrammingDialog();
   syncPanelProgrammingUi();
+  let browserEpochCompletionFailed = false;
   try {
     const payload = operation === "restore"
       ? await panelProgrammingJSON<PanelRestorePayload>(
           "/api/panel/restore/apply",
           "POST",
           {
+            hardware_epoch: hardwareEpochMutation.epoch,
             expected_selector: panelProgrammingRestoreRequest!.expected_selector,
             restore: {
               backup_id: panelProgrammingRestoreRequest!.backup_id,
@@ -5770,6 +6396,7 @@ async function applyPanelProgrammingPlan(): Promise<void> {
           "/api/panel/program/apply",
           "POST",
           {
+            hardware_epoch: hardwareEpochMutation.epoch,
             expected_selector: panelProgrammingProgramRequest!.expected_selector,
             program: {
               expected_base_sha256: panelProgrammingProgramRequest!.expected_base_sha256,
@@ -5783,8 +6410,19 @@ async function applyPanelProgrammingPlan(): Promise<void> {
             supervised: true,
           },
         );
+    if (payload.hardware_epoch !== hardwareEpochMutation.epoch) {
+      throw new Error(
+        "The backend did not bind its hardware outcome to this browser's exact mutation token.",
+      );
+    }
+    const detachedFromCurrentTarget =
+      currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint;
     if (payload.target_selector !== expectedSelector) {
       if (payload.mutation_disposition === "not-started") {
+        browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
+          hardwareEpochMutation,
+        );
+        panelProgrammingTransactionTargetFingerprint = "";
         panelProgrammingState.transaction = {
           phase: "idle",
           operation,
@@ -5794,13 +6432,21 @@ async function applyPanelProgrammingPlan(): Promise<void> {
         panelProgrammingConfirmed = false;
         panelProgrammingRecoveryReady = false;
         panelProgrammingMessage = payload.unavailable ||
-          "The selected encoder changed before programming began. Nothing was written; prepare a fresh review.";
+          "The selected encoder changed before programming began. Nothing was written from this request; Teach evidence remains retired because another window may own the hardware transaction.";
+        if (browserEpochCompletionFailed) {
+          panelProgrammingMessage +=
+            " KSX could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
+        }
         return;
       }
       throw new Error(payload.unavailable ||
         "The response did not identify the reviewed encoder after the hardware transaction began.");
     }
     if (payload.unavailable && payload.mutation_disposition === "not-started") {
+      browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
+        hardwareEpochMutation,
+      );
+      panelProgrammingTransactionTargetFingerprint = "";
       panelProgrammingState.transaction = {
         phase: "idle",
         operation,
@@ -5812,6 +6458,14 @@ async function applyPanelProgrammingPlan(): Promise<void> {
       panelProgrammingMessage = payload.remedy
         ? `${payload.unavailable} ${payload.remedy}`
         : payload.unavailable;
+      if (!detachedFromCurrentTarget) {
+        panelProgrammingMessage +=
+          " Teach evidence remains retired because another window may own the hardware transaction.";
+      }
+      if (browserEpochCompletionFailed) {
+        panelProgrammingMessage +=
+          " KSX could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
+      }
       return;
     }
     if (payload.unavailable || !payload.outcome) {
@@ -5826,7 +6480,30 @@ async function applyPanelProgrammingPlan(): Promise<void> {
           outcome.observed_sha256.toLocaleUpperCase() !== plan.desired_sha256.toLocaleUpperCase()))) {
       throw new Error("The hardware outcome did not match the reviewed board and target hashes.");
     }
-    const detachedFromCurrentTarget = panelProgrammingTarget() !== expectedSelector;
+    // The response is now definitive. Publish completion before any
+    // nonessential UI reconciliation can throw; failure leaves the original
+    // pending record intact and therefore fail-closed in every window.
+    browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
+      hardwareEpochMutation,
+    );
+    const changedBoard = outcome.board_fingerprint.trim().toLocaleUpperCase();
+    panelProgrammingUntrustedBoards.add(changedBoard);
+    // Even a byte-verified write invalidates the browser's pre-write chart.
+    // Keep this exact selector+instance locked until its automatic complete
+    // chart read returns; a replacement instance sharing the selector must not
+    // inherit either that lock or the old board's recovery state.
+    panelProgrammingRecoveryTargets.set(requestTargetFingerprint, changedBoard);
+    if (!detachedFromCurrentTarget && panelRecoveryProbePossible()) {
+      if (outcome.state === "recovery-required") {
+        setPanelRecoveryProbe(
+          currentControlSurfaceHardwareFingerprint(),
+          "recovery-required",
+          outcome.summary,
+        );
+      } else {
+        beginPanelRecoveryProbe();
+      }
+    }
     if (!detachedFromCurrentTarget && outcome.backup && !panelProgrammingBackups.some(
       (candidate) => candidate.backup_id === outcome.backup.backup_id,
     )) panelProgrammingBackups.unshift(outcome.backup);
@@ -5842,6 +6519,10 @@ async function applyPanelProgrammingPlan(): Promise<void> {
     panelProgrammingMessage = detachedFromCurrentTarget
       ? `${outcome.summary} This result belongs to the previously selected encoder; the current canvas target was not changed.`
       : outcome.summary;
+    if (browserEpochCompletionFailed) {
+      panelProgrammingMessage +=
+        " Hardware verification finished, but KSX could not publish cross-window completion. Routes remain locked until a complete recovery read settles the browser journal.";
+    }
     if (outcome.state === "verified" && !detachedFromCurrentTarget) {
       panelProgrammingDraftCache.delete(outcome.board_fingerprint);
       reconcilePanelProgrammingOutcome(plan, outcome);
@@ -5875,6 +6556,24 @@ async function applyPanelProgrammingPlan(): Promise<void> {
       );
     }
   } catch (error) {
+    const failedBoard = plan.board_fingerprint.trim().toLocaleUpperCase();
+    panelProgrammingRecoveryTargets.set(
+      requestTargetFingerprint,
+      failedBoard,
+    );
+    panelProgrammingUntrustedBoards.add(failedBoard);
+    if (currentControlSurfaceHardwareFingerprint() === requestTargetFingerprint &&
+        panelRecoveryProbePossible()) {
+      setPanelRecoveryProbe(
+        currentControlSurfaceHardwareFingerprint(),
+        "recovery-required",
+        error instanceof Error ? error.message : "The hardware transaction was interrupted.",
+      );
+    }
+    applyControlSurfaceState(
+      invalidateControlSurfaceEncoderVerification(controlSurfaceState, plan.board_fingerprint),
+      true,
+    );
     panelProgrammingState = {
       ...panelProgrammingState,
       transaction: {
@@ -5887,10 +6586,11 @@ async function applyPanelProgrammingPlan(): Promise<void> {
     panelProgrammingMessage = `${error instanceof Error ? error.message : "The hardware transaction was interrupted."} KSX cannot prove the current chart; restore a verified backup before programming again.`;
   } finally {
     panelProgrammingBusy = false;
+    controlSurfaceActiveHardwareEpoch = null;
     renderPanelProgrammingDialog();
     syncPanelProgrammingUi();
     if (panelProgrammingState.transaction.phase === "verified" && refreshVerifiedTarget) {
-      void readPanelProgrammingChart(false);
+      window.setTimeout(() => void readPanelProgrammingChart(false), 0);
     } else if (panelProgrammingState.transaction.phase !== "verified") {
       void loadPanelProgrammingBackups();
     }
@@ -5913,6 +6613,717 @@ function clearControlSurfaceUndo(): void {
   controlSurfaceUndoAfterFingerprint = "";
 }
 
+function normalizedControlSurfaceHardwareDevice(value: string): string {
+  return value.trim().slice(0, 240).toLocaleUpperCase();
+}
+
+function emptyControlSurfaceHardwareEpochLedger(): ControlSurfaceHardwareEpochLedger {
+  return { version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION, devices: {} };
+}
+
+function controlSurfaceHardwareEpochStorageKey(device: string): string {
+  return CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX + encodeURIComponent(device);
+}
+
+function sanitizeControlSurfaceHardwareEpochRecord(
+  value: unknown,
+  expectedDevice: string,
+): ControlSurfaceHardwareEpochRecord | null {
+  let candidate = value;
+  if (typeof candidate === "string") {
+    try {
+      candidate = JSON.parse(candidate) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const record = candidate as Record<string, unknown>;
+  const device = typeof record.device === "string"
+    ? normalizedControlSurfaceHardwareDevice(record.device)
+    : "";
+  const epoch = typeof record.epoch === "string" ? record.epoch.trim().slice(0, 160) : "";
+  const boardFingerprint = typeof record.boardFingerprint === "string"
+    ? record.boardFingerprint.trim().slice(0, 240).toLocaleUpperCase()
+    : "";
+  const selector = typeof record.selector === "string"
+    ? record.selector.trim().slice(0, 480).toLocaleUpperCase()
+    : "";
+  const phase = record.phase === "pending" || record.phase === "settled"
+    ? record.phase
+    : "";
+  return record.version === CONTROL_SURFACE_HARDWARE_EPOCH_VERSION &&
+      device === expectedDevice && Boolean(epoch) && Boolean(boardFingerprint) &&
+      Boolean(selector) && Boolean(phase)
+    ? { epoch, boardFingerprint, selector, phase }
+    : null;
+}
+
+/** Missing is a valid first-run ledger. Malformed or inaccessible is not: the
+ * caller must fail closed instead of guessing that old Teach evidence is safe. */
+function readControlSurfaceHardwareEpochLedger(
+  requiredDevices: readonly string[] = [],
+): ControlSurfaceHardwareEpochLedger | null {
+  try {
+    const ledger = emptyControlSurfaceHardwareEpochLedger();
+    const keys = new Set<string>();
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX)) keys.add(key);
+    }
+    for (const rawDevice of requiredDevices) {
+      const device = normalizedControlSurfaceHardwareDevice(rawDevice);
+      if (device) keys.add(controlSurfaceHardwareEpochStorageKey(device));
+    }
+    for (const key of keys) {
+      const suffix = key.slice(CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX.length);
+      let device = "";
+      try {
+        device = normalizedControlSurfaceHardwareDevice(decodeURIComponent(suffix));
+      } catch {
+        return null;
+      }
+      const raw = window.localStorage.getItem(key);
+      if (raw === null) continue;
+      const record = sanitizeControlSurfaceHardwareEpochRecord(raw, device);
+      if (!device || !record || ledger.devices[device]) return null;
+      if (Object.keys(ledger.devices).length >= CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT) {
+        return null;
+      }
+      ledger.devices[device] = record;
+    }
+    return ledger;
+  } catch {
+    return null;
+  }
+}
+
+function newControlSurfaceHardwareEpoch(): string {
+  try {
+    if (typeof window.crypto?.randomUUID === "function") return window.crypto.randomUUID();
+    const words = new Uint32Array(4);
+    window.crypto.getRandomValues(words);
+    return Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function beginControlSurfaceHardwareEpoch(
+  rawDevice: string,
+  rawBoardFingerprint: string,
+  rawSelector: string,
+): ControlSurfaceHardwareEpochMutation | null {
+  const device = normalizedControlSurfaceHardwareDevice(rawDevice);
+  const boardFingerprint = rawBoardFingerprint.trim().slice(0, 240).toLocaleUpperCase();
+  const selector = rawSelector.trim().slice(0, 480).toLocaleUpperCase();
+  const previous = readControlSurfaceHardwareEpochLedger();
+  if (!device || !boardFingerprint || !selector || !previous) return null;
+  // The caller owns the device Web Lock, so this is a real storage CAS among
+  // cooperating KSX documents. Never overwrite a crash-surviving pending
+  // intent: its backend task may still be capable of writing.
+  if (previous.devices[device]?.phase === "pending") return null;
+  const epoch = newControlSurfaceHardwareEpoch();
+  if (!previous.devices[device] &&
+      Object.keys(previous.devices).length >= CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT) {
+    return null;
+  }
+  try {
+    window.localStorage.setItem(
+      controlSurfaceHardwareEpochStorageKey(device),
+      JSON.stringify({
+        version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION,
+        device,
+        epoch,
+        boardFingerprint,
+        selector,
+        phase: "pending",
+      }),
+    );
+    return { device, epoch, boardFingerprint, selector };
+  } catch {
+    return null;
+  }
+}
+
+function controlSurfaceHardwareEpochIsCurrent(
+  mutation: ControlSurfaceHardwareEpochMutation,
+): boolean {
+  const ledger = readControlSurfaceHardwareEpochLedger([mutation.device]);
+  const record = ledger?.devices[mutation.device];
+  return record?.epoch === mutation.epoch && record.phase === "pending" &&
+    record.boardFingerprint === mutation.boardFingerprint &&
+    record.selector === mutation.selector;
+}
+
+/** Publish completion only for the pending intent owned by the Web Lock
+ * holder. The lock is the cross-document CAS; without it this read/set pair
+ * would be able to overwrite a newer writer's pending record. */
+function settleControlSurfaceHardwareEpoch(
+  mutation: ControlSurfaceHardwareEpochMutation,
+): ControlSurfaceHardwareEpochMutation | null {
+  const ledger = readControlSurfaceHardwareEpochLedger([mutation.device]);
+  const current = ledger?.devices[mutation.device];
+  if (!current || current.epoch !== mutation.epoch || current.phase !== "pending" ||
+      current.boardFingerprint !== mutation.boardFingerprint ||
+      current.selector !== mutation.selector) return null;
+  const settled: ControlSurfaceHardwareEpochMutation = {
+    ...mutation,
+    epoch: newControlSurfaceHardwareEpoch(),
+  };
+  try {
+    window.localStorage.setItem(
+      controlSurfaceHardwareEpochStorageKey(mutation.device),
+      JSON.stringify({
+        version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION,
+        device: settled.device,
+        epoch: settled.epoch,
+        boardFingerprint: settled.boardFingerprint,
+        selector: settled.selector,
+        phase: "settled",
+      }),
+    );
+    return settled;
+  } catch {
+    return null;
+  }
+}
+
+function controlSurfaceRelevantHardwareBoards(): Set<string> {
+  const boards = new Set<string>();
+  const collect = (state: ControlSurfaceState): void => {
+    for (const control of state.controls) {
+      for (const channel of control.channels) {
+        const board = channel.encoder?.boardFingerprint.trim().toLocaleUpperCase() ?? "";
+        if (board) boards.add(board);
+      }
+    }
+  };
+  collect(controlSurfaceState);
+  for (const candidate of [
+    panelProgrammingState.inspection.chart?.board_fingerprint,
+    panelProgrammingState.editor.plan?.board_fingerprint,
+    panelProgrammingState.transaction.outcome?.board_fingerprint,
+  ]) {
+    const board = candidate?.trim().toLocaleUpperCase() ?? "";
+    if (board) boards.add(board);
+  }
+  return boards;
+}
+
+function relevantControlSurfaceHardwareEpochs(
+  ledger: ControlSurfaceHardwareEpochLedger,
+): { device: string; record: ControlSurfaceHardwareEpochRecord }[] {
+  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const selectedSelector = nCapSelector().trim().toLocaleUpperCase();
+  const boards = controlSurfaceRelevantHardwareBoards();
+  return Object.entries(ledger.devices)
+    .filter(([device, record]) =>
+      device === selectedDevice || boards.has(record.boardFingerprint) ||
+      Boolean(selectedSelector && record.selector === selectedSelector)
+    )
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([device, record]) => ({ device, record }));
+}
+
+function pendingControlSurfaceHardwareEpochs(): ControlSurfaceHardwareEpochMutation[] | null {
+  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const ledger = readControlSurfaceHardwareEpochLedger(selectedDevice ? [selectedDevice] : []);
+  if (!ledger) return null;
+  return relevantControlSurfaceHardwareEpochs(ledger)
+    .filter(({ record }) => record.phase === "pending")
+    .map(({ device, record }) => ({
+      device,
+      epoch: record.epoch,
+      boardFingerprint: record.boardFingerprint,
+      selector: record.selector,
+    }));
+}
+
+function controlSurfaceHardwareEpochAuthoritySignature(): string | null {
+  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const ledger = readControlSurfaceHardwareEpochLedger(selectedDevice ? [selectedDevice] : []);
+  if (!ledger) return null;
+  return JSON.stringify(relevantControlSurfaceHardwareEpochs(ledger).map(({ device, record }) => [
+    device,
+    record.epoch,
+    record.phase,
+    record.boardFingerprint,
+    record.selector,
+  ]));
+}
+
+function controlSurfaceHardwareLockIdentities(
+  rawPreferredDevice: string,
+  rawPreferredBoard = "",
+): string[] {
+  const pending = pendingControlSurfaceHardwareEpochs();
+  if (!pending) return [];
+  const identities = new Set<string>();
+  for (const mutation of pending) {
+    identities.add(`device:${mutation.device}`);
+    identities.add(`board:${mutation.boardFingerprint}`);
+  }
+  const preferredBoard = rawPreferredBoard.trim().toLocaleUpperCase();
+  const device = normalizedControlSurfaceHardwareDevice(rawPreferredDevice);
+  if (preferredBoard) identities.add(`board:${preferredBoard}`);
+  if (device) identities.add(`device:${device}`);
+  return Array.from(identities).sort((left, right) => left.localeCompare(right));
+}
+
+function controlSurfaceHardwareLockName(identity: string): string {
+  return `ksx-panel-hardware-v1:${identity}`;
+}
+
+/** Acquire both exact-device and stable-board locks in lexical order. The
+ * device lock makes the per-device localStorage read/set a CAS; the board lock
+ * keeps that guarantee across Windows re-enumeration. */
+async function withControlSurfaceHardwareLocks(
+  identities: readonly string[],
+  action: () => Promise<void>,
+): Promise<boolean> {
+  if (!navigator.locks || identities.length === 0) return false;
+  const acquire = async (index: number): Promise<boolean> => {
+    if (index >= identities.length) {
+      await action();
+      return true;
+    }
+    return navigator.locks.request(
+      controlSurfaceHardwareLockName(identities[index]),
+      { mode: "exclusive", ifAvailable: true },
+      async (lock) => lock ? acquire(index + 1) : false,
+    );
+  };
+  return acquire(0);
+}
+
+/** This tab gets no `storage` event for its own phase transition. Consume and
+ * persist it synchronously while suppressing only the editor reset that would
+ * otherwise mistake our own reviewed transaction for an external one. */
+function consumeLocallyPublishedControlSurfaceHardwareEpoch(
+  mutation: ControlSurfaceHardwareEpochMutation,
+): void {
+  controlSurfaceLocallyOwnedHardwareEpoch = mutation;
+  try {
+    const reconciled = reconcileControlSurfaceHardwareEpoch(
+      controlSurfaceState,
+      controlSurfaceStore,
+      controlSurfaceAppliedHardwareEpochs,
+    );
+    consumeControlSurfaceHardwareReconciliation(reconciled);
+    applyControlSurfaceState(controlSurfaceState, true);
+  } finally {
+    controlSurfaceLocallyOwnedHardwareEpoch = null;
+  }
+}
+
+function publishSettledControlSurfaceHardwareEpoch(
+  mutation: ControlSurfaceHardwareEpochMutation,
+): ControlSurfaceHardwareEpochMutation | null {
+  const settled = settleControlSurfaceHardwareEpoch(mutation);
+  if (!settled) return null;
+  controlSurfaceActiveHardwareEpoch = settled;
+  consumeLocallyPublishedControlSurfaceHardwareEpoch(settled);
+  return settled;
+}
+
+/** The lock holder can distinguish a refusal before packet zero from an
+ * ambiguous write. Keep Teach retired, but retain this tab's reviewed chart
+ * and draft because the hardware bytes provably did not change. */
+function publishNoWriteControlSurfaceHardwareSettlement(
+  mutation: ControlSurfaceHardwareEpochMutation,
+  targetFingerprint: string,
+): ControlSurfaceHardwareEpochMutation | null {
+  const settled = publishSettledControlSurfaceHardwareEpoch(mutation);
+  if (!settled) return null;
+  panelProgrammingRecoveryTargets.delete(targetFingerprint);
+  const boardStillPending = pendingControlSurfaceHardwareEpochs()?.some(
+    (pending) => pending.boardFingerprint === mutation.boardFingerprint,
+  ) ?? true;
+  const boardStillRecovering = Array.from(panelProgrammingRecoveryTargets.values()).some(
+    (board) => board === mutation.boardFingerprint,
+  );
+  if (!boardStillPending && !boardStillRecovering) {
+    panelProgrammingUntrustedBoards.delete(mutation.boardFingerprint);
+  }
+  if (currentControlSurfaceHardwareFingerprint() === targetFingerprint &&
+      panelRecoveryProbePossible()) {
+    setPanelRecoveryProbe(targetFingerprint, "settled", "");
+  }
+  return settled;
+}
+
+function invalidateAllControlSurfaceHardwareObservations(
+  state: ControlSurfaceState,
+  device: string,
+): ControlSurfaceState {
+  let next = invalidateControlSurfaceHardwareObservations(state, "", device);
+  const boards = new Set(
+    next.controls.flatMap((control) => control.channels.flatMap((channel) =>
+      channel.encoder?.boardFingerprint ? [channel.encoder.boardFingerprint] : []
+    )),
+  );
+  for (const board of boards) next = invalidateControlSurfaceEncoderVerification(next, board);
+  return next;
+}
+
+function controlSurfaceHardwareEpochSnapshot(
+  ledger: ControlSurfaceHardwareEpochLedger | null,
+): Record<string, string> {
+  if (!ledger) return {};
+  return Object.fromEntries(
+    Object.entries(ledger.devices)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([device, record]) => [device, record.epoch]),
+  );
+}
+
+function reconcileControlSurfaceStateHardwareEpochs(
+  state: ControlSurfaceState,
+  appliedEpochs: Readonly<Record<string, string>>,
+  ledger: ControlSurfaceHardwareEpochLedger | null,
+  selectedDevice: string,
+): ControlSurfaceState {
+  let next = state;
+  const devices = new Set([
+    ...Object.keys(appliedEpochs),
+    ...Object.keys(ledger?.devices ?? {}),
+    ...(selectedDevice ? [selectedDevice] : []),
+  ]);
+  for (const device of devices) {
+    const record = ledger?.devices[device];
+    if (ledger && (record?.epoch ?? "") === (appliedEpochs[device] ?? "")) continue;
+    next = record
+      ? invalidateControlSurfaceHardwareObservations(next, record.boardFingerprint, device)
+      : invalidateAllControlSurfaceHardwareObservations(next, device);
+  }
+  return next;
+}
+
+function reconcileControlSurfaceStoreHardwareEpochs(
+  store: ControlSurfaceStore,
+  ledger: ControlSurfaceHardwareEpochLedger | null,
+  selectedDevice: string,
+): ControlSurfaceStore {
+  const safe = sanitizeControlSurfaceStore(store);
+  const devicesToCheck = new Set([
+    ...Object.keys(safe.hardwareEpochs),
+    ...Object.keys(ledger?.devices ?? {}),
+    ...(selectedDevice ? [selectedDevice] : []),
+  ]);
+  const devices = { ...safe.devices };
+  for (const [identity, state] of Object.entries(devices)) {
+    let next = state;
+    for (const device of devicesToCheck) {
+      const record = ledger?.devices[device];
+      if (ledger && (record?.epoch ?? "") === (safe.hardwareEpochs[device] ?? "")) continue;
+      next = record
+        ? invalidateControlSurfaceHardwareObservations(next, record.boardFingerprint, device)
+        : invalidateAllControlSurfaceHardwareObservations(next, device);
+    }
+    devices[identity] = next;
+  }
+  return {
+    ...safe,
+    devices,
+    hardwareEpochs: controlSurfaceHardwareEpochSnapshot(ledger),
+  };
+}
+
+function controlSurfaceHardwareObservationDevices(
+  state: ControlSurfaceState,
+  store: ControlSurfaceStore,
+): string[] {
+  const devices = new Set<string>();
+  const collect = (candidate: ControlSurfaceState): void => {
+    for (const control of candidate.controls) {
+      for (const channel of control.channels) {
+        if (channel.input.kind !== "keyboard") continue;
+        const device = normalizedControlSurfaceHardwareDevice(channel.input.device);
+        if (device) devices.add(device);
+      }
+    }
+  };
+  collect(state);
+  for (const candidate of Object.values(store.devices)) collect(candidate);
+  return Array.from(devices);
+}
+
+function reconcileControlSurfaceHardwareEpoch(
+  state: ControlSurfaceState,
+  baseStore: ControlSurfaceStore,
+  locallyAppliedEpochs: Readonly<Record<string, string>>,
+): {
+  state: ControlSurfaceState;
+  store: ControlSurfaceStore;
+  appliedEpochs: Record<string, string>;
+  changedHardware: {
+    device: string;
+    boardFingerprint: string;
+    phase: ControlSurfaceHardwareEpochPhase;
+  }[];
+  pendingHardware: ControlSurfaceHardwareEpochMutation[];
+  changed: boolean;
+  ledgerReadable: boolean;
+} {
+  const device = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const safeStore = sanitizeControlSurfaceStore(baseStore);
+  const ledger = readControlSurfaceHardwareEpochLedger([
+    ...Object.keys(locallyAppliedEpochs),
+    ...Object.keys(safeStore.hardwareEpochs),
+    ...controlSurfaceHardwareObservationDevices(state, safeStore),
+    ...(device ? [device] : []),
+  ]);
+  const changedHardware = Array.from(new Set([
+    ...Object.keys(locallyAppliedEpochs),
+    ...Object.keys(ledger?.devices ?? {}),
+    ...(device ? [device] : []),
+  ])).flatMap((candidate) => {
+    const record = ledger?.devices[candidate];
+    return !ledger || (record?.epoch ?? "") !== (locallyAppliedEpochs[candidate] ?? "")
+      ? [{
+          device: candidate,
+          boardFingerprint: record?.boardFingerprint ?? "",
+          phase: record?.phase ?? ("pending" as const),
+        }]
+      : [];
+  });
+  const pendingHardware = ledger
+    ? relevantControlSurfaceHardwareEpochs(ledger)
+        .filter(({ record }) => record.phase === "pending")
+        .map(({ device: pendingDevice, record }) => ({
+          device: pendingDevice,
+          epoch: record.epoch,
+          boardFingerprint: record.boardFingerprint,
+          selector: record.selector,
+        }))
+    : [];
+  const nextState = reconcileControlSurfaceStateHardwareEpochs(
+    state,
+    locallyAppliedEpochs,
+    ledger,
+    device,
+  );
+  const nextStore = reconcileControlSurfaceStoreHardwareEpochs(safeStore, ledger, device);
+  const appliedEpochs = controlSurfaceHardwareEpochSnapshot(ledger);
+  return {
+    state: nextState,
+    store: nextStore,
+    appliedEpochs,
+    changedHardware,
+    pendingHardware,
+    changed: JSON.stringify(nextState) !== JSON.stringify(state) ||
+      JSON.stringify(nextStore) !== JSON.stringify(safeStore) ||
+      JSON.stringify(appliedEpochs) !== JSON.stringify(locallyAppliedEpochs),
+    ledgerReadable: Boolean(ledger),
+  };
+}
+
+function invalidatePanelProgrammingForExternalHardwareEpoch(
+  boardFingerprint: string,
+): void {
+  const target = currentControlSurfaceHardwareFingerprint();
+  const retiredDraftBoards = new Set([
+    boardFingerprint,
+    panelProgrammingState.inspection.chart?.board_fingerprint ?? "",
+    panelProgrammingState.editor.plan?.board_fingerprint ?? "",
+    panelProgrammingState.transaction.outcome?.board_fingerprint ?? "",
+  ].map((candidate) => candidate.trim().toLocaleUpperCase()).filter(Boolean));
+  const board = boardFingerprint.trim().toLocaleUpperCase() ||
+    panelProgrammingState.inspection.chart?.board_fingerprint.trim().toLocaleUpperCase() || "";
+  if (target && board) panelProgrammingRecoveryTargets.set(target, board);
+  if (board) panelProgrammingUntrustedBoards.add(board);
+  resetPanelProgramming(true);
+  // resetPanelProgramming normally caches a dirty draft while changing
+  // targets. An external hardware epoch is different: that draft predates a
+  // potentially real write, so resurrecting it after the recovery read would
+  // falsely present stale bytes as a current unsaved edit.
+  for (const retiredBoard of retiredDraftBoards) {
+    panelProgrammingDraftCache.delete(retiredBoard);
+  }
+  panelProgrammingMessage =
+    "Another KSX window began a hardware transaction for this encoder. Its prior chart, draft, wiring test and routes were retired. Read the complete board again after that transaction finishes.";
+  panelProgrammingState = {
+    ...panelProgrammingState,
+    inspection: {
+      ...panelProgrammingState.inspection,
+      phase: "changed",
+      target_selector: panelProgrammingTarget(),
+      chart: null,
+      error: panelProgrammingMessage,
+    },
+    capability: panelProgrammingCapability(null),
+    editor: {
+      ...panelProgrammingState.editor,
+      phase: "closed",
+      plan_expected_selector: "",
+      plan: null,
+    },
+  };
+  if (target) setPanelRecoveryProbe(target, "checking", panelProgrammingMessage);
+  syncPanelProgrammingUi();
+}
+
+function consumeControlSurfaceHardwareReconciliation(
+  reconciled: ReturnType<typeof reconcileControlSurfaceHardwareEpoch>,
+): void {
+  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
+  const relevantBoards = new Set([
+    ...reconciled.state.controls.flatMap((control) => control.channels.flatMap((channel) =>
+      channel.encoder?.boardFingerprint
+        ? [channel.encoder.boardFingerprint.trim().toLocaleUpperCase()]
+        : []
+    )),
+    panelProgrammingState.inspection.chart?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
+    panelProgrammingState.editor.plan?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
+    panelProgrammingState.transaction.outcome?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
+  ].filter(Boolean));
+  controlSurfaceState = reconciled.state;
+  controlSurfaceStore = withControlSurfaceState(
+    reconciled.store,
+    controlSurfaceIdentity,
+    controlSurfaceState,
+  );
+  if (reconciled.changedHardware.length > 0 || reconciled.pendingHardware.length > 0) {
+    const relevantEncoderAuthorityChange = selectedInputIsPanelEncoder() && [
+      ...reconciled.changedHardware,
+      ...reconciled.pendingHardware,
+    ].some((change) => {
+      const board = change.boardFingerprint.trim().toLocaleUpperCase();
+      return change.device === selectedDevice || Boolean(board && relevantBoards.has(board));
+    });
+    const learnPurpose = learnRow?.purpose ?? "binding";
+    if (learnRow && (
+      learnPurpose === "surface" || learnPurpose === "panel-test" ||
+      (learnPurpose === "binding" && relevantEncoderAuthorityChange)
+    )) {
+      if (learnPurpose === "binding") autoMap = null;
+      void cancelLearn();
+    }
+    if (assignKey) cancelAssign();
+    pendingConflict = null;
+    setNConfOpen(false);
+    clearControlSurfaceUndo();
+    const isExternalRelevant = (change: {
+      device: string;
+      boardFingerprint: string;
+      epoch?: string;
+    }): boolean => {
+      const localMutation = controlSurfaceLocallyOwnedHardwareEpoch ??
+        controlSurfaceActiveHardwareEpoch;
+      const locallyOwned = localMutation?.device === change.device &&
+        reconciled.appliedEpochs[change.device] === localMutation.epoch;
+      const board = change.boardFingerprint.trim().toLocaleUpperCase();
+      return !locallyOwned &&
+        (change.device === selectedDevice || Boolean(board && relevantBoards.has(board)));
+    };
+    const externalRelevantChange = reconciled.changedHardware.find(isExternalRelevant);
+    const externalRelevantPending = reconciled.pendingHardware.find((change) => {
+      if (!isExternalRelevant(change)) return false;
+      const board = change.boardFingerprint.trim().toLocaleUpperCase();
+      const target = currentControlSurfaceHardwareFingerprint();
+      return !board || !panelProgrammingUntrustedBoards.has(board) ||
+        (change.device === selectedDevice && panelProgrammingRecoveryTargets.get(target) !== board);
+    });
+    const externalAuthorityChange = externalRelevantChange ?? externalRelevantPending;
+    if (externalAuthorityChange) {
+      invalidatePanelProgrammingForExternalHardwareEpoch(
+        externalAuthorityChange.boardFingerprint,
+      );
+    }
+  }
+  // Advance this proof only after every authority-bearing side effect above.
+  // A later storage event may now see no delta, so it cannot be responsible
+  // for cleanup that a save or user gesture skipped.
+  controlSurfaceAppliedHardwareEpochs = reconciled.appliedEpochs;
+}
+
+/** A user gesture can run before another document's queued `storage` event.
+ * Read the sidecar synchronously at every action that could turn a signal into
+ * routing authority, consume any missed epoch, and make the user retry. */
+function controlSurfaceHardwareAuthorityCurrentForAction(): boolean {
+  const reconciled = reconcileControlSurfaceHardwareEpoch(
+    controlSurfaceState,
+    controlSurfaceStore,
+    controlSurfaceAppliedHardwareEpochs,
+  );
+  if (reconciled.changedHardware.length === 0 && reconciled.pendingHardware.length === 0 &&
+      reconciled.ledgerReadable) return true;
+  consumeControlSurfaceHardwareReconciliation(reconciled);
+  saveControlSurfacePrefs();
+  syncControlSurfaceWidget(false);
+  syncIpacSignalSource();
+  mappingFlowLayer?.scheduleLayout();
+  keyboardWorkbenchAnnounce(
+    reconciled.ledgerReadable
+      ? reconciled.pendingHardware.length > 0
+        ? "This encoder has a pending hardware transaction. Wait for it to finish, then read the complete chart before teaching or routing."
+        : "Another KSX window changed this encoder. The old signal was retired; inspect or Teach it again before routing."
+      : "KSX could not verify the shared hardware epoch. Signal authority was retired for safety.",
+  );
+  return false;
+}
+
+/** The old contextual mapper and the Control Surface Builder ultimately write
+ * the same KSX route. For a selected encoder, both therefore require the same
+ * browser epoch *and* machine recovery authority at the last user-action
+ * boundary. Ordinary keyboards deliberately bypass this hardware-only gate. */
+interface PanelEncoderBindAuthority {
+  expected_selector: string;
+  expected_instance: string;
+  expected_board_fingerprint: string;
+  expected_chart_sha256: string;
+}
+
+function selectedProgrammableEncoderNeedsBindAuthority(): boolean {
+  if (!selectedInputIsPanelEncoder()) return false;
+  const board = selectedPanelStatusBoard();
+  const chart = panelProgrammingState.inspection.chart;
+  const selector = nCapSelector().trim();
+  const chartMatches = Boolean(chart) &&
+    panelProgrammingState.inspection.target_selector.trim().toLocaleUpperCase() ===
+      selector.toLocaleUpperCase();
+  return Boolean(
+    chartMatches ||
+    (board?.capabilities?.can_write_chart && board.capabilities.write_is_persistent),
+  );
+}
+
+function selectedPanelEncoderBindAuthority(): PanelEncoderBindAuthority | null {
+  const selector = nCapSelector().trim();
+  const instance = nCapInstance().trim();
+  const chart = panelProgrammingState.inspection.chart;
+  if (!selector || !instance || !chart ||
+      panelProgrammingState.inspection.target_selector.trim().toLocaleUpperCase() !==
+        selector.toLocaleUpperCase() ||
+      !chart.board_fingerprint.trim() || !chart.image_sha256.trim()) return null;
+  return {
+    expected_selector: selector,
+    expected_instance: instance,
+    expected_board_fingerprint: chart.board_fingerprint,
+    expected_chart_sha256: chart.image_sha256,
+  };
+}
+
+function selectedPanelEncoderRoutingAuthorityCurrent(): boolean {
+  if (!selectedInputIsPanelEncoder()) return true;
+  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return false;
+  if (panelProgrammingRoutingAuthoritySuspended()) {
+    keyboardWorkbenchAnnounce(
+      "This encoder is being changed or recovered. Read its complete chart after the transaction finishes before mapping its keys.",
+    );
+    return false;
+  }
+  if (selectedProgrammableEncoderNeedsBindAuthority() &&
+      !selectedPanelEncoderBindAuthority()) {
+    keyboardWorkbenchAnnounce(
+      "Read this programmable encoder's complete chart before mapping one of its keys.",
+    );
+    return false;
+  }
+  return true;
+}
+
 function saveControlSurfacePrefs(): void {
   if (
     controlSurfaceUndoAfterFingerprint &&
@@ -5920,11 +7331,21 @@ function saveControlSurfacePrefs(): void {
   ) {
     clearControlSurfaceUndo();
   }
-  controlSurfaceStore = withControlSurfaceState(
-    controlSurfaceStore,
-    controlSurfaceIdentity,
+  let latestStore = controlSurfaceStore;
+  try {
+    latestStore = sanitizeControlSurfaceStore(
+      window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY),
+    );
+  } catch {
+    // Rebase against the in-memory copy when the main document cannot be read;
+    // the write below still decides whether this edit can become durable.
+  }
+  const reconciled = reconcileControlSurfaceHardwareEpoch(
     controlSurfaceState,
+    latestStore,
+    controlSurfaceAppliedHardwareEpochs,
   );
+  consumeControlSurfaceHardwareReconciliation(reconciled);
   try {
     window.localStorage.setItem(
       CONTROL_SURFACE_STORAGE_KEY,
@@ -5969,7 +7390,8 @@ function controlSurfaceMappingRecords(): ControlSurfaceMappingRecord[] {
 
 function controlSurfaceEncoderRecords(): ControlSurfaceEncoderRecord[] {
   const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingState.inspection.target_selector.trim() !== panelProgrammingTarget()) {
+  if (!chart || panelProgrammingRoutingAuthoritySuspended() ||
+      panelProgrammingState.inspection.target_selector.trim() !== panelProgrammingTarget()) {
     return [];
   }
   return chart.terminals.flatMap((terminal) => {
@@ -6066,6 +7488,7 @@ function loadControlSurfacePrefs(): void {
       version: CONTROL_SURFACE_STORE_VERSION,
       devices: {},
       migratedWorkbench: {},
+      hardwareEpochs: {},
     };
   }
   controlSurfaceIdentity = currentKeyboardWorkbenchIdentity();
@@ -6074,10 +7497,68 @@ function loadControlSurfacePrefs(): void {
     controlSurfaceIdentity,
     keyboardWorkbenchState.theme,
   );
+  controlSurfaceAppliedHardwareEpochs = { ...controlSurfaceStore.hardwareEpochs };
+  const reconciled = reconcileControlSurfaceHardwareEpoch(
+    controlSurfaceState,
+    controlSurfaceStore,
+    controlSurfaceAppliedHardwareEpochs,
+  );
+  consumeControlSurfaceHardwareReconciliation(reconciled);
   controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   maybeMigrateKeyboardWorkbenchSurface();
-  applyControlSurfaceState(controlSurfaceState, false);
-  if (controlSurfaceState.open) void refreshControlSurfaceHardwareStatus();
+  applyControlSurfaceState(controlSurfaceState, reconciled.changed);
+  installControlSurfaceStorageSync();
+  if (controlSurfaceState.open || panelRecoveryProbePossible()) {
+    void refreshControlSurfaceHardwareStatus();
+  }
+}
+
+/** `storage` fires in every other document sharing this origin. Hardware
+ * epochs are intentionally separate from the whole surface document, so a
+ * stale tab cannot overwrite both the old observation and the fact that the
+ * encoder changed in one setItem. */
+function installControlSurfaceStorageSync(): void {
+  if (controlSurfaceStorageSyncInstalled) return;
+  controlSurfaceStorageSyncInstalled = true;
+  window.addEventListener("storage", (event) => {
+    if (event.storageArea && event.storageArea !== window.localStorage) return;
+    if (event.key !== CONTROL_SURFACE_STORAGE_KEY &&
+        !event.key?.startsWith(CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX) &&
+        event.key !== null) return;
+    let sourceStore = controlSurfaceStore;
+    if (event.key === CONTROL_SURFACE_STORAGE_KEY || event.key === null) {
+      try {
+        sourceStore = sanitizeControlSurfaceStore(
+          event.key === CONTROL_SURFACE_STORAGE_KEY
+            ? event.newValue
+            : window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY),
+        );
+      } catch {
+        sourceStore = {
+          version: CONTROL_SURFACE_STORE_VERSION,
+          devices: {},
+          migratedWorkbench: {},
+          hardwareEpochs: {},
+        };
+      }
+    }
+    const reconciled = reconcileControlSurfaceHardwareEpoch(
+      controlSurfaceState,
+      sourceStore,
+      controlSurfaceAppliedHardwareEpochs,
+    );
+    consumeControlSurfaceHardwareReconciliation(reconciled);
+    if (reconciled.changedHardware.length > 0) {
+      keyboardWorkbenchAnnounce(
+        reconciled.ledgerReadable
+          ? "Another KSX window changed this encoder. Its earlier Teach observations were retired before they could route or be saved again."
+          : "KSX could not verify the shared hardware epoch. Encoder Teach observations were retired for safety.",
+      );
+    }
+    syncControlSurfaceWidget(false);
+    syncIpacSignalSource();
+    mappingFlowLayer?.scheduleLayout();
+  });
 }
 
 function currentControlSurfaceHardwareFingerprint(): string {
@@ -6111,10 +7592,27 @@ function reconcileControlSurfaceIdentity(): void {
       identity,
       keyboardWorkbenchState.theme,
     );
+    controlSurfaceAppliedHardwareEpochs = { ...controlSurfaceStore.hardwareEpochs };
+  }
+  if (changed || hardwareTargetChanged) {
+    const reconciled = reconcileControlSurfaceHardwareEpoch(
+      controlSurfaceState,
+      controlSurfaceStore,
+      controlSurfaceAppliedHardwareEpochs,
+    );
+    consumeControlSurfaceHardwareReconciliation(reconciled);
+    if (reconciled.changed) {
+      clearControlSurfaceUndo();
+      saveControlSurfacePrefs();
+    }
   }
   maybeMigrateKeyboardWorkbenchSurface();
   syncControlSurfaceWidget(false);
-  if ((changed || hardwareTargetChanged) && controlSurfaceState.open) {
+  if (changed || hardwareTargetChanged) {
+    beginPanelRecoveryProbe();
+  }
+  if ((changed || hardwareTargetChanged) &&
+      (controlSurfaceState.open || panelRecoveryProbePossible())) {
     void refreshControlSurfaceHardwareStatus();
   }
 }
@@ -7501,8 +8999,8 @@ function controlSurfaceRelationship(
   }
   const keys = new Set(
     control.channels
-      .filter((channel) => channel.input.kind === "keyboard")
-      .map((channel) => channel.input.key),
+      .map((channel) => controlSurfaceSignalTruth(channel).flowKey)
+      .filter(Boolean),
   );
   if (
     keys.size > 0 &&
@@ -7510,7 +9008,7 @@ function controlSurfaceRelationship(
       candidate.id !== control.id &&
       candidate.physicalId !== control.physicalId &&
       candidate.channels.some(
-        (channel) => channel.input.kind === "keyboard" && keys.has(channel.input.key),
+        (channel) => keys.has(controlSurfaceSignalTruth(channel).flowKey),
       )
     )
   ) {
@@ -7526,9 +9024,9 @@ function syncControlSurfaceInspector(): void {
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
   const relationship = control ? controlSurfaceRelationship(control) : "single";
-  const routeRows = channel?.input.kind === "keyboard"
-    ? controlSurfaceRoutesForKey(channel.input.key)
-    : [];
+  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
+  const routeFlowKey = channel ? controlSurfaceSignalTruth(channel).flowKey : "";
+  const routeRows = controlSurfaceRoutesForKey(routeFlowKey);
   const print = JSON.stringify({
     control,
     channel,
@@ -7544,6 +9042,7 @@ function syncControlSurfaceInspector(): void {
       message: panelProgrammingMessage,
       busy: panelProgrammingBusy,
       transaction: panelProgrammingState.transaction.phase,
+      routingAuthoritySuspended,
       deliberateSharedKey: control && channel
         ? channel.encoder?.boardFingerprint ===
             panelProgrammingState.inspection.chart?.board_fingerprint &&
@@ -7576,6 +9075,7 @@ function syncControlSurfaceInspector(): void {
     inspector.append(kicker, title, copy);
     return;
   }
+  const routeKey = controlSurfaceRouteKey(channel);
 
   const relationshipCopy = relationship === "mirror"
     ? "Mirror · this is another view of the same physical control. Teaching either view updates both."
@@ -7656,7 +9156,9 @@ function syncControlSurfaceInspector(): void {
       qualificationState,
     );
     const encoderCopy = document.createElement("p");
-    encoderCopy.textContent = qualificationAwaitingRestore
+    encoderCopy.textContent = routingAuthoritySuspended
+      ? "KSX cannot prove this panel's current hardware chart after the last programming transaction. Read the complete chart or restore a verified backup before editing terminal links."
+      : qualificationAwaitingRestore
       ? qualificationState === "validation-recovery"
         ? "The first test write was interrupted or could not be proven. Restore its exact safety backup, then repeat the one-terminal check; this restore will not unlock full layouts."
         : "The one-terminal validation write is complete. Restore its exact safety backup before editing terminal assignments; verified restore unlocks full layouts."
@@ -7703,7 +9205,8 @@ function syncControlSurfaceInspector(): void {
     const qualificationTerminalIneligible = qualificationState === "required" &&
       Boolean(selectedTerminal &&
         !panelProgrammingQualificationTerminalIsEligible(selectedTerminal));
-    terminalSelect.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    terminalSelect.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+      panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore;
     terminalLabel.append(terminalSelect);
 
@@ -7735,7 +9238,8 @@ function syncControlSurfaceInspector(): void {
     keySelect.value = encoderMatchesChart && chart.key_options.some(
       (option) => option.key === channel.encoder?.expectedKey,
     ) ? channel.encoder?.expectedKey ?? "" : "";
-    keySelect.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    keySelect.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+      panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore || qualificationTerminalIneligible ||
       panelProgrammingState.editor.assignment_mode !== "custom" || !terminalSelect.value;
     keyLabel.append(keySelect);
@@ -7750,7 +9254,8 @@ function syncControlSurfaceInspector(): void {
     sharedKeyCheckbox.checked = encoderMatchesChart && panelProgrammingDraftTerminal(
       channel.encoder?.terminalId ?? "",
     )?.allow_shared_key === true;
-    sharedKeyCheckbox.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    sharedKeyCheckbox.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+      panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore || qualificationTerminalIneligible ||
       panelProgrammingState.editor.assignment_mode !== "custom" || !keySelect.value;
     const sharedKeyCopy = document.createElement("span");
@@ -7760,21 +9265,30 @@ function syncControlSurfaceInspector(): void {
     const verification = document.createElement("div");
     verification.className = "n-surface-encoder-verification";
     const signalTruth = controlSurfaceSignalTruth(channel);
-    const verificationTone = encoderMatchesChart
-      ? channel.encoder?.verification ?? "unverified"
+    const verificationTone = encoderMatchesChart &&
+        (signalTruth.authority === "matched" || signalTruth.authority === "mismatch")
+      ? signalTruth.authority
       : "unverified";
+    const pendingPlan = signalTruth.configuredKnown &&
+      !samePanelKey(signalTruth.plannedKey, signalTruth.configuredKey);
     verification.dataset.state = verificationTone;
     const expected = encoderMatchesChart ? channel.encoder?.expectedKey.trim() ?? "" : "";
-    verification.textContent = !terminalSelect.value
+    verification.textContent = routingAuthoritySuspended
+      ? "Hardware authority is suspended. The terminal and key shown above are the last reviewed values, not a claim about what the board emits now. Read the complete chart again before teaching or routing."
+      : !terminalSelect.value
       ? "Link a terminal before preparing a custom chart."
       : qualificationTerminalIneligible
       ? "This terminal stays visible as part of the complete chart, but it cannot be the first writer check. Choose an ordinary SW action button whose Shift state is explicitly disabled."
       : signalTruth.authority === "planned"
       ? `Board currently emits ${signalTruth.configuredKey || "Disabled"}. Draft plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
       : verificationTone === "matched"
-      ? `Teach verified ${expected || "the programmed signal"} on this physical channel.`
+      ? pendingPlan
+        ? `Teach verified the current board key ${signalTruth.configuredKey || "Disabled"} on this physical channel. The draft still plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
+        : `Teach verified ${expected || "the programmed signal"} on this physical channel.`
       : verificationTone === "mismatch"
-      ? `Teach observed a different key than ${expected || "the programmed chart"}. Check the wiring or restore the chart.`
+      ? pendingPlan
+        ? `Teach observed ${signalTruth.observedKey}, different from the current board key ${signalTruth.configuredKey || "Disabled"}. The draft still plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
+        : `Teach observed a different key than ${expected || "the programmed chart"}. Check the wiring or restore the chart.`
       : signalTruth.observedKey
       ? `Board is configured for ${signalTruth.configuredKey || expected || "Disabled"}. Last Teach observed ${signalTruth.observedKey}, but that evidence no longer verifies this chart; Teach again.`
       : `Configured ${signalTruth.configuredKey || expected || "Disabled"} · verify it in Teach after programming.`;
@@ -7817,12 +9331,20 @@ function syncControlSurfaceInspector(): void {
     "surface-teach",
     "Listen for the signal Windows receives from this physical control without changing any mapping",
   );
+  teach.disabled = routingAuthoritySuspended;
+  if (routingAuthoritySuspended) {
+    teach.title =
+      "Read this encoder's complete current chart before teaching a physical input";
+  }
   const route = makeKeyboardWorkbenchButton(
     "Route output",
     "surface-route",
     "Hold this learned signal, then choose one or more virtual-controller controls on the canvas",
   );
-  route.disabled = channel.input.kind !== "keyboard";
+  route.disabled = routingAuthoritySuspended || !routeKey;
+  if (!routeKey && channel.input.kind === "keyboard") {
+    route.title = "Teach this physical input again before routing; its retained observation is not authoritative for the current hardware chart";
+  }
   actions.append(teach, route);
 
   const routes = document.createElement("div");
@@ -7834,8 +9356,10 @@ function syncControlSurfaceInspector(): void {
   if (routeRows.length === 0) {
     const empty = document.createElement("span");
     empty.className = "n-surface-route-empty";
-    empty.textContent = channel.input.kind === "keyboard"
+    empty.textContent = routeFlowKey
       ? "Not routed yet"
+      : channel.input.kind === "keyboard"
+      ? "Teach again before routing"
       : "Teach an input first";
     routes.append(empty);
   } else {
@@ -7901,6 +9425,17 @@ function syncControlSurfaceInspector(): void {
   }
 }
 
+function controlSurfaceSignalClearance(deck: HTMLElement, channelCount: number): number {
+  // clientHeight is the untransformed layout box. getBoundingClientRect()
+  // includes canvas zoom, while these signal-row dimensions are CSS pixels;
+  // mixing them makes bottom docking change when the user zooms the canvas.
+  const layoutHeight = deck.clientHeight;
+  const modelUnitsPerPixel = layoutHeight > 0
+    ? CONTROL_SURFACE_BOUNDS.height / layoutHeight
+    : 1;
+  return (4 + channelCount * 17) * modelUnitsPerPixel;
+}
+
 function renderControlSurfaceControls(): void {
   const item = controlSurfaceItem;
   const deck = item?.querySelector<HTMLElement>(".n-surface-deck");
@@ -7936,7 +9471,9 @@ function renderControlSurfaceControls(): void {
     const expected = encoderChannels.length > 0;
     const taught = expected
       ? verifiedEncoderChannels.length === encoderChannels.length
-      : control.channels.some((channel) => channel.input.kind === "keyboard");
+      : control.channels.some(
+          (channel) => controlSurfaceSignalTruth(channel).authority === "observed",
+        );
     const partiallyTaught = expected && verifiedEncoderChannels.length > 0 && !taught;
     const encoderMismatch = control.channels.some(
       (channel) => controlSurfaceSignalTruth(channel).authority === "mismatch",
@@ -7945,7 +9482,7 @@ function renderControlSurfaceControls(): void {
       learnRow.surfaceIdentity === controlSurfaceIdentity &&
       learnRow.surfaceControlId === control.id;
     const assigning = Boolean(assignKey) && control.channels.some(
-      (channel) => channel.input.kind === "keyboard" && channel.input.key === assignKey,
+      (channel) => controlSurfaceSignalTruth(channel).flowKey === assignKey,
     );
     button.className = `n-surface-control kind-${control.kind}${selected ? " selected" : ""}${taught ? " taught" : expected ? " expected" : " unassigned"}${partiallyTaught ? " partially-taught" : ""}${encoderMismatch ? " encoder-mismatch" : ""}${relationship !== "single" ? ` ${relationship}` : ""}${control.playerSlot ? ` np${control.playerSlot}` : ""}${teaching ? " teach" : ""}${assigning ? " assign" : ""}`;
     button.dataset.surfaceControlId = control.id;
@@ -7957,7 +9494,7 @@ function renderControlSurfaceControls(): void {
     button.style.top = `${(control.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
     button.style.width = `${(control.width / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
     button.style.height = `${(control.height / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
-    const signalBlockHeight = 4 + control.channels.length * 17;
+    const signalBlockHeight = controlSurfaceSignalClearance(deck, control.channels.length);
     button.dataset.signalV = control.y + control.height + signalBlockHeight >
         CONTROL_SURFACE_BOUNDS.height
       ? "above"
@@ -8024,6 +9561,8 @@ function renderControlSurfaceControls(): void {
         const observedKey = truth.observedKey;
         const verification = truth.authority;
         const flowKey = truth.flowKey;
+        const pendingPlan = truth.configuredKnown &&
+          !samePanelKey(expectedKey, truth.configuredKey);
         const chain = document.createElement("span");
         chain.className = `n-surface-signal-chain channel-${channel.id}`;
         chain.dataset.surfaceChannelId = channel.id;
@@ -8071,7 +9610,7 @@ function renderControlSurfaceControls(): void {
         if (control.playerSlot !== null) keycap.dataset.playerSlot = String(control.playerSlot);
         if (expectedKey) keycap.dataset.expectedKey = expectedKey;
         if (truth.configuredKnown) keycap.dataset.configuredKey = truth.configuredKey;
-        if (verification === "planned") keycap.dataset.plannedKey = expectedKey;
+        if (pendingPlan) keycap.dataset.plannedKey = expectedKey;
         if (flowKey) keycap.dataset.flowKey = flowKey;
         if (observedKey) keycap.dataset.lastObservedKey = observedKey;
         if (observedKey &&
@@ -8103,7 +9642,7 @@ function renderControlSurfaceControls(): void {
           keycap.append(current, divider, planned, state);
         } else {
           const key = document.createElement("strong");
-          key.textContent = flowKey || "?";
+          key.textContent = verification === "expected" ? expectedKey || "?" : flowKey || "?";
           const state = document.createElement("small");
           state.textContent = verification === "matched"
             ? "✓"
@@ -8119,9 +9658,9 @@ function renderControlSurfaceControls(): void {
         keycap.title = verification === "planned" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} currently emits ${truth.configuredKey || "Disabled"}; the draft proposes ${expectedKey || "Disabled"}. Nothing changes until Program board verifies the write.`
           : verification === "matched" && encoder
-          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach verified the same key`
+          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach verified the same key${pendingPlan ? `; the draft still proposes ${expectedKey || "Disabled"}` : ""}`
           : verification === "mismatch" && encoder
-          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach observed ${observedKey}`
+          ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach observed ${observedKey}${pendingPlan ? `; the draft still proposes ${expectedKey || "Disabled"}` : ""}`
           : verification === "configured" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey}; ${observedKey ? `last Teach saw ${observedKey}, but that evidence is stale` : "press the wired control to verify it in Windows"}`
           : verification === "expected" && encoder
@@ -8254,7 +9793,7 @@ function syncControlSurfaceChrome(): void {
     const selectedDevice = nCapInstance().trim().toLocaleUpperCase();
     const verified = [...physical.values()].reduce(
       (count, control) => count + control.channels.filter((channel) =>
-        channel.input.kind === "keyboard" && Boolean(selectedDevice) &&
+        Boolean(controlSurfaceRouteKey(channel)) && Boolean(selectedDevice) &&
         channel.input.device.trim().toLocaleUpperCase() === selectedDevice
       ).length,
       0,
@@ -9089,7 +10628,8 @@ function closeControlSurfaceBuilder(preservePanelChart = true): void {
     return;
   }
   exitPanelProgrammingWorkspace();
-  cancelControlSurfaceHardwareStatus(true);
+  const needsRecoveryProbe = panelRecoveryProbePossible();
+  if (!needsRecoveryProbe) cancelControlSurfaceHardwareStatus(true);
   if (!preservePanelChart) resetPanelProgramming(false);
   if (learnRow?.purpose === "surface" || learnRow?.purpose === "panel-test") void cancelLearn();
   if (assignKey) cancelAssign();
@@ -9097,6 +10637,12 @@ function closeControlSurfaceBuilder(preservePanelChart = true): void {
   controlSurfacePendingTemplate = null;
   controlSurfaceEncoderSetupEntry = false;
   applyControlSurfaceState({ ...controlSurfaceState, open: false }, true);
+  if (needsRecoveryProbe &&
+      (panelRecoveryProbeState === "checking" ||
+        panelRecoveryProbeState === "indeterminate") &&
+      !controlSurfaceHardwareAbort && panelRecoveryProbeRetryTimer === undefined) {
+    void refreshControlSurfaceHardwareStatus();
+  }
   // Once the physical panel leaves the canvas its keycap endpoints no longer
   // exist. Re-open the keyboard widget's fallback shelf immediately so no
   // saved route is stranded on an invisible source.
@@ -9244,7 +10790,8 @@ function selectControlSurfaceChannel(controlId: string, channelId = ""): void {
     true,
   );
   const channel = selectedControlSurfaceChannel();
-  if (channel?.input.kind === "keyboard") setInspectorContext({ kind: "key", key: channel.input.key });
+  const flowKey = channel ? controlSurfaceSignalTruth(channel).flowKey : "";
+  if (flowKey) setInspectorContext({ kind: "key", key: flowKey });
 }
 
 function removeSelectedControlSurfaceControl(): void {
@@ -9333,14 +10880,22 @@ function resolveSelectedControlSurfaceSignal(resolution: "mirror" | "duplicate")
 }
 
 function startControlSurfaceTeach(): void {
+  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return;
+  if (panelProgrammingRoutingAuthoritySuspended()) {
+    keyboardWorkbenchAnnounce(
+      "This encoder is being changed or recovered. Read its complete chart after the transaction finishes, then Teach the physical input again.",
+    );
+    return;
+  }
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
   if (!control || !channel) {
     keyboardWorkbenchAnnounce("Select a physical component before teaching an input.");
     return;
   }
-  const expectedDevice = nCapInstance().trim();
-  if (!expectedDevice) {
+  const expectedSelector = nCapSelector().trim();
+  const expectedInstance = nCapInstance().trim();
+  if (!expectedSelector || !expectedInstance) {
     keyboardWorkbenchAnnounce(
       "Select a keyboard or keyboard-mode encoder with a verified Windows device before teaching its physical inputs.",
     );
@@ -9357,7 +10912,8 @@ function startControlSurfaceTeach(): void {
     surfaceControlId: control.id,
     surfaceChannelId: channel.id,
     surfacePhysicalId: control.physicalId,
-    surfaceExpectedDevice: expectedDevice,
+    expectedDevice: expectedSelector,
+    expectedInstance,
   });
 }
 
@@ -9367,9 +10923,15 @@ function teachSelectedControlSurfaceWithKey(
   channelId: string,
   physicalId: string,
   key: string,
-  device: string,
-  expectedDevice: string,
+  expectedInstance: string,
 ): boolean {
+  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return false;
+  if (panelProgrammingRoutingAuthoritySuspended()) {
+    keyboardWorkbenchAnnounce(
+      `Ignored ${key}: this encoder is being changed or recovered. Read its complete chart after the transaction finishes, then Teach again.`,
+    );
+    return false;
+  }
   const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
   if (
     identity !== controlSurfaceIdentity ||
@@ -9382,12 +10944,9 @@ function teachSelectedControlSurfaceWithKey(
     );
     return false;
   }
-  if (
-    !expectedDevice || !device ||
-    device.trim().toLocaleUpperCase() !== expectedDevice.trim().toLocaleUpperCase()
-  ) {
+  if (!expectedInstance || !sameBindingIdentity(expectedInstance, nCapInstance())) {
     keyboardWorkbenchAnnounce(
-      `Ignored ${key}: Windows reported ${device || "an unknown device"}, not the selected keyboard or encoder. Nothing changed.`,
+      `Ignored ${key}: the selected keyboard or encoder changed while Teach was listening. Nothing changed.`,
     );
     return false;
   }
@@ -9397,7 +10956,7 @@ function teachSelectedControlSurfaceWithKey(
       controlId,
       channelId,
       key,
-      device || nCapSelector().trim() || controlSurfaceIdentity,
+      expectedInstance,
     ),
     true,
   );
@@ -9409,20 +10968,22 @@ function teachSelectedControlSurfaceWithKey(
 }
 
 function routeSelectedControlSurfaceChannel(): void {
+  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return;
   const channel = selectedControlSurfaceChannel();
-  if (!channel || channel.input.kind !== "keyboard") {
+  const key = channel ? controlSurfaceRouteKey(channel) : "";
+  if (!channel || !key) {
     keyboardWorkbenchAnnounce("Teach this physical input before routing it.");
     return;
   }
   chooseControlSurfaceStage("route");
-  setInspectorContext({ kind: "key", key: channel.input.key });
-  const routeSlots = new Set(controlSurfaceRoutesForKey(channel.input.key).map((route) => route.slot));
+  setInspectorContext({ kind: "key", key });
+  const routeSlots = new Set(controlSurfaceRoutesForKey(key).map((route) => route.slot));
   const currentSlot = Number(nSlotVal() || "1");
   const needsAllPlayers = routeSlots.size > 1 || [...routeSlots].some((slot) => slot !== currentSlot);
   const currentMode = canvasPrefs.mappingPaths ?? "off";
   if (needsAllPlayers && currentMode !== "all") setMappingPathMode("all");
   else if (currentMode === "off") setMappingPathMode("selected");
-  armAssign(channel.input.key, "replace");
+  armAssign(key, "replace");
 }
 
 function nudgeControlSurfaceControl(controlId: string, dx: number, dy: number): void {
@@ -9443,10 +11004,13 @@ function controlSurfacePointerDown(event: PointerEvent): void {
   const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
   const rect = deck?.getBoundingClientRect();
   if (!button || !deck || !control || !rect || rect.width <= 0 || rect.height <= 0) return;
-  const channelId = target?.closest<HTMLElement>(".n-surface-channel-anchor")
-    ?.dataset.surfaceChannelId ?? "";
-  // The terminal/keycap is a channel picker, not a drag handle. Leave it in
-  // the DOM until the delegated click reads its exact joystick channel.
+  const channelId = target?.closest<HTMLElement>(
+    ".n-surface-signal-chain[data-surface-channel-id]",
+  )?.dataset.surfaceChannelId ?? "";
+  // The complete terminal → key row is a channel picker, not a drag handle.
+  // Leave it in the DOM until the delegated click reads its exact joystick
+  // direction; restricting this guard to the keycap made its terminal pill
+  // select the stick's first channel and begin a drag.
   if (channelId) {
     event.stopPropagation();
     return;
@@ -9495,7 +11059,10 @@ function controlSurfacePointerMove(event: PointerEvent): void {
   if (moved && button) {
     button.style.left = `${(moved.x / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
     button.style.top = `${(moved.y / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
-    const signalBlockHeight = 4 + moved.channels.length * 17;
+    const deck = button.closest<HTMLElement>(".n-surface-deck");
+    const signalBlockHeight = deck
+      ? controlSurfaceSignalClearance(deck, moved.channels.length)
+      : 4 + moved.channels.length * 17;
     button.dataset.signalV = moved.y + moved.height + signalBlockHeight >
         CONTROL_SURFACE_BOUNDS.height
       ? "above"
@@ -9815,6 +11382,7 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   syncPadWidgets();
   syncKeyboardWorkbenchWidget(false);
   syncControlSurfaceWidget(false);
+  syncIpacSignalSource();
   if (flowLines && flowPorts && flowNodes) {
     mappingFlowLayer?.dispose();
     mappingFlowLayer = new MappingFlowLayer(
@@ -10277,6 +11845,8 @@ interface NocturneLearnView {
   generation: number | null;
   remaining_ms: number | null;
   device: string | null;
+  /** Canonical selector resolved server-side from the Raw Input HID child. */
+  selector?: string | null;
   key: string | null;
   error: string | null;
 }
@@ -10295,13 +11865,46 @@ interface LearnTarget {
   label: string;
   slot: string;
   mode: "replace" | "add" | "remove";
+  /** Opaque token from the exact served controller row this action opened
+   *  on. It survives a conflict dialog unchanged; the browser never derives
+   *  it from the slot number, preset, persona, or artwork. */
+  expectedTargetRevision?: string;
+  /** Source identity captured with the same user gesture. `null` encoder
+   *  authority is meaningful: it says this was an ordinary keyboard action,
+   *  not permission to discover a programmable encoder at commit time. */
+  bindingAuthorityPinned?: boolean;
   purpose?: "binding" | "surface" | "panel-test";
   expectedDevice?: string;
+  expectedInstance?: string;
+  encoderAuthority?: PanelEncoderBindAuthority | null;
   surfaceIdentity?: string;
   surfaceControlId?: string;
   surfaceChannelId?: string;
   surfacePhysicalId?: string;
-  surfaceExpectedDevice?: string;
+}
+
+interface BindingSourcePin {
+  bindingAuthorityPinned: true;
+  expectedDevice: string;
+  expectedInstance: string;
+  encoderAuthority: PanelEncoderBindAuthority | null;
+}
+
+function captureBindingSourcePin(): BindingSourcePin {
+  const authority = selectedPanelEncoderBindAuthority();
+  return {
+    bindingAuthorityPinned: true,
+    expectedDevice: nCapSelector().trim(),
+    expectedInstance: nCapInstance().trim(),
+    encoderAuthority: authority ? { ...authority } : null,
+  };
+}
+
+function stagedBindingRevisionSignature(): string {
+  return (lastBindView?.pads ?? [])
+    .map((pad) => `${pad.slot}:${pad.target_revision?.trim() ?? ""}`)
+    .sort()
+    .join("\n");
 }
 
 /** PadForge's recorder tick — snappy but far under the daemon's own rate. */
@@ -10364,10 +11967,136 @@ let lastWrite: {
 
 /** The page poller, installed by the entry so a successful JSON bind
  *  repaints the rows immediately instead of waiting out the 2 s tick. */
-let nocturnePollFn: () => void = () => {};
+let nocturnePollFn: () => Promise<void> = async () => {};
 
-export function setNocturnePoll(fn: () => void): void {
+export function setNocturnePoll(fn: () => Promise<void>): void {
   nocturnePollFn = fn;
+}
+
+/** Pin a mapping action to the exact controller row the browser observed.
+ *  Key-first assignment already owns a source pin before a controller exists;
+ *  add only its target revision here. A fully pinned row is returned verbatim:
+ *  that keeps conflict confirmation from adopting either newer authority. */
+function pinBindingTarget(row: LearnTarget): LearnTarget | null {
+  if ((row.purpose ?? "binding") !== "binding") return row;
+  const revision = row.expectedTargetRevision?.trim() || lastBindView?.pads.find(
+    (pad) => String(pad.slot) === row.slot,
+  )?.target_revision?.trim() || "";
+  if (!revision) return null;
+  if (row.bindingAuthorityPinned) {
+    return row.expectedTargetRevision?.trim()
+      ? row
+      : { ...row, expectedTargetRevision: revision };
+  }
+  return {
+    ...row,
+    expectedTargetRevision: revision,
+    ...captureBindingSourcePin(),
+  };
+}
+
+function sameBindingIdentity(left: string | undefined, right: string): boolean {
+  return (left ?? "").trim().toLocaleUpperCase() === right.trim().toLocaleUpperCase();
+}
+
+/** A learner observation is authoritative only for the exact input selected
+ * when the action was armed. Real Raw Input hits usually carry a HID child,
+ * while Studio's picker carries its USB MI_00 parent, so the server-resolved
+ * selector is the primary proof. The exact-instance arm is the narrow fallback
+ * for a direct USB observation or an older provider that cannot resolve one.
+ * An unresolved HID child therefore fails closed. */
+function learnHitBelongsToPinnedSource(row: LearnTarget, learn: NocturneLearnView): boolean {
+  const expectedSelector = row.expectedDevice?.trim() ?? "";
+  const expectedInstance = row.expectedInstance?.trim() ?? "";
+  if (!expectedSelector || !expectedInstance) return false;
+  if (!sameBindingIdentity(expectedSelector, nCapSelector()) ||
+      !sameBindingIdentity(expectedInstance, nCapInstance())) return false;
+  const selectorMatches = Boolean(learn.selector?.trim()) &&
+    sameBindingIdentity(learn.selector ?? "", expectedSelector);
+  const exactInstanceMatches = Boolean(learn.device?.trim()) &&
+    sameBindingIdentity(learn.device ?? "", expectedInstance);
+  return selectorMatches || exactInstanceMatches;
+}
+
+function sameEncoderBindAuthority(
+  left: PanelEncoderBindAuthority | null | undefined,
+  right: PanelEncoderBindAuthority | null,
+): boolean {
+  if (!left || !right) return (left ?? null) === (right ?? null);
+  return sameBindingIdentity(left.expected_selector, right.expected_selector) &&
+    sameBindingIdentity(left.expected_instance, right.expected_instance) &&
+    sameBindingIdentity(left.expected_board_fingerprint, right.expected_board_fingerprint) &&
+    sameBindingIdentity(left.expected_chart_sha256, right.expected_chart_sha256);
+}
+
+function bindingSourceAuthorityCurrent(row: {
+  bindingAuthorityPinned?: boolean;
+  expectedDevice?: string;
+  expectedInstance?: string;
+  encoderAuthority?: PanelEncoderBindAuthority | null;
+}): boolean {
+  if (!row.bindingAuthorityPinned) return true;
+  return sameBindingIdentity(row.expectedDevice, nCapSelector()) &&
+    sameBindingIdentity(row.expectedInstance, nCapInstance()) &&
+    sameEncoderBindAuthority(row.encoderAuthority, selectedPanelEncoderBindAuthority());
+}
+
+function bindingTargetAuthorityCurrent(row: LearnTarget): boolean {
+  if (!bindingSourceAuthorityCurrent(row)) return false;
+  const expected = row.expectedTargetRevision?.trim();
+  if (!expected) return false;
+  return lastBindView?.pads.some(
+    (pad) => String(pad.slot) === row.slot && pad.target_revision?.trim() === expected,
+  ) ?? false;
+}
+
+/** Polls and hardware-status refreshes can invalidate a gesture while the
+ *  listener, key picker, or conflict dialog is still open. Retire it as soon
+ *  as that newer authority is observed; the server remains the final atomic
+ *  gate if the payload and the click cross in flight. */
+function reconcileBindingActionAuthority(): void {
+  let retired = false;
+  if (learnRow && (learnRow.purpose ?? "binding") === "binding" &&
+      !bindingTargetAuthorityCurrent(learnRow)) {
+    autoMap = null;
+    void cancelLearn();
+    retired = true;
+  }
+  if (assignKey && assignSourcePin &&
+      (!bindingSourceAuthorityCurrent(assignSourcePin) ||
+       assignDraftRevision !== stagedBindingRevisionSignature())) {
+    cancelAssign();
+    retired = true;
+  }
+  if (pendingConflict && !bindingTargetAuthorityCurrent(pendingConflict.row)) {
+    pendingConflict = null;
+    setNConfOpen(false);
+    restoreDialogFocus();
+    retired = true;
+  }
+  if (retired) {
+    keyboardWorkbenchAnnounce(
+      "The selected input or controller draft changed in another action. The old mapping gesture was cancelled before it could write.",
+    );
+  }
+}
+
+/** A completed write deliberately opens a new action. Strip every old pin so
+ *  it captures the post-write row and hardware authority after the awaited
+ *  mutation poll. Conflict retries never call this helper. */
+function reopenBindingTarget(
+  row: LearnTarget,
+  mode: "replace" | "add" | "remove",
+): LearnTarget {
+  return {
+    ...row,
+    mode,
+    expectedTargetRevision: undefined,
+    bindingAuthorityPinned: undefined,
+    expectedDevice: undefined,
+    expectedInstance: undefined,
+    encoderAuthority: undefined,
+  };
 }
 
 function learnSentence(mode: "replace" | "add" | "remove"): string {
@@ -10569,6 +12298,38 @@ function retireLearn(): void {
 }
 
 async function startLearn(row: LearnTarget): Promise<void> {
+  const pinned = pinBindingTarget(row);
+  if (!pinned) {
+    autoMap = null;
+    applyFlash(
+      "error: This controller changed or came from an older daemon. Refresh the canvas before mapping it.",
+    );
+    return;
+  }
+  row = pinned;
+  if (!row.expectedDevice?.trim() || !row.expectedInstance?.trim()) {
+    autoMap = null;
+    if (row.purpose === "panel-test") {
+      panelProgrammingLastTest = null;
+      panelProgrammingMessage =
+        "KSX cannot test this wiring until the selected I-PAC has a canonical selector and exact Windows device identity. Nothing changed.";
+      syncPanelProgrammingUi();
+    } else {
+      applyFlash(
+        "error: Select an input with a verified Windows device identity before listening for a key. Nothing changed.",
+      );
+    }
+    return;
+  }
+  if ((row.purpose ?? "binding") === "binding" &&
+      (!bindingTargetAuthorityCurrent(row) ||
+       !selectedPanelEncoderRoutingAuthorityCurrent())) {
+    autoMap = null;
+    applyFlash(
+      "error: This encoder is being changed or recovered. Read its complete chart before mapping another control.",
+    );
+    return;
+  }
   // PadForge convention: clicking the control being recorded cancels it.
   if (
     learnRow &&
@@ -10579,8 +12340,10 @@ async function startLearn(row: LearnTarget): Promise<void> {
     learnRow.surfaceControlId === row.surfaceControlId &&
     learnRow.surfaceChannelId === row.surfaceChannelId &&
     learnRow.surfacePhysicalId === row.surfacePhysicalId &&
+    learnRow.expectedTargetRevision === row.expectedTargetRevision &&
     learnRow.expectedDevice === row.expectedDevice &&
-    learnRow.surfaceExpectedDevice === row.surfaceExpectedDevice
+    learnRow.expectedInstance === row.expectedInstance &&
+    sameEncoderBindAuthority(learnRow.encoderAuthority, row.encoderAuthority ?? null)
   ) {
     await cancelLearn();
     return;
@@ -10641,7 +12404,7 @@ async function startLearn(row: LearnTarget): Promise<void> {
     stopLearnTimer();
     learnTimer = window.setInterval(() => void pollLearn(), LEARN_POLL_MS);
     // A fast press can land before the start response reaches the browser.
-    if (started.state === "hit") void pollLearn();
+    if (started.state === "hit") void pollLearn(started);
   } catch {
     if (learnGen !== gen) return;
     retireLearn();
@@ -10649,7 +12412,7 @@ async function startLearn(row: LearnTarget): Promise<void> {
   }
 }
 
-async function pollLearn(): Promise<void> {
+async function pollLearn(observed?: NocturneLearnView): Promise<void> {
   const row = learnRow;
   const gen = learnGen;
   const expected = daemonGen;
@@ -10657,11 +12420,13 @@ async function pollLearn(): Promise<void> {
     stopLearnTimer();
     return;
   }
-  let learn: NocturneLearnView;
-  try {
-    learn = await fetchJSON<NocturneLearnView>("/api/learn");
-  } catch {
-    return; // transient — keep listening on the last known state
+  let learn = observed;
+  if (!learn) {
+    try {
+      learn = await fetchJSON<NocturneLearnView>("/api/learn");
+    } catch {
+      return; // transient — keep listening on the last known state
+    }
   }
   if (learnGen !== gen) return; // superseded meanwhile
   if (expected === null || !validGen(learn.generation) || learn.generation !== expected) {
@@ -10689,18 +12454,28 @@ async function pollLearn(): Promise<void> {
       // fast-hit poll may overlap, and only the first terminal response may
       // reach the bind verb.
       const chain = chainWanted();
-      if (row.purpose === "panel-test") {
-        retireLearn();
-        if (!learn.key) break;
-        const expected = row.expectedDevice?.trim().toLocaleUpperCase() ?? "";
-        const observed = learn.device?.trim().toLocaleUpperCase() ?? "";
-        if (!expected || observed !== expected) {
+      retireLearn();
+      if (!learn.key) break;
+      if (!learnHitBelongsToPinnedSource(row, learn)) {
+        const observed = learn.device?.trim() || "an unresolved Windows input";
+        if (row.purpose === "panel-test") {
           panelProgrammingLastTest = null;
           panelProgrammingMessage =
-            "The key did not include the exact selected I-PAC identity. Nothing was mapped; refresh status, then press a control wired to this encoder.";
+            `Ignored ${learn.key} from ${observed}: it did not resolve to the exact selected I-PAC. Nothing was mapped; refresh status, then press a control wired to this encoder.`;
           syncPanelProgrammingUi();
-          break;
+        } else if (row.purpose === "surface") {
+          keyboardWorkbenchAnnounce(
+            `Ignored ${learn.key}: Windows reported ${observed}, not the selected keyboard or encoder. Nothing changed.`,
+          );
+        } else {
+          autoMap = null;
+          applyFlash(
+            `error: Ignored ${learn.key} from another or unresolved keyboard. The selected controller binding was not changed.`,
+          );
         }
+        break;
+      }
+      if (row.purpose === "panel-test") {
         const wanted = learn.key.trim().toLocaleUpperCase();
         const chart = panelProgrammingState.inspection.chart;
         const includeShifted = panelProgrammingShiftLayerActive(chart);
@@ -10713,7 +12488,7 @@ async function pollLearn(): Promise<void> {
           .map((terminal) => terminal.terminal_id);
         panelProgrammingLastTest = {
           key: learn.key,
-          device: learn.device ?? "",
+          device: row.expectedInstance ?? "",
           terminalIds,
         };
         panelProgrammingMessage = terminalIds.length > 0
@@ -10726,31 +12501,26 @@ async function pollLearn(): Promise<void> {
       if (row.purpose === "surface") {
         const controlId = row.surfaceControlId ?? "";
         const channelId = row.surfaceChannelId ?? "";
-        retireLearn();
-        if (learn.key && controlId && channelId) {
+        if (controlId && channelId) {
           teachSelectedControlSurfaceWithKey(
             row.surfaceIdentity ?? "",
             controlId,
             channelId,
             row.surfacePhysicalId ?? "",
             learn.key,
-            learn.device ?? "",
-            row.surfaceExpectedDevice ?? "",
+            row.expectedInstance ?? "",
           );
         }
         break;
       }
       lastWrite = { origin: "learn", chain, assignMode: "replace" };
-      retireLearn();
-      if (learn.key) {
-        void writeLearnedKey(row, learn.key, false).then((ok) => {
-          // "Bind several": the control keeps listening; further keys ADD.
-          if (ok && chain && !autoMap) {
-            void startLearn({ ...row, mode: "add" });
-            setChainBox(true);
-          }
-        });
-      }
+      void writeLearnedKey(row, learn.key, false).then((ok) => {
+        // "Bind several": the control keeps listening; further keys ADD.
+        if (ok && chain && !autoMap) {
+          void startLearn(reopenBindingTarget(row, "add"));
+          setChainBox(true);
+        }
+      });
       break;
     }
     case "timeout":
@@ -11039,6 +12809,37 @@ function autoMapAdvance(didBind: boolean): void {
  *  verb. The server reads the slot's preset identity and current key list
  *  itself; this browser is never trusted with a key list it made up. */
 async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): Promise<boolean> {
+  const pinned = pinBindingTarget(row);
+  if (!pinned || (force && pinned !== row)) {
+    autoMap = null;
+    pendingConflict = null;
+    setNConfOpen(false);
+    applyFlash(
+      "error: This controller changed or came from an older daemon. Refresh the canvas before mapping it.",
+    );
+    return false;
+  }
+  row = pinned;
+  // This is the final common commit boundary for captured hits, clicked-key
+  // assignment, chained binding, and conflict confirmation. Authority may
+  // change after any earlier arm or dialog opened, so no caller can safely
+  // substitute an arm-time check for this one.
+  if ((row.purpose ?? "binding") === "binding" &&
+      (!bindingTargetAuthorityCurrent(row) ||
+       !selectedPanelEncoderRoutingAuthorityCurrent())) {
+    autoMap = null;
+    pendingConflict = null;
+    setNConfOpen(false);
+    applyFlash(
+      "error: This encoder is being changed or recovered. Its unproven key was not mapped.",
+    );
+    return false;
+  }
+  // The exact machine authority belongs to the gesture, not to POST time.
+  // A conflict confirmation therefore sends the same instance/fingerprint/
+  // chart proof the user originally saw, while the checks above reject it if
+  // that authority is no longer current.
+  const encoderAuthority = row.encoderAuthority;
   let outcome: NocturneBindOutcome;
   try {
     outcome = await fetchJSON<NocturneBindOutcome>("/nocturne/api/bind", {
@@ -11046,10 +12847,12 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         slot: Number(row.slot),
+        expected_target_revision: row.expectedTargetRevision,
         function: row.fn,
         key,
         mode: row.mode,
         force,
+        encoder_authority: encoderAuthority ?? undefined,
       }),
     });
   } catch {
@@ -11071,7 +12874,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     }
     const surfaceSignal = controlSurfaceState.controls.some((control) =>
       control.channels.some(
-        (channel) => channel.input.kind === "keyboard" && channel.input.key === key,
+        (channel) => controlSurfaceSignalTruth(channel).flowKey === key,
       )
     );
     if (lastWrite.origin === "assign" && surfaceSignal) {
@@ -11084,7 +12887,20 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
       }
     }
     applyFlash(line);
-    nocturnePollFn();
+    // A successful bind changes the controller's content revision. Wait for
+    // the newly served row before a chained/auto-map action opens its next
+    // target, rather than reusing the token that just committed.
+    await nocturnePollFn();
+    const refreshedRevision = lastBindView?.pads.find(
+      (pad) => String(pad.slot) === row.slot,
+    )?.target_revision?.trim() ?? "";
+    if (!refreshedRevision || refreshedRevision === row.expectedTargetRevision?.trim()) {
+      autoMap = null;
+      applyFlash(
+        `${line} Refresh the canvas before mapping another control; KSX could not confirm the new draft revision.`,
+      );
+      return false;
+    }
     autoMapAdvance(true);
     return true;
   } else if (outcome.code === "conflict" && outcome.conflicts.length > 0) {
@@ -11541,6 +13357,8 @@ function locateKeyRow(root: HTMLElement, key: string): void {
  *  dialog behave exactly like a learned key. */
 let assignKey: string | null = null;
 let assignMode: "replace" | "add" | "remove" = "replace";
+let assignSourcePin: BindingSourcePin | null = null;
+let assignDraftRevision = "";
 
 /** Light the armed key everywhere it appears (board cap, tray, available
  *  chip) — a glow that WAITS, cleared only by resolution or Esc. */
@@ -11569,6 +13387,8 @@ let assignTimer: number | undefined;
 function armAssign(key: string, mode: "replace" | "add" | "remove" = "replace"): void {
   assignKey = key;
   assignMode = mode;
+  assignSourcePin = captureBindingSourcePin();
+  assignDraftRevision = stagedBindingRevisionSignature();
   const deadline = Date.now() + ASSIGN_WINDOW_MS;
   setNLearnCls("n-learnbar listen");
   setNLearnText(
@@ -11597,6 +13417,8 @@ function armAssign(key: string, mode: "replace" | "add" | "remove" = "replace"):
 
 function cancelAssign(): void {
   assignKey = null;
+  assignSourcePin = null;
+  assignDraftRevision = "";
   setChainBox(false);
   if (assignTimer !== undefined) {
     window.clearInterval(assignTimer);
@@ -11620,7 +13442,7 @@ function resolveLearnWithKey(key: string, chain: boolean): boolean {
   void cancelLearn();
   void writeLearnedKey(row, key, false).then((ok) => {
     if (ok && chain && !autoMap) {
-      void startLearn({ ...row, mode: "add" });
+      void startLearn(reopenBindingTarget(row, "add"));
       setChainBox(true);
     }
   });
@@ -12464,9 +14286,20 @@ export function nocturneWire(root: HTMLElement): void {
         functionName: padCanonical ?? fnName,
       });
       if (assignKey && fnName) {
+        // A second window can publish a hardware epoch after this key was
+        // armed but before the pad click. Recheck synchronously so an old
+        // physical observation can never cross that transaction boundary.
+        if (!selectedPanelEncoderRoutingAuthorityCurrent()) {
+          cancelAssign();
+          applyFlash(
+            "error: This encoder is being changed or recovered. Its unproven key was not mapped.",
+          );
+          return;
+        }
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
         const mode = assignMode;
+        const sourcePin = assignSourcePin;
         const chain = ev.shiftKey || chainWanted();
         cancelAssign();
         // Canonical spelling and persona label belong to the backend-owned
@@ -12477,7 +14310,13 @@ export function nocturneWire(root: HTMLElement): void {
         const canonical = padCanonical ?? selectedControl?.function ?? fnName;
         lastWrite = { origin: "assign", chain, assignMode: mode };
         const label = padLabel || selectedControl?.label || fnName;
-        void writeLearnedKey({ fn: canonical, label, slot: padSlot, mode }, held, false).then(
+        void writeLearnedKey({
+          fn: canonical,
+          label,
+          slot: padSlot,
+          mode,
+          ...(sourcePin ?? {}),
+        }, held, false).then(
           (ok) => {
             // "Bind several": the key stays in your hand for the next
             // control; the box survives the re-arm.
@@ -12530,8 +14369,9 @@ export function nocturneWire(root: HTMLElement): void {
     if (physicalControl) {
       ev.preventDefault();
       const controlId = physicalControl.dataset.surfaceControlId ?? "";
-      const channel = target?.closest<HTMLElement>(".n-surface-channel-anchor")
-        ?.dataset.surfaceChannelId ?? "";
+      const channel = target?.closest<HTMLElement>(
+        ".n-surface-signal-chain[data-surface-channel-id]",
+      )?.dataset.surfaceChannelId ?? "";
       if (controlId) selectControlSurfaceChannel(controlId, channel);
       if (assignKey) cancelAssign();
       return;
@@ -12881,6 +14721,12 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-remove") {
       removeSelectedControlSurfaceControl();
     } else if (hit === "kb-workbench") {
+      if (selectedInputIsPanelEncoder()) {
+        keyboardWorkbenchAnnounce(
+          "Arcade encoder terminals belong in Hardware Setup or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
+        );
+        return;
+      }
       const opening = !keyboardWorkbenchState.open;
       if (opening) {
         // Pull mode and learn mode both claim the next key. Entering the
@@ -12970,7 +14816,7 @@ export function nocturneWire(root: HTMLElement): void {
             if (pend.origin === "assign") {
               armAssign(pend.key, pend.assignMode);
             } else {
-              void startLearn({ ...pend.row, mode: "add" });
+              void startLearn(reopenBindingTarget(pend.row, "add"));
             }
             setChainBox(true);
           }
@@ -14594,14 +16440,14 @@ export function NocturneIsland() {
               h(
                 "article",
                 {
-                   class: "widget-instance n-widget n-widget-kb",
-                   id: "keyboard-source-widget",
+                  class: "widget-instance n-widget n-widget-kb",
+                  id: "keyboard-source-widget",
                   role: "listitem",
-                  "aria-label": "Keyboard",
+                  "aria-label": "Input source",
                   tabindex: "-1",
                   "data-client-canvas": "",
                   "data-instance-id": "keyboard",
-                  "data-widget-name": "Keyboard",
+                  "data-widget-name": "Input source",
                   "data-widget-navigation-item": "",
                   "data-canvas-preferred-width": "980",
                   "data-canvas-min-height": "320",
@@ -14623,8 +16469,9 @@ export function NocturneIsland() {
                       {
                         type: "button",
                         class: "widget-drag-handle",
-                        "aria-label": "Move Keyboard",
-                        title: "Drag to move \u00b7 Arrow keys nudge \u00b7 Enter opens the widget",
+                        "aria-label": "Move input source",
+                        title:
+                          "Drag input source to move · Arrow keys nudge · Enter opens the widget",
                       },
                       h("span", {
                         class: "widget-drag-rail",
@@ -14639,8 +16486,12 @@ export function NocturneIsland() {
                      h(
                        "span",
                        { class: "n-source-parked-copy" },
-                       h("strong", null, "Source keyboard hidden"),
-                       h("small", null, "Art, mappings, and canvas position are preserved."),
+                       h("strong", null, "Input source hidden"),
+                       h(
+                         "small",
+                         null,
+                         "Signals, mappings, and canvas position are preserved.",
+                       ),
                      ),
                      h(
                        "button",
@@ -14650,7 +16501,7 @@ export function NocturneIsland() {
                          "data-nx": "keylab-source-show",
                          "aria-controls": "keyboard-source-widget",
                        },
-                       "Show keyboard",
+                       "Show input source",
                      ),
                    ),
                  ),
@@ -14661,9 +16512,14 @@ export function NocturneIsland() {
                     "data-forma-runtime-host": "",
                     "aria-hidden": "false",
                   },
-        h(
-          "div",
-          { class: "n-kbhead" },
+                  h("section", {
+                    class: "n-ipac-signal-source",
+                    "data-client-subtree": "",
+                    "aria-label": "Encoder terminal and Windows key signals",
+                  }),
+                  h(
+                    "div",
+                    { class: "n-kbhead" },
           h(
             "div",
             { "aria-hidden": "true", class: () => nKeyCueCls() },
@@ -14779,7 +16635,8 @@ export function NocturneIsland() {
               type: "button",
               class: "n-kbbuild",
               "data-nx": "kb-workbench",
-              title: "Arrange real keycaps from this detected keyboard without changing their identities or mappings",
+              title:
+                "Arrange real keycaps from this detected keyboard without changing their identities or mappings",
               "aria-pressed": () => nKbWorkbenchPressed(),
             },
             () => nKeyboardWorkbenchOpen() ? "Arranging" : "Arrange keys",

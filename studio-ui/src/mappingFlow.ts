@@ -508,6 +508,10 @@ function svgElement<K extends keyof SVGElementTagNameMap>(
 }
 
 function endpointVisible(element: Element): boolean {
+  // Chromium preserves geometry for descendants of a closed <details> even
+  // though they are not painted. Without this structural check cords can end
+  // at invisible tokens after a source shelf is folded.
+  if (element.closest("details:not([open])")) return false;
   const rect = element.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2 || element.getClientRects().length === 0) return false;
   const style = getComputedStyle(element);
@@ -2242,9 +2246,18 @@ export class MappingFlowLayer {
         slot: Number(macro.dataset.flowSlot ?? this.#selectedSlot),
       };
     }
+    const pointedSignalRow = target.closest<HTMLElement>(
+      ".n-surface-signal-chain[data-surface-channel-id]",
+    );
     const pointedSurfaceAnchor = target.closest<HTMLElement>(
       ".n-surface-channel-anchor[data-flow-key]",
-    );
+    ) ?? pointedSignalRow?.querySelector<HTMLElement>(
+      ".n-surface-channel-anchor[data-flow-key]",
+    ) ?? null;
+    // A multi-channel control is not one interchangeable input. Hovering an
+    // unassigned direction must not fall through to a selected sibling and
+    // highlight that sibling's route.
+    if (pointedSignalRow && !pointedSurfaceAnchor) return null;
     const surface = target.closest<HTMLElement>(".n-surface-control");
     const surfaceAnchor = pointedSurfaceAnchor ?? surface?.querySelector<HTMLElement>(
       '.n-surface-channel-anchor[data-flow-key][data-selected="true"]',

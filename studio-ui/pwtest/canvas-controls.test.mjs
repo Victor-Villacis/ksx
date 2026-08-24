@@ -113,6 +113,27 @@ async function openCanvas(options = {}, prepare = async () => {}) {
   return page;
 }
 
+/** Variant for concurrency tests which must close one page without destroying
+ * the shared storage context that owns its surviving peer. */
+async function openCanvasInContext(context, prepare = async () => {}) {
+  const page = await context.newPage();
+  await prepare(page);
+  const noise = [];
+  page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") noise.push(`console: ${message.text()}`);
+  });
+  page.ksxNoise = noise;
+  await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+    null,
+    { timeout: 20_000 },
+  );
+  await settle(page);
+  return page;
+}
+
 /** The camera is still: no animation running, and none scheduled for the next
  *  frame either (fitAll arms its animation one frame after it is asked). */
 async function settle(page) {
@@ -212,6 +233,8 @@ function panelChartPayload({
   qualificationState = "qualified",
   qualificationDetail = "This synthetic encoder has completed its reversible writer check.",
   qualificationRestoreBackupId = null,
+  hardwareEpoch = null,
+  hardwareFence = null,
 } = {}) {
   const chartKey = imageSha256 === PANEL_DESIRED_SHA ? "A" : "B";
   const keyValue = (key) => ({
@@ -245,6 +268,8 @@ function panelChartPayload({
   return {
     target_selector: PANEL_SELECTOR,
     unavailable: null,
+    hardware_epoch: hardwareEpoch,
+    hardware_fence: hardwareFence,
     view: {
       generated_at: "2026-08-23T00:30:00-04:00",
       summary: "The complete 256-byte I-PAC chart was read.",
@@ -341,6 +366,8 @@ function panelStatusPayload({
   chartDetail = "Chart read-back protocol is unverified, so no report was sent.",
   configurationState = "available-unopened",
   configurationDetail = "One exact five-byte configuration collection is available and remains unopened.",
+  recoveryRequired = false,
+  recoveryDetail = "",
   unavailable = null,
 } = {}) {
   return {
@@ -381,6 +408,8 @@ function panelStatusPayload({
         configuration_collection: configurationState === "available-unopened" ? "HID MI_02" : null,
         configuration_collection_detail: configurationDetail,
         recommendation,
+        programming_recovery_required: recoveryRequired,
+        programming_recovery_detail: recoveryDetail,
         interfaces: [],
         hid_collections: [],
       }],
@@ -397,15 +426,56 @@ const scaleOf = (page, id) =>
     id,
   );
 
+async function restoreFixturePanelSource() {
+  const response = await fetch(`${BASE}/nocturne/device`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      selector: PANEL_SELECTOR,
+      alias: "panel",
+      label: "Ultimarc I-PAC 4",
+    }),
+  });
+  assert.equal(response.ok, true, "the shared fixture restores its baseline I-PAC source");
+}
+
 describe("the canvas navigation controls", () => {
   test("mapping actions keep their controller truth after the legacy pane is absent", async () => {
     const page = await openCanvas();
+    let bindCommitted = false;
+    let committedBinding = null;
+    const postWriteRevision = "fixture-pane-free-revision-after-bind";
     let resolveBind;
     const bound = new Promise((resolve) => {
       resolveBind = resolve;
     });
+    await page.route("**/api/panel/chart", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelChartPayload()),
+      });
+    });
+    await page.route("**/api/nocturne*", async (route) => {
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const response = await route.fetch({ headers });
+      assert.equal(response.status(), 200);
+      const payload = await response.json();
+      if (bindCommitted && committedBinding) {
+        const pad = payload.view?.pads?.find(
+          (candidate) => Number(candidate.slot) === Number(committedBinding.slot),
+        );
+        assert.ok(pad, "fixture payload contains the committed controller");
+        pad.target_revision = postWriteRevision;
+        setPadControlKeys(pad, committedBinding.function, [committedBinding.key]);
+        payload.view.save_text = postWriteRevision;
+      }
+      await route.fulfill({ response, json: payload });
+    });
     await page.route("**/nocturne/api/bind", async (route) => {
-      resolveBind(JSON.parse(route.request().postData() ?? "{}"));
+      committedBinding = JSON.parse(route.request().postData() ?? "{}");
+      bindCommitted = true;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -418,8 +488,20 @@ describe("the canvas navigation controls", () => {
           also_drives: [],
         }),
       });
+      resolveBind(committedBinding);
     });
     try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+
       await page.locator(".n-right").evaluate((pane) => pane.remove());
       assert.equal(await page.locator(".n-right").count(), 0, "the test removes the ledger entirely");
       assert.equal(
@@ -442,11 +524,18 @@ describe("the canvas navigation controls", () => {
       const signal = page.locator(".n-widget-kb .n-ipac-signal:visible").first();
       const signalKey = await signal.getAttribute("data-key");
       assert.ok(signalKey, "the selected I-PAC exposes at least one concrete Windows signal");
-      await signal.click();
+      await signal.evaluate((button) => button.click());
       await page.locator(
         '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
-      ).first().click({ force: true });
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
       const request = await bound;
+      await page.waitForFunction(
+        (revision) => document.querySelector(".n-saved")?.textContent?.trim() === revision,
+        postWriteRevision,
+      );
       assert.equal(request.slot, 1);
       assert.equal(request.key, signalKey);
       assert.equal(request.function, "A", "pad art resolves the mapper's canonical spelling");
@@ -457,9 +546,374 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("conflict consent retains its opened authority and a chained bind waits for the new revision", async () => {
+    const bodies = [];
+    let bindCommitted = false;
+    const committedBindings = [];
+    const postWriteRevision = "fixture-draft-revision-after-bind";
+    const postWriteRevision2 = "fixture-draft-revision-after-chained-bind";
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/chart", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        // A successful bind changes the served revision even when the fixture's
+        // scripted source is otherwise unchanged. Force this mutation poll to
+        // carry a body instead of forwarding its pre-bind conditional as 304.
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        if (bindCommitted) {
+          const revision = committedBindings.length >= 2
+            ? postWriteRevision2
+            : postWriteRevision;
+          for (const binding of committedBindings) {
+            const pad = payload.view?.pads?.find(
+              (candidatePad) => Number(candidatePad.slot) === Number(binding.slot),
+            );
+            assert.ok(pad, "fixture payload contains the committed controller");
+            pad.target_revision = revision;
+            setPadControlKeys(pad, binding.function, [binding.key]);
+          }
+          payload.view.save_text = revision;
+        }
+        await route.fulfill({ response, json: payload });
+      });
+      await candidate.route("**/nocturne/api/bind", async (route) => {
+        const body = JSON.parse(route.request().postData() ?? "{}");
+        bodies.push(body);
+        const conflict = bodies.length === 1;
+        if (!conflict) {
+          bindCommitted = true;
+          committedBindings.push(body);
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(conflict ? {
+            ok: false,
+            message: null,
+            error: "F7 already controls A for Player 2",
+            code: "conflict",
+            conflicts: [{
+              scope: "draft",
+              preset: "Player 2",
+              function: "A",
+              slot: 2,
+            }],
+            also_drives: [],
+          } : {
+            ok: true,
+            message: null,
+            error: null,
+            code: null,
+            conflicts: [],
+            also_drives: [],
+          }),
+        });
+      });
+    });
+    try {
+      // Read the exact programmable encoder chart so the mapping gesture has
+      // selector + instance + board fingerprint + chart hash authority.
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+
+      const signal = page.locator(".n-widget-kb .n-ipac-signal:visible").first();
+      const key = await signal.getAttribute("data-key");
+      assert.ok(key);
+      await signal.evaluate((button) => button.click());
+      await page.locator('.n-right [data-nx="inspector-action"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+      await page.locator(".n-chain-box").check();
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
+      await page.locator('[data-nx="conf-force"]').waitFor({ state: "visible" });
+      assert.equal(bodies.length, 1);
+      const openedRevision = bodies[0].expected_target_revision;
+      assert.ok(openedRevision, "the first POST carries the served slot revision");
+      assert.ok(bodies[0].encoder_authority, "the opened action pins exact encoder authority");
+      assert.deepEqual(bodies[0].encoder_authority, {
+        expected_selector: PANEL_SELECTOR,
+        expected_instance: bodies[0].encoder_authority.expected_instance,
+        expected_board_fingerprint: PANEL_FINGERPRINT,
+        expected_chart_sha256: PANEL_BASE_SHA,
+      });
+      assert.ok(bodies[0].encoder_authority.expected_instance);
+
+      await page.click('[data-nx="conf-force"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+      assert.equal(bodies.length, 2);
+      assert.equal(
+        bodies[1].expected_target_revision,
+        openedRevision,
+        "force sends the token whose conflict set was disclosed",
+      );
+      assert.deepEqual(
+        bodies[1].encoder_authority,
+        bodies[0].encoder_authority,
+        "force never recomputes exact hardware authority at dialog time",
+      );
+
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="b"]',
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
+      const deadline = Date.now() + 5_000;
+      while (bodies.length < 3 && Date.now() < deadline) await page.waitForTimeout(25);
+      assert.equal(bodies.length, 3, "Bind several sends its second mapping");
+      assert.equal(
+        bodies[2].expected_target_revision,
+        postWriteRevision,
+        "the chained action waits for post-write controller authority",
+      );
+      await page.waitForFunction(
+        (revision) => document.querySelector(".n-saved")?.textContent?.trim() === revision,
+        postWriteRevision2,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("same-selector re-enumeration cancels an armed mapping before it can write", async () => {
+    let reenumerate = false;
+    let resolveReenumerated;
+    const reenumerated = new Promise((resolve) => {
+      resolveReenumerated = resolve;
+    });
+    let binds = 0;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/chart", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+      await candidate.route("**/nocturne/api/bind", async (route) => {
+        binds += 1;
+        await route.abort();
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        if (reenumerate) {
+          // Same staged selector and same controller revisions: only the exact
+          // Windows instance changed underneath the armed gesture.
+          payload.view.cap_instance = `${payload.view.cap_instance}\\REENUMERATED`;
+          reenumerate = false;
+          resolveReenumerated();
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+
+      const signal = page.locator(".n-widget-kb .n-ipac-signal:visible").first();
+      await signal.evaluate((button) => button.click());
+      await page.locator('.n-right [data-nx="inspector-action"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+      reenumerate = true;
+      await reenumerated;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("none")
+      );
+      assert.equal(binds, 0, "the old instance never reaches the bind route");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a keyboard-only selector change cancels ordinary binding Learn", async () => {
+    let changeInput = false;
+    let resolveChanged;
+    const changed = new Promise((resolve) => {
+      resolveChanged = resolve;
+    });
+    let binds = 0;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/nocturne/api/bind", async (route) => {
+        binds += 1;
+        await route.abort();
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        if (changeInput) {
+          payload.view.cap_selector = "usb:feed:0002:00";
+          payload.view.cap_instance = "HID\\VID_FEED&PID_0002\\KEYBOARD-B";
+          for (const pad of payload.view?.pads ?? []) {
+            pad.target_revision = `device-b-${pad.slot}`;
+          }
+          changeInput = false;
+          resolveChanged();
+        }
+        await route.fulfill({ response, json: payload });
+      });
+    });
+    try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-kb")?.getAttribute("data-input-kind") === "keyboard"
+      );
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
+      await page.locator('.n-right [data-nx="inspector-action"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+
+      changeInput = true;
+      await changed;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("none")
+      );
+      assert.equal(binds, 0, "Keyboard A's listener cannot write after Keyboard B is selected");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      // This suite intentionally shares one stateful fixture. Return the
+      // staged source to its baseline so this cancellation case cannot turn
+      // the following I-PAC authority tests into keyboard tests.
+      await restoreFixturePanelSource();
+      await page.close();
+    }
+  });
+
+  test("a chart fingerprint change closes stale conflict consent", async () => {
+    let changedChart = false;
+    let chartReads = 0;
+    const bodies = [];
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/chart", async (route) => {
+        chartReads += 1;
+        const payload = panelChartPayload({
+          imageSha256: changedChart ? "C".repeat(64) : PANEL_BASE_SHA,
+        });
+        if (changedChart) payload.view.board_fingerprint = `${PANEL_FINGERPRINT}-replacement`;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+      await candidate.route("**/nocturne/api/bind", async (route) => {
+        bodies.push(JSON.parse(route.request().postData() ?? "{}"));
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: false,
+            message: null,
+            error: "already used",
+            code: "conflict",
+            conflicts: [{ scope: "draft", preset: "Player 2", function: "A", slot: 2 }],
+            also_drives: [],
+          }),
+        });
+      });
+    });
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+      await page.locator(".n-widget-kb .n-ipac-signal:visible").first()
+        .evaluate((button) => button.click());
+      await page.locator('.n-right [data-nx="inspector-action"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen")
+      );
+      await page.locator(
+        '.n-widget-pad[data-instance-id="pad-1"] [data-fn~="a"]',
+      ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      })));
+      await page.locator('[data-nx="conf-force"]').waitFor({ state: "visible" });
+      assert.equal(bodies.length, 1);
+
+      changedChart = true;
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-read"]')
+        .evaluate((button) => button.click());
+      const deadline = Date.now() + 5_000;
+      while (chartReads < 2 && Date.now() < deadline) await page.waitForTimeout(25);
+      assert.equal(chartReads, 2, "the exact chart authority was reread");
+      await page.locator('[data-nx="conf-force"]').waitFor({ state: "hidden" });
+      assert.equal(bodies.length, 1, "stale force consent was retired, not resubmitted");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("the mapping inspector follows canvas selection and Find returns to the whole graph", async () => {
     const page = await openCanvas();
     try {
+      const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
+        .filter({ hasText: "Logitech G915" });
+      await keyboardLane.locator("button.n-dev").click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-kb")?.getAttribute("data-input-kind") === "keyboard"
+      );
+
       const pane = page.locator(".n-right");
       assert.match(await pane.locator(".n-inspector-kicker").innerText(), /mapping inspector/i);
       assert.match(await pane.locator(".n-filter-key").innerText(), /Ctrl K/i);
@@ -472,7 +926,7 @@ describe("the canvas navigation controls", () => {
         "the overview's one primary action enters Find",
       );
 
-      await page.locator('.n-widget-kb [data-key="G"]').click({ force: true });
+      await page.locator('.n-widget-kb [data-key="G"]').evaluate((key) => key.click());
       await page.waitForFunction(() =>
         document.querySelector(".n-right")?.classList.contains("context-mode") &&
         document.querySelector(".n-right")?.classList.contains("keys-mode")
@@ -564,18 +1018,41 @@ describe("the canvas navigation controls", () => {
       });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
+      await restoreFixturePanelSource();
       await page.close();
     }
   });
 
   test("an arranged keyboard keycap is a first-class mapping source", async () => {
     const page = await openCanvas();
+    let bindCommitted = false;
+    let committedBinding = null;
+    const postWriteRevision = "fixture-workbench-revision-after-bind";
     let resolveBound;
     const bound = new Promise((resolve) => {
       resolveBound = resolve;
     });
+    await page.route("**/api/nocturne*", async (route) => {
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const response = await route.fetch({ headers });
+      assert.equal(response.status(), 200);
+      const payload = await response.json();
+      if (bindCommitted && committedBinding) {
+        const pad = payload.view?.pads?.find(
+          (candidate) => Number(candidate.slot) === Number(committedBinding.slot),
+        );
+        assert.ok(pad, "fixture payload contains the committed controller");
+        pad.target_revision = postWriteRevision;
+        setPadControlKeys(pad, committedBinding.function, [committedBinding.key]);
+        payload.view.save_text = postWriteRevision;
+      }
+      await route.fulfill({ response, json: payload });
+    });
     await page.route("**/nocturne/api/bind", async (route) => {
-      resolveBound(route.request());
+      committedBinding = JSON.parse(route.request().postData() ?? "{}");
+      bindCommitted = true;
+      const request = route.request();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -588,6 +1065,7 @@ describe("the canvas navigation controls", () => {
           also_drives: [],
         }),
       });
+      resolveBound(request);
     });
     try {
       const keyboardLane = page.locator(".n-devform:not(.n-encoder-form)")
@@ -619,7 +1097,10 @@ describe("the canvas navigation controls", () => {
         )),
       ]);
       const boundBody = JSON.parse(boundRequest.postData() ?? "{}");
-      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      await page.waitForFunction(
+        (revision) => document.querySelector(".n-saved")?.textContent?.trim() === revision,
+        postWriteRevision,
+      );
       assert.equal(await keycap.evaluate((element) => element.classList.contains("assign")), false);
       assert.equal(boundBody?.slot, 1);
       assert.equal(boundBody?.key, "G");
@@ -627,6 +1108,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(boundBody?.mode, "add");
       assert.deepEqual(page.ksxNoise, []);
     } finally {
+      await restoreFixturePanelSource();
       await page.close();
     }
   });
@@ -1309,6 +1791,15 @@ describe("the canvas navigation controls", () => {
         (lines) => document.querySelectorAll(`${lines} [data-flow-kind="binding"]`).length === 28,
         lines,
       );
+      await page.waitForFunction((lines) => {
+        const routes = Array.from(
+          document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
+        );
+        const geometry = routes.map(
+          (edge) => edge.querySelector(".n-flow-core")?.getAttribute("d") ?? "",
+        );
+        return geometry.every(Boolean) && new Set(geometry).size === routes.length;
+      }, lines);
       const reloadedTraceability = await page.evaluate((lines) => {
         const routes = Array.from(
           document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
@@ -4969,7 +5460,7 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("Control Surface inspects the selected encoder only on open, refresh, or concrete identity change", async () => {
+  test("Control Surface passively checks recovery once, then inspects only on open, refresh, or concrete identity change", async () => {
     let panelCalls = 0;
     let observedMode = "keyboard-compatible";
     let reenumerate = false;
@@ -5019,7 +5510,7 @@ describe("the canvas navigation controls", () => {
       await candidate.route("**/api/panel/status", async (route) => {
         panelCalls += 1;
         methods.push(route.request().method());
-        if (panelCalls === 4) markReenumeratedPanelRead();
+        if (panelCalls === 5) markReenumeratedPanelRead();
         if (holdNextPanelRead) {
           holdNextPanelRead = false;
           markHeldPanelRead();
@@ -5058,15 +5549,16 @@ describe("the canvas navigation controls", () => {
 
     try {
       await page.waitForTimeout(2_250);
-      assert.equal(panelCalls, 0, "the closed Builder is absent from the two-second poll payload");
+      assert.equal(panelCalls, 1,
+        "the closed selected encoder gets one passive recovery-journal check");
 
       await page.click('[data-nx="surface-open"]');
       const card = page.locator(".n-widget-surface .n-surface-hardware");
       await card.waitFor({ state: "visible" });
       await page.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
-      assert.equal(panelCalls, 1, "opening performs one explicit read");
-      assert.deepEqual(methods, ["GET"]);
+      assert.equal(panelCalls, 2, "opening performs one additional explicit read");
+      assert.deepEqual(methods, ["GET", "GET"]);
       assert.equal(await card.getAttribute("aria-labelledby"), "n-surface-hardware-title");
       assert.equal(await card.locator('[role="status"][aria-live="polite"]').count(), 1);
       let cardCopy = (await card.textContent()).replace(/\s+/g, " ");
@@ -5094,7 +5586,7 @@ describe("the canvas navigation controls", () => {
       assert.deepEqual(stageLabels, ["Design", "Teach inputs", "Route outputs"]);
 
       await page.waitForTimeout(2_250);
-      assert.equal(panelCalls, 1, "ordinary Nocturne polls do not re-inspect hardware");
+      assert.equal(panelCalls, 2, "ordinary Nocturne polls do not re-inspect hardware");
 
       holdNextPanelRead = true;
       await card.locator('[data-nx="surface-hardware-refresh"]').click();
@@ -5103,7 +5595,7 @@ describe("the canvas navigation controls", () => {
       await card.locator('[data-nx="surface-hardware-refresh"]').click();
       await page.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-mode") === "unknown");
-      assert.equal(panelCalls, 3, "an explicit retry supersedes the in-flight inspection");
+      assert.equal(panelCalls, 4, "an explicit retry supersedes the in-flight inspection");
       releaseHeldPanelRead();
       await page.waitForTimeout(200);
       cardCopy = (await card.textContent()).replace(/\s+/g, " ");
@@ -5118,10 +5610,10 @@ describe("the canvas navigation controls", () => {
         reenumeratedPanelRead,
         "a concrete encoder-instance change never triggered a fresh panel inspection",
       );
-      assert.equal(panelCalls, 4, "a new concrete Windows instance under the same selector refreshes once");
+      assert.equal(panelCalls, 5, "a new concrete Windows instance under the same selector refreshes once");
       await page.waitForTimeout(2_250);
-      assert.equal(panelCalls, 4, "the unchanged re-enumerated target does not refresh on every poll");
-      assert.deepEqual(methods, ["GET", "GET", "GET", "GET"]);
+      assert.equal(panelCalls, 5, "the unchanged re-enumerated target does not refresh on every poll");
+      assert.deepEqual(methods, ["GET", "GET", "GET", "GET", "GET"]);
       assert.deepEqual(panelWrites, []);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -5163,6 +5655,8 @@ describe("the canvas navigation controls", () => {
         assert.deepEqual(request, {
           expected_selector: PANEL_SELECTOR,
           backup: true,
+          hardware_epoch: null,
+          expected_board_fingerprint: null,
         });
         const payload = panelChartPayload({
           qualificationState: "required",
@@ -5624,6 +6118,11 @@ describe("the canvas navigation controls", () => {
     let learnGeneration = 760;
     let learnHitReady = false;
     let learnDevice = "";
+    let learnSelector = "";
+    const reenumeratedIpacMi00 =
+      "USB\\VID_D209&PID_0430&MI_00\\7&FIXTURE-REENUMERATED&0&0000";
+    const rawReenumeratedIpacChild =
+      "HID\\VID_D209&PID_0430&MI_00\\8&FIXTURE-RAW-CHILD&0&0000";
     let encoderPresence = "present";
     let markMissingServed = () => {};
     let markReenumeratedServed = () => {};
@@ -5683,7 +6182,7 @@ describe("the canvas navigation controls", () => {
           payload.view.cap_instance = "";
         } else {
           payload.view.cap_selector = PANEL_SELECTOR;
-          payload.view.cap_instance = "HID\\VID_D209&PID_0430\\FIXTURE-REENUMERATED";
+          payload.view.cap_instance = reenumeratedIpacMi00;
         }
         await route.fulfill({ response, json: payload });
         if (encoderPresence === "missing") markMissingServed();
@@ -5722,6 +6221,7 @@ describe("the canvas navigation controls", () => {
             generation: learnGeneration,
             remaining_ms: learnHitReady ? null : 10_000,
             device: learnHitReady ? learnDevice : null,
+            selector: learnHitReady ? learnSelector : null,
             key: learnHitReady ? "E" : null,
             error: null,
           }),
@@ -5958,8 +6458,22 @@ describe("the canvas navigation controls", () => {
         /1SW1.*P1 SW1/i,
         "the canvas source names the physical terminal id users see on the I-PAC silkscreen",
       );
-      learnDevice = "HID\\VID_D209&PID_0430\\FIXTURE-REENUMERATED";
-      assert.ok(learnDevice, "the passive wiring test stays pinned to the re-enumerated Windows device instance");
+      learnDevice = "HID\\VID_046D&PID_C31C&MI_00\\9&DESK-KEYBOARD&0&0000";
+      learnSelector = "usb:046d:c31c:00";
+      await setup.locator('[data-nx="surface-encoder-test"]').click();
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      learnHitReady = true;
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      assert.match(
+        (await setup.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
+        /Ignored E.*did not resolve to the exact selected I-PAC/i,
+        "Test wiring rejects a desk-keyboard hit before it can impersonate an encoder terminal",
+      );
+      assert.equal(await setup.locator('[data-panel-signal-terminal][data-hit="true"]').count(), 0);
+
+      learnDevice = rawReenumeratedIpacChild;
+      learnSelector = PANEL_SELECTOR;
+      assert.ok(learnDevice, "the passive wiring test accepts the I-PAC Raw Input child through its canonical selector");
       await setup.locator('[data-nx="surface-encoder-test"]').click();
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
       assert.match(
@@ -6029,12 +6543,23 @@ describe("the canvas navigation controls", () => {
     }
   });
 
-  test("Encoder setup keeps three workflow stages and requires an exact reviewed consent before a mocked write", async () => {
+  test("Encoder setup keeps three workflow stages and closes the persisted Teach crash window before a mocked write", async () => {
     let chartReads = 0;
     let capturedPlan = null;
     let capturedApply = null;
     let learnGeneration = 880;
     let taughtDevice = "";
+    let taughtKey = "B";
+    let applyRequests = 0;
+    let applyDisposition = "not-started";
+    let peer = null;
+    let learnPeer = null;
+    let coldPeer = null;
+    let peerChartReads = 0;
+    let legacyPeerBindRequests = 0;
+    const peerNoise = [];
+    const learnPeerNoise = [];
+    const coldPeerNoise = [];
     let markApplyStarted = () => {};
     let releaseApply = () => {};
     const applyStarted = new Promise((resolve) => {
@@ -6044,6 +6569,16 @@ describe("the canvas navigation controls", () => {
       releaseApply = resolve;
     });
     const page = await openCanvas({}, async (candidate) => {
+      await candidate.addInitScript(() => {
+        const originalSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function setItem(key, value) {
+          if (this === localStorage && key === "ksx-nocturne-control-surfaces1" &&
+              sessionStorage.getItem("ksx-pwtest-refuse-prewrite-surface-save") === "1") {
+            throw new DOMException("storage refused", "QuotaExceededError");
+          }
+          return originalSetItem.call(this, key, value);
+        };
+      });
       await candidate.route("**/api/learn/start", async (route) => {
         learnGeneration += 1;
         await route.fulfill({
@@ -6070,7 +6605,7 @@ describe("the canvas navigation controls", () => {
             generation: learnGeneration,
             remaining_ms: null,
             device: taughtDevice,
-            key: "B",
+            key: taughtKey,
             error: null,
           }),
         });
@@ -6094,13 +6629,14 @@ describe("the canvas navigation controls", () => {
         const first = chartReads === 1;
         const body = JSON.parse(route.request().postData() ?? "{}");
         assert.equal(body.expected_selector, PANEL_SELECTOR);
-        assert.equal(body.backup, first, "the first setup read creates a restore point; post-verify refresh does not duplicate it");
+        assert.equal(body.backup, first || applyDisposition === "not-started",
+          "explicit setup/recovery reads create restore points; post-verify refresh does not duplicate one");
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify(panelChartPayload({
-            imageSha256: first ? PANEL_BASE_SHA : PANEL_DESIRED_SHA,
-            backup: first ? panelBackup() : null,
+            imageSha256: applyDisposition === "verified" ? PANEL_DESIRED_SHA : PANEL_BASE_SHA,
+            backup: body.backup ? panelBackup() : null,
           })),
         });
       });
@@ -6129,7 +6665,24 @@ describe("the canvas navigation controls", () => {
         });
       });
       await candidate.route("**/api/panel/program/apply", async (route) => {
+        applyRequests += 1;
         capturedApply = JSON.parse(route.request().postData() ?? "{}");
+        if (applyDisposition === "not-started") {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              target_selector: PANEL_SELECTOR,
+              hardware_epoch: capturedApply.hardware_epoch,
+              unavailable: "The encoder became busy before the first packet.",
+              refusal_code: "panel-busy",
+              remedy: "Close the competing utility, then review again.",
+              mutation_disposition: "not-started",
+              outcome: null,
+            }),
+          });
+          return;
+        }
         markApplyStarted();
         await applyGate;
         await route.fulfill({
@@ -6137,6 +6690,7 @@ describe("the canvas navigation controls", () => {
           contentType: "application/json",
           body: JSON.stringify({
             target_selector: PANEL_SELECTOR,
+            hardware_epoch: capturedApply.hardware_epoch,
             unavailable: null,
             refusal_code: null,
             remedy: null,
@@ -6155,6 +6709,42 @@ describe("the canvas navigation controls", () => {
         });
       });
     });
+    const storedBoardVerifications = () => page.evaluate((boardFingerprint) => {
+      const value = JSON.parse(
+        localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+      );
+      return Object.values(value?.devices ?? {}).flatMap((surface) =>
+        (surface.controls ?? []).flatMap((control) =>
+          (control.channels ?? [])
+            .filter((channel) => channel.encoder?.boardFingerprint === boardFingerprint)
+            .map((channel) => ({
+              terminal: channel.encoder.terminalId,
+              verification: channel.encoder.verification,
+            })),
+        ),
+      );
+    }, PANEL_FINGERPRINT);
+    const storedUnlinkedObservations = () => page.evaluate((device) => {
+      const value = JSON.parse(
+        localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+      );
+      return Object.values(value?.devices ?? {}).flatMap((surface) =>
+        (surface.controls ?? []).flatMap((control) =>
+          (control.channels ?? [])
+            .filter((channel) => !channel.encoder && channel.input?.kind === "keyboard" &&
+              channel.input.device?.toLocaleUpperCase() === device.toLocaleUpperCase())
+            .map((channel) => channel.input.key),
+        ),
+      );
+    }, taughtDevice);
+    const storedHardwareEpoch = () => page.evaluate((device) => {
+      const normalized = device.trim().toLocaleUpperCase();
+      const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(normalized)}`;
+      return {
+        key,
+        record: JSON.parse(localStorage.getItem(key) ?? "null"),
+      };
+    }, taughtDevice);
 
     try {
       await page.click('[data-nx="surface-open"]');
@@ -6163,7 +6753,8 @@ describe("the canvas navigation controls", () => {
       await page.click('.n-widget-surface [data-surface-template="blank"]');
       await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
       await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
-      assert.equal(await page.locator(".n-widget-surface .n-surface-control").count(), 2);
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      assert.equal(await page.locator(".n-widget-surface .n-surface-control").count(), 3);
 
       await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
       await page.waitForFunction(() =>
@@ -6183,7 +6774,7 @@ describe("the canvas navigation controls", () => {
       const controls = page.locator(".n-widget-surface .n-surface-control");
       assert.equal(new Set(await controls.evaluateAll((items) => items.map(
         (item) => item.getAttribute("data-physical-id"),
-      ))).size, 2, "the regression uses two distinct physical drawings");
+      ))).size, 3, "the regression uses three distinct physical drawings");
       const terminalSelect = page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]');
       const keySelect = page.locator('.n-widget-surface [data-nx="surface-encoder-key"]');
       const sharedKey = page.locator('.n-widget-surface [data-nx="surface-encoder-share"]');
@@ -6266,6 +6857,50 @@ describe("the canvas navigation controls", () => {
       await terminalSelect.selectOption("1sw2");
       await keySelect.selectOption("A");
       await sharedKey.check();
+      taughtKey = "Escape";
+      await controls.nth(0).click();
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-encoder-verification')
+          ?.getAttribute("data-state") === "mismatch");
+      const freshMismatchKeycap = page.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          '[data-verification="mismatch"] .n-surface-signal-keycap',
+      ).first();
+      assert.equal(await freshMismatchKeycap.getAttribute("data-configured-key"), "B");
+      assert.equal(await freshMismatchKeycap.getAttribute("data-planned-key"), "A",
+        "fresh Teach evidence does not erase the separately pending hardware draft");
+      assert.equal(await freshMismatchKeycap.getAttribute("data-flow-key"), "Escape");
+      assert.equal(await freshMismatchKeycap.getAttribute("data-flow-authority"), "mismatch");
+      assert.equal(await freshMismatchKeycap.getAttribute("data-key"), "Escape",
+        "the signal Windows just observed outranks an unwritten draft for routing");
+      assert.match(
+        (await page.locator('.n-widget-surface .n-surface-encoder-verification').textContent())
+          .replace(/\s+/g, " "),
+        /observed Escape.*current board key B.*draft still plans A.*not written/i,
+      );
+      assert.ok(
+        (await storedBoardVerifications()).some((channel) => channel.verification === "mismatch"),
+        "the apply boundary starts with durable pre-write Teach evidence",
+      );
+      taughtKey = "Tab";
+      await controls.nth(2).click();
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').click();
+      await page.waitForFunction((device) => {
+        const value = JSON.parse(
+          localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+        );
+        return Object.values(value?.devices ?? {}).some((surface) =>
+          (surface.controls ?? []).some((control) =>
+            (control.channels ?? []).some((channel) =>
+              !channel.encoder && channel.input?.kind === "keyboard" &&
+              channel.input.key === "Tab" &&
+              channel.input.device?.toLocaleUpperCase() === device.toLocaleUpperCase()),
+          ),
+        );
+      }, taughtDevice);
+      assert.deepEqual(await storedUnlinkedObservations(), ["Tab"],
+        "the regression begins with one durable Teach observation outside the terminal chart");
 
       const review = page.locator('.n-widget-surface [data-nx="surface-encoder-review"]');
       assert.equal(await review.isEnabled(), true, "deliberate fan-in resolves the otherwise-blocking shared-key conflict");
@@ -6286,8 +6921,355 @@ describe("the canvas navigation controls", () => {
       await dialog.locator("[data-panel-program-supervised]").check();
       assert.equal(await apply.isEnabled(), true,
         "the write unlocks only after exact-diff and supervised-recovery consent");
+      await page.evaluate(() => {
+        sessionStorage.setItem("ksx-pwtest-refuse-prewrite-surface-save", "1");
+      });
+      await apply.click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-panel-program-dialog .n-panel-program-review-status")
+          ?.textContent?.includes("Nothing was written"));
+      assert.equal(applyRequests, 0,
+        "the hardware request is refused when pre-write invalidation cannot be persisted");
+      assert.equal(await dialog.getAttribute("data-phase"), "idle");
+      assert.match(await dialog.textContent(), /browser storage is unavailable.*Nothing was written/i);
+      assert.match(await page.locator(".n-live-sr").textContent(), /Nothing was written/i,
+        "the storage refusal is announced as well as rerendered in the review");
+      assert.ok(
+        (await storedBoardVerifications()).some((channel) => channel.verification === "mismatch"),
+        "a failed localStorage write cannot pretend that the saved Teach evidence was cleared",
+      );
+      assert.deepEqual(await storedUnlinkedObservations(), ["Tab"],
+        "a failed localStorage write leaves the durable unlinked observation untouched and refuses USB");
+
+      await page.evaluate(() => {
+        sessionStorage.removeItem("ksx-pwtest-refuse-prewrite-surface-save");
+      });
+      await dialog.locator("[data-panel-program-confirm]").check();
+      await dialog.locator("[data-panel-program-supervised]").check();
+      await apply.click();
+      await page.waitForFunction(() =>
+        document.querySelector("dialog.n-panel-program-dialog .n-panel-program-review-status")
+          ?.textContent?.includes("first packet"));
+      assert.equal(applyRequests, 1);
+      assert.equal(await dialog.getAttribute("data-phase"), "idle");
+      assert.ok(
+        (await storedBoardVerifications()).every((channel) => channel.verification === "unverified"),
+        "not-started cannot restore Teach because another tab may own the hardware lease",
+      );
+      assert.deepEqual(await storedUnlinkedObservations(), [],
+        "a refused request keeps exact-device unlinked observations retired");
+      assert.match(await dialog.textContent(), /Teach evidence remains retired/i);
+
+      // A machine-global busy refusal proves only that this request did not
+      // start; it does not prove that another process left the board unchanged.
+      // The initiating tab must read the current chart before it can Teach.
+      await dialog.locator('[data-panel-dialog-action="close"]').click();
+      assert.equal(
+        await page.locator('.n-widget-surface [data-nx="surface-teach"]').isDisabled(),
+        true,
+        "not-started remains fail-closed until a complete current-chart read",
+      );
+      await page.waitForFunction(async () => !(await navigator.locks.query()).held.some(
+        (lock) => lock.name.startsWith("ksx-panel-hardware-v1:"),
+      ));
+      page.once("dialog", (confirmation) => confirmation.accept());
+      const recoveryRead = page.waitForRequest("**/api/panel/chart");
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await recoveryRead;
+      await page.waitForFunction(() => document.querySelector(
+        '.n-widget-surface .n-surface-programming',
+      )?.getAttribute("data-capability") === "programmable");
+      assert.equal(chartReads, 2,
+        (await page.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "));
+      await page.click('.n-widget-surface [data-surface-programming-mode="custom"]');
+      await controls.nth(0).click();
+      await terminalSelect.selectOption("1sw1");
+      await keySelect.selectOption("A");
+      await sharedKey.check();
+      await controls.nth(1).click();
+      await terminalSelect.selectOption("1sw2");
+      await keySelect.selectOption("A");
+      await sharedKey.check();
+
+      // Only the post-read physical observations regain routing authority.
+      taughtKey = "Escape";
+      await controls.nth(0).click();
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-encoder-verification')
+          ?.getAttribute("data-state") === "mismatch");
+      taughtKey = "Tab";
+      await controls.nth(2).click();
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').click();
+      await page.waitForFunction((device) => {
+        const value = JSON.parse(
+          localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null",
+        );
+        return Object.values(value?.devices ?? {}).some((surface) =>
+          (surface.controls ?? []).some((control) =>
+            (control.channels ?? []).some((channel) =>
+              !channel.encoder && channel.input?.kind === "keyboard" &&
+              channel.input.key === "Tab" &&
+              channel.input.device?.toLocaleUpperCase() === device.toLocaleUpperCase()),
+          ),
+        );
+      }, taughtDevice);
+      await review.click();
+      await dialog.waitFor({ state: "visible" });
+
+      await page.evaluate((device) => {
+        const key = "ksx-nocturne-control-surfaces1";
+        const store = JSON.parse(localStorage.getItem(key) ?? "null");
+        const current = Object.values(store?.devices ?? {})[0];
+        const staleControls = (current?.controls ?? []).flatMap((control) => {
+          const channels = (control.channels ?? []).filter((channel) =>
+            !channel.encoder && channel.input?.kind === "keyboard" &&
+            channel.input.device?.toLocaleUpperCase() === device.toLocaleUpperCase()
+          );
+          return channels.length > 0 ? [{ ...control, channels }] : [];
+        });
+        store.devices["keyboard:stored-sibling-surface"] = {
+          ...current,
+          name: "Stored sibling surface",
+          controls: staleControls,
+          selectedControlId: staleControls[0]?.id ?? "",
+          selectedChannelId: staleControls[0]?.channels?.[0]?.id ?? "",
+        };
+        localStorage.setItem(key, JSON.stringify(store));
+      }, taughtDevice);
+      assert.deepEqual((await storedUnlinkedObservations()).sort(), ["Tab", "Tab"],
+        "the fixture carries the same stale exact-device observation in another stored surface");
+
+      // A second tab is the dangerous case: it owns an in-memory copy of the
+      // exact-instance Teach evidence before this tab begins programming. A
+      // later whole-store save from that tab must never resurrect the old
+      // Windows observation after the encoder chart may have changed.
+      const peerOpened = page.waitForEvent("popup");
+      await page.evaluate(() => window.open("about:blank", "_blank"));
+      peer = await peerOpened;
+      peer.on("pageerror", (error) => peerNoise.push(`pageerror: ${error.stack ?? error}`));
+      peer.on("console", (message) => {
+        if (message.type() === "error") peerNoise.push(`console: ${message.text()}`);
+      });
+      await peer.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await peer.route("**/api/panel/chart", async (route) => {
+        peerChartReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload({
+            imageSha256: PANEL_DESIRED_SHA,
+            backup: null,
+          })),
+        });
+      });
+      await peer.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await peer.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null, { timeout: 20_000 });
+      await settle(peer);
+      await peer.click('[data-nx="surface-open"]');
+      await peer.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      const stalePeerKeycap = peer.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          ' .n-surface-signal-keycap',
+      ).first();
+      await stalePeerKeycap.waitFor({ state: "visible" });
+      assert.equal(await stalePeerKeycap.getAttribute("data-flow-key"), "Escape");
+      assert.equal(await stalePeerKeycap.getAttribute("data-key"), "Escape",
+        "the peer really begins with the old exact-instance Teach authority");
+      const stalePreWriteStore = await page.evaluate(() =>
+        localStorage.getItem("ksx-nocturne-control-surfaces1"));
+      assert.ok(stalePreWriteStore, "the cold-document regression captures a real stale surface document");
+      await stalePeerKeycap.click();
+      const peerRoute = peer.locator('.n-widget-surface [data-nx="surface-route"]');
+      assert.equal(await peerRoute.isEnabled(), true);
+      await peerRoute.click();
+      assert.ok(await peer.locator(".n-widget-surface .n-surface-control.assign").count() > 0,
+        "the peer also begins with a stale armed route awaiting a pad click");
+
+      // The contextual compatibility mapper is a second route into the same
+      // selected encoder. Keep one ordinary binding Learn active in another
+      // document so the pending epoch must retire both old and new UI paths.
+      // `openCanvas` uses Playwright's one-page convenience context, which
+      // deliberately refuses `context.newPage()`. Open a real sibling window
+      // instead: it shares this origin's localStorage, exactly like the two
+      // Studio tabs whose storage-event ordering this regression exercises.
+      const learnPeerOpened = peer.waitForEvent("popup");
+      await peer.evaluate(() => window.open("about:blank", "_blank"));
+      learnPeer = await learnPeerOpened;
+      learnPeer.on("pageerror", (error) => learnPeerNoise.push(`pageerror: ${error.stack ?? error}`));
+      learnPeer.on("console", (message) => {
+        if (message.type() === "error") learnPeerNoise.push(`console: ${message.text()}`);
+      });
+      let legacyLearnGeneration = 990;
+      await learnPeer.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await learnPeer.route("**/api/panel/chart", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload({
+            imageSha256: PANEL_BASE_SHA,
+            backup: null,
+          })),
+        });
+      });
+      await learnPeer.route("**/api/learn/start", async (route) => {
+        legacyLearnGeneration += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation: legacyLearnGeneration,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await learnPeer.route("**/api/learn", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation: legacyLearnGeneration,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await learnPeer.route("**/nocturne/api/bind", async (route) => {
+        legacyPeerBindRequests += 1;
+        await route.fulfill({ status: 500, body: "stale encoder Learn must not bind" });
+      });
+      await learnPeer.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await learnPeer.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null, { timeout: 20_000 });
+      await settle(learnPeer);
+      const learnPeerSetup = learnPeer.locator(
+        '.n-widget-surface [data-nx="surface-encoder-open"]',
+      );
+      if (await learnPeerSetup.getAttribute("aria-expanded") !== "true") {
+        await learnPeerSetup.click();
+      }
+      await learnPeer.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable");
+      await learnPeer.locator(
+        '.n-widget-surface [data-nx="surface-encoder-close"]',
+      ).click();
+      await learnPeer.click('[data-nx="auto-map"]');
+      await learnPeer.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("listen"));
+
+      applyDisposition = "verified";
+      await dialog.locator("[data-panel-program-confirm]").check();
+      await dialog.locator("[data-panel-program-supervised]").check();
       await apply.click();
       await applyStarted;
+      assert.equal(applyRequests, 2);
+      const expectedHardwareLocks = [
+        `ksx-panel-hardware-v1:board:${PANEL_FINGERPRINT.toLocaleUpperCase()}`,
+        `ksx-panel-hardware-v1:device:${taughtDevice.toLocaleUpperCase()}`,
+      ].sort();
+      const duringWriteLocks = await page.evaluate(async () => {
+        const snapshot = await navigator.locks.query();
+        const ours = (locks) => locks.map((lock) => lock.name)
+          .filter((name) => name.startsWith("ksx-panel-hardware-v1:"))
+          .sort();
+        return { held: ours(snapshot.held), pending: ours(snapshot.pending) };
+      });
+      assert.deepEqual(duringWriteLocks.held, expectedHardwareLocks,
+        "the in-flight request owns both its stable-board and exact-device Web Locks");
+      assert.deepEqual(duringWriteLocks.pending, [],
+        "ifAvailable contention never leaves a hidden queued hardware action");
+      const pendingHardwareEpoch = await storedHardwareEpoch();
+      assert.equal(pendingHardwareEpoch.record?.version, 2);
+      assert.equal(pendingHardwareEpoch.record?.device, taughtDevice.toLocaleUpperCase());
+      assert.equal(pendingHardwareEpoch.record?.boardFingerprint, PANEL_FINGERPRINT.toLocaleUpperCase());
+      assert.equal(pendingHardwareEpoch.record?.selector, PANEL_SELECTOR.toLocaleUpperCase());
+      assert.equal(pendingHardwareEpoch.record?.phase, "pending",
+        "the durable sidecar records an unresolved hardware transaction before packet completion");
+      assert.ok(pendingHardwareEpoch.record?.epoch);
+      await peer.waitForFunction(() => {
+        const keycap = document.querySelector(
+          '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+            ' .n-surface-signal-keycap',
+        );
+        return keycap !== null && keycap.getAttribute("data-key") === null &&
+          keycap.getAttribute("data-flow-key") !== "Escape";
+      }, null, { timeout: 10_000 });
+      assert.equal(await stalePeerKeycap.getAttribute("data-key"), null,
+        "the hardware epoch invalidates another tab before the write response arrives");
+      assert.notEqual(await stalePeerKeycap.getAttribute("data-flow-key"), "Escape",
+        "a storage event removes stale routing authority from the peer's live DOM");
+      assert.equal(await peer.locator(".n-widget-surface .n-surface-control.assign").count(), 0,
+        "the hardware epoch cancels an armed stale route before it can reach a pad");
+      assert.equal(await peer.locator(".n-learnbar").evaluate((bar) => bar.classList.contains("none")), true,
+        "the peer's global assign affordance closes with the retired authority");
+      await learnPeer.waitForFunction(() =>
+        document.querySelector(".n-learnbar")?.classList.contains("none"), null,
+      { timeout: 10_000 });
+      assert.equal(legacyPeerBindRequests, 0,
+        "a pending encoder epoch retires an ordinary compatibility Learn before it can bind");
+      await peer.locator('.n-widget-surface [data-nx="surface-teach"]').evaluate((button) =>
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+      assert.equal(await peer.locator(".n-learnbar").evaluate((bar) => bar.classList.contains("none")), true,
+        "even a programmatic click cannot start Teach while post-transaction chart authority is locked");
+      const peerSetup = peer.locator('.n-widget-surface [data-nx="surface-encoder-open"]');
+      if (await peerSetup.getAttribute("aria-expanded") !== "true") await peerSetup.click();
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await peer.waitForFunction(() => document.querySelector(
+        ".n-widget-surface [data-surface-programming-summary]",
+      )?.textContent?.includes("changing or reading this encoder"));
+      assert.equal(peerChartReads, 0,
+        "a peer cannot slip an old chart read ahead of the writer's backend lease");
+      assert.match(
+        (await peer.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
+        /another KSX window is changing or reading this encoder/i,
+        "the read attempt reaches the Web Lock refusal instead of merely observing stale epoch copy",
+      );
+      const durableDuringWrite = await storedBoardVerifications();
+      assert.equal(durableDuringWrite.length, 2);
+      assert.ok(durableDuringWrite.every((channel) => channel.verification === "unverified"),
+        "every exact-board link is durably invalidated while the apply response is still held");
+      assert.deepEqual(await storedUnlinkedObservations(), [],
+        "Teach observations from the exact selected device are durably cleared even without terminal links");
       await page.keyboard.press("Escape");
       assert.equal(await dialog.getAttribute("open"), "", "an in-flight hardware transaction cannot be dismissed");
       assert.match(await dialog.textContent(), /Keep the encoder connected|Reading back every byte/i);
@@ -6295,6 +7277,21 @@ describe("the canvas navigation controls", () => {
 
       await page.waitForFunction(() =>
         document.querySelector("dialog.n-panel-program-dialog")?.getAttribute("data-phase") === "verified");
+      const settledHardwareEpoch = await storedHardwareEpoch();
+      assert.equal(settledHardwareEpoch.key, pendingHardwareEpoch.key);
+      assert.equal(settledHardwareEpoch.record?.version, 2);
+      assert.equal(settledHardwareEpoch.record?.device, taughtDevice.toLocaleUpperCase());
+      assert.equal(settledHardwareEpoch.record?.boardFingerprint, PANEL_FINGERPRINT.toLocaleUpperCase());
+      assert.equal(settledHardwareEpoch.record?.selector, PANEL_SELECTOR.toLocaleUpperCase());
+      assert.equal(settledHardwareEpoch.record?.phase, "settled",
+        "a definitive response leaves a durable settled marker for documents which missed the live event");
+      assert.ok(settledHardwareEpoch.record?.epoch);
+      assert.notEqual(settledHardwareEpoch.record?.epoch, pendingHardwareEpoch.record?.epoch,
+        "settlement publishes a fresh epoch rather than mutating meaning underneath the pending token");
+      await page.waitForFunction(async (names) => {
+        const snapshot = await navigator.locks.query();
+        return [...snapshot.held, ...snapshot.pending].every((lock) => !names.includes(lock.name));
+      }, expectedHardwareLocks);
       assert.equal(capturedApply.confirm, true);
       assert.equal(capturedApply.supervised, true);
       assert.equal(capturedApply.expected_board_fingerprint, PANEL_FINGERPRINT);
@@ -6314,26 +7311,656 @@ describe("the canvas navigation controls", () => {
         '.n-widget-surface [data-nx="surface-encoder-open"]',
       )?.getAttribute("aria-expanded") === "false");
       assert.ok(chartReads >= 2, "a verified write triggers a fresh complete chart read");
+      if (await peerSetup.getAttribute("aria-expanded") !== "true") await peerSetup.click();
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await peer.waitForFunction(() => document.querySelector(
+        '.n-widget-surface .n-surface-programming',
+      )?.getAttribute("data-capability") === "programmable");
+      assert.equal(peerChartReads, 1,
+        "after completion, the peer performs its own authoritative current-chart read");
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-close"]').click();
       const refreshedKeycap = page.locator(
         '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
           '[data-verification="configured"] .n-surface-signal-keycap',
       ).first();
       await refreshedKeycap.waitFor({ state: "visible" });
       assert.equal(await refreshedKeycap.getAttribute("data-flow-key"), "A");
-      assert.equal(await refreshedKeycap.getAttribute("data-last-observed-key"), "B");
+      assert.equal(await refreshedKeycap.getAttribute("data-last-observed-key"), "Escape");
       assert.equal(await refreshedKeycap.getAttribute("data-key"), null);
       assert.match((await refreshedKeycap.textContent()).replace(/\s+/g, " "), /A.*\?/i);
       assert.doesNotMatch(await refreshedKeycap.textContent(), /✓/,
         "post-write readback establishes firmware truth but still requires a new physical Teach");
+      await refreshedKeycap.evaluate((keycap) => keycap.click());
+      assert.equal(
+        await page.locator('.n-widget-surface [data-nx="surface-route"]').isDisabled(),
+        true,
+        "the stale pre-write Escape observation cannot route a keycap now owned by configured A",
+      );
+
+      // Simulate a suspended or discarded document which missed both storage
+      // events and later restores its pre-write whole-store snapshot. The
+      // independent settled sidecar must invalidate that snapshot on cold load.
+      await page.evaluate((raw) => {
+        localStorage.setItem("ksx-nocturne-control-surfaces1", raw);
+      }, stalePreWriteStore);
+      const coldPeerOpened = page.waitForEvent("popup");
+      await page.evaluate(() => window.open("about:blank", "_blank"));
+      coldPeer = await coldPeerOpened;
+      coldPeer.on("pageerror", (error) => coldPeerNoise.push(`pageerror: ${error.stack ?? error}`));
+      coldPeer.on("console", (message) => {
+        if (message.type() === "error") coldPeerNoise.push(`console: ${message.text()}`);
+      });
+      await coldPeer.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await coldPeer.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await coldPeer.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null, { timeout: 20_000 });
+      await settle(coldPeer);
+      await coldPeer.click('[data-nx="surface-open"]');
+      const coldKeycap = coldPeer.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          ' .n-surface-signal-keycap',
+      ).first();
+      await coldKeycap.waitFor({ state: "visible" });
+      assert.equal(await coldKeycap.getAttribute("data-key"), null,
+        "a new document cannot trust the pre-write Teach evidence in a restored stale snapshot");
+      assert.notEqual(await coldKeycap.getAttribute("data-flow-key"), "Escape");
+      await coldKeycap.click();
+      assert.equal(
+        await coldPeer.locator('.n-widget-surface [data-nx="surface-route"]').isDisabled(),
+        true,
+      );
+      await coldPeer.waitForFunction((device) => {
+        const value = JSON.parse(localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null");
+        return Object.values(value?.devices ?? {}).every((surface) =>
+          (surface.controls ?? []).every((control) =>
+            (control.channels ?? []).every((channel) =>
+              channel.input?.kind !== "keyboard" ||
+              channel.input.device?.toLocaleUpperCase() !== device.toLocaleUpperCase() ||
+              channel.input.key !== "Tab"
+            ),
+          ),
+        );
+      }, taughtDevice);
+      assert.deepEqual(coldPeerNoise, []);
+      await coldPeer.close();
+      coldPeer = null;
+
+      const peerControlCount = await peer.locator(".n-widget-surface .n-surface-control").count();
+      await peer.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button24"]');
+      await peer.waitForFunction((count) =>
+        document.querySelectorAll(".n-widget-surface .n-surface-control").length === count + 1,
+      peerControlCount);
+      await peer.reload({ waitUntil: "domcontentloaded" });
+      await peer.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null, { timeout: 20_000 });
+      await settle(peer);
+      if (!await peer.locator(".n-widget-surface").isVisible()) {
+        await peer.click('[data-nx="surface-open"]');
+      }
+      assert.equal(
+        await peer.locator(".n-widget-surface .n-surface-control").count(),
+        peerControlCount + 1,
+        "the peer edit really was saved before testing that stale authority stayed retired",
+      );
+      const reloadedPeerKeycap = peer.locator(
+        '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"]' +
+          ' .n-surface-signal-keycap',
+      ).first();
+      await reloadedPeerKeycap.waitFor({ state: "visible" });
+      assert.equal(await reloadedPeerKeycap.getAttribute("data-key"), null,
+        "a later save and reload cannot resurrect pre-write Teach evidence");
+      assert.notEqual(await reloadedPeerKeycap.getAttribute("data-flow-key"), "Escape");
+      await reloadedPeerKeycap.click();
+      assert.equal(
+        await peer.locator('.n-widget-surface [data-nx="surface-route"]').isDisabled(),
+        true,
+        "the reloaded stale tab still cannot route the pre-write observation",
+      );
+      assert.deepEqual(peerNoise, []);
+      assert.deepEqual(learnPeerNoise, []);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       releaseApply();
+      await coldPeer?.close();
+      await learnPeer?.close();
+      await peer?.close();
       await page.close();
     }
   });
 
+  test("Encoder hardware actions fail closed when Web Locks are unavailable", async () => {
+    let chartRequests = 0;
+    let applyRequests = 0;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.addInitScript(() => {
+        const nativeLocks = navigator.locks;
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          get: () => globalThis.__ksxPwtestLocksUnavailable ? undefined : nativeLocks,
+        });
+        globalThis.__ksxPwtestLocksUnavailable = true;
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        chartRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One verified backup.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [panelBackup()],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelProgramPlan({ terminals: ["1sw1"] })),
+        });
+      });
+      await candidate.route("**/api/panel/program/apply", async (route) => {
+        applyRequests += 1;
+        await route.fulfill({ status: 500, body: "the client must not reach this route" });
+      });
+    });
+
+    try {
+      assert.equal(await page.evaluate(() => navigator.locks), undefined,
+        "the page starts with the Web Locks capability genuinely absent");
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await page.click('.n-widget-surface [data-surface-template="blank"]');
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() => document.querySelector(
+        ".n-widget-surface [data-surface-programming-summary]",
+      )?.textContent?.includes("cannot safely coordinate this encoder across browser windows"));
+      assert.equal(chartRequests, 0,
+        "a complete-chart request cannot reach the backend without cross-window exclusion");
+      assert.match(
+        (await page.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
+        /cannot safely coordinate.*Nothing was changed/i,
+      );
+
+      await page.evaluate(() => {
+        globalThis.__ksxPwtestLocksUnavailable = false;
+      });
+      assert.ok(await page.evaluate(() => navigator.locks));
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await page.waitForFunction(() => document.querySelector(
+        ".n-widget-surface .n-surface-programming",
+      )?.getAttribute("data-capability") === "programmable");
+      assert.equal(chartRequests, 1,
+        "restoring Web Locks allows the same explicit chart read to proceed");
+      await page.click('.n-widget-surface [data-surface-programming-mode="custom"]');
+      await page.locator(".n-widget-surface .n-surface-control").first().click();
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw1");
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-review"]').click();
+      const dialog = page.locator("dialog.n-panel-program-dialog");
+      await dialog.waitFor({ state: "visible" });
+      await dialog.locator("[data-panel-program-confirm]").check();
+      await dialog.locator("[data-panel-program-supervised]").check();
+      await page.evaluate(() => {
+        globalThis.__ksxPwtestLocksUnavailable = true;
+      });
+      assert.equal(await page.evaluate(() => navigator.locks), undefined);
+      await dialog.locator('[data-panel-dialog-action="apply"]').click();
+      await page.waitForFunction(() => document.querySelector(
+        "dialog.n-panel-program-dialog .n-panel-program-review-status",
+      )?.textContent?.includes("cannot safely coordinate this persistent write"));
+      assert.match(
+        (await dialog.locator(".n-panel-program-review-status").textContent()).replace(/\s+/g, " "),
+        /cannot safely coordinate this persistent write/i,
+      );
+      assert.equal(applyRequests, 0,
+        "a persistent program request cannot reach the backend without cross-window exclusion");
+      assert.equal(await dialog.getAttribute("data-phase"), "idle");
+      assert.match((await dialog.textContent()).replace(/\s+/g, " "), /Nothing was written/i);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a crashed writer's pending epoch settles only with the backend's exact ordered recovery proof", async () => {
+    let capturedHardwareEpoch = "";
+    let peerChartReads = 0;
+    let serveOrderedFence = false;
+    let hardwareImageSha256 = PANEL_BASE_SHA;
+    let releaseLateApply = () => {};
+    let markApplyStarted = () => {};
+    let markLateApplyFinished = () => {};
+    const applyGate = new Promise((resolve) => {
+      releaseLateApply = resolve;
+    });
+    const applyStarted = new Promise((resolve) => {
+      markApplyStarted = resolve;
+    });
+    const lateApplyFinished = new Promise((resolve) => {
+      markLateApplyFinished = resolve;
+    });
+    const crashContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const writer = await openCanvasInContext(crashContext, async (candidate) => {
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        const request = JSON.parse(route.request().postData() ?? "{}");
+        assert.equal(request.hardware_epoch ?? null, null,
+          "the writer's initial read has no interrupted mutation to recover");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload({ imageSha256: hardwareImageSha256 })),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One verified backup.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [panelBackup()],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelProgramPlan({ terminals: ["1sw1"] })),
+        });
+      });
+      await candidate.route("**/api/panel/program/apply", async (route) => {
+        const request = JSON.parse(route.request().postData() ?? "{}");
+        capturedHardwareEpoch = request.hardware_epoch ?? "";
+        assert.ok(capturedHardwareEpoch, "every admitted writer carries the browser mutation token");
+        markApplyStarted();
+        await applyGate;
+        // The ordered recovery read below wins the backend fence. A late
+        // admitted request for this same token is canceled before packet zero.
+        try {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              target_selector: PANEL_SELECTOR,
+              hardware_epoch: capturedHardwareEpoch,
+              unavailable: "The recovery read settled this hardware epoch before mutation admission.",
+              refusal_code: "panel-hardware-epoch-settled",
+              remedy: "Review again from the current chart.",
+              mutation_disposition: "not-started",
+              outcome: null,
+            }),
+          });
+        } catch {
+          // The initiating document was deliberately closed; the backend-side
+          // ordering outcome remains observable through the peer's next read.
+        } finally {
+          markLateApplyFinished();
+        }
+      });
+    });
+    let peer = null;
+    const peerNoise = [];
+
+    try {
+      await writer.click('[data-nx="surface-open"]');
+      await writer.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await writer.click('.n-widget-surface [data-surface-template="blank"]');
+      await writer.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await writer.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await writer.waitForFunction(() => document.querySelector(
+        ".n-widget-surface .n-surface-programming",
+      )?.getAttribute("data-capability") === "programmable");
+      await writer.click('.n-widget-surface [data-surface-programming-mode="custom"]');
+      await writer.locator(".n-widget-surface .n-surface-control").first().click();
+      await writer.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw1");
+      await writer.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
+      await writer.locator('.n-widget-surface [data-nx="surface-encoder-review"]').click();
+      const writerDialog = writer.locator("dialog.n-panel-program-dialog");
+      await writerDialog.waitFor({ state: "visible" });
+
+      peer = await crashContext.newPage();
+      peer.on("pageerror", (error) => peerNoise.push(`pageerror: ${error.stack ?? error}`));
+      peer.on("console", (message) => {
+        if (message.type() === "error") peerNoise.push(`console: ${message.text()}`);
+      });
+      await peer.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await peer.route("**/api/panel/chart", async (route) => {
+        peerChartReads += 1;
+        const request = JSON.parse(route.request().postData() ?? "{}");
+        assert.equal(request.hardware_epoch, capturedHardwareEpoch,
+          "recovery is fenced by the exact pending mutation token");
+        assert.equal(
+          request.expected_board_fingerprint?.toLocaleUpperCase(),
+          PANEL_FINGERPRINT.toLocaleUpperCase(),
+        );
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload({
+            imageSha256: hardwareImageSha256,
+            backup: null,
+            hardwareEpoch: capturedHardwareEpoch,
+            hardwareFence: serveOrderedFence ? "settled" : null,
+          })),
+        });
+      });
+      await peer.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await peer.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null, { timeout: 20_000 });
+
+      await writerDialog.locator("[data-panel-program-confirm]").check();
+      await writerDialog.locator("[data-panel-program-supervised]").check();
+      await writerDialog.locator('[data-panel-dialog-action="apply"]').click();
+      await applyStarted;
+      const pendingBeforeCrash = await peer.evaluate((device) => {
+        const normalized = device.trim().toLocaleUpperCase();
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(normalized)}`;
+        return JSON.parse(localStorage.getItem(key) ?? "null");
+      }, await writer.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance ?? ""));
+      assert.equal(pendingBeforeCrash?.epoch, capturedHardwareEpoch);
+      assert.equal(pendingBeforeCrash?.phase, "pending");
+      await writer.close();
+      await peer.waitForFunction(async () => !(await navigator.locks.query()).held.some(
+        (lock) => lock.name.startsWith("ksx-panel-hardware-v1:"),
+      ));
+
+      await settle(peer);
+      if (!await peer.locator(".n-widget-surface").isVisible()) {
+        await peer.click('[data-nx="surface-open"]');
+      }
+      await peer.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await peer.waitForFunction(() => document.querySelector(
+        ".n-widget-surface [data-surface-programming-summary]",
+      )?.textContent?.includes("did not return the matching ordered recovery proof"));
+      assert.equal(peerChartReads, 1);
+      const pendingAfterUnfencedRead = await peer.evaluate((device) => {
+        const normalized = device.trim().toLocaleUpperCase();
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(normalized)}`;
+        return JSON.parse(localStorage.getItem(key) ?? "null");
+      }, pendingBeforeCrash.device);
+      assert.equal(pendingAfterUnfencedRead?.epoch, capturedHardwareEpoch);
+      assert.equal(pendingAfterUnfencedRead?.phase, "pending",
+        "reading the old bytes cannot settle a writer without ordered backend proof");
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-close"]').click();
+      assert.equal(await peer.locator('.n-widget-surface [data-nx="surface-teach"]').isDisabled(), true,
+        "an unfenced recovery read cannot restore Teach authority");
+
+      serveOrderedFence = true;
+      await peer.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await peer.waitForFunction((epoch) => {
+        const device = JSON.parse(document.getElementById("__ksx-payload")?.textContent ?? "{}")
+          .view?.cap_instance?.trim().toLocaleUpperCase() ?? "";
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(device)}`;
+        const record = JSON.parse(localStorage.getItem(key) ?? "null");
+        return record?.phase === "settled" && record.epoch !== epoch;
+      }, capturedHardwareEpoch);
+      assert.equal(peerChartReads, 2);
+      await peer.locator('.n-widget-surface [data-nx="surface-encoder-close"]').click();
+      assert.equal(await peer.locator('.n-widget-surface [data-nx="surface-teach"]').isEnabled(), true,
+        "only the exact settled fence restores authority for the chart it ordered");
+
+      releaseLateApply();
+      await lateApplyFinished;
+      assert.equal(hardwareImageSha256, PANEL_BASE_SHA,
+        "recovery-wins cancels the detached writer before it can change hardware");
+      assert.deepEqual(peerNoise, []);
+    } finally {
+      releaseLateApply();
+      await writer.close().catch(() => {});
+      await peer?.close();
+      await crashContext.close();
+    }
+  });
+
+  test("a queued writer preserves a crash-surviving pending token before its lock callback can POST", async () => {
+    let applyRequests = 0;
+    const sharedContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const contender = await openCanvasInContext(sharedContext, async (candidate) => {
+      await candidate.addInitScript(() => {
+        const nativeLocks = navigator.locks;
+        const queued = [];
+        let holdFirstRequest = false;
+        const facade = {
+          query: nativeLocks.query.bind(nativeLocks),
+          request(name, options, callback) {
+            const request = () => nativeLocks.request(name, options, callback);
+            if (!holdFirstRequest) return request();
+            return new Promise((resolve, reject) => {
+              queued.push(() => request().then(resolve, reject));
+            });
+          },
+        };
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          get: () => facade,
+        });
+        globalThis.__ksxQueuedHardwareLockCount = () => queued.length;
+        globalThis.__ksxQueueNextHardwareLock = () => {
+          holdFirstRequest = true;
+        };
+        globalThis.__ksxReleaseQueuedHardwareLocks = () => {
+          holdFirstRequest = false;
+          for (const request of queued.splice(0)) request();
+        };
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One verified backup.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [panelBackup()],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelProgramPlan({ terminals: ["1sw1"] })),
+        });
+      });
+      await candidate.route("**/api/panel/program/apply", async (route) => {
+        applyRequests += 1;
+        await route.fulfill({ status: 500, body: "the stale contender must never POST" });
+      });
+    });
+    let publisher = null;
+
+    try {
+      await contender.click('[data-nx="surface-open"]');
+      await contender.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await contender.click('.n-widget-surface [data-surface-template="blank"]');
+      await contender.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await contender.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await contender.waitForFunction(() => document.querySelector(
+        ".n-widget-surface .n-surface-programming",
+      )?.getAttribute("data-capability") === "programmable");
+      await contender.click('.n-widget-surface [data-surface-programming-mode="custom"]');
+      await contender.locator(".n-widget-surface .n-surface-control").first().click();
+      await contender.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw1");
+      await contender.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
+      await contender.locator('.n-widget-surface [data-nx="surface-encoder-review"]').click();
+      const dialog = contender.locator("dialog.n-panel-program-dialog");
+      await dialog.waitFor({ state: "visible" });
+      await dialog.locator("[data-panel-program-confirm]").check();
+      await dialog.locator("[data-panel-program-supervised]").check();
+      await contender.evaluate(() => globalThis.__ksxQueueNextHardwareLock?.());
+      await dialog.locator('[data-panel-dialog-action="apply"]').click();
+      await contender.waitForFunction(() => globalThis.__ksxQueuedHardwareLockCount?.() === 1);
+      assert.equal(applyRequests, 0,
+        "the contender has passed its outer checks but has not entered the lock callback");
+
+      const device = await contender.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance?.trim().toLocaleUpperCase() ?? "");
+      assert.ok(device);
+      const publisherToken = "writer-a-crash-token";
+      publisher = await sharedContext.newPage();
+      await publisher.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await publisher.evaluate(({ device: exactDevice, token }) => {
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(exactDevice)}`;
+        localStorage.setItem(key, JSON.stringify({
+          version: 2,
+          device: exactDevice,
+          epoch: token,
+          boardFingerprint: "PANEL-FIXTURE-FINGERPRINT",
+          selector: "USB:D209:0430:00",
+          phase: "pending",
+        }));
+      }, { device, token: publisherToken });
+      await publisher.close();
+      publisher = null;
+      await contender.waitForFunction((token) => {
+        const device = JSON.parse(document.getElementById("__ksx-payload")?.textContent ?? "{}")
+          .view?.cap_instance?.trim().toLocaleUpperCase() ?? "";
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(device)}`;
+        return JSON.parse(localStorage.getItem(key) ?? "null")?.epoch === token;
+      }, publisherToken);
+
+      await contender.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.());
+      await contender.waitForFunction(() => document.querySelector(".n-live-sr")?.textContent?.includes(
+        "Another encoder transaction began while this review was waiting",
+      ));
+      assert.equal(applyRequests, 0,
+        "the inner lock-held authority check refuses before the second hardware POST");
+      const durablePublisher = await contender.evaluate((exactDevice) => {
+        const key = `ksx-nocturne-control-surface-hardware-epoch2:${encodeURIComponent(exactDevice)}`;
+        return JSON.parse(localStorage.getItem(key) ?? "null");
+      }, device);
+      assert.equal(durablePublisher?.epoch, publisherToken,
+        "the contender cannot replace the crashed writer's exact mutation token");
+      assert.equal(durablePublisher?.phase, "pending");
+      assert.match(
+        (await contender.locator(".n-live-sr").textContent()).replace(/\s+/g, " "),
+        /pending hardware lock was preserved.*Nothing was written from this window/i,
+      );
+      assert.deepEqual(contender.ksxNoise, []);
+    } finally {
+      await contender.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.()).catch(() => {});
+      await publisher?.close();
+      await sharedContext.close();
+    }
+  });
+
   test("Encoder setup binds completed and interrupted results to the encoder that owned them", async () => {
-    const replacementSelector = "usb:d209:0430:01";
+    // Re-enumeration can replace the physical Windows instance while the
+    // staged selector remains byte-for-byte identical. Selector-only result
+    // ownership would let this replacement inherit the first board's outcome.
+    const replacementSelector = PANEL_SELECTOR;
     for (const disposition of ["verified", "recovery-required"]) {
       let switchTarget = false;
       let chartReads = 0;
@@ -6407,6 +8034,7 @@ describe("the canvas navigation controls", () => {
           });
         });
         await candidate.route("**/api/panel/program/apply", async (route) => {
+          const request = JSON.parse(route.request().postData() ?? "{}");
           markApplyStarted();
           await applyGate;
           await route.fulfill({
@@ -6414,6 +8042,7 @@ describe("the canvas navigation controls", () => {
             contentType: "application/json",
             body: JSON.stringify({
               target_selector: PANEL_SELECTOR,
+              hardware_epoch: request.hardware_epoch,
               unavailable: null,
               refusal_code: null,
               remedy: null,
@@ -6481,11 +8110,510 @@ describe("the canvas navigation controls", () => {
           `${disposition} is informational and Close-only after target detachment`);
         assert.equal(chartReads, 1,
           "a detached result never reads the newly selected encoder as if it owned the old transaction");
+        await page.locator('.n-widget-kb .n-ipac-signal').first().waitFor({
+          state: "visible",
+          timeout: 10_000,
+        });
+        assert.ok(await page.locator('.n-widget-kb .n-ipac-signal').count() > 0,
+          "a replacement instance sharing the selector does not inherit the previous board's recovery lock");
+        await dialog.locator('[data-panel-dialog-action="close"]').click();
+        const setupButton = page.locator('.n-widget-surface [data-nx="surface-encoder-open"]');
+        if (await setupButton.getAttribute("aria-expanded") === "true") {
+          page.once("dialog", (confirmation) => confirmation.accept());
+          await page.click('.n-widget-surface [data-nx="surface-encoder-read"]');
+        } else {
+          await setupButton.click();
+        }
+        await page.waitForFunction(() =>
+          document.querySelector('.n-widget-surface .n-surface-programming')
+            ?.getAttribute('data-qualification') === 'qualified');
+        assert.equal(chartReads, 2,
+          "the replacement instance performs its own complete authoritative chart read");
+        await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+        const settledPanelKey = page.locator(
+          '.n-widget-surface .n-surface-signal-chain[data-terminal-id="1sw1"] ' +
+            '.n-surface-signal-keycap[data-flow-key="B"]',
+        ).first();
+        await settledPanelKey.waitFor({
+          state: "visible",
+          timeout: 10_000,
+        });
+        assert.equal(await settledPanelKey.getAttribute("data-flow-authority"), "configured",
+          "a settled reread clears every stale instance alias for the same physical board");
         assert.deepEqual(page.ksxNoise, []);
       } finally {
         releaseApply();
         await page.close();
       }
+    }
+  });
+
+  test("closed first-run encoder sources wait for exact-board recovery status", async () => {
+    const withinRecoveryStatus = (promise, label) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(label)), 10_000);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+    for (const recoveryCase of [
+      { recoveryRequired: false, omitRecoveryField: false },
+      { recoveryRequired: true, omitRecoveryField: false },
+      { recoveryRequired: undefined, omitRecoveryField: true },
+    ]) {
+      const { recoveryRequired, omitRecoveryField } = recoveryCase;
+      let releaseStatus = () => {};
+      let markStatusStarted = () => {};
+      let markStatusServed = () => {};
+      let statusCalls = 0;
+      let transientIdentityMissing = false;
+      let markTransientIdentityServed = () => {};
+      const statusGate = new Promise((resolve) => {
+        releaseStatus = resolve;
+      });
+      const statusStarted = new Promise((resolve) => {
+        markStatusStarted = resolve;
+      });
+      const statusServed = new Promise((resolve) => {
+        markStatusServed = resolve;
+      });
+      const transientIdentityServed = new Promise((resolve) => {
+        markTransientIdentityServed = resolve;
+      });
+      const page = await openCanvas({}, async (candidate) => {
+        await candidate.addInitScript(() => {
+          window.localStorage.removeItem("ksx-nocturne-control-surfaces1");
+        });
+        await candidate.route("**/api/nocturne*", async (route) => {
+          if (!transientIdentityMissing) {
+            await route.continue();
+            return;
+          }
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          const response = await route.fetch({ headers });
+          assert.equal(response.status(), 200);
+          const payload = await response.json();
+          payload.view.cap_selector = "";
+          payload.view.cap_instance = "";
+          payload.view.dev_encoders = [];
+          payload.view.kb_title = "Encoder inventory is temporarily unavailable";
+          await route.fulfill({ response, json: payload });
+          markTransientIdentityServed();
+        });
+        await candidate.route("**/api/panel/status", async (route) => {
+          statusCalls += 1;
+          markStatusStarted();
+          await statusGate;
+          const payload = panelStatusPayload({
+            name: omitRecoveryField ? "Legacy recovery-field fixture" : "Ultimarc I-PAC 4X",
+            recoveryRequired,
+            recoveryDetail: recoveryRequired
+              ? "The exact encoder has an unresolved durable transaction."
+              : "",
+          });
+          if (omitRecoveryField) {
+            delete payload.view.panels[0].programming_recovery_required;
+            delete payload.view.panels[0].programming_recovery_detail;
+          }
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(payload),
+          });
+          markStatusServed();
+        });
+      });
+
+      try {
+        await withinRecoveryStatus(
+          statusStarted,
+          `the ${omitRecoveryField ? "missing-field" : String(recoveryRequired)} recovery probe never reached passive status`,
+        );
+        assert.equal(await page.locator('.n-widget-surface').count(), 0,
+          "the recovery probe does not require an open Builder or saved physical panel");
+        assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+          "mapping-derived I-PAC sources stay unavailable while exact-board recovery is unknown");
+        assert.match(
+          (await page.locator('.n-widget-kb .n-ipac-signal-source > p').first().textContent())
+            .replace(/\s+/g, ' '),
+          /checking this exact .* recovery journal/i,
+        );
+
+        releaseStatus();
+        await withinRecoveryStatus(
+          statusServed,
+          `the ${omitRecoveryField ? "missing-field" : String(recoveryRequired)} passive status response was never served`,
+        );
+        if (recoveryRequired) {
+          await page.waitForFunction(() => /cannot prove which keys/i.test(
+            document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent ?? '',
+          ));
+          assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+            "an unresolved exact-board journal keeps mapping-derived sources suspended");
+        } else if (omitRecoveryField) {
+          await page.waitForFunction(() => /could not complete this exact/i.test(
+            document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent ?? '',
+          ));
+          await page.click('[data-nx="surface-open"]');
+          await page.waitForFunction((name) => {
+            const card = document.querySelector('.n-widget-surface .n-surface-hardware');
+            return card?.getAttribute('data-state') === 'error' &&
+              (card.textContent ?? '').includes(name);
+          }, "Legacy recovery-field fixture");
+          assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+            "an older status response without recovery authority remains fail-closed");
+          assert.match(
+            (await page.locator('.n-widget-kb .n-ipac-signal-source > p').first().textContent())
+              .replace(/\s+/g, ' '),
+            /could not complete this exact .* recovery check/i,
+            "a missing recovery field is reported as indeterminate instead of pretending the request is still running",
+          );
+        } else {
+          await page.locator('.n-widget-kb .n-ipac-signal').first().waitFor({ state: "visible" });
+          assert.ok(await page.locator('.n-widget-kb .n-ipac-signal').count() > 0,
+            "a settled exact-board probe restores the closed Builder's source shelf immediately");
+          assert.match(
+            (await page.locator('.n-widget-kb .n-ipac-signal-source > p').first().textContent())
+              .replace(/\s+/g, ' '),
+            /Hardware Setup has not read/i,
+            "settled status repaints ordinary shelf copy even while the Builder remains closed",
+          );
+
+          transientIdentityMissing = true;
+          await page.evaluate(() => {
+            const form = document.querySelector('form:has(input[name="fresh"])');
+            form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+          });
+          await withinRecoveryStatus(
+            transientIdentityServed,
+            "the transient missing-identity payload was never served",
+          );
+          await page.waitForFunction(() =>
+            document.querySelector('.n-widget-kb')?.getAttribute('data-input-kind') ===
+              'panel-encoder' &&
+            document.querySelectorAll('.n-widget-kb .n-ipac-signal').length === 0 &&
+            /could not complete this exact .* recovery check/i.test(
+              document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent ?? '',
+            )
+          );
+          assert.equal(await page.locator('.n-widget-surface').count(), 0,
+            "transient identity loss remains fail-closed while the Builder is closed");
+        }
+        if (recoveryRequired) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          assert.equal(statusCalls, 1,
+            "a durable recovery journal is not mistaken for a transient lease and retried");
+        }
+        assert.deepEqual(page.ksxNoise, []);
+      } finally {
+        releaseStatus();
+        await page.close();
+      }
+    }
+  });
+
+  test("passive recovery retries transient status failures and then restores sources", async () => {
+    for (const transient of ["network", "missing-field", "busy-lease"]) {
+      let statusCalls = 0;
+      let markFirstStatusStarted = () => {};
+      let markFirstStatusServed = () => {};
+      let releaseFirstStatus = () => {};
+      let markRetryStarted = () => {};
+      let releaseRetry = () => {};
+      const firstStatusStarted = new Promise((resolve) => {
+        markFirstStatusStarted = resolve;
+      });
+      const firstStatusServed = new Promise((resolve) => {
+        markFirstStatusServed = resolve;
+      });
+      const firstStatusGate = new Promise((resolve) => {
+        releaseFirstStatus = resolve;
+      });
+      const retryStarted = new Promise((resolve) => {
+        markRetryStarted = resolve;
+      });
+      const retryGate = new Promise((resolve) => {
+        releaseRetry = resolve;
+      });
+      const page = await openCanvas({}, async (candidate) => {
+        await candidate.addInitScript(() => {
+          window.localStorage.removeItem("ksx-nocturne-control-surfaces1");
+        });
+        await candidate.route("**/api/panel/status", async (route) => {
+          statusCalls += 1;
+          if (statusCalls > 1) {
+            markRetryStarted();
+            await retryGate;
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(panelStatusPayload({ recoveryRequired: false })),
+            });
+            return;
+          }
+          markFirstStatusStarted();
+          await firstStatusGate;
+          if (transient === "network") {
+            await route.fulfill({ status: 503, body: "hardware inventory is busy" });
+          } else {
+            const payload = panelStatusPayload({
+              recoveryRequired: transient === "busy-lease",
+              recoveryDetail: transient === "busy-lease"
+                ? "Another KSX panel operation owns the hardware lease; nothing was changed."
+                : "",
+            });
+            if (transient === "missing-field") {
+              delete payload.view.panels[0].programming_recovery_required;
+              delete payload.view.panels[0].programming_recovery_detail;
+            }
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(payload),
+            });
+          }
+          markFirstStatusServed();
+        });
+      });
+
+      try {
+        await Promise.race([
+          firstStatusStarted,
+          new Promise((_, reject) => setTimeout(() => reject(
+            new Error(`${transient} recovery request never started`)
+          ), 10_000)),
+        ]);
+        releaseFirstStatus();
+        await Promise.race([
+          firstStatusServed,
+          new Promise((_, reject) => setTimeout(() => reject(
+            new Error(`${transient} recovery response was never served`)
+          ), 10_000)),
+        ]);
+        await page.waitForFunction(() => /could not complete this exact/i.test(
+          document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent ?? '',
+        ));
+        assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+          `${transient} remains fail-closed before its retry settles`);
+        await Promise.race([
+          retryStarted,
+          new Promise((_, reject) => setTimeout(() => reject(
+            new Error(`${transient} recovery retry never started`)
+          ), 5000)),
+        ]);
+        releaseRetry();
+        await page.locator('.n-widget-kb .n-ipac-signal').first().waitFor({
+          state: "visible",
+          timeout: 5000,
+        });
+        assert.equal(statusCalls, 2, `${transient} receives one bounded retry`);
+        await new Promise((resolve) => setTimeout(resolve, 1750));
+        assert.equal(statusCalls, 2,
+          `${transient} stops retrying after the exact encoder is settled`);
+        const unexpectedNoise = page.ksxNoise.filter((entry) =>
+          !(transient === "network" && /503 \(Service Unavailable\)/i.test(entry))
+        );
+        assert.deepEqual(unexpectedNoise, []);
+        if (transient === "network") {
+          assert.ok(page.ksxNoise.some((entry) => /503 \(Service Unavailable\)/i.test(entry)),
+            "the simulated HTTP failure remains visible to the browser while KSX recovers");
+        }
+      } finally {
+        releaseFirstStatus();
+        releaseRetry();
+        await page.close();
+      }
+    }
+  });
+
+  test("an ambiguous current-board write suspends every stale signal authority", async () => {
+    let durableRecoveryRequired = false;
+    let statusCalls = 0;
+    let holdRecoveryStatus = false;
+    let releaseRecoveryStatus = () => {};
+    let markRecoveryStatusStarted = () => {};
+    let markRecoveryStatusServed = () => {};
+    const recoveryStatusGate = new Promise((resolve) => {
+      releaseRecoveryStatus = resolve;
+    });
+    const recoveryStatusStarted = new Promise((resolve) => {
+      markRecoveryStatusStarted = resolve;
+    });
+    const recoveryStatusServed = new Promise((resolve) => {
+      markRecoveryStatusServed = resolve;
+    });
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/status", async (route) => {
+        statusCalls += 1;
+        const held = holdRecoveryStatus && durableRecoveryRequired;
+        if (held) {
+          markRecoveryStatusStarted();
+          await recoveryStatusGate;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+          driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+          chartState: "not-read",
+          configurationState: "available-unopened",
+          recoveryRequired: durableRecoveryRequired,
+          recoveryDetail: durableRecoveryRequired
+            ? "The durable transaction journal for this exact encoder still requires recovery."
+            : "",
+          })),
+        });
+        if (held) markRecoveryStatusServed();
+      });
+      await candidate.route("**/api/panel/chart", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelChartPayload()),
+      }));
+      await candidate.route("**/api/panel/backups", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          target_selector: PANEL_SELECTOR,
+          unavailable: null,
+          view: {
+            summary: "One verified backup.",
+            board_fingerprint: PANEL_FINGERPRINT,
+            backups: [panelBackup()],
+          },
+        }),
+      }));
+      await candidate.route("**/api/panel/program/plan", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelProgramPlan({ terminals: ["1sw1"] })),
+      }));
+      await candidate.route("**/api/panel/program/apply", (route) => {
+        const request = JSON.parse(route.request().postData() ?? "{}");
+        durableRecoveryRequired = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+          target_selector: PANEL_SELECTOR,
+          hardware_epoch: request.hardware_epoch,
+          unavailable: null,
+          refusal_code: null,
+          remedy: null,
+          mutation_disposition: "recovery-required",
+          outcome: {
+            state: "recovery-required",
+            summary: "The write may have started, but the complete chart could not be verified.",
+            board_fingerprint: PANEL_FINGERPRINT,
+            expected_sha256: PANEL_DESIRED_SHA,
+            observed_sha256: null,
+            backup: panelBackup(),
+            verified_at: "2026-08-23T00:31:00-04:00",
+            next_step: "Read the complete chart again or restore the verified backup.",
+          },
+          }),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      const surface = page.locator('.n-widget-surface');
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-hardware')
+          ?.getAttribute('data-state') === 'ready'
+      );
+      await surface.locator('[data-surface-template="blank"]').click();
+      await surface.locator('[data-nx="surface-add"][data-control-kind="button30"]').click();
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-programming')
+          ?.getAttribute('data-capability') === 'programmable'
+      );
+      await surface.locator('[data-surface-programming-mode="custom"]').click();
+      await surface.locator('.n-surface-control').click();
+      await surface.locator('[data-nx="surface-encoder-terminal"]').selectOption('1sw1');
+      await surface.locator('[data-nx="surface-encoder-key"]').selectOption('A');
+      await surface.locator('[data-nx="surface-encoder-review"]').click();
+      const dialog = page.locator('dialog.n-panel-program-dialog');
+      await dialog.locator('[data-panel-program-confirm]').check();
+      await dialog.locator('[data-panel-program-supervised]').check();
+      await dialog.locator('[data-panel-dialog-action="apply"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('dialog.n-panel-program-dialog')
+          ?.getAttribute('data-phase') === 'recovery-required'
+      );
+      await dialog.locator('[data-panel-dialog-action="close"]').click();
+      for (const action of [
+        'surface-encoder-test',
+        'surface-encoder-route',
+        'surface-encoder-build-panel',
+        'surface-encoder-design-panel',
+      ]) {
+        assert.equal(await surface.locator(`[data-nx="${action}"]`).isDisabled(), true,
+          `${action} cannot consume the unproven pre-write chart`);
+      }
+      await surface.locator('[data-nx="surface-encoder-close"]').click();
+      assert.equal(await surface.locator('.n-surface-signal-keycap[data-flow-key]').count(), 0,
+        "the pre-write chart cannot own a cord while its current bytes are unknown");
+      assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+        "the pre-write signal shelf is removed during hardware recovery");
+      assert.match(
+        (await page.locator('.n-widget-kb .n-ipac-source-empty').textContent()).replace(/\s+/g, ' '),
+        /outputs are intentionally hidden until hardware recovery/i,
+      );
+      await surface.locator('.n-surface-signal-keycap').click();
+      assert.equal(await surface.locator('[data-nx="surface-route"]').isDisabled(), true);
+
+      await surface.locator('[data-nx="surface-close"]').click();
+      await page.waitForFunction(() => !document.querySelector('.n-widget-surface'));
+      const statusCallsBeforeReload = statusCalls;
+      holdRecoveryStatus = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() =>
+        document.querySelector('.n-canvas [data-instance-id="keyboard"]')?.dataset.canvasX !==
+          undefined
+      );
+      await Promise.race([
+        recoveryStatusStarted,
+        new Promise((_, reject) => setTimeout(() => reject(
+          new Error("closed saved encoder links did not request passive recovery status")
+        ), 10_000)),
+      ]);
+      assert.ok(statusCalls > statusCallsBeforeReload,
+        "closed saved encoder links trigger a passive recovery probe on reload");
+      assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+        "unknown recovery status cannot briefly resurrect stale shelf sources");
+
+      releaseRecoveryStatus();
+      await recoveryStatusServed;
+      holdRecoveryStatus = false;
+      assert.equal(await page.locator('.n-widget-kb .n-ipac-signal').count(), 0,
+        "durable recovery keeps the closed Builder's shelf sources suspended");
+
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() => {
+        const surface = document.querySelector('.n-widget-surface');
+        const note = surface?.querySelector('.n-surface-hardware-note')?.textContent ?? '';
+        return surface?.querySelector('.n-surface-hardware')?.getAttribute('data-state') === 'error'
+          && /durable transaction journal.*requires recovery/i.test(note.replace(/\s+/g, ' '));
+      });
+      assert.equal(await surface.locator('.n-surface-signal-keycap[data-flow-key]').count(), 0,
+        "the machine-scoped recovery journal re-suspends routes after a page reload");
+      assert.match(
+        (await surface.locator('.n-surface-hardware-note').textContent()).replace(/\s+/g, ' '),
+        /durable transaction journal.*requires recovery/i,
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
     }
   });
 
@@ -6590,12 +8718,14 @@ describe("the canvas navigation controls", () => {
         });
       });
       await candidate.route("**/api/panel/program/apply", async (route) => {
+        const request = JSON.parse(route.request().postData() ?? "{}");
         qualificationState = "validation-written";
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
             target_selector: PANEL_SELECTOR,
+            hardware_epoch: request.hardware_epoch,
             unavailable: null,
             refusal_code: null,
             remedy: null,
@@ -6643,6 +8773,7 @@ describe("the canvas navigation controls", () => {
           contentType: "application/json",
           body: JSON.stringify({
             target_selector: PANEL_SELECTOR,
+            hardware_epoch: request.hardware_epoch,
             unavailable: null,
             refusal_code: null,
             remedy: null,
@@ -6737,9 +8868,9 @@ describe("the canvas navigation controls", () => {
       await controls.first().waitFor({ state: "visible" });
       const terminalSelect = page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]');
       const keySelect = page.locator('.n-widget-surface [data-nx="surface-encoder-key"]');
-      await controls.nth(0).click();
+      await controls.nth(0).evaluate((control) => control.click());
       await terminalSelect.selectOption("1sw1");
-      await controls.nth(1).click();
+      await controls.nth(1).evaluate((control) => control.click());
       await terminalSelect.selectOption("1sw1");
       await keySelect.selectOption("A");
       await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
@@ -6895,6 +9026,13 @@ describe("the canvas navigation controls", () => {
   test("Control Surface keeps unsupported, unavailable, stale, and failed panel reads distinct", async () => {
     let answer = "unsupported";
     let panelCalls = 0;
+    const waitForPanelCalls = async (expected) => {
+      const deadline = Date.now() + 10_000;
+      while (panelCalls < expected && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(panelCalls >= expected, `expected ${expected} panel status calls, saw ${panelCalls}`);
+    };
     const page = await openCanvas({}, async (candidate) => {
       await candidate.route("**/api/panel/status", async (route) => {
         panelCalls += 1;
@@ -6941,8 +9079,10 @@ describe("the canvas navigation controls", () => {
     try {
       await page.click('[data-nx="surface-open"]');
       const card = page.locator(".n-widget-surface .n-surface-hardware");
+      await waitForPanelCalls(2);
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unsupported");
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unsupported" &&
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("aria-busy") === "false");
       let copy = (await card.textContent()).replace(/\s+/g, " ");
       assert.match(copy, /Generic USB Encoder/);
       assert.match(copy, /Unsupported panel protocol/);
@@ -6952,29 +9092,36 @@ describe("the canvas navigation controls", () => {
 
       answer = "mismatch";
       await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await waitForPanelCalls(3);
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error");
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error" &&
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("aria-busy") === "false");
       copy = (await card.textContent()).replace(/\s+/g, " ");
       assert.match(copy, /selected encoder changed before this inspection finished/i);
       assert.doesNotMatch(copy, /Wrong stale encoder/);
 
       answer = "unavailable";
       await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await waitForPanelCalls(4);
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unavailable");
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "unavailable" &&
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("aria-busy") === "false");
       copy = (await card.textContent()).replace(/\s+/g, " ");
       assert.match(copy, /USB inventory could not be read/);
       assert.match(copy, /not an empty or healthy panel result/);
 
       answer = "http-error";
       await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await waitForPanelCalls(5);
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error");
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "error" &&
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("aria-busy") === "false");
       copy = (await card.textContent()).replace(/\s+/g, " ");
       assert.match(copy, /HTTP 503/);
       assert.match(copy, /Nothing was changed/);
       assert.doesNotMatch(copy, /Chart read-back unsupported/);
-      assert.equal(panelCalls, 4);
+      assert.equal(panelCalls, 5,
+        "one closed-surface recovery check plus the open inspection and three explicit refreshes ran");
       const unexpectedNoise = page.ksxNoise.filter((line) =>
         !/Failed to load resource:.*503 \(Service Unavailable\)/i.test(line)
       );
@@ -7131,18 +9278,23 @@ describe("the canvas navigation controls", () => {
 
   test("a readable encoder chart generates an honest physical panel before Teach owns its routes", async () => {
     const writes = [];
+    let chartFingerprint = PANEL_FINGERPRINT;
     let physicalGeneration = 1200;
     let physicalHitReady = false;
     let physicalDevice = "";
     let physicalKey = "W";
+    let capInstanceOverride = "";
     const page = await openCanvas({}, async (candidate) => {
       await candidate.route("**/api/nocturne*", async (route) => {
-        const response = await route.fetch();
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
         if (response.status() !== 200) {
           await route.fulfill({ response });
           return;
         }
         const payload = await response.json();
+        if (capInstanceOverride) payload.view.cap_instance = capInstanceOverride;
         for (const pad of payload.view?.pads ?? []) {
           if (pad.slot === 1) continue;
           pad.mapping_available = false;
@@ -7199,6 +9351,7 @@ describe("the canvas navigation controls", () => {
       }));
       await candidate.route("**/api/panel/chart", (route) => {
         const payload = panelChartPayload();
+        payload.view.board_fingerprint = chartFingerprint;
         const keyValue = (key, code) => ({ code, key, label: key, supported: true });
         const empty = { code: 0, key: null, label: "Unassigned", supported: true };
         const terminal = (id, label, player, kind, key, code) => ({
@@ -7212,7 +9365,14 @@ describe("the canvas navigation controls", () => {
           is_shift: false,
         });
         payload.view.terminals = [
-          terminal("1up", "Up", 1, "direction", "W", 26),
+          terminal(
+            "1up",
+            "Up",
+            1,
+            "direction",
+            chartFingerprint === PANEL_FINGERPRINT ? "W" : "Q",
+            chartFingerprint === PANEL_FINGERPRINT ? 26 : 20,
+          ),
           terminal("1right", "Right", 1, "direction", "D", 7),
           terminal("1down", "Down", 1, "direction", "S", 22),
           terminal("1left", "Left", 1, "direction", "A", 4),
@@ -7256,6 +9416,7 @@ describe("the canvas navigation controls", () => {
       await page.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-deck")
           ?.getAttribute("data-template") === "encoder-current");
+      await settle(page);
 
       assert.equal(await surface.locator('.n-surface-deck').getAttribute("data-panel-layout"), "four-player");
       assert.equal(await surface.locator('.n-surface-deck').getAttribute("data-stage"), "teach");
@@ -7286,6 +9447,45 @@ describe("the canvas navigation controls", () => {
       assert.equal(await surface.locator('.n-surface-channel-anchor').count(), 12);
       assert.equal(await surface.locator('.n-surface-channel-anchor[data-key]').count(), 0,
         "configured expectations do not impersonate a Teach-observed Windows signal");
+      const lowerStick = surface.locator('.n-surface-control.kind-joystick').nth(1);
+      const lowerStickBox = await lowerStick.boundingBox();
+      const panelDeckBox = await surface.locator('.n-surface-deck').boundingBox();
+      assert.ok(lowerStickBox && panelDeckBox);
+      await page.mouse.move(
+        lowerStickBox.x + lowerStickBox.width / 2,
+        lowerStickBox.y + lowerStickBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        lowerStickBox.x + lowerStickBox.width / 2,
+        panelDeckBox.y + panelDeckBox.height * (472 / 720) + lowerStickBox.height / 2,
+        { steps: 5 },
+      );
+      await page.mouse.up();
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.n-widget-surface .n-surface-control.kind-joystick')[1]
+          ?.getAttribute('data-signal-v') === 'above'
+      );
+      assert.equal(await lowerStick.evaluate((element) => {
+        const deckRect = element.closest('.n-surface-deck')?.getBoundingClientRect();
+        return Boolean(deckRect) && Array.from(
+          element.querySelectorAll('.n-surface-signal-keycap'),
+        ).every((keycap) => {
+          const rect = keycap.getBoundingClientRect();
+          return rect.top >= deckRect.top - 1 && rect.bottom <= deckRect.bottom + 1;
+        });
+      }), true, "all four joystick signal rows dock inward before any keycap is clipped");
+      for (let attempt = 0; attempt < 20 &&
+          Number.parseInt((await page.textContent('.n-zoomval')).trim(), 10) < 200;
+          attempt += 1) {
+        await page.click('[data-nx="canvas-zoom-in"]');
+      }
+      assert.equal((await page.textContent('.n-zoomval')).trim(), '200%');
+      await lowerStick.evaluate((element) => element.click());
+      assert.equal(await lowerStick.getAttribute('data-signal-v'), 'above',
+        "four-row docking uses untransformed deck geometry and stays correct at 200% canvas zoom");
+      await page.click('[data-nx="canvas-zoom-reset"]');
+      await page.click('[data-nx="canvas-fit"]');
       await page.waitForFunction(() =>
         document.querySelector('.n-widget-kb .n-ipac-signal-roster-shell')
           ?.getAttribute('data-panel-fallback') === 'true'
@@ -7340,6 +9540,28 @@ describe("the canvas navigation controls", () => {
         await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
         null,
         "returning to the visible panel restores its compact source ownership",
+      );
+      await surface.locator('[data-nx="surface-new"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-workarea')?.hidden === true &&
+        document.querySelector('.n-widget-kb .n-ipac-signal-roster-shell')
+          ?.getAttribute('data-panel-fallback') === 'false'
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
+        "",
+        "the replacement gallery restores visible source endpoints while panel keycaps are hidden",
+      );
+      await surface.locator('[data-nx="surface-template-cancel"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-workarea')?.hidden === false &&
+        document.querySelector('.n-widget-kb .n-ipac-signal-roster-shell')
+          ?.getAttribute('data-panel-fallback') === 'true'
+      );
+      assert.equal(
+        await page.locator('.n-widget-kb .n-ipac-signal-roster-shell').getAttribute("open"),
+        null,
+        "canceling replacement returns source ownership to the visible physical panel",
       );
       await page.selectOption('[data-nx="mapping-paths"]', "selected");
       await page.waitForFunction(() =>
@@ -7397,7 +9619,41 @@ describe("the canvas navigation controls", () => {
       await upKeycap.dispatchEvent("click");
       assert.equal(await upKeycap.getAttribute("data-selected"), "true",
         "a joystick keycap selects its own physical channel without becoming a drag gesture");
-      await rightKeycap.dispatchEvent("pointerover", { bubbles: true });
+      const rightTerminal = firstStick.locator(
+        '.n-surface-signal-chain[data-terminal-id="1right"] .n-surface-terminal-chip',
+      );
+      const stickPosition = await firstStick.evaluate((element) => ({
+        left: element.style.left,
+        top: element.style.top,
+      }));
+      const terminalBox = await rightTerminal.boundingBox();
+      assert.ok(terminalBox);
+      await page.mouse.move(
+        terminalBox.x + terminalBox.width / 2,
+        terminalBox.y + terminalBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        terminalBox.x + terminalBox.width / 2 + 6,
+        terminalBox.y + terminalBox.height / 2,
+        { steps: 3 },
+      );
+      await page.mouse.up();
+      await rightTerminal.click();
+      assert.equal(await rightKeycap.getAttribute("data-selected"), "true",
+        "the terminal side of a signal row selects that same joystick direction");
+      assert.equal(await upKeycap.getAttribute("data-selected"), "false",
+        "a terminal click never falls back to the joystick's first channel");
+      assert.deepEqual(
+        await firstStick.evaluate((element) => ({
+          left: element.style.left,
+          top: element.style.top,
+        })),
+        stickPosition,
+        "a real pointer gesture on a signal row selects it without moving the physical control",
+      );
+      await upKeycap.dispatchEvent("click");
+      await rightTerminal.hover();
       await page.waitForFunction(() => Boolean(document.querySelector(
         '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="D"].is-related',
       )));
@@ -7439,6 +9695,68 @@ describe("the canvas navigation controls", () => {
         ) < 1,
         "Teach promotes the same keycap origin instead of making the cord jump to another source widget",
       );
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector(
+        '.n-widget-surface .n-surface-signal-keycap[data-flow-key="W"]',
+      );
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface .n-surface-hardware')
+          ?.getAttribute('data-state') === 'ready'
+      );
+      assert.equal(
+        await firstStick.locator('.n-surface-signal-keycap[data-flow-key="W"]')
+          .getAttribute('data-flow-authority'),
+        'observed',
+        "a persisted Teach result remains a Windows observation until this session rereads the board chart",
+      );
+
+      capInstanceOverride = "HID\\VID_D209&PID_0430\\TEACH-REPLACEMENT";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector(
+        '.n-widget-surface .n-surface-signal-keycap[data-expected-key="W"]',
+      );
+      await page.waitForFunction((expected) => Array.from(
+        document.querySelectorAll('input[name="instance_id"]'),
+      ).some((input) => input.value === expected), capInstanceOverride);
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '.n-widget-surface .n-surface-signal-chain.channel-up .n-surface-signal-keycap',
+        )?.getAttribute('data-flow-authority') === 'expected');
+      const replacedUp = firstStick.locator(
+        '.n-surface-signal-chain.channel-up .n-surface-signal-keycap',
+      );
+      assert.equal(await replacedUp.getAttribute('data-last-observed-key'), 'W');
+      assert.equal(await replacedUp.getAttribute('data-flow-authority'), 'expected');
+      assert.equal(await replacedUp.getAttribute('data-flow-key'), null,
+        "a persisted Teach result from the prior Windows instance cannot route its replacement");
+      assert.equal(await replacedUp.getAttribute('data-key'), null,
+        "the previous instance remains history rather than current Windows evidence");
+      await replacedUp.click();
+      assert.equal(await surface.locator('[data-nx="surface-route"]').isDisabled(), true,
+        "Route stays unavailable until this exact replacement instance is taught");
+      physicalDevice = capInstanceOverride;
+
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming')
+          ?.getAttribute('data-qualification') === 'qualified'
+      );
+      await surface.locator('[data-nx="surface-encoder-close"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '.n-widget-surface .n-surface-signal-keycap[data-flow-key="W"]',
+        )?.getAttribute('data-flow-authority') === 'configured'
+      );
+      await replacedUp.click();
+      physicalKey = "W";
+      await surface.locator('[data-nx="surface-teach"]').evaluate((button) => button.click());
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      physicalHitReady = true;
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '.n-widget-surface .n-surface-signal-keycap[data-flow-key="W"]',
+        )?.getAttribute('data-flow-authority') === 'matched'
+      );
       assert.equal(await firstStick.evaluate((element) => element.classList.contains("taught")), false,
         "one observed direction never claims that the whole four-channel stick is taught");
       assert.equal(await firstStick.evaluate((element) => element.classList.contains("partially-taught")), true);
@@ -7465,7 +9783,7 @@ describe("the canvas navigation controls", () => {
       const mismatchedButton = surface.locator(
         '.n-surface-control:has(.n-surface-signal-chain[data-terminal-id="1sw1"])',
       );
-      await mismatchedButton.click();
+      await mismatchedButton.evaluate((control) => control.click());
       await surface.locator('[data-nx="surface-teach"]').evaluate((button) => button.click());
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
       physicalHitReady = true;
@@ -7486,7 +9804,7 @@ describe("the canvas navigation controls", () => {
         '.n-surface-signal-chain[data-terminal-id="1sw2"] ' +
           '.n-surface-signal-keycap[data-flow-key="K"][data-flow-authority="configured"]',
       );
-      await configuredDuplicate.click();
+      await configuredDuplicate.evaluate((keycap) => keycap.click());
       assert.equal(await configuredDuplicate.getAttribute("data-selected"), "true");
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() =>
         requestAnimationFrame(resolve)
@@ -7519,15 +9837,56 @@ describe("the canvas navigation controls", () => {
       });
       assert.equal(mismatchOrigin, true,
         "a selected configured duplicate cannot steal the route from the key Windows observed");
+      await firstStick.locator(
+        '.n-surface-signal-chain[data-terminal-id="1right"] .n-surface-signal-keycap',
+      ).evaluate((keycap) => keycap.click());
+      await surface.locator('[data-nx="surface-encoder-terminal"]').selectOption("");
+      await page.mouse.move(1, 1);
+      await firstStick.locator(
+        '.n-surface-signal-chain.channel-right .n-surface-signal-direction',
+      ).evaluate((direction) => direction.dispatchEvent(new PointerEvent("pointerover", {
+        bubbles: true,
+      })));
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() =>
+        requestAnimationFrame(resolve)
+      )));
+      assert.equal(await page.locator(
+        '#n-mapping-paths [data-flow-kind="binding"][data-flow-key="W"].is-related',
+      ).count(), 0, "hovering an unassigned stick direction never highlights a sibling's route");
+
+      chartFingerprint = `${PANEL_FINGERPRINT}:replacement`;
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await surface.locator('.n-surface-programming').waitFor({ state: "visible" });
+      page.once("dialog", (dialog) => dialog.accept());
+      await surface.locator('[data-nx="surface-encoder-read"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '.n-widget-surface [data-nx="surface-terminal-key"]' +
+            '[data-panel-terminal="1up"][data-panel-field="normal"]',
+        )?.value === "Q"
+      );
+      await surface.locator('[data-nx="surface-encoder-close"]').click();
+      const staleUp = firstStick.locator('.n-surface-signal-chain.channel-up .n-surface-signal-keycap');
+      assert.equal(await staleUp.getAttribute('data-flow-key'), null,
+        "a complete read from a different board disproves the persisted terminal link");
+      await staleUp.evaluate((keycap) => keycap.click());
+      assert.equal(await surface.locator('[data-nx="surface-route"]').isDisabled(), true,
+        "a retained observation from the previous board cannot be routed");
       await surface.locator('[data-nx="surface-close"]').click();
       await surface.waitFor({ state: "detached" });
       const fallback = page.locator('.n-widget-kb .n-ipac-signal-roster-shell');
       assert.equal(await fallback.getAttribute("data-panel-fallback"), "false");
       assert.equal(await fallback.getAttribute("open"), "",
         "closing the physical panel immediately restores the visible signal shelf");
+      assert.equal(await fallback.evaluate((element) => element.tagName), "SECTION",
+        "the only visible signal shelf is structural, not user-collapsible");
+      await fallback.locator('.n-ipac-signal-roster-summary').click();
+      assert.equal(await fallback.getAttribute("open"), "",
+        "the only visible signal shelf cannot hide every route endpoint");
+      assert.equal(await fallback.locator('.n-ipac-signal[data-key="D"]').first().isVisible(), true);
       const fallbackOriginHandle = await page.waitForFunction(() => {
         const edge = document.querySelector(
-          '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="1"][data-flow-key="W"]',
+          '#n-mapping-paths [data-flow-kind="binding"][data-flow-slot="1"][data-flow-key="D"]',
         );
         const id = edge?.getAttribute('data-flow-id') ?? '';
         const port = id
@@ -7536,7 +9895,7 @@ describe("the canvas navigation controls", () => {
           )
           : null;
         const source = document.querySelector(
-          '.n-widget-kb .n-ipac-signal[data-key="W"][data-player-slot="1"]',
+          '.n-widget-kb .n-ipac-signal[data-key="D"][data-player-slot="1"]',
         );
         const portRect = port?.getBoundingClientRect();
         const sourceRect = source?.getBoundingClientRect();
@@ -7552,7 +9911,7 @@ describe("the canvas navigation controls", () => {
           : null;
       });
       const fallbackOrigin = await fallbackOriginHandle.jsonValue();
-      assert.match(fallbackOrigin.source.replace(/\s+/g, " "), /1UP.*Player 1.*Up.*W/i,
+      assert.match(fallbackOrigin.source.replace(/\s+/g, " "), /1RIGHT.*Player 1.*Right.*D/i,
         "post-close layout moves the source port onto the restored terminal/key shelf");
       assert.deepEqual(writes, []);
       assert.deepEqual(page.ksxNoise, []);
@@ -8131,11 +10490,179 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("ordinary binding rejects a desk keyboard and accepts the exact selected MI_00 fallback", async () => {
+    const bindBodies = [];
+    let bindCommitted = false;
+    let committedBinding = null;
+    const postWriteRevision = "fixture-ordinary-binding-revision-after-bind";
+    let markBindObserved = () => {};
+    const bindObserved = new Promise((resolve) => { markBindObserved = resolve; });
+    let generation = 1700;
+    let hitReady = false;
+    let hitDevice = "HID\\VID_046D&PID_C31C&MI_00\\9&DESK-KEYBOARD&0&0000";
+    let hitSelector = "usb:046d:c31c:00";
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/chart", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelChartPayload({ imageSha256: PANEL_BASE_SHA, backup: null })),
+      }));
+      await candidate.route("**/api/nocturne*", async (route) => {
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        if (bindCommitted && committedBinding) {
+          const pad = payload.view?.pads?.find(
+            (candidate) => Number(candidate.slot) === Number(committedBinding.slot),
+          );
+          assert.ok(pad, "fixture payload contains the committed controller");
+          pad.target_revision = postWriteRevision;
+          setPadControlKeys(pad, committedBinding.function, [committedBinding.key]);
+          payload.view.save_text = postWriteRevision;
+        }
+        await route.fulfill({ response, json: payload });
+      });
+      await candidate.route("**/api/learn/start", (route) => {
+        generation += 1;
+        hitReady = false;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation,
+            remaining_ms: 10_000,
+            device: null,
+            selector: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await candidate.route("**/api/learn", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          state: hitReady ? "hit" : "listening",
+          generation,
+          remaining_ms: hitReady ? null : 10_000,
+          device: hitReady ? hitDevice : null,
+          selector: hitReady ? hitSelector : null,
+          key: hitReady ? "Z" : null,
+          error: null,
+        }),
+      }));
+      await candidate.route("**/nocturne/api/bind", (route) => {
+        committedBinding = JSON.parse(route.request().postData() ?? "{}");
+        bindBodies.push(committedBinding);
+        bindCommitted = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            message: null,
+            error: null,
+            code: null,
+            conflicts: [],
+            also_drives: [],
+          }),
+        }).then(() => markBindObserved());
+      });
+    });
+    const armOrdinaryBinding = async () => {
+      await page.locator('.n-bindgroups [data-nx="chip-learn"]').first()
+        .evaluate((button) => button.click());
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+    };
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable");
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
+      const exactMi00 = await page.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance ?? "");
+      assert.ok(exactMi00);
+
+      await armOrdinaryBinding();
+      hitReady = true;
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      assert.deepEqual(bindBodies, [],
+        "a desk-keyboard hit cannot write the armed controller binding");
+      assert.match(await page.textContent(".n-flash"),
+        /Ignored Z from another or unresolved keyboard.*binding was not changed/i);
+
+      hitDevice = exactMi00;
+      hitSelector = "";
+      await armOrdinaryBinding();
+      hitReady = true;
+      await bindObserved;
+      await page.waitForFunction(
+        (revision) => document.querySelector(".n-saved")?.textContent?.trim() === revision,
+        postWriteRevision,
+      );
+      assert.equal(bindBodies.length, 1);
+      assert.equal(bindBodies[0].key, "Z");
+      assert.ok(bindBodies[0].expected_target_revision,
+        "learner identity proof preserves the target-revision fence");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("teaching observes a signal while routing performs the real backend bind", async () => {
     const page = await openCanvas();
     const bindBodies = [];
+    let bindCommitted = false;
+    let committedBinding = null;
+    const postWriteRevision = "fixture-surface-routing-revision-after-bind";
+    let resolveBindObserved;
+    const bindObserved = new Promise((resolve) => {
+      resolveBindObserved = resolve;
+    });
+    await page.route("**/api/panel/chart", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelChartPayload({
+          imageSha256: PANEL_BASE_SHA,
+          backup: null,
+        })),
+      });
+    });
+    await page.route("**/api/nocturne*", async (route) => {
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const response = await route.fetch({ headers });
+      assert.equal(response.status(), 200);
+      const payload = await response.json();
+      if (bindCommitted && committedBinding) {
+        const pad = payload.view?.pads?.find(
+          (candidate) => Number(candidate.slot) === Number(committedBinding.slot),
+        );
+        assert.ok(pad, "fixture payload contains the committed controller");
+        pad.target_revision = postWriteRevision;
+        setPadControlKeys(pad, committedBinding.function, [committedBinding.key]);
+        payload.view.save_text = postWriteRevision;
+      }
+      await route.fulfill({ response, json: payload });
+    });
     await page.route("**/nocturne/api/bind", async (route) => {
-      bindBodies.push(JSON.parse(route.request().postData() ?? "{}"));
+      committedBinding = JSON.parse(route.request().postData() ?? "{}");
+      bindBodies.push(committedBinding);
+      bindCommitted = true;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -8148,6 +10675,7 @@ describe("the canvas navigation controls", () => {
           also_drives: [],
         }),
       });
+      resolveBindObserved?.();
     });
     const controls = () => page.evaluate(() => Array.from(document.querySelectorAll(
       ".n-widget-surface .n-surface-control",
@@ -8158,12 +10686,34 @@ describe("the canvas navigation controls", () => {
         .map((anchor) => anchor.getAttribute("data-key")),
       relation: control.querySelector(".n-surface-control-relation")?.textContent ?? "",
     })));
-    const expectedDevice = await page.evaluate(() => JSON.parse(
-      document.getElementById("__ksx-payload")?.textContent ?? "{}",
-    ).view?.cap_instance ?? "");
+    // This test is about the Teach/Route state contract. Invoke Teach through
+    // its button semantics so a canvas minimap overlapping the moved widget
+    // cannot turn the authority assertion into an unrelated hit-test failure.
+    let learnStartedResolve;
+    const invokeSurfaceAction = (action) => page.locator(
+      `.n-widget-surface [data-nx="${action}"]`,
+    ).evaluate((button) => button.click());
+    const clickTeach = async () => {
+      const started = new Promise((resolve) => {
+        learnStartedResolve = resolve;
+      });
+      await invokeSurfaceAction("surface-teach");
+      await started;
+    };
+    const selectedInput = await page.evaluate(() => {
+      const view = JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view ?? {};
+      return { selector: view.cap_selector ?? "", instance: view.cap_instance ?? "" };
+    });
+    const expectedSelector = selectedInput.selector;
+    const expectedDevice = selectedInput.instance;
+    assert.ok(expectedSelector, "the fixture serves the selected input's canonical selector");
     assert.ok(expectedDevice, "the fixture serves the exact selected Windows device instance");
     let physicalKey = "J";
-    let physicalDevice = expectedDevice;
+    const rawIpacChild = "HID\\VID_D209&PID_0430&MI_00\\8&RAW-INPUT-CHILD&0&0000";
+    let physicalDevice = rawIpacChild;
+    let physicalSelector = expectedSelector;
     let physicalGeneration = 900;
     let physicalHitReady = false;
     let holdNextPoll = false;
@@ -8172,6 +10722,8 @@ describe("the canvas navigation controls", () => {
     await page.route("**/api/learn/start", async (route) => {
       physicalGeneration += 1;
       physicalHitReady = false;
+      learnStartedResolve?.();
+      learnStartedResolve = undefined;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -8203,6 +10755,7 @@ describe("the canvas navigation controls", () => {
           generation: physicalGeneration,
           remaining_ms: physicalHitReady ? null : 10_000,
           device: physicalHitReady ? physicalDevice : null,
+          selector: physicalHitReady ? physicalSelector : null,
           key: physicalHitReady ? physicalKey : null,
           error: null,
         }),
@@ -8211,11 +10764,19 @@ describe("the canvas navigation controls", () => {
 
     try {
       await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("data-capability") === "programmable");
+      await page.click('.n-widget-surface [data-nx="surface-encoder-close"]');
       await page.click('.n-widget-surface [data-surface-template="blank"]');
       await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
-      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      await clickTeach();
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
-      await page.locator('.n-widget-kb .n-ipac-signal[data-key="J"]').evaluate(
+      await page.locator('.n-widget-kb .n-ipac-signal[data-key="B"]').evaluate(
         (button) => button.click(),
       );
       assert.equal(
@@ -8236,14 +10797,20 @@ describe("the canvas navigation controls", () => {
         (await page.textContent(".n-widget-surface .n-surface-signal strong")).trim(),
         "J",
       );
+      const canonicalTeachCopy = await page.textContent(
+        ".n-widget-surface .n-surface-signal small",
+      );
+      assert.match(canonicalTeachCopy, new RegExp(expectedDevice.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+        "Teach persists the selected USB MI_00 identity, not Raw Input's HID child");
+      assert.doesNotMatch(canonicalTeachCopy, /RAW-INPUT-CHILD/i);
       assert.equal(
         await page.locator('.n-widget-surface [data-surface-stage="teach"]').getAttribute("aria-pressed"),
         "true",
         "a successful capture keeps the author in Teach mode for batch wiring",
       );
 
-      await page.click('.n-widget-surface [data-nx="surface-mirror"]');
-      await page.click('.n-widget-surface [data-nx="surface-duplicate"]');
+      await invokeSurfaceAction("surface-mirror");
+      await invokeSurfaceAction("surface-duplicate");
       let views = await controls();
       assert.equal(views.length, 3);
       assert.equal(views[0].physicalId, views[1].physicalId, "a mirror shares physical identity");
@@ -8252,7 +10819,8 @@ describe("the canvas navigation controls", () => {
 
       physicalKey = "Z";
       physicalDevice = "HID\\VID_0000&PID_0000\\WRONG-KEYBOARD";
-      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalSelector = "usb:046d:c31c:00";
+      await clickTeach();
       physicalHitReady = true;
       await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
       assert.deepEqual((await controls()).map((view) => view.keys), [["J"], ["J"], ["J"]]);
@@ -8263,8 +10831,9 @@ describe("the canvas navigation controls", () => {
       );
 
       physicalKey = "K";
-      physicalDevice = expectedDevice;
-      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalDevice = rawIpacChild;
+      physicalSelector = expectedSelector;
+      await clickTeach();
       physicalHitReady = true;
       await page.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-control.selected .n-surface-channel-anchor")
@@ -8286,8 +10855,9 @@ describe("the canvas navigation controls", () => {
         (button) => button.click(),
       );
       physicalKey = "L";
-      physicalDevice = expectedDevice;
-      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      physicalDevice = rawIpacChild;
+      physicalSelector = expectedSelector;
+      await clickTeach();
       physicalHitReady = true;
       await page.waitForFunction(() =>
         document.querySelector(".n-widget-surface .n-surface-control.selected .n-surface-channel-anchor")
@@ -8304,15 +10874,16 @@ describe("the canvas navigation controls", () => {
         (button) => button.click(),
       );
       physicalKey = "M";
-      physicalDevice = expectedDevice;
+      physicalDevice = rawIpacChild;
+      physicalSelector = expectedSelector;
       holdNextPoll = true;
       const pollStarted = new Promise((resolve) => {
         pendingPollStarted = resolve;
       });
-      await page.click('.n-widget-surface [data-nx="surface-teach"]');
+      await clickTeach();
       await pollStarted;
       const beforeStaleRemoval = await controls();
-      await page.click('.n-widget-surface [data-nx="surface-remove"]');
+      await invokeSurfaceAction("surface-remove");
       physicalHitReady = true;
       releasePendingPoll?.();
       await page.waitForTimeout(120);
@@ -8326,7 +10897,7 @@ describe("the canvas navigation controls", () => {
       await page.unroute("**/api/learn/start");
       await page.unroute("**/api/learn");
 
-      await page.click('.n-widget-surface [data-nx="surface-route"]');
+      await invokeSurfaceAction("surface-route");
       assert.notEqual(
         await page.inputValue('[data-nx="mapping-paths"]'),
         "off",
@@ -8343,13 +10914,27 @@ describe("the canvas navigation controls", () => {
         bubbles: true,
         cancelable: true,
       })));
-      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("none"));
+      await bindObserved;
+      await page.waitForFunction(
+        (revision) => document.querySelector(".n-saved")?.textContent?.trim() === revision,
+        postWriteRevision,
+      );
+      const routedTargetRevision = bindBodies[0]?.expected_target_revision;
+      assert.ok(routedTargetRevision,
+        "surface routing carries the exact controller revision captured with the gesture");
       assert.deepEqual(bindBodies, [{
         slot: 2,
+        expected_target_revision: routedTargetRevision,
         function: "A",
         key: "L",
         mode: "replace",
         force: false,
+        encoder_authority: {
+          expected_selector: PANEL_SELECTOR,
+          expected_instance: expectedDevice,
+          expected_board_fingerprint: PANEL_FINGERPRINT,
+          expected_chart_sha256: PANEL_BASE_SHA,
+        },
       }]);
       assert.equal(
         await page.inputValue('[data-nx="mapping-paths"]'),

@@ -1254,6 +1254,8 @@ fn main() {
                     ),
                     configuration_collection_detail: "One exact 5-byte IN/OUT configuration collection is available in this synthetic fixture".into(),
                     recommendation: "Choose Set up to QA the blank-board read, backup, qualification, and review flow without writing hardware".into(),
+                    programming_recovery_required: false,
+                    programming_recovery_detail: String::new(),
                     interfaces: vec![ksx_api::PanelInterfaceRow {
                         instance_id: "USB\\VID_D209&PID_0430&MI_00\\FIXTURE".into(),
                         interface_number: 0,

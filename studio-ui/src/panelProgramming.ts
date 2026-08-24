@@ -133,6 +133,12 @@ export interface PanelChartView {
 export interface PanelChartPayload {
   target_selector: string | null;
   unavailable: string | null;
+  /** Echoed only for a recovery read that the backend ordered against the
+   * matching hardware mutation token. */
+  hardware_epoch?: string | null;
+  /** `settled` means a late writer carrying that token was canceled, or its
+   * already-admitted mutation finished before this chart was read. */
+  hardware_fence?: "settled" | null;
   view: PanelChartView | null;
 }
 
@@ -242,6 +248,7 @@ export interface PanelProgramRequest {
 }
 
 export interface PanelProgramApplyRequest {
+  hardware_epoch: string;
   expected_selector: string;
   program: Omit<PanelProgramRequest, "expected_selector">;
   expected_board_fingerprint: string;
@@ -320,6 +327,7 @@ export type PanelMutationDisposition =
 export interface PanelProgramPayload {
   target_selector: string | null;
   unavailable: string | null;
+  hardware_epoch?: string | null;
   refusal_code: string | null;
   remedy: string | null;
   mutation_disposition: PanelMutationDisposition;
@@ -353,6 +361,7 @@ export interface PanelRestoreRequest {
 }
 
 export interface PanelRestoreApplyRequest {
+  hardware_epoch: string;
   expected_selector: string;
   restore: Omit<PanelRestoreRequest, "expected_selector">;
   expected_board_fingerprint: string;
@@ -365,6 +374,7 @@ export interface PanelRestoreApplyRequest {
 export interface PanelRestorePayload {
   target_selector: string | null;
   unavailable: string | null;
+  hardware_epoch?: string | null;
   refusal_code: string | null;
   remedy: string | null;
   mutation_disposition: PanelMutationDisposition;

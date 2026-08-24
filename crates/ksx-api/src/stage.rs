@@ -89,6 +89,15 @@ impl From<&StagedDevice> for StagedDeviceView {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedSlotView {
     pub number: u8,
+    /// Opaque identity-and-content revision for actions opened on this exact
+    /// controller row. A surface sends it back unchanged; it must never infer
+    /// or recompute it from the visible labels.
+    ///
+    /// Older daemons omit the field. Such a row remains readable, but a newer
+    /// mutation surface must refresh before it can safely bind through a route
+    /// that requires stale-target protection.
+    #[serde(default)]
+    pub target_revision: String,
     /// Canonical persona name (`xbox360`, `playstation`…) — what a
     /// [`StageEdit`] sends back.
     pub persona: String,
@@ -509,16 +518,21 @@ impl StagedSetupView {
             slots: setup
                 .slots()
                 .iter()
-                .map(|slot| StagedSlotView {
-                    number: slot.number,
-                    persona: slot.persona.as_str().to_owned(),
-                    persona_label: slot.persona.label().to_owned(),
-                    is_xinput: slot.persona.is_xinput(),
-                    preset: slot.preset.name.clone(),
-                    authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
-                    bindings: slot.preset.live_bindings(),
-                    socd: slot.socd.as_str().to_owned(),
-                    socd_label: socd_title(slot.socd),
+                .map(|slot| {
+                    let mut view = StagedSlotView {
+                        number: slot.number,
+                        target_revision: String::new(),
+                        persona: slot.persona.as_str().to_owned(),
+                        persona_label: slot.persona.label().to_owned(),
+                        is_xinput: slot.persona.is_xinput(),
+                        preset: slot.preset.name.clone(),
+                        authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
+                        bindings: slot.preset.live_bindings(),
+                        socd: slot.socd.as_str().to_owned(),
+                        socd_label: socd_title(slot.socd),
+                    };
+                    view.target_revision = staged_slot_revision(&view);
+                    view
                 })
                 .collect(),
             blocking: setup.blocking().map(|b| b.as_str().to_owned()),
@@ -808,6 +822,23 @@ impl StageEdit {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedBindRequest {
     pub number: u8,
+    /// Input-board selector observed when the binding action began. Studio
+    /// supplies this for every Nocturne bind so the daemon can recheck the
+    /// selected source while holding its staged-state lock. Older callers may
+    /// omit it; the empty value preserves their existing behavior.
+    #[serde(default)]
+    pub expected_device: String,
+    /// Opaque identity-and-content revision of the exact staged controller
+    /// observed when the binding action began.
+    ///
+    /// Studio captures this from the served [`StagedSlotView`] before it
+    /// performs any slow machine check. The daemon compares it while holding
+    /// the staged-state lock, so removing and recreating the same player
+    /// number cannot receive the stale write — even if the replacement's
+    /// visible content is identical. Older callers may omit it; the empty
+    /// value preserves their existing behavior.
+    #[serde(default)]
+    pub expected_target_revision: String,
     /// Controller-layout name observed with `number` when the action began.
     /// The daemon checks both pieces of identity so removing and recreating a
     /// player at the same number cannot receive a stale browser write.
@@ -930,6 +961,19 @@ pub fn staged_bind_edit(
             Vec::new(),
         ));
     }
+    if !request.expected_device.trim().is_empty()
+        && !setup.device.as_ref().is_some_and(|device| {
+            device
+                .selector
+                .eq_ignore_ascii_case(request.expected_device.trim())
+        })
+    {
+        return Err(bind_refusal(
+            codes::BAD_REQUEST,
+            "The selected input changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+            Vec::new(),
+        ));
+    }
     let Some(slot) = setup
         .slots
         .iter()
@@ -944,7 +988,43 @@ pub fn staged_bind_edit(
             Vec::new(),
         ));
     };
+    if !request.expected_target_revision.trim().is_empty()
+        && request.expected_target_revision.trim() != slot.target_revision
+    {
+        return Err(bind_refusal(
+            codes::BAD_SLOT,
+            format!(
+                "Player {} changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+                request.number
+            ),
+            Vec::new(),
+        ));
+    }
     staged_slot_bind_edit(slot, &setup.slots, request)
+}
+
+/// Deterministic, opaque revision for one staged binding target.
+///
+/// The complete serialized slot participates, including the persona, SOCD
+/// policy, macro bodies and every binding in the authoring table. This is the
+/// deterministic fallback used outside the daemon. The daemon prefixes it
+/// with a draft incarnation and mutation generation before serving it, which
+/// is what also detects an exact-content remove/recreate. `PresetFile` uses
+/// ordered maps, making its JSON bytes stable.
+pub fn staged_slot_revision(slot: &StagedSlotView) -> String {
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    // The served revision is an output of this function, never one of its
+    // inputs. Clear it before serialization so a row recomputes identically
+    // after crossing JSON and so the token cannot hash itself.
+    let mut canonical = slot.clone();
+    canonical.target_revision.clear();
+    let bytes =
+        serde_json::to_vec(&canonical).unwrap_or_else(|_| format!("{canonical:?}").into_bytes());
+    let hash = bytes.iter().fold(OFFSET, |hash, byte| {
+        (hash ^ u128::from(*byte)).wrapping_mul(PRIME)
+    });
+    format!("s1-{hash:032x}")
 }
 
 /// Prepare a binding edit when the caller already selected the target slot.
@@ -2781,6 +2861,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &before,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "a".into(),
                 keys: vec!["g".into(), "enter".into(), "G".into()],
@@ -2829,6 +2911,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &changed_view,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "A".into(),
                 keys: vec!["none".into()],
@@ -2855,6 +2939,100 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .any(|row| ksx_config::function_name(&row.binding) == "A"));
     }
 
+    #[test]
+    fn staged_binding_rechecks_the_selected_input_selector() {
+        let setup = staged_with_preset(&authored_preset());
+        let view = StagedSetupView::of(&setup);
+        let refused = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: "usb:d209:0431:00".to_owned(),
+                preset: "Player 1".to_owned(),
+                function: "A".to_owned(),
+                keys: vec!["G".to_owned()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_REQUEST));
+        assert!(
+            refused
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("selected input changed")),
+            "{refused:?}"
+        );
+
+        let accepted = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: "USB:D209:0430:00".to_owned(),
+                preset: "Player 1".to_owned(),
+                function: "A".to_owned(),
+                keys: vec!["G".to_owned()],
+                ..StagedBindRequest::default()
+            },
+        );
+        assert!(accepted.is_ok(), "the exact selector is case-insensitive");
+    }
+
+    #[test]
+    fn staged_binding_rechecks_the_complete_controller_target() {
+        let old_request: StagedBindRequest = serde_json::from_value(serde_json::json!({
+            "number": 1,
+            "preset": "Player 1",
+            "function": "A",
+            "keys": ["G"]
+        }))
+        .unwrap();
+        assert!(
+            old_request.expected_target_revision.is_empty(),
+            "an older caller retains the compatibility path"
+        );
+
+        let setup = staged_with_preset(&authored_preset());
+        let first = StagedSetupView::of(&setup);
+        let first_slot = &first.slots[0];
+        let revision = staged_slot_revision(first_slot);
+
+        let changed = StageEdit::SetPersona {
+            number: 1,
+            persona: "playstation".into(),
+        }
+        .apply(&setup)
+        .unwrap();
+        let changed = StageEdit::SetLayout {
+            number: 1,
+            layout: "empty".into(),
+            player: None,
+        }
+        .apply(&changed)
+        .unwrap();
+        let changed = StagedSetupView::of(&changed);
+        assert_eq!(changed.slots[0].number, first_slot.number);
+        assert_eq!(changed.slots[0].preset, first_slot.preset);
+        assert_ne!(staged_slot_revision(&changed.slots[0]), revision);
+
+        let refused = staged_bind_edit(
+            &changed,
+            &StagedBindRequest {
+                number: 1,
+                expected_target_revision: revision,
+                preset: "Player 1".into(),
+                function: "A".into(),
+                keys: vec!["G".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_SLOT));
+        let error = refused.error.as_deref().unwrap_or_default();
+        assert!(error.contains("Player 1 changed"), "{error}");
+        assert!(error.contains("Nothing changed"), "{error}");
+    }
+
     /// TOGGLE-HOLD at the staging layer: the same three-state rule as the
     /// rate (absent = untouched, `false` = cleared, `true` = latched), the
     /// same clear-drops-it rule, and the same macro-trigger refusal.
@@ -2864,6 +3042,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         let view = StagedSetupView::of(&setup);
         let latch = |keys: Vec<String>, toggle: Option<bool>| StagedBindRequest {
             number: 1,
+            expected_device: String::new(),
+            expected_target_revision: String::new(),
             preset: "Player 1".into(),
             function: "a".into(),
             keys,
@@ -2909,6 +3089,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &view,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "macro.hadouken".into(),
                 keys: vec!["p".into()],
@@ -2999,6 +3181,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .unwrap();
         let request = StagedBindRequest {
             number: 1,
+            expected_device: String::new(),
+            expected_target_revision: String::new(),
             preset: "Player 1".into(),
             function: "A".into(),
             keys: vec![occupied],
@@ -3068,6 +3252,8 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &with_body_view,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "MACRO.Hadouken".into(),
                 keys: vec!["p".into(), "leftcontrol".into()],

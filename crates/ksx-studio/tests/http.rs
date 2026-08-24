@@ -193,6 +193,9 @@ struct ScriptedControl {
     /// The daemon's StageMeta dirty stamp, scripted: set by the test that
     /// exercises the Apply button's running+dirty visibility.
     dirty: AtomicBool,
+    /// Daemon-style staged mutation generation. Unlike the content fallback
+    /// this changes even when a slot is removed and recreated identically.
+    stage_revision: AtomicUsize,
     /// Scripts `stage_apply` to refuse with `needs-restart`.
     apply_needs_restart: AtomicBool,
     /// Emulate an older daemon whose staged slot predates the authoring table.
@@ -209,6 +212,9 @@ struct ScriptedControl {
     restored_with: std::sync::Mutex<Option<(String, String)>>,
     cleared: std::sync::Mutex<Option<String>>,
     saved_macro: std::sync::Mutex<Option<MacroWrite>>,
+    /// Optional machine-guard lifetime probe used by the encoder bind tests.
+    route_guard_probe: Mutex<Option<Arc<AtomicBool>>>,
+    stage_bind_saw_route_guard: AtomicBool,
 }
 
 impl ScriptedControl {
@@ -225,6 +231,7 @@ impl ScriptedControl {
             learning: AtomicBool::new(false),
             learn_generation: AtomicUsize::new(0),
             dirty: AtomicBool::new(false),
+            stage_revision: AtomicUsize::new(0),
             apply_needs_restart: AtomicBool::new(false),
             without_authoring: false,
             invalid_mapping_authoring: AtomicBool::new(false),
@@ -233,6 +240,8 @@ impl ScriptedControl {
             restored_with: std::sync::Mutex::new(None),
             cleared: std::sync::Mutex::new(None),
             saved_macro: std::sync::Mutex::new(None),
+            route_guard_probe: Mutex::new(None),
+            stage_bind_saw_route_guard: AtomicBool::new(false),
         }
     }
 
@@ -257,6 +266,14 @@ impl ScriptedControl {
 
     fn invalidate_mapping_authoring(&self) {
         self.invalid_mapping_authoring.store(true, Ordering::SeqCst);
+    }
+
+    fn stamp_target_revisions(&self, view: &mut ksx_api::StagedSetupView) {
+        let revision = self.stage_revision.load(Ordering::SeqCst);
+        for slot in &mut view.slots {
+            let content = ksx_api::staged_slot_revision(slot);
+            slot.target_revision = format!("test-d1-{revision:016x}-{content}");
+        }
     }
 }
 
@@ -469,7 +486,9 @@ impl ControlSource for ScriptedControl {
         if self.no_daemon {
             return ksx_api::StagedSetupView::unreachable(NO_CHANNEL);
         }
-        let mut view = ksx_api::StagedSetupView::of(&self.staged.lock().unwrap());
+        let setup = self.staged.lock().unwrap();
+        let mut view = ksx_api::StagedSetupView::of(&setup);
+        self.stamp_target_revisions(&mut view);
         view.dirty = self.dirty.load(Ordering::SeqCst);
         if self.without_authoring {
             for slot in &mut view.slots {
@@ -518,9 +537,42 @@ impl ControlSource for ScriptedControl {
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
+                self.stage_revision.fetch_add(1, Ordering::SeqCst);
                 ksx_api::StageOutcome::ok(&setup, "staged")
             }
             Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
+        }
+    }
+
+    fn stage_bind(&self, request: &ksx_api::StagedBindRequest) -> BindOutcome {
+        if self
+            .route_guard_probe
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|active| active.load(Ordering::SeqCst))
+        {
+            self.stage_bind_saw_route_guard
+                .store(true, Ordering::SeqCst);
+        }
+        let mut setup = self.staged.lock().unwrap();
+        let mut view = ksx_api::StagedSetupView::of(&setup);
+        self.stamp_target_revisions(&mut view);
+        let prepared = match ksx_api::staged_bind_edit(&view, request) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
+        match prepared.edit.apply(&setup) {
+            Ok(next) => {
+                *setup = next;
+                self.stage_revision.fetch_add(1, Ordering::SeqCst);
+                let outcome = ksx_api::StageOutcome::ok(&setup, "staged");
+                prepared.finish(&outcome)
+            }
+            Err(refusal) => {
+                let outcome = ksx_api::StageOutcome::refused(&setup, &refusal);
+                prepared.finish(&outcome)
+            }
         }
     }
 
@@ -560,6 +612,7 @@ impl ControlSource for ScriptedControl {
             }
         }
         *setup = next;
+        self.stage_revision.fetch_add(1, Ordering::SeqCst);
         ksx_api::StageOutcome::ok(&setup, "adopted")
     }
 
@@ -737,12 +790,23 @@ struct ScriptedMachine {
     panel_status_devices: Mutex<Vec<Option<String>>>,
     panel_status_refuse: bool,
     panel_chart_specs: Mutex<Vec<ksx_api::PanelChartSpec>>,
+    panel_routing_specs: Mutex<Vec<ksx_api::PanelRoutingAuthoritySpec>>,
+    /// 0 = ordinary/unwritable bypass; 1 = exact authority; 2 = recovery.
+    panel_routing_mode: AtomicUsize,
+    panel_routing_active: Arc<AtomicBool>,
+    panel_routing_hold: AtomicBool,
+    panel_routing_entered: AtomicBool,
     panel_backup_specs: Mutex<Vec<ksx_api::PanelBackupsSpec>>,
     panel_profile_reads: AtomicUsize,
     panel_profile_save_specs: Mutex<Vec<ksx_api::PanelHardwareProfileSaveSpec>>,
     panel_profile_delete_specs: Mutex<Vec<ksx_api::PanelHardwareProfileDeleteSpec>>,
     panel_program_plan_specs: Mutex<Vec<ksx_api::PanelProgramSpec>>,
     panel_program_specs: Mutex<Vec<ksx_api::PanelProgramApplySpec>>,
+    /// Hermetic gate for the epoch-ordering tests. When held, the provider has
+    /// already been entered (so the server fence is Running) but has not yet
+    /// returned its verified outcome.
+    panel_program_hold: AtomicBool,
+    panel_program_entered: AtomicBool,
     panel_restore_plan_specs: Mutex<Vec<ksx_api::PanelRestoreSpec>>,
     panel_restore_specs: Mutex<Vec<ksx_api::PanelRestoreApplySpec>>,
     picked: Mutex<Vec<(String, Option<String>)>>,
@@ -802,12 +866,19 @@ impl Default for ScriptedMachine {
             panel_status_devices: Mutex::new(Vec::new()),
             panel_status_refuse: false,
             panel_chart_specs: Mutex::new(Vec::new()),
+            panel_routing_specs: Mutex::new(Vec::new()),
+            panel_routing_mode: AtomicUsize::new(0),
+            panel_routing_active: Arc::new(AtomicBool::new(false)),
+            panel_routing_hold: AtomicBool::new(false),
+            panel_routing_entered: AtomicBool::new(false),
             panel_backup_specs: Mutex::new(Vec::new()),
             panel_profile_reads: AtomicUsize::new(0),
             panel_profile_save_specs: Mutex::new(Vec::new()),
             panel_profile_delete_specs: Mutex::new(Vec::new()),
             panel_program_plan_specs: Mutex::new(Vec::new()),
             panel_program_specs: Mutex::new(Vec::new()),
+            panel_program_hold: AtomicBool::new(false),
+            panel_program_entered: AtomicBool::new(false),
             panel_restore_plan_specs: Mutex::new(Vec::new()),
             panel_restore_specs: Mutex::new(Vec::new()),
             picked: Mutex::new(Vec::new()),
@@ -839,9 +910,24 @@ impl Default for ScriptedMachine {
 
 const IPAC_KB: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
 const IPAC_AUX: &str = r"USB\VID_D209&PID_0430&MI_01\7&1A2B3C4D&0&0001";
+/// What Raw Input reports for the same I-PAC MI_00 collection. The real
+/// backend resolves this HID child through its USB parent before returning a
+/// canonical selector to Studio's learner endpoint.
+const IPAC_RAW_HID: &str = r"HID\VID_D209&PID_0430&MI_00\8&2F8AC447&0&0000";
+const DESK_RAW_HID: &str = r"HID\VID_046D&PID_C31C&MI_00\9&DEADBEEF&0&0000";
 const EXAMPLE_AUX_HID: &str = r"USB\VID_F00D&PID_CAFE&MI_01\7&5A6B7C8&0&0001";
 /// A paired Bluetooth keyboard with a shape-preserving synthetic identity.
 const BT_KEYBOARD: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&0800\7&B1C2D3E4&0&02A1B2C3D4E5_C00000000";
+
+struct ScriptedPanelRoutingGuard(Arc<AtomicBool>);
+
+impl ksx_api::PanelRoutingGuard for ScriptedPanelRoutingGuard {}
+
+impl Drop for ScriptedPanelRoutingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 impl ScriptedMachine {
     fn refusing() -> Self {
@@ -1324,6 +1410,8 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 recommendation:
                     "Keep this encoder in keyboard mode so Teach and Route retain KSX's dynamic transforms."
                         .to_owned(),
+                programming_recovery_required: false,
+                programming_recovery_detail: String::new(),
                 interfaces: vec![ksx_api::PanelInterfaceRow {
                     instance_id: IPAC_KB.to_owned(),
                     interface_number: 0,
@@ -1358,6 +1446,62 @@ impl ksx_api::MachineSource for ScriptedMachine {
     ) -> Result<ksx_api::PanelChartView, Refusal> {
         self.panel_chart_specs.lock().unwrap().push(spec.clone());
         Ok(Self::panel_chart_view())
+    }
+
+    fn panel_routing_guard(
+        &self,
+        spec: &ksx_api::PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+        self.panel_routing_specs.lock().unwrap().push(spec.clone());
+        match self.panel_routing_mode.load(Ordering::SeqCst) {
+            0 => Ok(None),
+            2 => Err(Refusal::with_remedy(
+                ksx_api::codes::RECOVERY_REQUIRED,
+                "the scripted encoder has an unresolved hardware transaction",
+                "read and recover its complete chart",
+            )),
+            _ => {
+                let exact = spec.device.eq_ignore_ascii_case("usb:d209:0430:00")
+                    && spec
+                        .expected_selector
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("usb:d209:0430:00"))
+                    && spec
+                        .expected_instance
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(IPAC_KB))
+                    && spec.expected_board_fingerprint.as_deref()
+                        == Some("ultimarc-ipac:D209:0430:board-4")
+                    && spec
+                        .expected_chart_sha256
+                        .as_deref()
+                        .is_some_and(|value| value == "A".repeat(64));
+                if !exact {
+                    return Err(Refusal::with_remedy(
+                        ksx_api::codes::BAD_REQUEST,
+                        "the scripted encoder authority is missing or stale; nothing was mapped",
+                        "read its complete chart and try again",
+                    ));
+                }
+                if self
+                    .panel_routing_active
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    return Err(Refusal::new(
+                        ksx_api::codes::REFUSED,
+                        "another scripted route owns the encoder",
+                    ));
+                }
+                self.panel_routing_entered.store(true, Ordering::SeqCst);
+                while self.panel_routing_hold.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                Ok(Some(Box::new(ScriptedPanelRoutingGuard(Arc::clone(
+                    &self.panel_routing_active,
+                )))))
+            }
+        }
     }
 
     fn panel_backups(
@@ -1440,6 +1584,10 @@ impl ksx_api::MachineSource for ScriptedMachine {
         &self,
         spec: &ksx_api::PanelProgramApplySpec,
     ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_program_entered.store(true, Ordering::SeqCst);
+        while self.panel_program_hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
         self.panel_program_specs.lock().unwrap().push(spec.clone());
         Ok(Self::panel_program_outcome())
     }
@@ -1475,7 +1623,9 @@ impl ksx_api::MachineSource for ScriptedMachine {
             .lock()
             .unwrap()
             .push(observed_instance.to_owned());
-        if !observed_instance.eq_ignore_ascii_case(IPAC_KB) {
+        if !observed_instance.eq_ignore_ascii_case(IPAC_KB)
+            && !observed_instance.eq_ignore_ascii_case(IPAC_RAW_HID)
+        {
             return Err(Refusal::new(
                 ksx_api::codes::IDENTIFY_UNMATCHED,
                 "the observed interface did not match the scripted board",
@@ -2313,6 +2463,9 @@ fn start_server_with_sources(
         fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
             self.0.stage_edit(edit)
         }
+        fn stage_bind(&self, request: &ksx_api::StagedBindRequest) -> BindOutcome {
+            self.0.stage_bind(request)
+        }
         fn stage_commit(&self) -> ksx_api::StageOutcome {
             self.0.stage_commit()
         }
@@ -2348,6 +2501,12 @@ fn start_server_with_sources(
             spec: &ksx_api::PanelChartSpec,
         ) -> Result<ksx_api::PanelChartView, Refusal> {
             self.0.panel_chart(spec)
+        }
+        fn panel_routing_guard(
+            &self,
+            spec: &ksx_api::PanelRoutingAuthoritySpec,
+        ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+            self.0.panel_routing_guard(spec)
         }
         fn panel_backups(
             &self,
@@ -4430,7 +4589,7 @@ fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
 fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
     let control = Arc::new(ScriptedControl::new(true));
     let machine = Arc::new(ScriptedMachine::default());
-    let addr = start_server_with_machine(control, machine.clone());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
 
     let response = post_form(
         addr,
@@ -4461,7 +4620,7 @@ fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
 fn updating_a_profile_reaches_the_typed_verb() {
     let control = Arc::new(ScriptedControl::new(true));
     let machine = Arc::new(ScriptedMachine::default());
-    let addr = start_server_with_machine(control, machine.clone());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
 
     let response = post_form(
         addr,
@@ -7445,6 +7604,512 @@ fn nocturne_bind_rows(api: &serde_json::Value) -> Vec<serde_json::Value> {
     .collect()
 }
 
+fn seed_nocturne_panel(control: &ScriptedControl, slots: u8) {
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    for number in 1..=slots {
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: Some(number),
+                    persona: "xbox360".into(),
+                    preset: format!("Player {number}"),
+                    layout: None,
+                })
+                .ok
+        );
+    }
+}
+
+fn staged_target_revision(control: &ScriptedControl, slot: u8) -> String {
+    control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|candidate| candidate.number == slot)
+        .unwrap_or_else(|| panic!("no staged Player {slot}"))
+        .target_revision
+}
+
+fn nocturne_bind_body_with_revision(
+    slot: u8,
+    target_revision: &str,
+    function: &str,
+    key: &str,
+    mode: Option<&str>,
+    force: bool,
+) -> String {
+    serde_json::json!({
+        "slot": slot,
+        "expected_target_revision": target_revision,
+        "function": function,
+        "key": key,
+        "mode": mode,
+        "force": force,
+    })
+    .to_string()
+}
+
+fn nocturne_bind_body(
+    control: &ScriptedControl,
+    slot: u8,
+    function: &str,
+    key: &str,
+    mode: Option<&str>,
+    force: bool,
+) -> String {
+    nocturne_bind_body_with_revision(
+        slot,
+        &staged_target_revision(control, slot),
+        function,
+        key,
+        mode,
+        force,
+    )
+}
+
+fn encoder_bind_body_with_revision(
+    slot: u8,
+    target_revision: &str,
+    key: &str,
+    force: bool,
+    sha: &str,
+) -> String {
+    serde_json::json!({
+        "slot": slot,
+        "expected_target_revision": target_revision,
+        "function": "A",
+        "key": key,
+        "force": force,
+        "encoder_authority": {
+            "expected_selector": "usb:d209:0430:00",
+            "expected_instance": IPAC_KB,
+            "expected_board_fingerprint": "ultimarc-ipac:D209:0430:board-4",
+            "expected_chart_sha256": sha,
+        },
+    })
+    .to_string()
+}
+
+fn encoder_bind_body(
+    control: &ScriptedControl,
+    slot: u8,
+    key: &str,
+    force: bool,
+    sha: &str,
+) -> String {
+    encoder_bind_body_with_revision(
+        slot,
+        &staged_target_revision(control, slot),
+        key,
+        force,
+        sha,
+    )
+}
+
+/// A programmable encoder route is authorized by the server, not by a
+/// browser preflight. Missing/stale/recovery proofs never reach staged state;
+/// a valid proof owns its opaque machine guard through the atomic bind; and
+/// ordinary keyboard-compatible providers retain the legacy request shape.
+#[test]
+fn nocturne_encoder_binds_require_fresh_machine_authority() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 2);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    *control.route_guard_probe.lock().unwrap() = Some(Arc::clone(&machine.panel_routing_active));
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "F7", None, false),
+    )))
+    .unwrap();
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert_eq!(missing["code"], "bad-request", "{missing}");
+
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"B".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+
+    machine.panel_routing_mode.store(2, Ordering::SeqCst);
+    let recovery: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(recovery["code"], "recovery-required", "{recovery}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    let first: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(first["ok"], true, "{first}");
+    assert!(control.stage_bind_saw_route_guard.load(Ordering::SeqCst));
+    assert!(!machine.panel_routing_active.load(Ordering::SeqCst));
+
+    let conflict: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 2, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(conflict["code"], "conflict", "{conflict}");
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 2, "F7", true, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(forced["ok"], true, "{forced}");
+
+    let ordinary = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&ordinary, 1);
+    let ordinary_addr =
+        start_server_with_machine(ordinary.clone(), Arc::new(ScriptedMachine::default()));
+    let compatible: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        ordinary_addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&ordinary, 1, "A", "F8", None, false),
+    )))
+    .unwrap();
+    assert_eq!(compatible["ok"], true, "{compatible}");
+}
+
+/// A hardware chart proof can take long enough for another surface to replace
+/// its controller. Reusing the same player number and preset name must not let
+/// the old request land on that new controller after the machine guard opens.
+#[test]
+fn nocturne_encoder_bind_refuses_a_recreated_staged_target_after_hardware_proof() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let body = encoder_bind_body(&control, 1, "F9", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "route never entered its slow guard"
+        );
+        std::thread::yield_now();
+    }
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 1 })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "playstation".into(),
+                preset: "Player 1".into(),
+                layout: Some("empty".into()),
+            })
+            .ok
+    );
+
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let refused: serde_json::Value =
+        serde_json::from_str(body_of(&bind.join().unwrap())).expect("bind response");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "bad-slot", "{refused}");
+
+    let after = control.staged();
+    assert_eq!(after.slots[0].number, 1);
+    assert_eq!(after.slots[0].preset, "Player 1");
+    assert_eq!(after.slots[0].persona, "playstation");
+    assert_eq!(
+        after.slots[0].bindings, 0,
+        "the stale F9 write must not land on the recreated controller"
+    );
+}
+
+/// Content equality is not identity. Removing and rebuilding the exact same
+/// slot while the HID proof is blocked still creates a new draft target, so a
+/// content hash alone must never let the old request through.
+#[test]
+fn nocturne_encoder_bind_refuses_an_identical_recreated_target_after_hardware_proof() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let original_revision = staged_target_revision(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let body =
+        encoder_bind_body_with_revision(1, &original_revision, "F10", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "route never entered its slow guard"
+        );
+        std::thread::yield_now();
+    }
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 1 })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "xbox360".into(),
+                preset: "Player 1".into(),
+                layout: None,
+            })
+            .ok
+    );
+    assert_ne!(
+        staged_target_revision(&control, 1),
+        original_revision,
+        "an identical replacement must still have a new incarnation"
+    );
+
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let refused: serde_json::Value =
+        serde_json::from_str(body_of(&bind.join().unwrap())).expect("bind response");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "bad-slot", "{refused}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+}
+
+/// The slot may be visually unchanged while another tab selects a different
+/// physical keyboard. Because the served target revision covers the complete
+/// daemon draft generation, that stale tab is rejected before hardware proof.
+#[test]
+fn nocturne_bind_refuses_a_stale_tab_after_only_the_input_device_changes() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let old_revision = staged_target_revision(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:1234:5678:00".into(),
+                alias: "replacement".into(),
+                label: "Keyboard B".into(),
+            })
+            .ok
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body_with_revision(1, &old_revision, "F11", false, &"A".repeat(64)),
+    )))
+    .expect("stale bind response");
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["code"], "bad-slot", "{stale}");
+    assert!(!machine.panel_routing_entered.load(Ordering::SeqCst));
+    assert_eq!(control.staged().slots[0].bindings, 0);
+}
+
+/// Conflict consent belongs to the exact conflict set the dialog disclosed.
+/// If another slot acquires the key while the dialog is open, forcing the old
+/// answer must refresh and ask again rather than silently broadening fan-out.
+#[test]
+fn nocturne_conflict_force_refuses_after_an_external_draft_mutation() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 3);
+    let addr = start_server(Arc::clone(&control));
+
+    let first: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 2, "A", "F12", None, false),
+    )))
+    .expect("first owner");
+    assert_eq!(first["ok"], true, "{first}");
+
+    let disclosed_revision = staged_target_revision(&control, 1);
+    let conflict_body =
+        nocturne_bind_body_with_revision(1, &disclosed_revision, "A", "F12", None, false);
+    let conflict: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &conflict_body,
+    )))
+    .expect("conflict response");
+    assert_eq!(conflict["code"], "conflict", "{conflict}");
+
+    let slot3 = control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|slot| slot.number == 3)
+        .expect("Player 3");
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 3,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset: slot3.preset,
+                function: "A".into(),
+                keys: vec!["F12".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body_with_revision(1, &disclosed_revision, "A", "F12", None, true),
+    )))
+    .expect("forced response");
+    assert_eq!(forced["ok"], false, "{forced}");
+    assert_eq!(forced["code"], "bad-slot", "{forced}");
+    let player1 = control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|slot| slot.number == 1)
+        .expect("Player 1");
+    assert_eq!(player1.bindings, 0, "stale consent must write nothing");
+}
+
+/// Studio request admission is ordered before either blocking task can race
+/// to the cross-process lease: the request registered first wins, in both
+/// directions, and the losing provider is never entered.
+#[test]
+fn nocturne_encoder_bind_and_program_requests_cannot_overtake_each_other() {
+    let program_body = |epoch: &str| {
+        format!(
+            r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64),
+        )
+    };
+
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_program_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+    let body = program_body("writer-first");
+    let writer = std::thread::spawn(move || post_json(addr, "/api/panel/program/apply", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_program_entered.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "writer never entered");
+        std::thread::yield_now();
+    }
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(blocked["ok"], false, "{blocked}");
+    assert!(!machine.panel_routing_entered.load(Ordering::SeqCst));
+    machine.panel_program_hold.store(false, Ordering::SeqCst);
+    let _ = writer.join().unwrap();
+
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+    let bind_body = encoder_bind_body(&control, 1, "F8", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &bind_body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "route never entered");
+        std::thread::yield_now();
+    }
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/panel/program/apply",
+        &program_body("route-first"),
+    )))
+    .unwrap();
+    assert_eq!(blocked["mutation_disposition"], "not-started", "{blocked}");
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let bound: serde_json::Value = serde_json::from_str(body_of(&bind.join().unwrap())).unwrap();
+    assert_eq!(bound["ok"], true, "{bound}");
+}
+
+/// **Raw Input identity is joined before it reaches the canvas.** The daemon
+/// reports a HID child for an ordinary keyboard-stack hit, while the device
+/// picker and staged setup name the USB MI_00 interface. Studio asks the
+/// machine provider for the canonical selector and preserves the raw path only
+/// as observation detail. A direct MI_00 observation remains valid, while an
+/// unrelated desk keyboard stays unresolved.
+#[test]
+fn nocturne_learner_resolves_hid_child_and_usb_mi00_to_one_canonical_selector() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let machine_source: Arc<dyn ksx_api::MachineSource> = machine.clone();
+    let addr = start_server_with_machine(Arc::clone(&control), machine_source);
+
+    for observed in [IPAC_RAW_HID, IPAC_KB] {
+        *control.identify_hit.lock().unwrap() = Some(observed.to_owned());
+        let started: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
+        assert_eq!(started["state"], "listening", "{started}");
+        assert!(started["selector"].is_null(), "{started}");
+        let polled: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/learn"))).unwrap();
+        assert_eq!(polled["state"], "hit", "{polled}");
+        assert_eq!(polled["device"], observed, "{polled}");
+        assert_eq!(polled["selector"], "usb:d209:0430:00", "{polled}");
+    }
+
+    *control.identify_hit.lock().unwrap() = Some(DESK_RAW_HID.to_owned());
+    let _: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
+    let unresolved: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).unwrap();
+    assert_eq!(unresolved["device"], DESK_RAW_HID, "{unresolved}");
+    assert!(unresolved["selector"].is_null(), "{unresolved}");
+
+    assert_eq!(
+        *machine.identified_from.lock().unwrap(),
+        vec![
+            IPAC_RAW_HID.to_owned(),
+            IPAC_KB.to_owned(),
+            DESK_RAW_HID.to_owned(),
+        ]
+    );
+}
+
 /// **The MIGRATED rebind editor, over HTTP.** The learner's JSON trio
 /// answers from its new home with generation-stamped states; the staged bind
 /// verb resolves the slot's preset identity and current key list server-side
@@ -7575,7 +8240,7 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     let replaced: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        &format!("{{\"slot\":1,\"function\":\"{unbound_fn}\",\"key\":\"F7\"}}"),
+        &nocturne_bind_body(&control, 1, &unbound_fn, "F7", None, false),
     )))
     .expect("bind outcome");
     assert_eq!(replaced["ok"], true, "{replaced}");
@@ -7591,7 +8256,7 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     let dup: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        &format!("{{\"slot\":1,\"function\":\"{unbound_fn}\",\"key\":\"F7\",\"mode\":\"add\"}}"),
+        &nocturne_bind_body(&control, 1, &unbound_fn, "F7", Some("add"), false),
     )))
     .expect("dup outcome");
     assert_eq!(dup["ok"], false, "{dup}");
@@ -7607,7 +8272,7 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     let conflicted: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        &format!("{{\"slot\":2,\"function\":\"{unbound_fn}\",\"key\":\"F7\"}}"),
+        &nocturne_bind_body(&control, 2, &unbound_fn, "F7", None, false),
     )))
     .expect("conflict outcome");
     assert_eq!(conflicted["ok"], false, "{conflicted}");
@@ -7620,7 +8285,7 @@ fn nocturne_serves_the_migrated_rebind_editor_over_http() {
     let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        &format!("{{\"slot\":2,\"function\":\"{unbound_fn}\",\"key\":\"F7\",\"force\":true}}"),
+        &nocturne_bind_body(&control, 2, &unbound_fn, "F7", None, true),
     )))
     .expect("forced outcome");
     assert_eq!(forced["ok"], true, "{forced}");
@@ -7778,9 +8443,7 @@ fn nocturne_treats_a_macro_trigger_as_a_binding() {
         serde_json::from_str(body_of(&post_json(
             addr,
             "/nocturne/api/bind",
-            &format!(
-                "{{\"slot\":1,\"function\":\"macro.combo\",\"key\":\"{key}\",\"mode\":\"{mode}\"}}"
-            ),
+            &nocturne_bind_body(&control, 1, "macro.combo", key, Some(mode), false),
         )))
         .expect("bind")
     };
@@ -8394,6 +9057,7 @@ fn nocturne_keeps_nonselected_player_macro_topology() {
     for (slot, function, key) in [(1, "macro.p1-combo", "F11"), (2, "macro.p2-combo", "F12")] {
         let request = serde_json::json!({
             "slot": slot,
+            "expected_target_revision": staged_target_revision(&control, slot),
             "function": function,
             "key": key,
             "mode": "replace",
@@ -8565,7 +9229,7 @@ fn nocturne_serves_the_migrated_macro_lifecycle_over_http() {
     let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        "{\"slot\":1,\"function\":\"macro.combo\",\"key\":\"F9\"}",
+        &nocturne_bind_body(&control, 1, "macro.combo", "F9", None, false),
     )))
     .expect("trigger bind");
     assert_eq!(bound["ok"], true, "{bound}");
@@ -9028,6 +9692,8 @@ fn nocturne_clears_one_key_everywhere_it_drives() {
             control
                 .stage_bind(&ksx_api::StagedBindRequest {
                     number: 1,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
                     preset: preset.clone(),
                     function: function.into(),
                     keys: keys.into_iter().map(str::to_owned).collect(),
@@ -9104,6 +9770,8 @@ fn nocturne_paints_the_board_by_owner() {
             control
                 .stage_bind(&ksx_api::StagedBindRequest {
                     number,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
                     preset,
                     function: function.into(),
                     keys: vec![key.into()],
@@ -9210,6 +9878,8 @@ fn nocturne_stacks_a_key_five_controllers_share() {
             control
                 .stage_bind(&ksx_api::StagedBindRequest {
                     number: slot.number,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
                     preset: slot.preset.clone(),
                     function: "A".into(),
                     keys: vec!["Q".into()],
@@ -9317,6 +9987,8 @@ fn nocturne_serves_ordered_canvas_control_authoring() {
         control
             .stage_bind(&ksx_api::StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset,
                 function: "A".into(),
                 keys: vec!["G".into(), "H".into()],
@@ -9462,6 +10134,8 @@ fn nocturne_serves_every_pad_for_the_grid() {
         control
             .stage_bind(&ksx_api::StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset,
                 function: "A".into(),
                 keys: vec!["G".into(), "H".into()],
@@ -9520,6 +10194,8 @@ fn nocturne_removes_one_key_from_one_control() {
         control
             .stage_bind(&ksx_api::StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: preset.clone(),
                 function: "A".into(),
                 keys: vec!["G".into(), "H".into()],
@@ -9533,7 +10209,7 @@ fn nocturne_removes_one_key_from_one_control() {
     let removed: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        "{\"slot\":1,\"function\":\"A\",\"key\":\"H\",\"mode\":\"remove\"}",
+        &nocturne_bind_body(&control, 1, "A", "H", Some("remove"), false),
     )))
     .expect("remove outcome");
     assert_eq!(removed["ok"], true, "{removed}");
@@ -9549,7 +10225,7 @@ fn nocturne_removes_one_key_from_one_control() {
     let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        "{\"slot\":1,\"function\":\"A\",\"key\":\"F9\",\"mode\":\"remove\"}",
+        &nocturne_bind_body(&control, 1, "A", "F9", Some("remove"), false),
     )))
     .expect("missing outcome");
     assert_eq!(missing["ok"], false, "{missing}");
@@ -9564,7 +10240,7 @@ fn nocturne_removes_one_key_from_one_control() {
     let last: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        "{\"slot\":1,\"function\":\"A\",\"key\":\"G\",\"mode\":\"remove\"}",
+        &nocturne_bind_body(&control, 1, "A", "G", Some("remove"), false),
     )))
     .expect("last outcome");
     assert_eq!(last["ok"], true, "{last}");
@@ -10266,7 +10942,7 @@ fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
         addr,
         "/api/panel/program/apply",
         &format!(
-            r#"{{"expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            r#"{{"hardware_epoch":"http-program-1","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
             "A".repeat(64),
             "B".repeat(64)
         ),
@@ -10274,6 +10950,7 @@ fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
     let applied: serde_json::Value = serde_json::from_str(body_of(&applied)).unwrap();
     assert_eq!(applied["outcome"]["state"], "verified", "{applied}");
     assert_eq!(applied["mutation_disposition"], "verified", "{applied}");
+    assert_eq!(applied["hardware_epoch"], "http-program-1", "{applied}");
     let writes = machine.panel_program_specs.lock().unwrap();
     assert_eq!(writes.len(), 1);
     assert!(writes[0].confirm);
@@ -10306,17 +10983,147 @@ fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
         addr,
         "/api/panel/restore/apply",
         &format!(
-            r#"{{"expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            r#"{{"hardware_epoch":"http-restore-1","expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
             "B".repeat(64),
             "B".repeat(64)
         ),
     );
     let restored: serde_json::Value = serde_json::from_str(body_of(&restored)).unwrap();
     assert_eq!(restored["mutation_disposition"], "verified", "{restored}");
+    assert_eq!(restored["hardware_epoch"], "http-restore-1", "{restored}");
     assert!(restored["outcome"]["summary"]
         .as_str()
         .is_some_and(|line| line.contains("restored")));
     assert_eq!(machine.panel_restore_specs.lock().unwrap().len(), 1);
+}
+
+/// A recovery read which reaches the server before its matching mutation must
+/// install a process-lifetime cancel tombstone. The delayed apply may not turn
+/// that same browser epoch into a write after the chart has been declared
+/// settled.
+#[test]
+fn panel_recovery_epoch_wins_before_delayed_apply() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-recovery-wins-1";
+
+    let recovered = post_json(
+        addr,
+        "/api/panel/chart",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+        ),
+    );
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(
+        recovered["view"]["board_fingerprint"], "ultimarc-ipac:D209:0430:board-4",
+        "{recovered}"
+    );
+
+    let delayed = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let delayed: serde_json::Value = serde_json::from_str(body_of(&delayed)).unwrap();
+    assert_eq!(delayed["hardware_epoch"], epoch, "{delayed}");
+    assert_eq!(delayed["mutation_disposition"], "not-started", "{delayed}");
+    assert!(
+        machine.panel_program_specs.lock().unwrap().is_empty(),
+        "a recovery-canceled epoch reached the hardware provider"
+    );
+}
+
+/// Once the matching apply has entered the provider, a crash-recovery chart
+/// waits for that exact mutation to finish and only then reads. This is the
+/// inverse ordering of `panel_recovery_epoch_wins_before_delayed_apply`.
+#[test]
+fn panel_apply_epoch_wins_before_recovery_read() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_program_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-apply-wins-1";
+    let apply_body = format!(
+        r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+        "A".repeat(64),
+        "B".repeat(64)
+    );
+    let duplicate_body = apply_body.clone();
+    let apply =
+        std::thread::spawn(move || post_json(addr, "/api/panel/program/apply", &apply_body));
+    let entered_deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_program_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the apply never entered the scripted hardware provider"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let duplicate = post_json(addr, "/api/panel/program/apply", &duplicate_body);
+    let duplicate: serde_json::Value = serde_json::from_str(body_of(&duplicate)).unwrap();
+    assert_eq!(duplicate["hardware_epoch"], epoch, "{duplicate}");
+    assert_eq!(
+        duplicate["mutation_disposition"], "unknown",
+        "a duplicate cannot claim nothing is running while the original token can still write: {duplicate}"
+    );
+
+    let recovery_body = format!(
+        r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+    );
+    let (chart_tx, chart_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = chart_tx.send(post_json(addr, "/api/panel/chart", &recovery_body));
+    });
+    assert!(
+        matches!(
+            chart_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the recovery chart returned before the admitted apply finished"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the chart provider ran before the admitted apply finished"
+    );
+
+    machine.panel_program_hold.store(false, Ordering::SeqCst);
+    let applied = apply.join().unwrap();
+    let applied: serde_json::Value = serde_json::from_str(body_of(&applied)).unwrap();
+    assert_eq!(applied["mutation_disposition"], "verified", "{applied}");
+    assert_eq!(applied["hardware_epoch"], epoch, "{applied}");
+    let recovered = chart_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(machine.panel_program_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
 }
 
 /// A browser selector is a stale-screen assertion, never authority, and a
@@ -10352,13 +11159,17 @@ fn panel_programming_rejects_stale_targets_and_live_session_writes() {
         addr,
         "/api/panel/program/apply",
         &format!(
-            r#"{{"expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            r#"{{"hardware_epoch":"http-running-blocked-1","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
             "A".repeat(64),
             "B".repeat(64)
         ),
     );
     let blocked: serde_json::Value = serde_json::from_str(body_of(&blocked)).unwrap();
     assert_eq!(blocked["mutation_disposition"], "not-started", "{blocked}");
+    assert_eq!(
+        blocked["hardware_epoch"], "http-running-blocked-1",
+        "{blocked}"
+    );
     assert!(blocked["unavailable"]
         .as_str()
         .is_some_and(|line| line.contains("stop Play")));

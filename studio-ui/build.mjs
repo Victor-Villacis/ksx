@@ -296,9 +296,11 @@ try {
     // blank-encoder entry, movable macro processors, multi-family discovery,
     // chart-derived panels, visible control → terminal → key handoffs, and the
     // fallback signal shelf live in Nocturne's one island. The measured
-    // compressed route is ~267.1 KB; keep a narrow 268.5 KB ceiling so those
-    // deliberate hardware/canvas costs are not an open-ended bump.
-    budgetThreshold: 268_500,
+    // compressed route is 275,015 bytes (~268.6 KiB) after the cross-window
+    // hardware journal and canonical learner identity; keep a narrow
+    // 275,100-byte ceiling so those deliberate safety costs are not an
+    // open-ended bump.
+    budgetThreshold: 275_100,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

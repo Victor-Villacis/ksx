@@ -89,6 +89,25 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// Establish the machine-side authority required to turn a key emitted by
+    /// the currently staged input into a controller binding.
+    ///
+    /// Ordinary keyboards return `Ok(None)`. A recognized panel encoder must
+    /// instead return a guard which retains the same cross-process lease used
+    /// by panel programming until the caller has committed its staged bind.
+    /// Implementations validate the browser's last complete chart identity and
+    /// hash while acquiring that guard; a surface-side preflight alone cannot
+    /// close the race with a CLI hardware mutation.
+    fn panel_routing_guard(
+        &self,
+        _spec: &PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn PanelRoutingGuard>>, Refusal> {
+        // Providers without panel-programming support have no managed encoder
+        // class. Production's LocalMachine overrides this and independently
+        // classifies the selected board from its fresh machine inventory.
+        Ok(None)
+    }
+
     /// `ksx panel backups` — immutable, lossless hardware restore points for
     /// the selected physical encoder. Raw images stay in the backend store;
     /// this view exposes identity and hashes, never EEPROM bytes.
@@ -642,6 +661,33 @@ pub struct PanelStatusSpec {
     pub device: Option<String>,
 }
 
+/// Browser evidence for one encoder-sourced staged binding.
+///
+/// `device` is always supplied by the server from the daemon-held stage. The
+/// remaining optional values are the untrusted browser proof: they stay
+/// optional on the wire so omission reaches the backend as an authored
+/// refusal instead of becoming an Axum extractor error. A recognized encoder
+/// requires all of them; an ordinary keyboard ignores them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRoutingAuthoritySpec {
+    pub device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_instance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_board_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_chart_sha256: Option<String>,
+}
+
+/// Opaque lifetime token returned by [`MachineSource::panel_routing_guard`].
+///
+/// The value intentionally exposes no operation. Keeping it alive is the
+/// operation: production stores the machine-wide panel-programming lease in
+/// it, and dropping it releases that lease after the staged bind settles.
+pub trait PanelRoutingGuard {}
+
 /// `ksx panel status`, presentation-shaped for every surface.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelStatusView {
@@ -728,6 +774,16 @@ pub struct PanelStatusRow {
     /// One backend-composed next-step sentence; a surface does not interpret
     /// protocol or topology codes to invent advice.
     pub recommendation: String,
+    /// True when this exact physical board has an unresolved persistent write,
+    /// or when passive status cannot safely prove its machine-scoped journal
+    /// is settled (for example, a busy maintenance lease or invalid store).
+    /// No report handle is opened.
+    #[serde(default)]
+    pub programming_recovery_required: bool,
+    /// Backend-owned recovery wording for the exact board. Empty only when
+    /// the journal was read from a trusted store and proved settled.
+    #[serde(default)]
+    pub programming_recovery_detail: String,
     pub interfaces: Vec<PanelInterfaceRow>,
     pub hid_collections: Vec<PanelHidCollectionRow>,
 }
@@ -3890,6 +3946,8 @@ mod tests {
         object.remove("firmware_label");
         object.remove("firmware_detail");
         object.remove("profile_terminal_count");
+        object.remove("programming_recovery_required");
+        object.remove("programming_recovery_detail");
 
         let decoded: PanelStatusRow = serde_json::from_value(older).unwrap();
         assert_eq!(decoded.family_id, None);
@@ -3898,6 +3956,8 @@ mod tests {
         assert_eq!(decoded.firmware_label, None);
         assert!(decoded.firmware_detail.is_empty());
         assert_eq!(decoded.profile_terminal_count, None);
+        assert!(!decoded.programming_recovery_required);
+        assert!(decoded.programming_recovery_detail.is_empty());
 
         let partial: PanelDriverCapabilities = serde_json::from_value(serde_json::json!({
             "can_identify": true

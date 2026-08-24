@@ -76,7 +76,7 @@ pub mod typethrough;
 mod panel_tests;
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -364,7 +364,7 @@ pub struct ActiveSession {
 /// sites (`pipe::apply_stage_edit`, `pipe::handle_stage_commit`,
 /// `pipe::handle_stage_adopt`) and stamped onto every served
 /// `StagedSetupView`, which cannot know it on its own.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StageMeta {
     /// Edits since the draft was fresh, adopted, or saved. Feeds the dirty
     /// dot and "Unsaved changes"; cleared by Save (the draft now IS the
@@ -373,6 +373,51 @@ pub struct StageMeta {
     /// Empty for a fresh visit; `config` once adopted from — or saved to —
     /// config.toml; `profile:<title>` when adopted from one saved game.
     pub origin: String,
+    /// Opaque identity of this in-memory draft incarnation. It changes when
+    /// Start over or adoption replaces the whole draft, including when the
+    /// replacement happens to have byte-identical visible content.
+    pub(crate) incarnation: String,
+    /// Monotonic mutation generation inside one incarnation. This is bumped
+    /// under the same daemon lock as every successful staged edit.
+    pub(crate) revision: u64,
+}
+
+static NEXT_STAGE_INCARNATION: AtomicU64 = AtomicU64::new(1);
+
+impl Default for StageMeta {
+    fn default() -> Self {
+        // This is a concurrency token, not a secret. Time + pid keep a stale
+        // browser token from a previous daemon process from colliding, while
+        // the sequence makes multiple drafts created in one tick distinct.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let sequence = NEXT_STAGE_INCARNATION.fetch_add(1, Ordering::Relaxed);
+        Self {
+            dirty: false,
+            origin: String::new(),
+            incarnation: format!("{nanos:032x}-{:08x}-{sequence:016x}", std::process::id()),
+            revision: 0,
+        }
+    }
+}
+
+impl StageMeta {
+    /// Move the draft's concurrency generation while its state lock is held.
+    /// On the theoretical wrap boundary, rotate the incarnation instead of
+    /// ever reissuing an earlier token.
+    pub(crate) fn bump_revision(&mut self) {
+        if self.revision == u64::MAX {
+            let dirty = self.dirty;
+            let origin = self.origin.clone();
+            *self = Self::default();
+            self.dirty = dirty;
+            self.origin = origin;
+        } else {
+            self.revision += 1;
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -4126,6 +4126,11 @@ pub struct NocturneLegendRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturnePadView {
     pub slot: u8,
+    /// Opaque staged-controller revision served with this exact row. The
+    /// browser returns it unchanged with a bind; it is not presentation data
+    /// and must never be reconstructed from the visible preset/persona.
+    #[serde(default)]
+    pub target_revision: String,
     /// "xbox" | "ps" — which master silhouette the client clones.
     pub family: String,
     /// The slot's preset name — the controller's STABLE identity across
@@ -5321,6 +5326,7 @@ impl NocturneDerived {
                     .collect();
                 NocturnePadView {
                     slot: slot.number,
+                    target_revision: slot.target_revision.clone(),
                     family: pad_art_family(Some(slot.persona.as_str()), Some(slot)).to_owned(),
                     preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),

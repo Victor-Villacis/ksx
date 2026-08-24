@@ -132,8 +132,11 @@ const SNAPSHOT = `(() => {
   //    and the engine annotates its own state through five data- namespaces
   //    (data-canvas-* geometry mirrors; data-widget-* navigation, chrome
   //    dock and focus mode; data-attention-*, data-runtime-* and
-  //    data-virtualization-* visibility ranking) — all browser-side facts
-  //    the server can never know. Exactly those channels are exempt ON THE
+  //    data-virtualization-* visibility ranking). The selected input device's
+  //    reconciled role is likewise annotated as data-input-kind after mount;
+  //    the served shell is intentionally the protocol-neutral Input source.
+  //    These are all browser-side facts the server can never know. Exactly
+  //    those channels are exempt ON THE
   //    MARKED NODE ITSELF — stripped from BOTH captures, so the served
   //    identity attrs that share a prefix (data-widget-name) vanish equally
   //    rather than escaping the compare. Everything else on the node
@@ -143,7 +146,10 @@ const SNAPSHOT = `(() => {
   clone.querySelectorAll("[data-client-canvas]").forEach((el) => {
     el.removeAttribute("style");
     for (const attr of Array.from(el.attributes)) {
-      if (/^data-(canvas-|widget-|attention-|runtime-|virtualization-)/.test(attr.name)) {
+      if (
+        attr.name === "data-input-kind" ||
+        /^data-(canvas-|widget-|attention-|runtime-|virtualization-)/.test(attr.name)
+      ) {
         el.removeAttribute(attr.name);
       }
     }

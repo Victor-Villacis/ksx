@@ -269,6 +269,8 @@ pub(super) fn bind_for_target(control: &dyn ControlSource, bind: TargetBind<'_>)
     };
     control.stage_bind(&ksx_api::StagedBindRequest {
         number,
+        expected_device: String::new(),
+        expected_target_revision: String::new(),
         preset: bind.preset.to_owned(),
         function: bind.function.to_owned(),
         keys: bind.keys.to_vec(),

@@ -527,6 +527,8 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         configuration_collection,
         configuration_collection_detail,
         recommendation: recommendation.to_owned(),
+        programming_recovery_required: false,
+        programming_recovery_detail: String::new(),
         interfaces,
         hid_collections: collections.into_iter().map(hid_row).collect(),
     }
@@ -601,6 +603,9 @@ pub fn render(view: &PanelStatusView) -> String {
             panel.configuration_collection_detail
         );
         let _ = writeln!(out, "  next        : {}", panel.recommendation);
+        if panel.programming_recovery_required {
+            let _ = writeln!(out, "  RECOVERY    : {}", panel.programming_recovery_detail);
+        }
         let _ = writeln!(out, "  interfaces  :");
         for interface in &panel.interfaces {
             let _ = writeln!(
@@ -664,12 +669,23 @@ fn stamp_utc() -> String {
     String::new()
 }
 
+/// Runtime passive status, including the machine-scoped transaction journal
+/// for each exact physical board. [`view`] stays pure for injected inventory
+/// tests; every shipping caller uses this collector so CLI and Studio cannot
+/// disagree about whether routes must remain suspended.
+#[cfg(windows)]
+pub fn status(spec: &PanelStatusSpec) -> Result<PanelStatusView, Refusal> {
+    let report = devices::collect();
+    let hid = ksx_platform::hid::survey();
+    let mut status = view(&report, &hid, spec)?;
+    crate::panel_programming::decorate_recovery_status(&report, &mut status.panels);
+    Ok(status)
+}
+
 /// Collect and print one passive status report.
 #[cfg(windows)]
 pub fn run(device: Option<String>, json: bool) -> anyhow::Result<()> {
-    let report = devices::collect();
-    let hid = ksx_platform::hid::survey();
-    let status = view(&report, &hid, &PanelStatusSpec { device })?;
+    let status = status(&PanelStatusSpec { device })?;
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {

@@ -51,7 +51,7 @@ async function poll(
 ): Promise<void> {
   // A hidden tab does not need fresh paint; visibilitychange below polls
   // the moment it returns.
-  if (document.hidden) return;
+  if (document.hidden && origin === "background") return;
   // The poller echoes the page's own selection, so the payload it copies is
   // the one this URL's SSR would paint (the workspace's rule). Rescan asks
   // with fresh=1, which drops the server's machine-read cache first — a
@@ -74,13 +74,16 @@ async function poll(
       // A higher-priority mutation may supersede the read, but it inherits
       // the cache invalidation already promised by Rescan. Equal/lower work
       // can simply share the active fresh request.
-      if (priority <= activePoll.priority) return;
+      // A mutation refresh is also the concurrency hand-off for a chained
+      // mapping action: it must observe the post-write target revision, not
+      // merely share a request that began before the write committed.
+      if (priority <= activePoll.priority && origin !== "mutation") return;
       requestFresh = true;
     } else if (fresh) {
       // Rescan is never discarded behind an ordinary mutation refresh. Give
       // the replacement the stronger priority as well as fresh=1.
       priority = Math.max(priority, activePoll.priority);
-    } else if (activePoll.priority > priority) {
+    } else if (activePoll.priority > priority && origin !== "mutation") {
       return;
     }
   }
@@ -222,7 +225,7 @@ activateIslands({
     if (seed) applyNocturne(seed);
     nocturneWire(el);
     wireForms(el);
-    setNocturnePoll(() => void poll(false, "mutation"));
+    setNocturnePoll(() => poll(false, "mutation"));
     nocturneLiveConnect();
     window.setInterval(() => void poll(), POLL_MS);
     document.addEventListener("visibilitychange", () => {

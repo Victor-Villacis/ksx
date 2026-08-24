@@ -141,6 +141,12 @@ struct AppState {
     /// `Arc`, not `Box`, because every SSE connection hands a handle to its own
     /// blocking bridge thread.
     live: Arc<dyn ksx_api::LiveSource>,
+    /// Process-local ordering fence for browser-declared physical encoder
+    /// mutations. The browser's Web Locks cannot survive a tab crash, while a
+    /// queued `spawn_blocking` task can; this fence makes recovery reads and
+    /// those already-admitted tasks agree on one epoch order before either
+    /// reaches the machine provider.
+    panel_hardware_fence: Arc<nocturne::PanelHardwareFence>,
     /// The last REMOVED controller, held SERVER-side for the rack's short
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
@@ -321,6 +327,7 @@ pub fn serve(
         control,
         machine,
         live,
+        panel_hardware_fence: Arc::new(nocturne::PanelHardwareFence::new()),
         nocturne_undo: std::sync::Mutex::new(None),
         machine_cache: MachineCache::new(),
     });

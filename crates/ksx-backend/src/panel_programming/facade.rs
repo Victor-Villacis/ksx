@@ -15,10 +15,11 @@ use std::time::Duration;
 
 use ksx_api::{
     PanelBackupRow, PanelBackupsView, PanelByteDiffRow, PanelChartView, PanelDriverCapabilities,
-    PanelKeyOption, PanelKeyValue, PanelProgramOutcome, PanelProgramPlanView, PanelShiftState,
-    PanelStatusRow, PanelTerminalDiffRow, PanelTerminalRow, Refusal,
+    PanelKeyOption, PanelKeyValue, PanelProgramOutcome, PanelProgramPlanView,
+    PanelRoutingAuthoritySpec, PanelRoutingGuard, PanelShiftState, PanelStatusRow,
+    PanelTerminalDiffRow, PanelTerminalRow, Refusal,
 };
-use ksx_core::Key;
+use ksx_core::{DeviceSelector, Key, Match};
 use ksx_platform::hid_report::{
     HidReportDevice, HidReportError, HidReportIdentity, HID_REPORT_BYTES,
 };
@@ -44,11 +45,25 @@ struct SelectedPanel {
     board_id: String,
     name: String,
     device_path: String,
+    input_instance: String,
+    staged_selector_names_input: bool,
     identity: BoardIdentity,
     profile: &'static PanelProtocolProfile,
 }
 
 struct HidIo(HidReportDevice);
+
+/// Routing owns both exclusion layers until the daemon has committed its
+/// staged binding. Fields drop in declaration order: close the exclusive
+/// MI_02 configuration handle first, then release the machine-wide lease, so
+/// another process can never acquire the lease while this transaction still
+/// owns the live collection.
+struct LivePanelRoutingGuard {
+    _configuration_handle: HidIo,
+    _programming_lease: PanelProgrammingLease,
+}
+
+impl PanelRoutingGuard for LivePanelRoutingGuard {}
 
 impl PanelReportIo for HidIo {
     fn send_report(&mut self, report: &[u8]) -> Result<(), ReportIoError> {
@@ -78,7 +93,20 @@ fn report_transport_error(error: HidReportError) -> ReportIoError {
 
 fn acquire_programming_lease(config_dir: &Path) -> Result<PanelProgrammingLease, Refusal> {
     let recovery_root = panel_recovery_root(config_dir)?;
-    PanelProgrammingLease::acquire(&recovery_root).map_err(|error| {
+    // The non-Windows lease is a filesystem sentinel. Keep it beside, never
+    // beneath, the recovery tree: a passive status read must not call
+    // `create_dir_all` through a substituted `panel-backups` symlink before
+    // the shared path-integrity walk has had a chance to reject that tree.
+    #[cfg(windows)]
+    let lease_root = recovery_root.as_path();
+    #[cfg(not(windows))]
+    let lease_root = recovery_root.parent().ok_or_else(|| {
+        refused(
+            "KSX cannot resolve a safe parent for the panel programming lease; nothing was changed",
+            "restore the installed configuration directory, then retry",
+        )
+    })?;
+    PanelProgrammingLease::acquire(lease_root).map_err(|error| {
         refused(
             format!(
                 "another KSX panel operation or Play start owns the hardware lease ({error}); nothing was changed"
@@ -156,9 +184,24 @@ fn require_no_pending_panel_transactions(config_dir: &Path) -> Result<(), Refusa
 }
 
 fn require_no_pending_panel_transactions_at(backup_root: &Path) -> Result<(), Refusal> {
+    let pending_paths = pending_panel_transaction_paths_at(backup_root)?;
+    let Some(pending_path) = pending_paths.first() else {
+        return Ok(());
+    };
+    Err(pending_play_start_refusal(
+        pending_path,
+        pending_paths.len(),
+    ))
+}
+
+/// Inventory durable transaction markers while proving that every path level
+/// which can redirect the recovery decision is an ordinary filesystem object.
+/// Passive status and Play/start share this walk so neither surface can call a
+/// substituted recovery tree "settled" while the other refuses it.
+fn pending_panel_transaction_paths_at(backup_root: &Path) -> Result<Vec<PathBuf>, Refusal> {
     let backup_metadata = match std::fs::symlink_metadata(backup_root) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(panel_recovery_store_refusal(backup_root, &error)),
     };
     require_plain_recovery_directory(backup_root, &backup_metadata, "panel backup root")?;
@@ -200,13 +243,7 @@ fn require_no_pending_panel_transactions_at(backup_root: &Path) -> Result<(), Re
     }
 
     pending_paths.sort();
-    let Some(pending_path) = pending_paths.first() else {
-        return Ok(());
-    };
-    Err(pending_play_start_refusal(
-        pending_path,
-        pending_paths.len(),
-    ))
+    Ok(pending_paths)
 }
 
 fn require_plain_recovery_directory(
@@ -1364,6 +1401,168 @@ fn fingerprint(
     format!("IPAC4-{}", &digest[..24])
 }
 
+fn board_identity_from_status(
+    report: &crate::devices::DevicesReport,
+    panel: &PanelStatusRow,
+) -> Result<BoardIdentity, Refusal> {
+    let topologies = report
+        .usb
+        .iter()
+        .filter(|row| {
+            row.candidate
+                .parent_id
+                .eq_ignore_ascii_case(&panel.board_id)
+        })
+        .map(|row| {
+            format!(
+                "bus:{};ports:{}",
+                row.candidate.bus_id,
+                row.candidate
+                    .port_chain
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if topologies.len() != 1
+        || topologies
+            .first()
+            .is_some_and(|topology| topology.starts_with("bus:;") || topology.ends_with("ports:"))
+    {
+        return Err(refused(
+            "KSX could not prove one physical bus/port path for the selected encoder; nothing was sent",
+            "reconnect the encoder directly, refresh panel status, and retry only after one stable port path is reported",
+        ));
+    }
+    let physical_topology = topologies.first().expect("one checked topology");
+    Ok(BoardIdentity {
+        driver: IPAC4_DRIVER.to_owned(),
+        vid: panel.vendor_id,
+        pid: panel.product_id,
+        bcd_device: panel.bcd_device,
+        serial: panel.serial.clone(),
+        fingerprint: fingerprint(
+            &panel.board_id,
+            physical_topology,
+            panel.vendor_id,
+            panel.product_id,
+            panel.bcd_device,
+            panel.serial.as_deref(),
+        ),
+    })
+}
+
+fn recovery_detail_for_identity(
+    store: &mut BackupStore,
+    identity: &BoardIdentity,
+) -> Result<Option<String>, Refusal> {
+    let journal = PanelTransactionJournal::new(store, identity);
+    let pending = journal
+        .load_pending(store, identity)
+        .map_err(backup_error)?;
+    Ok(pending.map(|pending| {
+        format!(
+            "Persistent {} transaction {} is unresolved for this exact encoder. Routes stay suspended until a complete stable chart is read and backed up or its verified safety backup is restored.",
+            pending.current.operation, pending.current.transaction_id,
+        )
+    }))
+}
+
+/// Add machine-scoped recovery authority to passive status without opening a
+/// HID report handle. Each row is joined to its own bus/port fingerprint, so
+/// an interrupted transaction for detached board A cannot lock selected board
+/// B merely because both share a VID/PID.
+pub(crate) fn decorate_recovery_status(
+    report: &crate::devices::DevicesReport,
+    panels: &mut [PanelStatusRow],
+) {
+    let root = match config_root() {
+        Ok(root) => root,
+        Err(refusal) => {
+            mark_recovery_status_unknown(panels, &refusal.message);
+            return;
+        }
+    };
+    let recovery_root = match panel_recovery_root(root.dir()) {
+        Ok(recovery_root) => recovery_root,
+        Err(refusal) => {
+            mark_recovery_status_unknown(panels, &refusal.message);
+            return;
+        }
+    };
+    decorate_recovery_status_guarded_at(root.dir(), &recovery_root, report, panels);
+}
+
+fn mark_recovery_status_unknown(panels: &mut [PanelStatusRow], detail: &str) {
+    for panel in panels {
+        if admitted_programming_profile(panel, PanelProfileAccess::ReadChart).is_ok() {
+            panel.programming_recovery_required = true;
+            panel.programming_recovery_detail =
+                format!("KSX cannot prove this encoder's recovery journal is settled: {detail}");
+        }
+    }
+}
+
+/// Hold the same nonblocking machine lease as Play/start and programming while
+/// taking the durable journal snapshot. Without this exclusion a second
+/// process could acquire the writer lease after status saw no marker but
+/// before that writer committed its pre-packet journal.
+fn decorate_recovery_status_guarded_at(
+    config_dir: &Path,
+    recovery_root: &Path,
+    report: &crate::devices::DevicesReport,
+    panels: &mut [PanelStatusRow],
+) {
+    let _lease = match acquire_programming_lease(config_dir) {
+        Ok(lease) => lease,
+        Err(refusal) => {
+            mark_recovery_status_unknown(panels, &refusal.message);
+            return;
+        }
+    };
+    if let Err(refusal) = pending_panel_transaction_paths_at(recovery_root) {
+        mark_recovery_status_unknown(panels, &refusal.message);
+        return;
+    }
+    decorate_recovery_status_at(recovery_root, report, panels);
+}
+
+fn decorate_recovery_status_at(
+    recovery_root: &Path,
+    report: &crate::devices::DevicesReport,
+    panels: &mut [PanelStatusRow],
+) {
+    let mut store = BackupStore::new(recovery_root);
+    for panel in panels {
+        if admitted_programming_profile(panel, PanelProfileAccess::ReadChart).is_err() {
+            continue;
+        }
+        match board_identity_from_status(report, panel)
+            .and_then(|identity| recovery_detail_for_identity(&mut store, &identity))
+        {
+            Ok(Some(detail)) => {
+                panel.programming_recovery_required = true;
+                panel.programming_recovery_detail = detail;
+            }
+            Ok(None) => {
+                panel.programming_recovery_required = false;
+                panel.programming_recovery_detail.clear();
+            }
+            Err(refusal) => {
+                // An unreadable exact-board journal is not evidence that the
+                // board is settled. Fail closed, but preserve passive status.
+                panel.programming_recovery_required = true;
+                panel.programming_recovery_detail = format!(
+                    "KSX cannot prove this encoder's recovery journal is settled: {}",
+                    refusal.message
+                );
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PanelProfileAccess {
     ReadChart,
@@ -1419,6 +1618,46 @@ fn admitted_programming_profile(
     Ok(profile)
 }
 
+/// Prove that a staged device selector names the exact live keyboard input,
+/// not merely another interface which happens to share its physical board.
+///
+/// Panel inventory intentionally groups MI_00 and MI_02 for presentation and
+/// maintenance. Routing cannot use that broader relation: the staged daemon
+/// source must resolve uniquely, through the normal selector engine, to the
+/// same MI_00 boot-keyboard devnode which supplied the browser-observed key.
+fn staged_selector_names_exact_input(
+    report: &crate::devices::DevicesReport,
+    selector: &str,
+    expected_input_instance: &str,
+) -> bool {
+    let Ok(selector) = DeviceSelector::parse(selector) else {
+        return false;
+    };
+    let facts = report
+        .usb
+        .iter()
+        .map(|row| row.candidate.facts())
+        .collect::<Vec<_>>();
+    let Match::One(resolved) = selector.match_against(&facts) else {
+        return false;
+    };
+    if !resolved
+        .id
+        .as_str()
+        .eq_ignore_ascii_case(expected_input_instance)
+    {
+        return false;
+    }
+    report.usb.iter().any(|row| {
+        row.candidate
+            .id
+            .as_str()
+            .eq_ignore_ascii_case(expected_input_instance)
+            && row.candidate.interface_number == 0
+            && row.candidate.is_boot_keyboard()
+    })
+}
+
 #[cfg(windows)]
 fn select_panel(
     device: Option<String>,
@@ -1454,6 +1693,18 @@ fn select_panel(
             "restore keyboard mode with the documented hardware gesture, refresh panel status, then retry",
         ));
     }
+    let input_instances = panel
+        .interfaces
+        .iter()
+        .filter(|interface| interface.boot_keyboard && interface.interface_number == 0)
+        .map(|interface| interface.instance_id.clone())
+        .collect::<Vec<_>>();
+    let [input_instance] = input_instances.as_slice() else {
+        return Err(refused(
+            "the selected encoder did not expose one exact MI_00 keyboard input interface; nothing was sent",
+            "refresh panel status and resolve the input-interface warning before retrying",
+        ));
+    };
     let collection_id = panel.configuration_collection.as_deref().ok_or_else(|| {
         refused(
             format!(
@@ -1520,59 +1771,17 @@ fn select_panel(
             "run `ksx panel status --device` and resolve every collection warning before retrying",
         ));
     }
-    let board_fingerprint = fingerprint(
-        &panel.board_id,
-        &{
-            let topologies = report
-                .usb
-                .iter()
-                .filter(|row| {
-                    row.candidate
-                        .parent_id
-                        .eq_ignore_ascii_case(&panel.board_id)
-                })
-                .map(|row| {
-                    format!(
-                        "bus:{};ports:{}",
-                        row.candidate.bus_id,
-                        row.candidate
-                            .port_chain
-                            .iter()
-                            .map(u8::to_string)
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    )
-                })
-                .collect::<BTreeSet<_>>();
-            if topologies.len() != 1
-                || topologies.first().is_some_and(|topology| {
-                    topology.starts_with("bus:;") || topology.ends_with("ports:")
-                })
-            {
-                return Err(refused(
-                    "KSX could not prove one physical bus/port path for the selected encoder; nothing was sent",
-                    "reconnect the encoder directly, refresh panel status, and retry only after one stable port path is reported",
-                ));
-            }
-            topologies.first().expect("one checked topology").clone()
-        },
-        panel.vendor_id,
-        panel.product_id,
-        panel.bcd_device,
-        panel.serial.as_deref(),
-    );
+    let identity = board_identity_from_status(&report, &panel)?;
+    let staged_selector_names_input = device.as_deref().is_some_and(|selector| {
+        staged_selector_names_exact_input(&report, selector, input_instance)
+    });
     Ok(SelectedPanel {
         board_id: panel.board_id,
         name: panel.name,
         device_path: collection.device_path.clone(),
-        identity: BoardIdentity {
-            driver: IPAC4_DRIVER.to_owned(),
-            vid: panel.vendor_id,
-            pid: panel.product_id,
-            bcd_device: panel.bcd_device,
-            serial: panel.serial,
-            fingerprint: board_fingerprint,
-        },
+        input_instance: input_instance.clone(),
+        staged_selector_names_input,
+        identity,
         profile,
     })
 }
@@ -1611,14 +1820,23 @@ fn open_panel(selected: &SelectedPanel) -> Result<HidIo, Refusal> {
 /// Closing and reopening is intentional: one lucky packet sequence is not
 /// enough authority for a persistent EEPROM write or restore plan.
 fn read_stable_panel_image(selected: &SelectedPanel) -> Result<RawPanelImage, Refusal> {
+    read_stable_panel_image_with_final_handle(selected).map(|(image, _handle)| image)
+}
+
+/// The routing variant retains the second independently opened MI_02 handle.
+/// Its exclusive share mode is the final hardware-side fence: another tool
+/// cannot rewrite the chart after validation and before the daemon commits the
+/// staged route. The caller must keep the returned handle alive for that
+/// entire interval.
+fn read_stable_panel_image_with_final_handle(
+    selected: &SelectedPanel,
+) -> Result<(RawPanelImage, HidIo), Refusal> {
     let first = {
         let mut io = open_panel(selected)?;
         read_ipac4_image(&mut io).map_err(programming_error)?
     };
-    let second = {
-        let mut io = open_panel(selected)?;
-        read_ipac4_image(&mut io).map_err(programming_error)?
-    };
+    let mut final_handle = open_panel(selected)?;
+    let second = read_ipac4_image(&mut final_handle).map_err(programming_error)?;
     if first.len() != IPAC4_IMAGE_BYTES || second.len() != IPAC4_IMAGE_BYTES {
         return Err(refused(
             format!(
@@ -1633,7 +1851,7 @@ fn read_stable_panel_image(selected: &SelectedPanel) -> Result<RawPanelImage, Re
             "close WinIPAC, stop Play, leave the encoder connected, and read the chart again",
         ));
     }
-    Ok(second)
+    Ok((second, final_handle))
 }
 
 fn key_for_usage(usage: KeyboardUsage) -> Option<Key> {
@@ -2229,6 +2447,141 @@ fn recovery_outcome(
             "do not retry or disconnect the encoder; preserve the panel-backups folder and inspect the board with a supervised recovery procedure",
         )),
     })
+}
+
+/// Establish one routing transaction against the exact chart that emitted a
+/// browser-observed key. The returned opaque guard owns the same machine-wide
+/// lease as programming and restore; callers must retain it until their
+/// staged binding commit has completed.
+pub fn routing_guard(
+    spec: &PanelRoutingAuthoritySpec,
+) -> Result<Box<dyn PanelRoutingGuard>, Refusal> {
+    let expected_selector = spec
+        .expected_selector
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            bad_request(
+                "this programmable encoder binding has no exact board selector; nothing was mapped",
+                "read the complete encoder chart, then teach or assign the key again",
+            )
+        })?;
+    if !expected_selector.eq_ignore_ascii_case(spec.device.trim()) {
+        return Err(bad_request(
+            "the encoder selected by the browser is no longer the staged input; nothing was mapped",
+            "refresh the canvas, read the selected encoder's complete chart, then try again",
+        ));
+    }
+    let expected_instance = spec
+        .expected_instance
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            bad_request(
+                "this programmable encoder binding has no exact keyboard interface; nothing was mapped",
+                "refresh the selected encoder, read its complete chart, then try again",
+            )
+        })?;
+    let expected_fingerprint = spec
+        .expected_board_fingerprint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            bad_request(
+                "this programmable encoder binding has no board fingerprint; nothing was mapped",
+                "read the complete encoder chart, then teach or assign the key again",
+            )
+        })?;
+    let expected_chart = spec
+        .expected_chart_sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            bad_request(
+                "this programmable encoder binding has no complete-chart identity; nothing was mapped",
+                "read the complete encoder chart, then teach or assign the key again",
+            )
+        })?;
+    validate_sha256(expected_chart, "expected_chart_sha256")?;
+
+    let root = config_root()?;
+    let lease = acquire_programming_lease(root.dir())?;
+    let selected = select_panel(
+        Some(spec.device.trim().to_owned()),
+        PanelProfileAccess::ReadChart,
+    )?;
+    if !selected.staged_selector_names_input {
+        return Err(bad_request(
+            "the staged device selector does not uniquely name this encoder's MI_00 keyboard input; nothing was mapped",
+            "select the encoder's exact keyboard input in Setup, refresh the canvas, then teach the key again",
+        ));
+    }
+    if !selected
+        .input_instance
+        .eq_ignore_ascii_case(expected_instance)
+    {
+        return Err(bad_request(
+            "the encoder keyboard interface changed after this binding was opened; nothing was mapped",
+            "refresh the canvas, read the selected encoder's complete chart, then try again",
+        ));
+    }
+    if !selected
+        .identity
+        .fingerprint
+        .eq_ignore_ascii_case(expected_fingerprint)
+    {
+        return Err(bad_request(
+            "the physical encoder no longer matches the board that supplied this key; nothing was mapped",
+            "read the currently connected encoder's complete chart, then teach the key again",
+        ));
+    }
+
+    let mut store = backup_store(&root)?;
+    let journal = PanelTransactionJournal::new(&store, &selected.identity);
+    if let Some(pending) = journal
+        .load_pending(&mut store, &selected.identity)
+        .map_err(backup_error)?
+    {
+        return Err(pending_transaction_refusal(&pending));
+    }
+    let (current, configuration_handle) = read_stable_panel_image_with_final_handle(&selected)?;
+    check_baseline(&current, expected_chart).map_err(programming_error)?;
+    Ok(Box::new(LivePanelRoutingGuard {
+        _configuration_handle: configuration_handle,
+        _programming_lease: lease,
+    }))
+}
+
+/// Classify the selected staged source from fresh machine inventory. Only an
+/// exact profile with persistent chart-write capability needs chart-bound
+/// routing authority; ordinary keyboards and recognized read-only encoders
+/// retain the legacy bind path.
+pub fn routing_guard_if_needed(
+    spec: &PanelRoutingAuthoritySpec,
+) -> Result<Option<Box<dyn PanelRoutingGuard>>, Refusal> {
+    let report = crate::devices::collect();
+    let hid = ksx_platform::hid::survey();
+    let view = crate::panel::view(
+        &report,
+        &hid,
+        &ksx_api::PanelStatusSpec {
+            device: Some(spec.device.clone()),
+        },
+    )?;
+    let [panel] = view.panels.as_slice() else {
+        return Err(refused(
+            "KSX could not resolve the staged input to one physical board; nothing was mapped",
+            "reconnect the selected input, refresh the canvas, then try again",
+        ));
+    };
+    if !panel.capabilities.can_write_chart || !panel.capabilities.write_is_persistent {
+        return Ok(None);
+    }
+    routing_guard(spec).map(Some)
 }
 
 pub fn chart(spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
@@ -2990,6 +3343,9 @@ pub fn run_restore_cli(
 
 #[cfg(test)]
 mod tests {
+    use ksx_capture::winusb::Binding;
+    use ksx_core::DeviceId;
+
     use super::*;
 
     static JOURNAL_TEST_SERIAL: std::sync::atomic::AtomicUsize =
@@ -3049,6 +3405,295 @@ mod tests {
             capabilities: crate::panel_catalog::capabilities_for(family, profile),
             ..PanelStatusRow::default()
         }
+    }
+
+    fn status_usb(parent: &str, bus: &str, port: u8) -> crate::devices::UsbRow {
+        crate::devices::UsbRow {
+            candidate: ksx_capture::UsbCandidate {
+                id: DeviceId::new(format!(r"{parent}&MI_00")),
+                parent_id: parent.to_owned(),
+                vendor_id: 0xD209,
+                product_id: 0x0430,
+                bcd_device: IPAC4_BCD_DEVICE,
+                interface_number: 0,
+                interface_class: 3,
+                interface_subclass: 1,
+                interface_protocol: 1,
+                interface_string: None,
+                product: Some("I-PAC 4".to_owned()),
+                serial: Some("4".to_owned()),
+                device_desc: Some("USB Input Device".to_owned()),
+                port_chain: vec![port],
+                bus_id: bus.to_owned(),
+                binding: Binding::HidUsb,
+            },
+            alias: None,
+            selected: false,
+        }
+    }
+
+    fn status_usb_sibling(
+        parent: &str,
+        bus: &str,
+        port: u8,
+        interface_number: u8,
+    ) -> crate::devices::UsbRow {
+        let mut row = status_usb(parent, bus, port);
+        let instance = ksx_core::DeviceFacts::instance_of(parent);
+        row.candidate.id = DeviceId::new(format!(
+            r"USB\VID_D209&PID_0430&MI_{interface_number:02X}\{instance}"
+        ));
+        row.candidate.interface_number = interface_number;
+        if interface_number != 0 {
+            row.candidate.interface_subclass = 0;
+            row.candidate.interface_protocol = 0;
+        }
+        row
+    }
+
+    /// Broken version caught: panel selection grouped MI_00 and MI_02 by
+    /// physical parent, allowing a staged selector for the configuration
+    /// interface to borrow the keyboard interface's routing authority.
+    #[test]
+    fn routing_selector_must_uniquely_name_the_exact_mi00_input() {
+        const BOARD: &str = r"USB\VID_D209&PID_0430\ROUTE_BOARD";
+        let input = status_usb_sibling(BOARD, "1", 4, 0);
+        let configuration = status_usb_sibling(BOARD, "1", 4, 2);
+        let input_id = input.candidate.id.as_str().to_owned();
+        let configuration_id = configuration.candidate.id.as_str().to_owned();
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![input, configuration],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+
+        assert!(staged_selector_names_exact_input(
+            &report,
+            "usb:d209:0430:00",
+            &input_id,
+        ));
+        assert!(staged_selector_names_exact_input(
+            &report, &input_id, &input_id
+        ));
+        assert!(!staged_selector_names_exact_input(
+            &report,
+            "usb:d209:0430:02",
+            &input_id,
+        ));
+        assert!(!staged_selector_names_exact_input(
+            &report,
+            &configuration_id,
+            &input_id,
+        ));
+        assert!(!staged_selector_names_exact_input(
+            &report,
+            "usb:d209:0430:00",
+            &configuration_id,
+        ));
+    }
+
+    #[test]
+    fn routing_selector_refuses_ambiguous_mi00_twins() {
+        const BOARD_A: &str = r"USB\VID_D209&PID_0430\ROUTE_A";
+        const BOARD_B: &str = r"USB\VID_D209&PID_0430\ROUTE_B";
+        let input_a = status_usb_sibling(BOARD_A, "1", 4, 0);
+        let input_a_id = input_a.candidate.id.as_str().to_owned();
+        let input_b = status_usb_sibling(BOARD_B, "1", 5, 0);
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![input_a, input_b],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+
+        assert!(!staged_selector_names_exact_input(
+            &report,
+            "usb:d209:0430:00",
+            &input_a_id,
+        ));
+    }
+
+    #[test]
+    fn passive_status_scopes_durable_recovery_to_the_exact_physical_board() {
+        const BOARD_A: &str = r"USB\VID_D209&PID_0430\BOARD_A";
+        const BOARD_B: &str = r"USB\VID_D209&PID_0430\BOARD_B";
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![status_usb(BOARD_A, "1", 4), status_usb(BOARD_B, "1", 5)],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+        let mut panel_a = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        panel_a.board_id = BOARD_A.to_owned();
+        panel_a.serial = Some("4".to_owned());
+        let mut panel_b = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        panel_b.board_id = BOARD_B.to_owned();
+        panel_b.serial = Some("4".to_owned());
+
+        let dir = JournalTestDir::new();
+        let identity_a = board_identity_from_status(&report, &panel_a).unwrap();
+        let mut store = BackupStore::new(&dir.0);
+        let baseline = image();
+        let backup = store
+            .save_immutable(
+                &identity_a,
+                &baseline,
+                test_stamp(),
+                BackupReason::BeforeProgram,
+            )
+            .unwrap();
+        let journal = PanelTransactionJournal::new(&store, &identity_a);
+        let pending = journal
+            .begin(
+                &identity_a,
+                "program",
+                baseline.sha256(),
+                &"B".repeat(64),
+                &backup,
+                test_stamp(),
+                None,
+                None,
+            )
+            .unwrap();
+
+        let mut panels = vec![panel_a.clone(), panel_b.clone()];
+        decorate_recovery_status_at(&dir.0, &report, &mut panels);
+        assert!(panels[0].programming_recovery_required);
+        assert!(!panels[1].programming_recovery_required);
+        assert!(panels[0]
+            .programming_recovery_detail
+            .contains(&pending.current.transaction_id));
+
+        journal
+            .resolve(&pending, "verified-readback", baseline.sha256())
+            .unwrap();
+        decorate_recovery_status_at(&dir.0, &report, &mut panels);
+        assert!(!panels[0].programming_recovery_required);
+        assert!(!panels[1].programming_recovery_required);
+
+        std::fs::write(journal.pending_path(), b"{ malformed journal").unwrap();
+        decorate_recovery_status_at(&dir.0, &report, &mut panels);
+        assert!(panels[0].programming_recovery_required);
+        assert!(!panels[1].programming_recovery_required);
+        assert!(panels[0]
+            .programming_recovery_detail
+            .contains("cannot prove"));
+    }
+
+    /// Broken version caught: status could observe no marker after a second
+    /// process acquired the writer lease but before that writer committed its
+    /// pre-packet journal, briefly publishing false route authority.
+    #[test]
+    fn passive_status_fails_closed_while_the_machine_lease_is_busy() {
+        const BOARD: &str = r"USB\VID_D209&PID_0430\BUSY_STATUS";
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![status_usb(BOARD, "1", 4)],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+        let mut panel = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        panel.board_id = BOARD.to_owned();
+        panel.serial = Some("4".to_owned());
+        let dir = JournalTestDir::new();
+        let recovery_root = dir.0.join(BACKUP_DIR);
+        let _lease = acquire_programming_lease(&dir.0).expect("first lease");
+
+        decorate_recovery_status_guarded_at(
+            &dir.0,
+            &recovery_root,
+            &report,
+            std::slice::from_mut(&mut panel),
+        );
+
+        assert!(panel.programming_recovery_required);
+        assert!(panel.programming_recovery_detail.contains("hardware lease"));
+    }
+
+    /// Broken version caught: passive status followed or ignored substituted
+    /// recovery path levels while Play/start rejected the same store.
+    #[test]
+    fn passive_status_rejects_a_wrong_kind_recovery_path() {
+        const BOARD: &str = r"USB\VID_D209&PID_0430\WRONG_KIND_STATUS";
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![status_usb(BOARD, "1", 4)],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+        let mut panel = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        panel.board_id = BOARD.to_owned();
+        panel.serial = Some("4".to_owned());
+        let dir = JournalTestDir::new();
+        let recovery_root = dir.0.join(BACKUP_DIR);
+        std::fs::create_dir_all(&recovery_root).unwrap();
+        std::fs::write(recovery_root.join(IPAC4_DRIVER), b"not a directory").unwrap();
+
+        decorate_recovery_status_guarded_at(
+            &dir.0,
+            &recovery_root,
+            &report,
+            std::slice::from_mut(&mut panel),
+        );
+
+        assert!(panel.programming_recovery_required);
+        assert!(panel
+            .programming_recovery_detail
+            .contains("panel driver level"));
+    }
+
+    /// Broken version caught: on Unix the filesystem lease was created below
+    /// `panel-backups`, so even a passive status request followed and wrote
+    /// through a substituted recovery-root symlink before rejecting it.
+    #[test]
+    fn passive_status_never_follows_a_reparse_recovery_root() {
+        const BOARD: &str = r"USB\VID_D209&PID_0430\REPARSE_STATUS";
+        let report = crate::devices::DevicesReport::build(
+            Vec::new(),
+            false,
+            vec![status_usb(BOARD, "1", 4)],
+            true,
+            Vec::new(),
+            true,
+            crate::devices::ConfiguredDevices::default(),
+        );
+        let mut panel = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        panel.board_id = BOARD.to_owned();
+        panel.serial = Some("4".to_owned());
+        let dir = JournalTestDir::new();
+        let target = dir.0.join("redirect-target");
+        std::fs::create_dir_all(&target).unwrap();
+        let recovery_root = dir.0.join(BACKUP_DIR);
+        create_test_directory_link(&recovery_root, &target);
+
+        decorate_recovery_status_guarded_at(
+            &dir.0,
+            &recovery_root,
+            &report,
+            std::slice::from_mut(&mut panel),
+        );
+
+        assert!(panel.programming_recovery_required);
+        assert!(panel
+            .programming_recovery_detail
+            .contains("symlink, junction"));
+        assert!(std::fs::read_dir(&target).unwrap().next().is_none());
     }
 
     #[test]
@@ -3282,6 +3927,8 @@ mod tests {
             board_id: "board".to_owned(),
             name: "I-PAC 4".to_owned(),
             device_path: "secret-device-path".to_owned(),
+            input_instance: "USB\\VID_D209&PID_0430&MI_00\\TEST".to_owned(),
+            staged_selector_names_input: true,
             identity: BoardIdentity {
                 driver: IPAC4_DRIVER.to_owned(),
                 vid: 0xD209,
@@ -3390,6 +4037,8 @@ mod tests {
                 board_id: "board".to_owned(),
                 name: "I-PAC 4".to_owned(),
                 device_path: "test-device-path".to_owned(),
+                input_instance: "USB\\VID_D209&PID_0430&MI_00\\TEST".to_owned(),
+                staged_selector_names_input: true,
                 identity: test_identity(),
                 profile: test_profile(),
             },

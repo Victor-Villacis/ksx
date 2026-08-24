@@ -674,6 +674,13 @@ pub struct PanelStatusRow {
     pub identity: String,
     pub vendor_id: u16,
     pub product_id: u16,
+    /// Stable backend catalog id for a passively recognized encoder family.
+    /// Absence means KSX has only generic USB/HID facts for this board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_id: Option<String>,
+    /// Human name owned by the same exact VID/PID family match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_label: Option<String>,
     /// Raw USB `bcdDevice`; never presented as a parsed firmware version.
     pub bcd_device: u16,
     /// Friendly firmware wording supplied only by an exact, measured protocol
@@ -700,6 +707,10 @@ pub struct PanelStatusRow {
     pub observed_mode_label: String,
     /// False in v1: topology is observed, no vendor mode query is issued.
     pub mode_read_supported: bool,
+    /// Independently proven operations for the exact family/profile match.
+    /// Family recognition alone sets only `can_identify`.
+    #[serde(default)]
+    pub capabilities: PanelDriverCapabilities,
     /// `protocol-unverified` | `unsupported-driver`.
     pub chart_state: String,
     /// Always false in v1. Kept explicit so absence cannot look like an empty
@@ -719,6 +730,21 @@ pub struct PanelStatusRow {
     pub recommendation: String,
     pub interfaces: Vec<PanelInterfaceRow>,
     pub hid_collections: Vec<PanelHidCollectionRow>,
+}
+
+/// Capability declaration for one panel status row.
+///
+/// These booleans are deliberately independent: recognizing a family does
+/// not authorize a report, and a future read-only driver must not accidentally
+/// inherit persistent-write support.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelDriverCapabilities {
+    pub can_identify: bool,
+    pub can_report_mode: bool,
+    pub can_read_chart: bool,
+    pub can_write_chart: bool,
+    pub write_is_persistent: bool,
 }
 
 /// One USB interface descriptor belonging to a physical board.
@@ -1677,9 +1703,10 @@ fn device_health(device: &ConfiguredDevice) -> (String, &'static str) {
 /// This is deliberately not inferred from a display name. A board can expose a
 /// boot-keyboard interface while physically being an arcade encoder, and the
 /// distinction decides which first-run workflow a surface offers. The backend
-/// assigns `panel-encoder` only from a registered exact hardware family; an
-/// unknown HID device remains a keyboard or other device until a driver owns
-/// that classification.
+/// assigns `panel-encoder` only from a catalogued exact hardware family; an
+/// unknown HID device remains a keyboard or other device until KSX has exact
+/// recognition evidence. Family recognition does not imply chart or write
+/// support; [`PanelDriverCapabilities`] carries those separately.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BoardRole {
@@ -3854,17 +3881,51 @@ mod tests {
     }
 
     #[test]
-    fn older_panel_status_rows_leave_profile_derived_firmware_facts_unknown() {
+    fn older_panel_status_rows_leave_catalog_and_profile_facts_unknown() {
         let mut older = serde_json::to_value(PanelStatusRow::default()).unwrap();
         let object = older.as_object_mut().unwrap();
+        object.remove("family_id");
+        object.remove("family_label");
+        object.remove("capabilities");
         object.remove("firmware_label");
         object.remove("firmware_detail");
         object.remove("profile_terminal_count");
 
         let decoded: PanelStatusRow = serde_json::from_value(older).unwrap();
+        assert_eq!(decoded.family_id, None);
+        assert_eq!(decoded.family_label, None);
+        assert_eq!(decoded.capabilities, PanelDriverCapabilities::default());
         assert_eq!(decoded.firmware_label, None);
         assert!(decoded.firmware_detail.is_empty());
         assert_eq!(decoded.profile_terminal_count, None);
+
+        let partial: PanelDriverCapabilities = serde_json::from_value(serde_json::json!({
+            "can_identify": true
+        }))
+        .unwrap();
+        assert!(partial.can_identify);
+        assert!(!partial.can_report_mode);
+        assert!(!partial.can_read_chart);
+        assert!(!partial.can_write_chart);
+        assert!(!partial.write_is_persistent);
+
+        let capabilities = PanelDriverCapabilities {
+            can_identify: true,
+            can_report_mode: false,
+            can_read_chart: true,
+            can_write_chart: false,
+            write_is_persistent: false,
+        };
+        assert_eq!(
+            serde_json::to_value(capabilities).unwrap(),
+            serde_json::json!({
+                "can_identify": true,
+                "can_report_mode": false,
+                "can_read_chart": true,
+                "can_write_chart": false,
+                "write_is_persistent": false
+            })
+        );
     }
 
     #[test]

@@ -313,9 +313,21 @@ function panelStatusPayload({
   targetSelector = PANEL_SELECTOR,
   name = "Ultimarc I-PAC 4X",
   identity = "USB D209:0430 · bcdDevice 0x0056",
+  vendorId = 0xd209,
+  productId = 0x0430,
+  bcdDevice = 0x0056,
   driver = "ultimarc-ipac",
   driverSupported = true,
-  driverLabel = "Ultimarc I-PAC family",
+  driverLabel = driverSupported ? "Ultimarc I-PAC family" : "Unsupported panel protocol",
+  familyId = driverSupported ? "ultimarc-ipac4" : null,
+  familyLabel = familyId ? name : null,
+  capabilities = {
+    can_identify: Boolean(familyId),
+    can_report_mode: false,
+    can_read_chart: driverSupported,
+    can_write_chart: driverSupported,
+    write_is_persistent: driverSupported,
+  },
   firmwareLabel = "1.56",
   firmwareDetail = "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.",
   profileTerminalCount = 56,
@@ -327,8 +339,8 @@ function panelStatusPayload({
   chartAttempted = false,
   chartLabel = "Protocol unverified · Not attempted",
   chartDetail = "Chart read-back protocol is unverified, so no report was sent.",
-  configurationState = "candidate-unverified",
-  configurationDetail = "One passive 5-byte input/output candidate was observed; its protocol is unverified.",
+  configurationState = "available-unopened",
+  configurationDetail = "One exact five-byte configuration collection is available and remains unopened.",
   unavailable = null,
 } = {}) {
   return {
@@ -341,29 +353,32 @@ function panelStatusPayload({
       summary: "One selected panel encoder was inspected.",
       access_detail: "USB descriptors and passive HID collection metadata were readable",
       panels: targetSelector === null ? [] : [{
-        board_id: "USB\\VID_D209&PID_0430\\FIXTURE",
+        board_id: `USB\\VID_${vendorId.toString(16).padStart(4, "0").toUpperCase()}&PID_${productId.toString(16).padStart(4, "0").toUpperCase()}\\FIXTURE`,
         name,
         identity,
-        vendor_id: 0xd209,
-        product_id: 0x0430,
-        bcd_device: 0x0056,
+        vendor_id: vendorId,
+        product_id: productId,
+        family_id: familyId,
+        family_label: familyLabel,
+        bcd_device: bcdDevice,
         firmware_label: firmwareLabel,
         firmware_detail: firmwareDetail,
         profile_terminal_count: profileTerminalCount,
         serial: null,
         driver,
         driver_supported: driverSupported,
-        driver_label: driverSupported ? driverLabel : "Unsupported panel protocol",
+        driver_label: driverLabel,
         observed_mode: mode,
         mode_detail: modeDetail,
         observed_mode_label: modeLabel,
         mode_read_supported: false,
+        capabilities,
         chart_state: chartState,
         chart_attempted: chartAttempted,
         chart_detail: chartDetail,
         chart_label: chartLabel,
         configuration_collection_state: configurationState,
-        configuration_collection: configurationState === "candidate-unverified" ? "HID MI_02" : null,
+        configuration_collection: configurationState === "available-unopened" ? "HID MI_02" : null,
         configuration_collection_detail: configurationDetail,
         recommendation,
         interfaces: [],
@@ -2500,7 +2515,7 @@ describe("the canvas navigation controls", () => {
       assert.match(
         (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent())
           .replace(/\s+/g, " "),
-        /has not read the I-PAC chart yet.*has not proven which physical terminals emit them/i,
+        /has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them/i,
         "the source distinguishes a macro's routed key name from a proven hardware-terminal output",
       );
       await macroSignal.click();
@@ -3576,7 +3591,10 @@ describe("the canvas navigation controls", () => {
         "I-PAC",
         "selecting the encoder renames the source marker without pretending it is a keyboard",
       );
-      assert.match(await encoderMarker.getAttribute("title"), /I-PAC Signals.*Windows key source/i);
+      assert.match(
+        await encoderMarker.getAttribute("title"),
+        /I-PAC(?: 4X?)? Signals.*Windows key source/i,
+      );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();
@@ -5059,11 +5077,11 @@ describe("the canvas navigation controls", () => {
       assert.match(cardCopy, /USB descriptors and passive HID collection metadata were readable/);
       assert.match(cardCopy, /Protocol unverified · Not attempted/);
       assert.match(cardCopy, /no report was sent/);
-      assert.match(cardCopy, /One passive 5-byte input\/output candidate/);
+      assert.match(cardCopy, /One exact five-byte configuration collection is available/);
       assert.match(cardCopy, /Inspection only\. KSX did not program or change this encoder\./);
       assert.equal(await card.locator("form").count(), 0);
       assert.equal(await card.locator("button").count(), 2, "the hardware card offers passive Refresh and explicit Encoder setup");
-      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Set up I-PAC…");
+      assert.equal((await card.locator('[data-nx="surface-encoder-open"]').textContent()).trim(), "Set up hardware…");
       assert.equal(await card.locator('[data-nx*="program"], [data-nx*="write"]').count(), 0);
       const hardwareDetails = card.locator("details.n-surface-hardware-details");
       assert.equal(await hardwareDetails.getAttribute("open"), null);
@@ -5232,7 +5250,7 @@ describe("the canvas navigation controls", () => {
         "the fixture's exact I-PAC is already the daemon-staged hardware authority",
       );
       assert.equal(
-        await encoderLane.getByRole("button", { name: "Set up Ultimarc I-PAC 4" }).count(),
+        await encoderLane.getByRole("button", { name: "Open Ultimarc I-PAC 4" }).count(),
         1,
         "each encoder action names the exact board it will configure",
       );
@@ -5251,10 +5269,10 @@ describe("the canvas navigation controls", () => {
       await encoderLane.locator("button.n-dev").click();
       await page.waitForFunction(() =>
         document.querySelector('.n-widget-kb .n-ipac-signal-source > p')?.textContent
-          ?.includes("Hardware Setup has not read the I-PAC chart yet"));
+          ?.includes("Hardware Setup has not read the I-PAC"));
       assert.match(
         (await page.locator('.n-widget-kb .n-ipac-signal-source > p').textContent()).replace(/\s+/g, " "),
-        /KSX routes currently reference these Windows key names.*has not read the I-PAC chart yet.*has not proven which physical terminals emit them.*terminal → Windows key ownership/i,
+        /KSX routes currently reference these Windows key names.*has not read the I-PAC(?: 4X?)? chart yet.*has not proven which physical terminals emit them.*terminal → Windows key ownership/i,
         "before chart read, mapped names are references rather than proven I-PAC emissions",
       );
 
@@ -5310,11 +5328,11 @@ describe("the canvas navigation controls", () => {
       assert.equal(await setup.locator("[data-surface-template]:visible").count(), 0);
       assert.match(
         (await setup.textContent()).replace(/\s+/g, " "),
-        /I-PAC Hardware Setup.*I-PAC terminal.*Windows key.*KSX mapping.*virtual controller.*game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
+        /I-PAC 4X Hardware Setup.*I-PAC 4X terminal.*Windows key.*KSX mapping.*virtual controller.*game.*Unconfigured I-PAC.*Verify this I-PAC writer.*Test wiring/i,
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["I-PAC", "Windows keys", "KSX", "Controller", "Game"],
+        ["I-PAC 4X", "Windows keys", "KSX", "Controller", "Game"],
         "the workspace teaches the complete physical-terminal-to-game signal chain",
       );
       assert.equal(
@@ -5524,7 +5542,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.match(
         (await setup.locator("[data-panel-route-copy]").textContent()).replace(/\s+/g, " "),
-        /Hardware output is only the source.*connect these Windows keys through KSX to virtual controller controls/i,
+        /Hardware output is only the source.*Build a physical panel view.*continue directly to KSX routing/i,
       );
       const advanced = setup.locator('[data-nx="surface-terminal-advanced"]');
       await advanced.check();
@@ -5743,7 +5761,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.deepEqual(
         await setup.locator("[data-panel-journey-step] strong").allTextContents(),
-        ["I-PAC", "Windows keys", "KSX", "Controller", "Game"],
+        ["I-PAC 4X", "Windows keys", "KSX", "Controller", "Game"],
       );
       assert.match(
         (await setup.locator(".n-surface-programming-modes").textContent()).replace(/\s+/g, " "),
@@ -5835,7 +5853,7 @@ describe("the canvas navigation controls", () => {
       );
       assert.match(
         (await setup.locator("[data-panel-output-test-copy]").textContent()).replace(/\s+/g, " "),
-        /draft is not written.*Test current board.*outputs that are on the I-PAC now/i,
+        /draft is not written.*Test current board.*outputs that are on the I-PAC(?: 4X?)? now/i,
         "a wiring test cannot be mistaken for testing an unwritten draft",
       );
 
@@ -6899,6 +6917,315 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  test("an exact encoder profile stays blocked until its live mode and configuration collection are ready", async () => {
+    let state = "mode";
+    let chartCalls = 0;
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.route("**/api/panel/status", (route) => {
+        const modeBlocked = state === "mode";
+        const collectionBlocked = state === "collection";
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            mode: modeBlocked ? "unknown" : "keyboard-compatible",
+            modeLabel: modeBlocked ? "Keyboard-compatible mode not observed" : "Keyboard-compatible input observed",
+            modeDetail: modeBlocked
+              ? "The required keyboard input interface is not present."
+              : "Keyboard-compatible HID input was observed.",
+            configurationState: collectionBlocked ? "ambiguous" : "available-unopened",
+            configurationDetail: collectionBlocked
+              ? "Two possible configuration collections were observed; neither was selected."
+              : "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", (route) => {
+        chartCalls += 1;
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "a blocked UI must never request the chart" }),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      const surface = page.locator(".n-widget-surface");
+      const card = surface.locator(".n-surface-hardware");
+      const setup = surface.locator('[data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "blocked");
+      assert.equal((await setup.textContent()).trim(), "Resolve hardware first");
+      assert.equal(await setup.isDisabled(), true);
+      assert.match(await setup.getAttribute("title"), /keyboard-compatible input.*configuration collection/i);
+
+      state = "collection";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface [data-surface-hardware-configuration]")
+          ?.textContent?.includes("Two possible configuration collections"));
+      assert.equal(await card.getAttribute("data-state"), "blocked");
+      assert.equal(await setup.isDisabled(), true);
+
+      state = "ready";
+      await card.locator('[data-nx="surface-hardware-refresh"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "ready");
+      assert.equal(await setup.isEnabled(), true);
+      assert.equal((await setup.textContent()).trim(), "Set up hardware…");
+      assert.equal(chartCalls, 0, "status recovery remains passive until the user opens setup");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a recognized encoder without an exact chart profile stays in Build, Teach, and Route", async () => {
+    let chartCalls = 0;
+    const hardwareWrites = [];
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname === "/api/panel/chart") chartCalls += 1;
+        if (request.method() !== "GET" && pathname.startsWith("/api/panel/")) {
+          hardwareWrites.push(pathname);
+        }
+      });
+      await candidate.route("**/api/panel/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelStatusPayload({
+          name: "Ultimarc Mini-PAC",
+          identity: "USB D209:0440 · bcdDevice 0x0056",
+          productId: 0x0440,
+          driver: "unsupported",
+          driverSupported: false,
+          driverLabel: "Ultimarc Mini-PAC recognized; release 0x0056 is not supported for programming",
+          familyId: "ultimarc-minipac",
+          familyLabel: "Ultimarc Mini-PAC",
+          capabilities: {
+            can_identify: true,
+            can_report_mode: false,
+            can_read_chart: false,
+            can_write_chart: false,
+            write_is_persistent: false,
+          },
+          firmwareLabel: null,
+          profileTerminalCount: null,
+          chartState: "unsupported-release",
+          chartLabel: "Chart not read — this encoder release is not profiled",
+          chartDetail: "KSX recognized the encoder family but did not select a report protocol.",
+          configurationState: "unsupported-release",
+          configurationDetail: "No configuration collection was selected.",
+          recommendation: "Keep using Teach and Route while a separately measured profile is developed.",
+        })),
+      }));
+    });
+
+    try {
+      const encoderLane = page.locator(".n-encoder-form").filter({ hasText: "Ultimarc I-PAC 4" });
+      await encoderLane.locator('[data-nx="encoder-select-setup"]').click();
+      const surface = page.locator(".n-widget-surface");
+      await surface.waitFor({ state: "visible" });
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "recognized");
+
+      assert.equal(await surface.getAttribute("data-entry"), "builder");
+      assert.equal(await surface.locator(".n-surface-programming:visible").count(), 0,
+        "recognition alone never opens the chart editor");
+      assert.equal(chartCalls, 0, "recognition never probes a configuration report");
+      const setup = surface.locator('[data-nx="surface-encoder-open"]');
+      assert.equal((await setup.textContent()).trim(), "Recognition only");
+      assert.equal(await setup.isDisabled(), true);
+      assert.match(
+        (await surface.locator(".n-surface-hardware").textContent()).replace(/\s+/g, " "),
+        /Ultimarc Mini-PAC.*recognized.*not supported for programming.*Teach and Route/i,
+      );
+      assert.equal(await surface.locator(".n-surface-stages").isVisible(), true);
+      assert.equal(await surface.locator(".n-surface-starters").isVisible(), true);
+      await surface.locator('[data-surface-template="arcade-stick"]').click();
+      assert.equal(await surface.locator(".n-surface-control").count(), 11,
+        "a recognition-only encoder still gets the complete physical-panel workflow");
+      assert.deepEqual(hardwareWrites, [], "no chart read or persistent operation was attempted");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a readable encoder chart generates an honest physical panel before Teach owns its routes", async () => {
+    const writes = [];
+    let physicalGeneration = 1200;
+    let physicalHitReady = false;
+    let physicalDevice = "";
+    const page = await openCanvas({}, async (candidate) => {
+      candidate.on("request", (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (request.method() !== "GET" &&
+            (pathname.includes("/bind") || pathname.includes("/program/apply") ||
+              pathname.includes("/restore/apply"))) writes.push(pathname);
+      });
+      await candidate.route("**/api/learn/start", (route) => {
+        physicalGeneration += 1;
+        physicalHitReady = false;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation: physicalGeneration,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await candidate.route("**/api/learn", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          state: physicalHitReady ? "hit" : "listening",
+          generation: physicalGeneration,
+          remaining_ms: physicalHitReady ? null : 10_000,
+          device: physicalHitReady ? physicalDevice : null,
+          key: physicalHitReady ? "W" : null,
+          error: null,
+        }),
+      }));
+      await candidate.route("**/api/panel/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(panelStatusPayload({
+          driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+          chartState: "not-read",
+          chartLabel: "Chart not read — explicit action required",
+          configurationState: "available-unopened",
+          configurationDetail: "The exact configuration collection is ready for a guarded read.",
+        })),
+      }));
+      await candidate.route("**/api/panel/chart", (route) => {
+        const payload = panelChartPayload();
+        const keyValue = (key, code) => ({ code, key, label: key, supported: true });
+        const empty = { code: 0, key: null, label: "Unassigned", supported: true };
+        const terminal = (id, label, player, kind, key, code) => ({
+          terminal_id: id,
+          terminal_label: `Player ${player} · ${label}`,
+          player,
+          kind,
+          normal: keyValue(key, code),
+          shifted: empty,
+          shift_state: "disabled",
+          is_shift: false,
+        });
+        payload.view.terminals = [
+          terminal("1up", "Up", 1, "direction", "W", 26),
+          terminal("1right", "Right", 1, "direction", "D", 7),
+          terminal("1down", "Down", 1, "direction", "S", 22),
+          terminal("1left", "Left", 1, "direction", "A", 4),
+          terminal("1sw1", "Button 1", 1, "button", "J", 13),
+          terminal("1sw2", "Left flipper", 1, "button", "K", 14),
+          terminal("1start", "Start", 1, "start", "1", 30),
+          terminal("2up", "Up", 2, "direction", "ArrowUp", 82),
+          terminal("2right", "Right", 2, "direction", "ArrowRight", 79),
+          terminal("2down", "Down", 2, "direction", "ArrowDown", 81),
+          terminal("2left", "Left", 2, "direction", "ArrowLeft", 80),
+          terminal("2sw1", "Button 1", 2, "button", "Numpad1", 89),
+        ];
+        payload.view.recommended_terminals = payload.view.terminals;
+        payload.view.key_options = payload.view.terminals.map((row) => ({
+          key: row.normal.key,
+          label: row.normal.label,
+          code: row.normal.code,
+          safe_for_qualification: false,
+        }));
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(payload),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      const surface = page.locator(".n-widget-surface");
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")
+          ?.getAttribute("data-state") === "ready");
+      await surface.locator('[data-nx="surface-encoder-open"]').click();
+      await page.waitForFunction(() =>
+        document.querySelector('.n-widget-surface[data-entry="encoder-setup"] .n-surface-programming')
+          ?.getAttribute("data-qualification") === "qualified");
+      const buildPanel = surface.locator('[data-nx="surface-encoder-build-panel"]');
+      assert.equal(await buildPanel.isEnabled(), true);
+      await buildPanel.click();
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-deck")
+          ?.getAttribute("data-template") === "encoder-current");
+
+      assert.equal(await surface.locator('.n-surface-deck').getAttribute("data-panel-layout"), "four-player");
+      assert.equal(await surface.locator('.n-surface-deck').getAttribute("data-stage"), "teach");
+      assert.equal(await surface.locator('.n-surface-control').count(), 6,
+        "four direction terminals per player collapse into one physical stick");
+      assert.equal(await surface.locator('.n-surface-control.kind-joystick').count(), 2);
+      assert.equal(await surface.locator('.n-surface-control.expected').count(), 6);
+      assert.equal(await surface.locator('.n-surface-control.taught').count(), 0);
+      assert.match(
+        (await surface.locator('.n-surface-control').allTextContents()).join(" "),
+        /1SW1\s*→\s*J/i,
+        "a physical action shows the board terminal and configured Windows key",
+      );
+      assert.equal(await surface.locator('.n-surface-channel-anchor').count(), 12);
+      assert.equal(await surface.locator('.n-surface-channel-anchor[data-key]').count(), 0,
+        "configured expectations do not impersonate a Teach-observed Windows signal");
+      physicalDevice = await page.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance ?? "");
+      assert.ok(physicalDevice, "Teach remains pinned to the exact selected Windows device");
+      const firstStick = surface.locator('.n-surface-control.kind-joystick').first();
+      await firstStick.click();
+      await surface.locator('[data-nx="surface-teach"]').evaluate((button) => button.click());
+      await page.waitForFunction(() => document.querySelector(".n-learnbar")?.classList.contains("listen"));
+      physicalHitReady = true;
+      await page.waitForFunction(() => document.querySelector(
+        '.n-widget-surface .n-surface-control.kind-joystick .n-surface-channel-anchor[data-key="W"]',
+      ));
+      assert.equal(await firstStick.evaluate((element) => element.classList.contains("taught")), false,
+        "one observed direction never claims that the whole four-channel stick is taught");
+      assert.equal(await firstStick.evaluate((element) => element.classList.contains("partially-taught")), true);
+      assert.match(
+        (await firstStick.locator(".n-surface-control-signal").textContent()).replace(/\s+/g, " "),
+        /Up:\s*W ✓.*Right:\s*D \?.*Down:\s*S \?.*Left:\s*A \?/i,
+        "the taught direction and every still-unverified configured direction stay visible",
+      );
+      const stored = await page.evaluate(() => {
+        const value = JSON.parse(localStorage.getItem("ksx-nocturne-control-surfaces1") ?? "null");
+        const device = Object.values(value?.devices ?? {})[0];
+        return device?.controls.flatMap((control) => control.channels.map((channel) => ({
+          input: channel.input.kind,
+          expected: channel.encoder?.expectedKey ?? "",
+          verification: channel.encoder?.verification ?? "",
+        }))) ?? [];
+      });
+      assert.equal(stored.length, 12);
+      assert.equal(stored.filter((channel) => channel.input === "keyboard").length, 1);
+      assert.equal(stored.filter((channel) => channel.verification === "matched").length, 1);
+      assert.ok(stored.every((channel) => channel.expected));
+      assert.deepEqual(writes, []);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   test("Control Surface starters create physical hardware without writing mappings", async () => {
     const page = await openCanvas();
     const writes = [];
@@ -6946,7 +7273,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(await page.locator(".n-widget-surface").count(), 1);
       assert.equal(
         await page.locator(".n-widget-surface [data-surface-template]").count(),
-        6,
+        7,
         "the starter gallery offers blank, hardware, and mapping-derived entries",
       );
       assert.equal(

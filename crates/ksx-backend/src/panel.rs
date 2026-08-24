@@ -16,51 +16,9 @@ use ksx_core::{DeviceSelector, Match};
 use ksx_platform::hid::{HidCollection, HidSurvey};
 
 use crate::devices::{self, DevicesReport, UsbRow};
-use crate::panel_programming::{IPAC4_BCD_DEVICE, IPAC4_TERMINAL_COUNT};
+use crate::panel_catalog::{capabilities_for, family_for, profile_for};
 
 const INSPECTION_NOTE: &str = "Read-only metadata inspection: HID handles used desired access 0; no input, output, or feature report was requested or sent.";
-
-#[derive(Clone, Copy)]
-struct PanelDriver {
-    id: &'static str,
-    label: &'static str,
-    /// These are catalogued facts for this exact measured profile, never a
-    /// generic interpretation of the USB release number.
-    firmware_label: &'static str,
-    firmware_detail: &'static str,
-    terminal_count: usize,
-}
-
-/// Does this exact VID/PID identify a physical panel-encoder family for which
-/// KSX has a registered chart driver?
-///
-/// The release-specific admission remains in [`driver_for`]. This family
-/// verdict exists for device-picking UX: an unmeasured I-PAC release is still
-/// an arcade encoder rather than an ordinary keyboard, while status/programming
-/// correctly refuses to borrow the measured release's protocol.
-pub(crate) const fn is_registered_panel_encoder_family(vendor_id: u16, product_id: u16) -> bool {
-    matches!((vendor_id, product_id), (0xD209, 0x0430))
-}
-
-/// Protocol drivers are intentionally separate from `ksx_core::vendors`, which
-/// is display-only. Registering a board here means KSX has a guarded chart
-/// driver; passive status still sends no protocol report and never implies a
-/// chart read.
-fn driver_for(vendor_id: u16, product_id: u16, bcd_device: u16) -> Option<PanelDriver> {
-    match (
-        is_registered_panel_encoder_family(vendor_id, product_id),
-        bcd_device,
-    ) {
-        (true, IPAC4_BCD_DEVICE) => Some(PanelDriver {
-            id: "ultimarc-ipac",
-            label: "Ultimarc I-PAC 4 lossless chart driver",
-            firmware_label: "1.56",
-            firmware_detail: "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.",
-            terminal_count: IPAC4_TERMINAL_COUNT,
-        }),
-        _ => None,
-    }
-}
 
 struct BoardGroup<'a> {
     board_id: String,
@@ -336,8 +294,9 @@ fn unknown_refusal(query: &str, groups: &[BoardGroup<'_>]) -> Refusal {
 
 fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
     let first = &group.interfaces[0].candidate;
-    let driver = driver_for(first.vendor_id, first.product_id, first.bcd_device);
-    let recognized_ipac4_family = first.vendor_id == 0xD209 && first.product_id == 0x0430;
+    let family = family_for(first.vendor_id, first.product_id);
+    let profile = profile_for(first.vendor_id, first.product_id, first.bcd_device);
+    let capabilities = capabilities_for(family, profile);
     let mut collections: Vec<&HidCollection> = hid
         .collections
         .iter()
@@ -385,18 +344,23 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         )
     };
 
-    let config_candidates: Vec<&HidCollection> = collections
-        .iter()
-        .copied()
-        .filter(|collection| {
-            collection.capabilities.is_some_and(|caps| {
-                caps.usage_page == 0x0001
-                    && caps.usage == 0x0000
-                    && caps.input_report_bytes == 5
-                    && caps.output_report_bytes == 5
+    let config_candidates: Vec<&HidCollection> = profile.map_or_else(Vec::new, |profile| {
+        collections
+            .iter()
+            .copied()
+            .filter(|collection| {
+                collection.capabilities.is_some_and(|caps| {
+                    profile.collection.matches(
+                        &collection.instance_id,
+                        caps.usage_page,
+                        caps.usage,
+                        caps.input_report_bytes,
+                        caps.output_report_bytes,
+                    )
+                })
             })
-        })
-        .collect();
+            .collect()
+    });
     let uncertain_unjoined_collection = hid.collections.iter().any(|collection| {
         collection.board_id.is_none()
             && collection.attributes.is_none_or(|attributes| {
@@ -412,19 +376,19 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
                 || !collection.errors.is_empty()
         });
     let (configuration_collection_state, configuration_collection, configuration_collection_detail) =
-        if driver.is_none() {
+        if profile.is_none() {
             (
-                if recognized_ipac4_family {
+                if family.is_some() {
                     "unsupported-release"
                 } else {
                     "unsupported-driver"
                 },
                 None,
-                if recognized_ipac4_family {
+                if let Some(family) = family {
                     format!(
-                    "The I-PAC 4 family is recognized, but raw release 0x{:04X} has no measured programming profile; no configuration collection was selected",
-                    first.bcd_device
-                )
+                        "The {} family is recognized, but raw release 0x{:04X} has no measured programming profile; no configuration collection was selected",
+                        family.label, first.bcd_device
+                    )
                 } else {
                     "No panel protocol driver is registered, so no configuration collection was selected".to_owned()
                 },
@@ -458,7 +422,7 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         }
         };
 
-    let (chart_state, chart_label, chart_detail, recommendation) = match (driver, observed_mode) {
+    let (chart_state, chart_label, chart_detail, recommendation) = match (profile, observed_mode) {
         (Some(_), "keyboard-compatible") => (
             "not-read",
             "Chart not read — explicit action required",
@@ -471,10 +435,10 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
             "Passive status never sends the chart query; an absent keyboard-compatible interface is kept explicit rather than guessed",
             "Use the documented hardware recovery gesture to restore keyboard mode, then open Encoder setup",
         ),
-        (None, _) if recognized_ipac4_family => (
+        (None, _) if family.is_some() => (
             "unsupported-release",
-            "Chart not read — this I-PAC release is not profiled",
-            "ksx recognized the I-PAC 4 family but will not reuse release-0056 protocol assumptions for another raw bcdDevice",
+            "Chart not read — this encoder release is not profiled",
+            "ksx recognized the encoder family but will not borrow protocol assumptions from a different model or raw bcdDevice",
             "Keep using Teach and Route; capture a separate measured protocol profile before enabling persistent programming for this release",
         ),
         (None, _) => (
@@ -485,7 +449,9 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         ),
     };
 
-    let name = ksx_core::vendors::name_for(first.vendor_id, first.product_id)
+    let name = family
+        .map(|family| family.label)
+        .or_else(|| ksx_core::vendors::name_for(first.vendor_id, first.product_id))
         .or_else(|| first.friendly())
         .unwrap_or(&group.board_id)
         .to_owned();
@@ -493,7 +459,7 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         "USB VID {:04X}, PID {:04X}, raw bcdDevice 0x{:04X}",
         first.vendor_id, first.product_id, first.bcd_device
     );
-    let firmware_detail = driver.map_or_else(
+    let firmware_detail = profile.map_or_else(
         || {
             format!(
                 "Raw USB release 0x{:04X} has no exact measured firmware mapping in KSX; it remains unidentified rather than being guessed.",
@@ -524,30 +490,35 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         identity,
         vendor_id: first.vendor_id,
         product_id: first.product_id,
+        family_id: family.map(|family| family.id.to_owned()),
+        family_label: family.map(|family| family.label.to_owned()),
         bcd_device: first.bcd_device,
-        firmware_label: driver.map(|driver| driver.firmware_label.to_owned()),
+        firmware_label: profile.map(|profile| profile.firmware_label.to_owned()),
         firmware_detail,
-        profile_terminal_count: driver.map(|driver| driver.terminal_count),
+        profile_terminal_count: profile.map(|profile| profile.terminal_count),
         serial: first.serial.clone(),
-        driver: driver.map_or("unsupported", |driver| driver.id).to_owned(),
-        driver_supported: driver.is_some(),
-        driver_label: driver.map_or_else(
+        driver: profile
+            .map_or("unsupported", |profile| profile.driver_id)
+            .to_owned(),
+        driver_supported: profile.is_some(),
+        driver_label: profile.map_or_else(
             || {
-                if recognized_ipac4_family {
+                if let Some(family) = family {
                     format!(
-                        "I-PAC 4 recognized; release 0x{:04X} is not supported for programming",
-                        first.bcd_device
+                        "{} recognized; release 0x{:04X} is not supported for programming",
+                        family.label, first.bcd_device,
                     )
                 } else {
                     "No panel protocol driver registered".to_owned()
                 }
             },
-            |driver| driver.label.to_owned(),
+            |profile| profile.driver_label.to_owned(),
         ),
         observed_mode: observed_mode.to_owned(),
         mode_detail,
         observed_mode_label: observed_mode_label.to_owned(),
-        mode_read_supported: false,
+        mode_read_supported: capabilities.can_report_mode,
+        capabilities,
         chart_state: chart_state.to_owned(),
         chart_attempted: false,
         chart_detail: chart_detail.to_owned(),
@@ -813,6 +784,8 @@ mod tests {
         assert_eq!(panel.interfaces.len(), 3);
         assert_eq!(panel.bcd_device, 0x0056);
         assert!(panel.identity.contains("raw bcdDevice 0x0056"));
+        assert_eq!(panel.family_id.as_deref(), Some("ultimarc-ipac4"));
+        assert_eq!(panel.family_label.as_deref(), Some("Ultimarc I-PAC 4X"));
         assert_eq!(panel.firmware_label.as_deref(), Some("1.56"));
         assert_eq!(
             panel.firmware_detail,
@@ -821,6 +794,11 @@ mod tests {
         assert_eq!(panel.profile_terminal_count, Some(56));
         assert_eq!(panel.driver, "ultimarc-ipac");
         assert_eq!(panel.driver_label, "Ultimarc I-PAC 4 lossless chart driver");
+        assert!(panel.capabilities.can_identify);
+        assert!(!panel.capabilities.can_report_mode);
+        assert!(panel.capabilities.can_read_chart);
+        assert!(panel.capabilities.can_write_chart);
+        assert!(panel.capabilities.write_is_persistent);
         assert_eq!(panel.observed_mode, "keyboard-compatible");
         assert_eq!(
             panel.observed_mode_label,
@@ -1014,6 +992,12 @@ mod tests {
         .unwrap();
         assert_eq!(status.panels.len(), 1, "unknown boards are not dropped");
         let panel = &status.panels[0];
+        assert_eq!(panel.family_id, None);
+        assert_eq!(panel.family_label, None);
+        assert_eq!(
+            panel.capabilities,
+            ksx_api::PanelDriverCapabilities::default()
+        );
         assert_eq!(panel.driver, "unsupported");
         assert!(!panel.driver_supported);
         assert_eq!(panel.observed_mode, "unknown");
@@ -1035,6 +1019,10 @@ mod tests {
         let panel = &status.panels[0];
         assert_eq!(panel.driver, "unsupported");
         assert!(!panel.driver_supported);
+        assert_eq!(panel.family_id.as_deref(), Some("ultimarc-ipac4"));
+        assert!(panel.capabilities.can_identify);
+        assert!(!panel.capabilities.can_read_chart);
+        assert!(!panel.capabilities.can_write_chart);
         assert_eq!(panel.firmware_label, None);
         assert_eq!(panel.profile_terminal_count, None);
         assert!(panel.firmware_detail.contains("0x0057"));
@@ -1042,6 +1030,61 @@ mod tests {
         assert_eq!(panel.chart_state, "unsupported-release");
         assert_eq!(panel.configuration_collection_state, "unsupported-release");
         assert!(panel.driver_label.contains("0x0057"));
+    }
+
+    #[test]
+    fn catalogued_encoder_families_are_recognized_without_inheriting_reports_or_writes() {
+        for (vid, pid, family_id, label) in [
+            (
+                0xD208,
+                0x0310,
+                "ultimarc-ipac-legacy",
+                "Ultimarc legacy I-PAC series",
+            ),
+            (
+                0xD209,
+                0x0410,
+                "ultimarc-ipac-ultimate-io",
+                "Ultimarc I-PAC Ultimate I/O",
+            ),
+            (0xD209, 0x0420, "ultimarc-ipac2", "Ultimarc I-PAC 2"),
+            (0xD209, 0x0440, "ultimarc-minipac", "Ultimarc Mini-PAC"),
+            (0xD209, 0x0450, "ultimarc-jpac", "Ultimarc J-PAC"),
+            (0xD209, 0x1501, "ultimarc-uhid", "Ultimarc U-HID"),
+        ] {
+            let board = format!(r"USB\VID_{vid:04X}&PID_{pid:04X}\CATALOG");
+            let mut row = usb(&board, 0, 3, 1, 1);
+            row.candidate.vendor_id = vid;
+            row.candidate.product_id = pid;
+            row.candidate.bcd_device = 0x0056;
+            row.candidate.product = None;
+            let status = view(
+                &report(vec![row]),
+                &HidSurvey {
+                    available: true,
+                    collections: Vec::new(),
+                    errors: Vec::new(),
+                },
+                &PanelStatusSpec::default(),
+            )
+            .unwrap();
+            let panel = &status.panels[0];
+            assert_eq!(panel.family_id.as_deref(), Some(family_id));
+            assert_eq!(panel.family_label.as_deref(), Some(label));
+            assert_eq!(panel.name, label);
+            assert!(panel.capabilities.can_identify);
+            assert!(!panel.capabilities.can_report_mode);
+            assert!(!panel.capabilities.can_read_chart);
+            assert!(!panel.capabilities.can_write_chart);
+            assert!(!panel.capabilities.write_is_persistent);
+            assert!(!panel.driver_supported);
+            assert_eq!(panel.driver, "unsupported");
+            assert_eq!(panel.firmware_label, None);
+            assert_eq!(panel.profile_terminal_count, None);
+            assert_eq!(panel.configuration_collection, None);
+            assert_eq!(panel.configuration_collection_state, "unsupported-release");
+            assert_eq!(panel.chart_state, "unsupported-release");
+        }
     }
 
     #[test]

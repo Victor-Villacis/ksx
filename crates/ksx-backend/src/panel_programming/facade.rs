@@ -14,28 +14,23 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ksx_api::{
-    PanelBackupRow, PanelBackupsView, PanelByteDiffRow, PanelChartView, PanelKeyOption,
-    PanelKeyValue, PanelProgramOutcome, PanelProgramPlanView, PanelShiftState,
-    PanelTerminalDiffRow, PanelTerminalRow, Refusal,
+    PanelBackupRow, PanelBackupsView, PanelByteDiffRow, PanelChartView, PanelDriverCapabilities,
+    PanelKeyOption, PanelKeyValue, PanelProgramOutcome, PanelProgramPlanView, PanelShiftState,
+    PanelStatusRow, PanelTerminalDiffRow, PanelTerminalRow, Refusal,
 };
 use ksx_core::Key;
 use ksx_platform::hid_report::{
-    HidReportDevice, HidReportError, HidReportIdentity, HID_REPORT_BYTES, IPAC4_USAGE,
-    IPAC4_USAGE_PAGE,
+    HidReportDevice, HidReportError, HidReportIdentity, HID_REPORT_BYTES,
 };
 
 use super::*;
+use crate::panel_catalog::{profile_for, PanelProtocolDriver, PanelProtocolProfile};
 
 pub use ksx_api::{
     PanelBackupsSpec, PanelChartSpec, PanelProgramApplySpec, PanelProgramSpec,
     PanelRestoreApplySpec, PanelRestoreSpec, PanelTerminalEdit,
 };
 
-const PANEL_DRIVER_ID: &str = "ultimarc-ipac";
-const IPAC4_VENDOR_ID: u16 = 0xD209;
-const IPAC4_PRODUCT_ID: u16 = 0x0430;
-const IPAC4_RELEASE_ID: u16 = 0x0056;
-const IPAC4_CONFIGURATION_INTERFACE: &str = "&MI_02&";
 const BACKUP_DIR: &str = "panel-backups";
 const TRANSACTION_SCHEMA: &str = "ksx.panel-transaction.v1";
 const PENDING_TRANSACTION_FILE: &str = "panel-transaction.pending.json";
@@ -50,6 +45,7 @@ struct SelectedPanel {
     name: String,
     device_path: String,
     identity: BoardIdentity,
+    profile: &'static PanelProtocolProfile,
 }
 
 struct HidIo(HidReportDevice);
@@ -1368,8 +1364,66 @@ fn fingerprint(
     format!("IPAC4-{}", &digest[..24])
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelProfileAccess {
+    ReadChart,
+    PersistentWrite,
+}
+
+fn capabilities_admit(capabilities: PanelDriverCapabilities, access: PanelProfileAccess) -> bool {
+    match access {
+        PanelProfileAccess::ReadChart => capabilities.can_read_chart,
+        PanelProfileAccess::PersistentWrite => {
+            capabilities.can_read_chart
+                && capabilities.can_write_chart
+                && capabilities.write_is_persistent
+        }
+    }
+}
+
+/// Resolve passive status to one exact measured chart profile.
+///
+/// Family recognition is deliberately insufficient: adding a VID/PID to the
+/// read-only catalog must never make this programming facade open a report
+/// collection. The current facade can dispatch only the independently
+/// measured PAC256 implementation.
+fn admitted_programming_profile(
+    panel: &PanelStatusRow,
+    access: PanelProfileAccess,
+) -> Result<&'static PanelProtocolProfile, Refusal> {
+    let profile = profile_for(panel.vendor_id, panel.product_id, panel.bcd_device).ok_or_else(|| {
+        refused(
+            format!(
+                "{} has no exact measured chart profile for {:04X}:{:04X} release {:04X}; nothing was sent",
+                panel.name, panel.vendor_id, panel.product_id, panel.bcd_device,
+            ),
+            "keep using Teach and Route; a separate measured protocol profile is required for this exact encoder revision",
+        )
+    })?;
+    if !panel.driver_supported
+        || panel.driver != profile.driver_id
+        || panel.family_id.as_deref() != Some(profile.family_id)
+        || panel.capabilities != profile.capabilities
+        || !capabilities_admit(profile.capabilities, access)
+        || profile.protocol_profile != IPAC4_PROTOCOL_PROFILE
+        || profile.driver != PanelProtocolDriver::Ipac4Pac256V1
+    {
+        return Err(refused(
+            format!(
+                "{} did not match the complete {} admission contract; nothing was sent",
+                panel.name, profile.protocol_profile,
+            ),
+            "refresh panel status and use Teach and Route until the exact measured profile is available",
+        ));
+    }
+    Ok(profile)
+}
+
 #[cfg(windows)]
-fn select_panel(device: Option<String>) -> Result<SelectedPanel, Refusal> {
+fn select_panel(
+    device: Option<String>,
+    access: PanelProfileAccess,
+) -> Result<SelectedPanel, Refusal> {
     let report = crate::devices::collect();
     let hid = ksx_platform::hid::survey();
     let view = crate::panel::view(
@@ -1390,20 +1444,7 @@ fn select_panel(device: Option<String>) -> Result<SelectedPanel, Refusal> {
         ));
     }
     let panel = panels.remove(0);
-    if !panel.driver_supported
-        || panel.driver != PANEL_DRIVER_ID
-        || panel.vendor_id != IPAC4_VENDOR_ID
-        || panel.product_id != IPAC4_PRODUCT_ID
-        || panel.bcd_device != IPAC4_RELEASE_ID
-    {
-        return Err(refused(
-            format!(
-                "{} is not the pinned D209:0430 release 0056 I-PAC4 profile; nothing was sent",
-                panel.name,
-            ),
-            "keep using Teach and Route; a separate measured protocol profile is required for this exact encoder revision",
-        ));
-    }
+    let profile = admitted_programming_profile(&panel, access)?;
     if panel.observed_mode != "keyboard-compatible" {
         return Err(refused(
             format!(
@@ -1442,7 +1483,7 @@ fn select_panel(device: Option<String>) -> Result<SelectedPanel, Refusal> {
     if !collection
         .instance_id
         .to_ascii_uppercase()
-        .contains(IPAC4_CONFIGURATION_INTERFACE)
+        .contains(profile.collection.interface_token)
     {
         return Err(refused(
             "the configuration collection was not the pinned MI_02 interface; nothing was sent",
@@ -1464,11 +1505,14 @@ fn select_panel(device: Option<String>) -> Result<SelectedPanel, Refusal> {
     if !collection.errors.is_empty()
         || attributes.vendor_id != panel.vendor_id
         || attributes.product_id != panel.product_id
-        || attributes.version_number != IPAC4_RELEASE_ID
-        || capabilities.usage_page != IPAC4_USAGE_PAGE
-        || capabilities.usage != IPAC4_USAGE
-        || capabilities.input_report_bytes != HID_REPORT_BYTES as u16
-        || capabilities.output_report_bytes != HID_REPORT_BYTES as u16
+        || attributes.version_number != profile.bcd_device
+        || !profile.collection.matches(
+            &collection.instance_id,
+            capabilities.usage_page,
+            capabilities.usage,
+            capabilities.input_report_bytes,
+            capabilities.output_report_bytes,
+        )
         || collection.device_path.is_empty()
     {
         return Err(refused(
@@ -1529,11 +1573,15 @@ fn select_panel(device: Option<String>) -> Result<SelectedPanel, Refusal> {
             serial: panel.serial,
             fingerprint: board_fingerprint,
         },
+        profile,
     })
 }
 
 #[cfg(not(windows))]
-fn select_panel(_device: Option<String>) -> Result<SelectedPanel, Refusal> {
+fn select_panel(
+    _device: Option<String>,
+    _access: PanelProfileAccess,
+) -> Result<SelectedPanel, Refusal> {
     Err(refused(
         "I-PAC chart programming is available only on Windows; nothing was changed",
         "run this command on the Windows cabinet that owns the encoder",
@@ -2020,7 +2068,7 @@ fn chart_view(
         board_name: selected.name.clone(),
         board_fingerprint: selected.identity.fingerprint.clone(),
         driver: selected.identity.driver.clone(),
-        protocol_profile: IPAC4_PROTOCOL_PROFILE.to_owned(),
+        protocol_profile: selected.profile.protocol_profile.to_owned(),
         image_sha256: image.sha256().to_owned(),
         image_bytes: image.len(),
         programming_state: programming_state.to_owned(),
@@ -2109,7 +2157,7 @@ fn plan_view(
         board_id: selected.board_id.clone(),
         board_name: selected.name.clone(),
         board_fingerprint: selected.identity.fingerprint.clone(),
-        protocol_profile: IPAC4_PROTOCOL_PROFILE.to_owned(),
+        protocol_profile: selected.profile.protocol_profile.to_owned(),
         base_sha256: plan.baseline_sha256.clone(),
         desired_sha256: plan.desired_sha256.clone(),
         image_bytes: plan.desired.len(),
@@ -2184,7 +2232,7 @@ fn recovery_outcome(
 }
 
 pub fn chart(spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
-    let selected = select_panel(spec.device.clone())?;
+    let selected = select_panel(spec.device.clone(), PanelProfileAccess::ReadChart)?;
     let root = config_root()?;
     let _lease = acquire_programming_lease(root.dir())?;
     let image = read_stable_panel_image(&selected)?;
@@ -2319,7 +2367,7 @@ pub fn chart(spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
 }
 
 pub fn backups(spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
-    let selected = select_panel(spec.device.clone())?;
+    let selected = select_panel(spec.device.clone(), PanelProfileAccess::ReadChart)?;
     let root = config_root()?;
     let store = backup_store(&root)?;
     let rows = store
@@ -2343,7 +2391,7 @@ pub fn backups(spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
 pub fn program_plan(spec: &PanelProgramSpec) -> Result<PanelProgramPlanView, Refusal> {
     validate_sha256(&spec.expected_base_sha256, "expected_base_sha256")?;
     terminal_edits(spec)?;
-    let selected = select_panel(spec.device.clone())?;
+    let selected = select_panel(spec.device.clone(), PanelProfileAccess::PersistentWrite)?;
     let root = config_root()?;
     let _lease = acquire_programming_lease(root.dir())?;
     let mut store = backup_store(&root)?;
@@ -2392,7 +2440,10 @@ pub fn program(spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refu
     validate_sha256(&spec.expected_desired_sha256, "expected_desired_sha256")?;
     require_session_stopped("programming")?;
     terminal_edits(&spec.program)?;
-    let selected = select_panel(spec.program.device.clone())?;
+    let selected = select_panel(
+        spec.program.device.clone(),
+        PanelProfileAccess::PersistentWrite,
+    )?;
     validate_supervised_binding(
         &selected,
         &spec.expected_board_fingerprint,
@@ -2546,7 +2597,7 @@ pub fn program(spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refu
 pub fn restore_plan(spec: &PanelRestoreSpec) -> Result<PanelProgramPlanView, Refusal> {
     validate_sha256(&spec.expected_current_sha256, "expected_current_sha256")?;
     let backup_id = BackupId::new(spec.backup_id.clone()).map_err(backup_error)?;
-    let selected = select_panel(spec.device.clone())?;
+    let selected = select_panel(spec.device.clone(), PanelProfileAccess::PersistentWrite)?;
     let root = config_root()?;
     let _lease = acquire_programming_lease(root.dir())?;
     let mut store = backup_store(&root)?;
@@ -2586,7 +2637,10 @@ pub fn restore(spec: &PanelRestoreApplySpec) -> Result<PanelProgramOutcome, Refu
     validate_sha256(&spec.expected_desired_sha256, "expected_desired_sha256")?;
     require_session_stopped("restoring")?;
     let backup_id = BackupId::new(spec.restore.backup_id.clone()).map_err(backup_error)?;
-    let selected = select_panel(spec.restore.device.clone())?;
+    let selected = select_panel(
+        spec.restore.device.clone(),
+        PanelProfileAccess::PersistentWrite,
+    )?;
     validate_supervised_binding(
         &selected,
         &spec.expected_board_fingerprint,
@@ -2964,12 +3018,109 @@ mod tests {
     fn test_identity() -> BoardIdentity {
         BoardIdentity {
             driver: IPAC4_DRIVER.to_owned(),
-            vid: IPAC4_VENDOR_ID,
-            pid: IPAC4_PRODUCT_ID,
-            bcd_device: IPAC4_RELEASE_ID,
+            vid: 0xD209,
+            pid: 0x0430,
+            bcd_device: IPAC4_BCD_DEVICE,
             serial: Some("journal-test".to_owned()),
             fingerprint: "IPAC4-JOURNAL-TEST".to_owned(),
         }
+    }
+
+    fn test_profile() -> &'static PanelProtocolProfile {
+        profile_for(0xD209, 0x0430, IPAC4_BCD_DEVICE).expect("measured I-PAC 4 profile")
+    }
+
+    fn status_row_for(vid: u16, pid: u16, bcd_device: u16) -> PanelStatusRow {
+        let family = crate::panel_catalog::family_for(vid, pid);
+        let profile = profile_for(vid, pid, bcd_device);
+        PanelStatusRow {
+            name: family
+                .map_or("Test encoder", |family| family.label)
+                .to_owned(),
+            vendor_id: vid,
+            product_id: pid,
+            family_id: family.map(|family| family.id.to_owned()),
+            family_label: family.map(|family| family.label.to_owned()),
+            bcd_device,
+            driver: profile
+                .map_or("unsupported", |profile| profile.driver_id)
+                .to_owned(),
+            driver_supported: profile.is_some(),
+            capabilities: crate::panel_catalog::capabilities_for(family, profile),
+            ..PanelStatusRow::default()
+        }
+    }
+
+    #[test]
+    fn programming_admission_requires_the_exact_measured_profile_not_family_recognition() {
+        let measured = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        assert_eq!(
+            admitted_programming_profile(&measured, PanelProfileAccess::ReadChart)
+                .expect("measured profile")
+                .driver,
+            PanelProtocolDriver::Ipac4Pac256V1
+        );
+
+        for recognition_only in [
+            status_row_for(0xD208, 0x0310, IPAC4_BCD_DEVICE),
+            status_row_for(0xD209, 0x0410, IPAC4_BCD_DEVICE),
+            status_row_for(0xD209, 0x0420, IPAC4_BCD_DEVICE),
+            status_row_for(0xD209, 0x0430, 0x0057),
+            status_row_for(0xD209, 0x0440, IPAC4_BCD_DEVICE),
+            status_row_for(0xD209, 0x0450, IPAC4_BCD_DEVICE),
+            status_row_for(0xD209, 0x1501, IPAC4_BCD_DEVICE),
+        ] {
+            let refusal =
+                admitted_programming_profile(&recognition_only, PanelProfileAccess::ReadChart)
+                    .unwrap_err();
+            assert!(refusal.message.contains("no exact measured chart profile"));
+        }
+
+        let mut stale_status = measured;
+        stale_status.driver_supported = false;
+        let refusal =
+            admitted_programming_profile(&stale_status, PanelProfileAccess::ReadChart).unwrap_err();
+        assert!(refusal
+            .message
+            .contains("complete ipac4-pac256-v1 admission contract"));
+
+        let mut capability_drift = status_row_for(0xD209, 0x0430, IPAC4_BCD_DEVICE);
+        capability_drift.capabilities.can_write_chart = false;
+        let refusal =
+            admitted_programming_profile(&capability_drift, PanelProfileAccess::PersistentWrite)
+                .unwrap_err();
+        assert!(refusal
+            .message
+            .contains("complete ipac4-pac256-v1 admission contract"));
+    }
+
+    #[test]
+    fn read_only_capabilities_never_admit_a_persistent_mutation() {
+        let read_only = PanelDriverCapabilities {
+            can_identify: true,
+            can_report_mode: false,
+            can_read_chart: true,
+            can_write_chart: false,
+            write_is_persistent: false,
+        };
+        assert!(capabilities_admit(read_only, PanelProfileAccess::ReadChart));
+        assert!(!capabilities_admit(
+            read_only,
+            PanelProfileAccess::PersistentWrite
+        ));
+
+        let volatile_writer = PanelDriverCapabilities {
+            can_write_chart: true,
+            ..read_only
+        };
+        assert!(!capabilities_admit(
+            volatile_writer,
+            PanelProfileAccess::PersistentWrite
+        ));
+        assert!(capabilities_admit(
+            test_profile().capabilities,
+            PanelProfileAccess::PersistentWrite
+        ));
     }
 
     fn test_stamp() -> Timestamp {
@@ -3139,6 +3290,7 @@ mod tests {
                 serial: None,
                 fingerprint: "IPAC4-TEST".to_owned(),
             },
+            profile: test_profile(),
         };
         let mut bytes = qualification_image().bytes().to_vec();
         bytes[IPAC4_TERMINALS[0].image_offset(TerminalPlane::Shift)] = 0x41;
@@ -3239,6 +3391,7 @@ mod tests {
                 name: "I-PAC 4".to_owned(),
                 device_path: "test-device-path".to_owned(),
                 identity: test_identity(),
+                profile: test_profile(),
             },
             &plan,
             Vec::new(),

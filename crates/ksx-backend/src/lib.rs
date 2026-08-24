@@ -62,6 +62,7 @@ pub mod map;
 pub mod mapping;
 pub mod monitor;
 pub mod panel;
+pub(crate) mod panel_catalog;
 pub mod panel_profiles;
 pub mod panel_programming;
 // The first-run state and the path-free config in/out, for the surfaces that

@@ -29,8 +29,8 @@ use ksx_api::{DevicesView, UsbRow};
 /// an I-PAC's `MI_00`/`MI_01`/`MI_02` are one device to a human and three
 /// devnodes to Windows, and they share that parent.
 pub struct Board<'a> {
-    /// What to call it: the vendor table's name, else the device's own product
-    /// string, else the parent path. Never empty.
+    /// What to call it: an exact panel-family label, else the enumerator's
+    /// friendly product/vendor name, else the parent path. Never empty.
     pub name: String,
     pub interfaces: Vec<&'a UsbRow>,
 }
@@ -132,8 +132,15 @@ fn transport_label(board: &Board<'_>) -> &'static str {
     }
 }
 
-/// Best available name, in the order a human would prefer it.
+/// Best available name, in the order a human would prefer it. The operational
+/// panel catalog is exact VID/PID evidence; the display table remains the
+/// fallback for every other USB device.
 fn name_of(row: &UsbRow, key: &str) -> String {
+    if let Some(family) = DeviceFacts::from_instance_path(&row.instance_id)
+        .and_then(|facts| crate::panel_catalog::family_for(facts.vendor_id, facts.product_id))
+    {
+        return family.label.to_owned();
+    }
     if let Some(vendor) = &row.vendor {
         return vendor.clone();
     }
@@ -370,7 +377,7 @@ fn board_row(board: &Board<'_>) -> ksx_api::BoardRow {
     let keyboard = board.keyboard();
     let role = if board.interfaces.iter().any(|row| {
         DeviceFacts::from_instance_path(&row.instance_id).is_some_and(|facts| {
-            crate::panel::is_registered_panel_encoder_family(facts.vendor_id, facts.product_id)
+            crate::panel_catalog::family_for(facts.vendor_id, facts.product_id).is_some()
         })
     }) {
         ksx_api::BoardRole::PanelEncoder
@@ -1184,7 +1191,7 @@ mod tests {
     /// protocol. Its product label happened to say I-PAC, but matching that
     /// display copy in a surface would make the classification drift again.
     #[test]
-    fn exact_registered_ipac_family_is_a_panel_encoder_not_a_keyboard() {
+    fn exact_catalogued_ipac_family_is_a_panel_encoder_not_a_keyboard() {
         let mut devices = cabinet();
         devices.usb.push(row(
             r"USB\VID_046D&PID_C31C&MI_00\8&ABCDEF01&0&0000",
@@ -1218,6 +1225,57 @@ mod tests {
             .iter()
             .find(|board| board.name == "Logitech Keyboard")
             .expect("the ordinary keyboard");
+        assert_eq!(keyboard.role, ksx_api::BoardRole::Keyboard);
+    }
+
+    #[test]
+    fn recognition_only_catalog_family_gets_the_encoder_role_without_a_chart_driver() {
+        let minipac_id = r"USB\VID_D209&PID_0440&MI_00\8&ABCDEF01&0&0000";
+        let mut devices = DevicesView {
+            generated_at: "t".into(),
+            keyboards: Vec::new(),
+            interception_available: true,
+            usb: vec![row(
+                minipac_id,
+                r"USB\VID_D209&PID_0440\MINIPAC",
+                "claimed",
+                Some("Mini-PAC"),
+            )],
+            usb_available: true,
+            bluetooth_available: true,
+            notes: Vec::new(),
+        };
+        devices.usb.push(row(
+            r"USB\VID_046D&PID_C31C&MI_00\8&12345678&0&0000",
+            r"USB\VID_046D&PID_C31C\KEYBOARD",
+            "claimed",
+            Some("Logitech Keyboard"),
+        ));
+
+        let view = view(
+            &devices,
+            &connected(),
+            &ConfigFile::default(),
+            &GamesFile::default(),
+        );
+        let minipac = view
+            .boards
+            .iter()
+            .find(|board| {
+                board
+                    .interfaces
+                    .iter()
+                    .any(|row| row.instance_id.eq_ignore_ascii_case(minipac_id))
+            })
+            .expect("Mini-PAC board");
+        assert_eq!(minipac.name, "Ultimarc Mini-PAC");
+        assert_eq!(minipac.role, ksx_api::BoardRole::PanelEncoder);
+        assert!(minipac.looks_like_a_keyboard);
+        let keyboard = view
+            .boards
+            .iter()
+            .find(|board| board.name == "Logitech Keyboard")
+            .expect("ordinary keyboard");
         assert_eq!(keyboard.role, ksx_api::BoardRole::Keyboard);
     }
 

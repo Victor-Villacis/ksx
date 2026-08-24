@@ -24,6 +24,7 @@ export const CONTROL_SURFACE_TEMPLATE_SLUGS = [
   "arcade-stick",
   "leverless",
   "four-player",
+  "encoder-current",
   "mapping-selected",
   "mapping-four",
 ] as const;
@@ -37,7 +38,12 @@ export type ControlSurfacePanelLayout = "single" | "four-player";
 export type ControlSurfacePhysicalResolution = "confirmed" | "unresolved-shared-signal";
 export type ControlSurfaceStage = "design" | "teach" | "route";
 export type ControlSurfaceControlKind = "button30" | "button24" | "keycap" | "joystick";
-export type ControlSurfaceOrigin = "template" | "manual" | "mapping-generated" | "workbench-migration";
+export type ControlSurfaceOrigin =
+  | "template"
+  | "manual"
+  | "encoder-generated"
+  | "mapping-generated"
+  | "workbench-migration";
 
 export interface ControlSurfaceInput {
   kind: "unassigned" | "keyboard";
@@ -113,6 +119,20 @@ export interface ControlSurfaceMappingRecord {
   playerLabel: string;
 }
 
+/** One readable hardware-chart row, reduced to the facts needed to draw a
+ * physical panel. The chart remains backend-owned; this projection never
+ * invents a Windows observation and therefore leaves `input` unassigned until
+ * Teach sees the real wired control. */
+export interface ControlSurfaceEncoderRecord {
+  driver: string;
+  boardFingerprint: string;
+  terminalId: string;
+  terminalLabel: string;
+  playerSlot: number;
+  kind: string;
+  expectedKey: string;
+}
+
 const MAX_DEVICE_IDENTITIES = 64;
 // A four-player Workbench can truthfully contain four views of every one of
 // its 128 selected keys. Keep the sanitizer cap large enough to migrate that
@@ -176,7 +196,8 @@ function validKind(value: unknown): value is ControlSurfaceControlKind {
 }
 
 function validOrigin(value: unknown): value is ControlSurfaceOrigin {
-  return value === "template" || value === "manual" || value === "mapping-generated" || value === "workbench-migration";
+  return value === "template" || value === "manual" || value === "encoder-generated" ||
+    value === "mapping-generated" || value === "workbench-migration";
 }
 
 function validStage(value: unknown): value is ControlSurfaceStage {
@@ -554,11 +575,16 @@ function appendControl(
     height?: number;
     inputKey?: string;
     device?: string;
+    channels?: ControlSurfaceChannel[];
   } = {},
 ): ControlSurfaceControl {
   const id = `c${context.nextId++}`;
   const size = sizeForKind(kind);
-  const channels = channelsForKind(kind);
+  const channels = options.channels?.map((channel) => ({
+    ...channel,
+    input: { ...channel.input },
+    encoder: channel.encoder ? { ...channel.encoder } : undefined,
+  })) ?? channelsForKind(kind);
   if (options.inputKey && channels[0]) {
     channels[0].input = { kind: "keyboard", key: options.inputKey, device: options.device ?? "" };
   }
@@ -579,6 +605,120 @@ function appendControl(
   if (!control) throw new Error("control surface template emitted an invalid component");
   context.controls.push(control);
   return control;
+}
+
+function encoderDirection(record: ControlSurfaceEncoderRecord): string {
+  const match = record.terminalLabel.match(/(?:^|\s|·)(up|right|down|left)(?:$|\s|·)/iu);
+  return match?.[1]?.toLocaleLowerCase() ?? "";
+}
+
+function encoderChannel(
+  id: string,
+  label: string,
+  record: ControlSurfaceEncoderRecord,
+): ControlSurfaceChannel {
+  return {
+    id,
+    label,
+    input: { ...EMPTY_INPUT },
+    encoder: {
+      driver: record.driver,
+      boardFingerprint: record.boardFingerprint,
+      terminalId: record.terminalId,
+      terminalLabel: record.terminalLabel,
+      expectedKey: record.expectedKey,
+      verification: "unverified",
+    },
+  };
+}
+
+function encoderControlLabel(record: ControlSurfaceEncoderRecord): string {
+  const withoutPlayer = record.terminalLabel
+    .replace(/^player\s+\d+\s*·\s*/iu, "")
+    .trim();
+  return withoutPlayer || record.terminalId.toLocaleUpperCase();
+}
+
+/** Build a physical cabinet view from the chart that is actually stored on an
+ * encoder. Directions collapse into one four-channel stick; every other
+ * assigned terminal remains an independent physical button. The expected key
+ * is visible immediately, while Teach remains the sole authority that can
+ * mark the physical wiring as observed. */
+function encoderTemplate(
+  context: BuildContext,
+  records: readonly ControlSurfaceEncoderRecord[],
+): void {
+  const usable = records
+    .filter((record) => record.expectedKey.trim() && record.playerSlot >= 1 && record.playerSlot <= 4)
+    .sort((left, right) =>
+      left.playerSlot - right.playerSlot || left.terminalId.localeCompare(right.terminalId)
+    );
+  const slots = [...new Set(usable.map((record) => record.playerSlot))];
+  const fourPlayerLayout = slots.length > 1 || slots.some((slot) => slot > 1);
+  for (const slot of slots) {
+    const playerRecords = usable.filter((record) => record.playerSlot === slot);
+    const directions = new Map(
+      playerRecords
+        .filter((record) => record.kind === "direction" && encoderDirection(record))
+        .map((record) => [encoderDirection(record), record]),
+    );
+    const panelColumn = fourPlayerLayout ? (slot - 1) % 2 : 0;
+    const panelRow = fourPlayerLayout ? Math.floor((slot - 1) / 2) : 0;
+    const region = fourPlayerLayout
+      ? { x: 28 + panelColumn * 590, y: 30 + panelRow * 342, width: 548, height: 314 }
+      : { x: 64, y: 92, width: 1072, height: 548 };
+    let actionX = region.x + 18;
+    if (directions.size > 0) {
+      const channelOrder = [
+        ["up", "Up"],
+        ["right", "Right"],
+        ["down", "Down"],
+        ["left", "Left"],
+      ] as const;
+      const channels = channelOrder.map(([id, label]) => {
+        const record = directions.get(id);
+        return record
+          ? encoderChannel(id, label, record)
+          : { id, label, input: { ...EMPTY_INPUT } };
+      });
+      appendControl(
+        context,
+        "joystick",
+        slots.length > 1 ? `P${slot} stick` : "Player stick",
+        region.x + 20,
+        region.y + Math.max(20, (region.height - 168) / 2),
+        {
+          playerSlot: fourPlayerLayout ? slot : null,
+          origin: "encoder-generated",
+          channels,
+        },
+      );
+      actionX = region.x + (fourPlayerLayout ? 214 : 238);
+    }
+    const actions = playerRecords.filter(
+      (record) => record.kind !== "direction" || !directions.has(encoderDirection(record)),
+    );
+    if (actions.length === 0) continue;
+    const columns = fourPlayerLayout ? Math.min(4, Math.max(1, Math.ceil(Math.sqrt(actions.length * 1.35)))) : 8;
+    const rows = Math.ceil(actions.length / columns);
+    const availableWidth = region.x + region.width - actionX;
+    const availableHeight = region.height;
+    const cellWidth = availableWidth / columns;
+    const cellHeight = availableHeight / rows;
+    actions.forEach((record, index) => {
+      const compact = record.kind === "start" || record.kind === "coin" ||
+        cellWidth < 82 || cellHeight < 82;
+      const kind = compact ? "button24" as const : "button30" as const;
+      const size = sizeForKind(kind);
+      const x = actionX + (index % columns) * cellWidth + Math.max(0, (cellWidth - size.width) / 2);
+      const y = region.y + Math.floor(index / columns) * cellHeight + Math.max(0, (cellHeight - size.height) / 2);
+      appendControl(context, kind, encoderControlLabel(record), x, y, {
+        playerSlot: fourPlayerLayout ? slot : null,
+        origin: "encoder-generated",
+        channels: [encoderChannel("press", "Press", record)],
+      });
+    });
+  }
 }
 
 function arcadeStickTemplate(context: BuildContext): void {
@@ -745,6 +885,7 @@ export function applyControlSurfaceTemplate(
   records: readonly ControlSurfaceMappingRecord[] = [],
   selectedSlot = 1,
   device = "",
+  encoderRecords: readonly ControlSurfaceEncoderRecord[] = [],
 ): ControlSurfaceState {
   if (template === "mapping-selected" || template === "mapping-four") {
     const generated = new Set(
@@ -760,6 +901,7 @@ export function applyControlSurfaceTemplate(
   if (template === "arcade-stick") arcadeStickTemplate(context);
   else if (template === "leverless") leverlessTemplate(context);
   else if (template === "four-player") fourPlayerTemplate(context);
+  else if (template === "encoder-current") encoderTemplate(context, encoderRecords);
   else if (template === "mapping-selected") {
     mappingTemplate(context, records, selectedSlot, false, device);
   } else if (template === "mapping-four") {
@@ -771,10 +913,11 @@ export function applyControlSurfaceTemplate(
     open: true,
     started: true,
     template,
-    panelLayout: template === "four-player" || template === "mapping-four"
+    panelLayout: template === "four-player" || template === "mapping-four" ||
+        (template === "encoder-current" && new Set(encoderRecords.map((record) => record.playerSlot)).size > 1)
       ? "four-player"
       : "single",
-    stage: template.startsWith("mapping-") ? "route" : "design",
+    stage: template.startsWith("mapping-") ? "route" : template === "encoder-current" ? "teach" : "design",
     controls: context.controls,
     selectedControlId: first?.id ?? "",
     selectedChannelId: first?.channels[0]?.id ?? "",
@@ -1201,6 +1344,7 @@ export const CONTROL_SURFACE_TEMPLATES = [
   { slug: "arcade-stick", label: "Arcade stick", note: "Lever, eight actions, Start and Coin." },
   { slug: "leverless", label: "Leverless", note: "Four directions and an eight-button action bank." },
   { slug: "four-player", label: "Four-player cabinet", note: "Four independent sticks, action banks, Start and Coin." },
+  { slug: "encoder-current", label: "Connected encoder", note: "Build physical controls from the terminal-to-key chart stored on this board." },
   { slug: "mapping-selected", label: "Current player", note: "Generate physical controls from this player's existing routes." },
   { slug: "mapping-four", label: "All four players", note: "Generate four panels and flag repeated signals for physical confirmation." },
 ] as const satisfies readonly {

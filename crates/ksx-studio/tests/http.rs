@@ -1287,6 +1287,8 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 identity: "USB D209:0430 · bcdDevice 0x0056".to_owned(),
                 vendor_id: 0xd209,
                 product_id: 0x0430,
+                family_id: Some("ultimarc-ipac4".to_owned()),
+                family_label: Some("Ultimarc I-PAC 4X".to_owned()),
                 bcd_device: 0x0056,
                 firmware_label: Some("1.56".to_owned()),
                 firmware_detail: "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.".to_owned(),
@@ -1300,6 +1302,13 @@ impl ksx_api::MachineSource for ScriptedMachine {
                     .to_owned(),
                 observed_mode_label: "Keyboard-compatible input observed".to_owned(),
                 mode_read_supported: false,
+                capabilities: ksx_api::PanelDriverCapabilities {
+                    can_identify: true,
+                    can_report_mode: false,
+                    can_read_chart: true,
+                    can_write_chart: true,
+                    write_is_persistent: true,
+                },
                 chart_state: "protocol-unverified".to_owned(),
                 chart_attempted: false,
                 chart_detail:
@@ -9892,6 +9901,25 @@ fn panel_status_uses_the_staged_selector_and_reports_metadata_without_mutation()
         "{payload}"
     );
     assert_eq!(view["panels"][0]["bcd_device"], 0x0056, "{payload}");
+    assert_eq!(
+        view["panels"][0]["family_id"], "ultimarc-ipac4",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["family_label"], "Ultimarc I-PAC 4X",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["capabilities"],
+        serde_json::json!({
+            "can_identify": true,
+            "can_report_mode": false,
+            "can_read_chart": true,
+            "can_write_chart": true,
+            "write_is_persistent": true
+        }),
+        "{payload}"
+    );
     assert_eq!(view["panels"][0]["firmware_label"], "1.56", "{payload}");
     assert_eq!(view["panels"][0]["profile_terminal_count"], 56, "{payload}");
     assert!(

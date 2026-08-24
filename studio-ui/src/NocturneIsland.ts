@@ -83,6 +83,7 @@ import {
   type ControlSurfaceChannel,
   type ControlSurfaceControl,
   type ControlSurfaceControlKind,
+  type ControlSurfaceEncoderRecord,
   type ControlSurfaceMappingRecord,
   type ControlSurfaceStage,
   type ControlSurfaceState,
@@ -550,6 +551,8 @@ interface PanelStatusRowView {
   identity: string;
   vendor_id: number;
   product_id: number;
+  family_id?: string | null;
+  family_label?: string | null;
   bcd_device: number;
   firmware_label?: string | null;
   firmware_detail?: string;
@@ -562,6 +565,13 @@ interface PanelStatusRowView {
   mode_detail: string;
   observed_mode_label: string;
   mode_read_supported: boolean;
+  capabilities?: {
+    can_identify: boolean;
+    can_report_mode: boolean;
+    can_read_chart: boolean;
+    can_write_chart: boolean;
+    write_is_persistent: boolean;
+  };
   chart_state: string;
   chart_attempted: boolean;
   chart_detail: string;
@@ -1852,6 +1862,72 @@ function cancelControlSurfaceHardwareStatus(clear: boolean): void {
   syncControlSurfaceHardwareCard();
 }
 
+function selectedEncoderRosterRow(): NocturneDeviceRowView | null {
+  const selector = nCapSelector().trim().toLocaleUpperCase();
+  if (!selector) return null;
+  return nDevEncoders().find(
+    (row) => row.selector.trim().toLocaleUpperCase() === selector,
+  ) ?? null;
+}
+
+function selectedPanelStatusBoard(): PanelStatusRowView | null {
+  const selector = nCapSelector().trim();
+  const payload = controlSurfaceHardwarePayload;
+  if (!selector || payload?.target_selector?.trim() !== selector) return null;
+  return payload.view?.panels[0] ?? null;
+}
+
+function panelBoardCanReadChart(board: PanelStatusRowView | null): boolean {
+  return board?.capabilities?.can_read_chart ?? board?.driver_supported ?? false;
+}
+
+function panelBoardCanWriteChart(board: PanelStatusRowView | null): boolean {
+  return board?.capabilities?.can_write_chart ?? board?.driver_supported ?? false;
+}
+
+function panelBoardChartAccessReady(board: PanelStatusRowView | null): boolean {
+  const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
+  return panelBoardCanReadChart(board) &&
+    (mode === "keyboard-compatible" || mode === "keyboard") &&
+    board?.configuration_collection_state === "available-unopened" &&
+    Boolean(board.configuration_collection?.trim());
+}
+
+function panelBoardChartAccessGuidance(board: PanelStatusRowView | null): string {
+  const name = selectedEncoderShortName();
+  if (!panelBoardCanReadChart(board)) {
+    return `${name} is recognized, but this exact model and firmware do not have a measured chart driver. Build its physical panel, Teach its live signals, and Route them normally.`;
+  }
+  const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
+  if (mode !== "keyboard-compatible" && mode !== "keyboard") {
+    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh status before opening Hardware Setup.`;
+  }
+  return `${name} has a measured chart driver, but one exact configuration collection is not currently available. Reconnect or resolve the reported HID collection issue, then refresh status.`;
+}
+
+function selectedEncoderDisplayName(): string {
+  const board = selectedPanelStatusBoard();
+  const chartMatches = panelProgrammingState.inspection.target_selector.trim() ===
+    panelProgrammingTarget().trim();
+  return (chartMatches ? panelProgrammingState.inspection.chart?.board_name.trim() : "") ||
+    board?.family_label?.trim() || board?.name.trim() ||
+    selectedEncoderRosterRow()?.name.trim() || "Panel encoder";
+}
+
+function selectedEncoderShortName(): string {
+  return selectedEncoderDisplayName().replace(/^Ultimarc\s+/iu, "").trim() || "Encoder";
+}
+
+function selectedEncoderNavigatorLabel(): string {
+  const name = selectedEncoderShortName();
+  if (/I-PAC\s*4/iu.test(name)) return "I-PAC";
+  if (/I-PAC\s*2/iu.test(name)) return "IP2";
+  if (/MINI-?PAC/iu.test(name)) return "MINI";
+  if (/J-?PAC/iu.test(name)) return "J-PAC";
+  if (/U-?HID/iu.test(name)) return "U-HID";
+  return "ENC";
+}
+
 function syncControlSurfaceHardwareCard(): void {
   const card = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware");
   if (!card) return;
@@ -1869,9 +1945,10 @@ function syncControlSurfaceHardwareCard(): void {
   const recommendation = card.querySelector<HTMLElement>("[data-surface-hardware-recommendation]");
   const note = card.querySelector<HTMLElement>("[data-surface-hardware-note]");
   const refresh = card.querySelector<HTMLButtonElement>('[data-nx="surface-hardware-refresh"]');
+  const setup = card.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
   if (
     !name || !identity || !mode || !summary || !details || !capabilities || !access || !driver ||
-    !configuration || !chart || !chartDetail || !recommendation || !note || !refresh
+    !configuration || !chart || !chartDetail || !recommendation || !note || !refresh || !setup
   ) return;
 
   const selected = nCapSelector().trim();
@@ -1900,6 +1977,9 @@ function syncControlSurfaceHardwareCard(): void {
   let showCapabilities = false;
   let observedMode = "unknown";
   let chartState = "not-inspected";
+  let canReadChart = false;
+  let canWriteChart = false;
+  let chartAccessReady = false;
 
   if (controlSurfaceHardwarePhase === "loading") {
     titleCopy = "Inspecting selected encoder…";
@@ -1927,7 +2007,14 @@ function syncControlSurfaceHardwareCard(): void {
     summaryCopy = view?.summary?.trim() || summaryCopy;
     noteCopy = view?.inspection_note?.trim() || noteCopy;
   } else if (controlSurfaceHardwarePhase === "ready" && board) {
-    cardState = board.driver_supported ? "ready" : "unsupported";
+    canReadChart = panelBoardCanReadChart(board);
+    canWriteChart = panelBoardCanWriteChart(board);
+    chartAccessReady = panelBoardChartAccessReady(board);
+    cardState = chartAccessReady ? "ready" : canReadChart
+      ? "blocked"
+      : board.capabilities?.can_identify || board.family_id
+      ? "recognized"
+      : "unsupported";
     titleCopy = board.name.trim() || "Selected encoder";
     identityCopy = board.identity.trim() || board.board_id;
     modeCopy = board.observed_mode_label.trim() || "Mode unknown";
@@ -1983,6 +2070,26 @@ function syncControlSurfaceHardwareCard(): void {
     : "Refresh status";
   refresh.setAttribute("aria-label", `${refresh.textContent} for the selected encoder`);
   refresh.disabled = panelProgrammingTransactionActive();
+  setup.disabled = panelProgrammingTransactionActive() || controlSurfaceHardwarePhase !== "ready" ||
+    !chartAccessReady;
+  setup.textContent = chartAccessReady
+    ? canWriteChart
+      ? "Configure hardware…"
+      : "Read hardware…"
+    : canReadChart
+    ? "Resolve hardware first"
+    : controlSurfaceHardwarePhase === "ready" && board
+    ? "Recognition only"
+    : "Inspect to continue";
+  setup.title = chartAccessReady
+    ? canWriteChart
+      ? `Open the complete hardware chart for ${selectedEncoderDisplayName()}, including reviewed persistent programming`
+      : `Open the read-only hardware chart for ${selectedEncoderDisplayName()}`
+    : canReadChart
+    ? `Hardware Setup requires keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
+    : board?.family_id
+    ? `${selectedEncoderDisplayName()} is recognized, but this exact model and firmware do not have a measured chart driver yet. Teach, Route, and Control Surface Builder remain available.`
+    : "Inspect this exact encoder before opening hardware configuration";
   if (panelProgrammingState.transaction.phase === "recovery-required" &&
       panelProgrammingTransactionBelongsToCurrentTarget()) {
     card.dataset.state = "error";
@@ -2167,10 +2274,18 @@ function syncPanelEncoderRailStatus(): void {
   const transport = (meta.dataset.encoderBaseMeta.split(" · ")[0] || "USB").trim();
   const chart = panelProgrammingState.inspection.chart;
   const task = panelProgrammingTaskCopy(chart);
+  const board = selectedPanelStatusBoard();
+  const canOpenChart = panelBoardChartAccessReady(board);
   if (setup) {
     const label = Array.from(setup.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
-    if (label) label.textContent = task.action;
-    setup.title = `${task.action} this I-PAC: read its hardware outputs, test wiring, then route its Windows keys through KSX`;
+    if (label) label.textContent = canOpenChart ? task.action : "Open";
+    setup.title = canOpenChart
+      ? `${task.action} this ${selectedEncoderShortName()}: read its hardware outputs, test wiring, then route its Windows keys through KSX`
+      : panelBoardCanReadChart(board)
+      ? panelBoardChartAccessGuidance(board)
+      : board?.family_id
+      ? `Open ${selectedEncoderShortName()} in Control Surface Builder; this exact model and firmware are recognition-only`
+      : "Open this exact encoder workspace and inspect its proven capabilities";
   }
   const transaction = panelProgrammingState.transaction;
   if (transaction.phase === "recovery-required" && panelProgrammingTransactionBelongsToCurrentTarget()) {
@@ -2235,6 +2350,11 @@ function syncPanelProgrammingJourneyAndTest(): void {
   const assigned = panelProgrammingAssignedCount(chart);
   const signalCount = panelProgrammingSignalCount(chart);
   const mapped = panelProgrammingMappedKeyCount(chart);
+  const encoderName = selectedEncoderShortName();
+  const encoderJourneyLabel = item.querySelector<HTMLElement>(
+    "[data-panel-journey-encoder-label]",
+  );
+  if (encoderJourneyLabel) encoderJourneyLabel.textContent = encoderName;
   const states: Record<string, "active" | "complete" | "upcoming"> = {
     encoder: chart ? "complete" : "active",
     keys: !chart ? "upcoming" : assigned > 0 ? "complete" : "active",
@@ -2260,6 +2380,9 @@ function syncPanelProgrammingJourneyAndTest(): void {
   const copy = item.querySelector<HTMLElement>("[data-panel-output-test-copy]");
   const grid = item.querySelector<HTMLElement>("[data-panel-signal-grid]");
   const test = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-test"]');
+  const buildPanel = item.querySelector<HTMLButtonElement>(
+    '[data-nx="surface-encoder-build-panel"]',
+  );
   const route = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-route"]');
   const routeCopy = item.querySelector<HTMLElement>("[data-panel-route-copy]");
   const listening = learnRow?.purpose === "panel-test";
@@ -2279,9 +2402,9 @@ function syncPanelProgrammingJourneyAndTest(): void {
   if (copy) {
     copy.textContent = assigned > 0
       ? draftPending
-        ? "The draft is not written. Test current board listens to the outputs that are on the I-PAC now; it does not test the keys shown only in this draft."
-        : "Press any wired cabinet control. KSX identifies the Windows key and every matching I-PAC terminal without changing mappings."
-      : "This I-PAC currently emits no supported Windows keys, so wired controls cannot reach KSX yet. Choose a hardware layout above first.";
+        ? `The draft is not written. Test current board listens to the outputs that are on the ${encoderName} now; it does not test the keys shown only in this draft.`
+        : `Press any wired cabinet control. KSX identifies the Windows key and every matching ${encoderName} terminal without changing mappings.`
+      : `This ${encoderName} currently emits no supported Windows keys, so wired controls cannot reach KSX yet. Choose a hardware layout above first.`;
   }
   if (test) {
     test.disabled = assigned === 0 || panelProgrammingBusy || panelProgrammingTransactionActive();
@@ -2292,14 +2415,23 @@ function syncPanelProgrammingJourneyAndTest(): void {
     route.disabled = assigned === 0 || panelProgrammingTransactionActive() ||
       Boolean(panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0);
   }
+  if (buildPanel) {
+    buildPanel.disabled = assigned === 0 || panelProgrammingTransactionActive();
+    buildPanel.textContent = controlSurfaceState.started
+      ? "Replace panel from chart…"
+      : "Build physical panel";
+    buildPanel.title = controlSurfaceState.started
+      ? `Replace the current physical panel only after confirming a chart-derived ${encoderName} layout`
+      : `Draw physical joysticks and buttons from the terminal-to-key chart currently stored on ${encoderName}`;
+  }
   if (routeCopy) {
     routeCopy.textContent = panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0
       ? `${panelProgrammingLastTest.key} came from this device but is absent from the chart KSX read. Read the board again before routing.`
       : mapped > 0
-      ? `${mapped} I-PAC ${mapped === 1 ? "signal is" : "signals are"} already routed in KSX. Continue to inspect or extend those routes.`
+      ? `${mapped} ${encoderName} ${mapped === 1 ? "signal is" : "signals are"} already routed in KSX. Continue to inspect or extend those routes.`
       : assigned > 0
-      ? "Hardware output is only the source. Next, connect these Windows keys through KSX to virtual controller controls."
-      : "Routing starts after the I-PAC has at least one Windows key output.";
+      ? "Hardware output is only the source. Build a physical panel view for this cabinet, or continue directly to KSX routing."
+      : `Routing starts after the ${encoderName} has at least one Windows key output.`;
   }
   if (!grid) return;
   grid.replaceChildren();
@@ -2307,7 +2439,7 @@ function syncPanelProgrammingJourneyAndTest(): void {
     const empty = document.createElement("p");
     empty.textContent = chart
       ? "No terminal-to-key signals are available yet."
-      : "Read the I-PAC to see its terminal-to-key signals.";
+      : `Read the ${encoderName} to see its terminal-to-key signals.`;
     grid.append(empty);
     return;
   }
@@ -2358,7 +2490,8 @@ function syncIpacSignalSource(): void {
   if (!keyboard) return;
   const isEncoder = selectedInputIsPanelEncoder();
   keyboard.dataset.inputKind = isEncoder ? "panel-encoder" : "keyboard";
-  const name = isEncoder ? "I-PAC Signals" : "Keyboard";
+  const encoderName = selectedEncoderShortName();
+  const name = isEncoder ? `${encoderName} Signals` : "Keyboard";
   keyboard.dataset.widgetName = name;
   keyboard.setAttribute("aria-label", name);
   keyboard.querySelector<HTMLElement>(".widget-drag-handle")
@@ -2370,16 +2503,16 @@ function syncIpacSignalSource(): void {
   const parkedDetail = keyboard.querySelector<HTMLElement>(".n-source-parked-copy small");
   const show = keyboard.querySelector<HTMLButtonElement>('[data-nx="keylab-source-show"]');
   const arrange = keyboard.querySelector<HTMLButtonElement>('[data-nx="kb-workbench"]');
-  if (parkedTitle) parkedTitle.textContent = isEncoder ? "I-PAC signals hidden" : "Source keyboard hidden";
+  if (parkedTitle) parkedTitle.textContent = isEncoder ? `${encoderName} signals hidden` : "Source keyboard hidden";
   if (parkedDetail) parkedDetail.textContent = isEncoder
     ? "Terminal assignments, routes, and canvas position are preserved."
     : "Art, mappings, and canvas position are preserved.";
-  if (show) show.textContent = isEncoder ? "Show I-PAC signals" : "Show keyboard";
+  if (show) show.textContent = isEncoder ? `Show ${encoderName} signals` : "Show keyboard";
   if (arrange) {
     arrange.hidden = isEncoder;
     arrange.disabled = isEncoder;
     arrange.title = isEncoder
-      ? "I-PAC terminals belong in Hardware Setup or Control Surface Builder, not Keyboard Arranger"
+      ? "Encoder terminals belong in Hardware Setup or Control Surface Builder, not Keyboard Arranger"
       : "Arrange real keycaps from this detected keyboard without changing their identities or mappings";
   }
   let source = keyboard.querySelector<HTMLElement>(".n-ipac-signal-source");
@@ -2488,7 +2621,7 @@ function syncIpacSignalSource(): void {
   if (!source) {
     source = document.createElement("section");
     source.className = "n-ipac-signal-source";
-    source.setAttribute("aria-label", "I-PAC terminal and Windows key signals");
+    source.setAttribute("aria-label", `${encoderName} terminal and Windows key signals`);
     keyboard.querySelector<HTMLElement>(".n-widget-body")?.prepend(source);
   }
   ipacSignalSourceFingerprint = fingerprint;
@@ -2498,7 +2631,7 @@ function syncIpacSignalSource(): void {
   const kicker = document.createElement("span");
   kicker.textContent = "Input signal layer";
   const title = document.createElement("strong");
-  title.textContent = "I-PAC terminal → Windows key";
+  title.textContent = `${encoderName} terminal → Windows key`;
   heading.append(kicker, title);
   const badge = document.createElement("span");
   badge.className = "n-ipac-source-badge";
@@ -2506,8 +2639,8 @@ function syncIpacSignalSource(): void {
   head.append(heading, badge);
   const copy = document.createElement("p");
   copy.textContent = chart
-    ? `The I-PAC emits these Windows key signals. KSX paths leave from each terminal/key signal below; shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an I-PAC Shift terminal is enabled.` : ""}`
-    : "KSX routes currently reference these Windows key names. Hardware Setup has not read the I-PAC chart yet, so KSX has not proven which physical terminals emit them. Read Hardware Setup to establish terminal → Windows key ownership.";
+    ? `The ${encoderName} emits these Windows key signals. KSX paths leave from each terminal/key signal below; shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
+    : `KSX routes currently reference these Windows key names. Hardware Setup has not read the ${encoderName} chart yet, so KSX has not proven which physical terminals emit them. Read Hardware Setup to establish terminal → Windows key ownership.`;
   source.append(head, copy);
   if (groups.length === 0) {
     const empty = document.createElement("div");
@@ -2518,7 +2651,7 @@ function syncIpacSignalSource(): void {
           ? `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but opaque Shift state leaves their reachability unknown.`
           : `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but no enabled Shift terminal can emit them.`
         : "This chart has no supported Windows key outputs."
-      : "No routed key signals are visible yet. Open I-PAC Hardware Setup to read the on-device output chart.";
+      : `No routed key signals are visible yet. Open ${encoderName} Hardware Setup to read the on-device output chart.`;
     source.append(empty);
     mappingFlowLayer?.scheduleLayout();
     return;
@@ -3894,11 +4027,25 @@ function syncPanelProgrammingUi(): void {
   }
   const setupButton = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
   if (setupButton) {
+    const canOpenChart = panelBoardChartAccessReady(statusBoard);
     setupButton.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
-      !panelProgrammingTarget();
+      !panelProgrammingTarget() || !canOpenChart;
     setupButton.textContent = open
-      ? "I-PAC hardware open"
-      : `${task.action} I-PAC…`;
+      ? `${selectedEncoderShortName()} hardware open`
+      : canOpenChart
+      ? `${task.action} hardware…`
+      : panelBoardCanReadChart(statusBoard)
+      ? "Resolve hardware first"
+      : statusBoard?.family_id
+      ? "Recognition only"
+      : "Inspect to continue";
+    setupButton.title = canOpenChart
+      ? `Open ${selectedEncoderShortName()}'s complete hardware chart`
+      : panelBoardCanReadChart(statusBoard)
+      ? `Hardware Setup requires keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
+      : statusBoard?.family_id
+      ? `${selectedEncoderShortName()} is recognized, but this exact model and firmware do not have a measured chart driver yet`
+      : "Inspect this exact encoder before opening hardware configuration";
     setupButton.setAttribute("aria-expanded", String(open));
   }
   renderPanelProgrammingTerminalEditor();
@@ -4317,6 +4464,24 @@ function continueFromPanelHardwareToRouting(): void {
     );
     nCanvas?.fitAll();
   }
+}
+
+function buildPhysicalPanelFromEncoderChart(): void {
+  const chart = panelProgrammingState.inspection.chart;
+  const records = controlSurfaceEncoderRecords();
+  if (!chart || records.length === 0) {
+    panelProgrammingSetMessage(
+      `The ${selectedEncoderShortName()} chart has no assigned terminal-to-key outputs to draw yet. Configure or load at least one hardware output first.`,
+    );
+    return;
+  }
+  if (learnRow?.purpose === "panel-test") void cancelLearn();
+  const replacing = controlSurfaceState.started;
+  closePanelProgrammingSetup(false, "surface");
+  controlSurfaceChoosingTemplate = replacing;
+  controlSurfacePendingTemplate = null;
+  syncControlSurfaceChrome();
+  chooseControlSurfaceTemplate("encoder-current");
 }
 
 function enterPanelProgrammingWorkspace(): void {
@@ -5573,6 +5738,26 @@ function controlSurfaceMappingRecords(): ControlSurfaceMappingRecord[] {
   return records;
 }
 
+function controlSurfaceEncoderRecords(): ControlSurfaceEncoderRecord[] {
+  const chart = panelProgrammingState.inspection.chart;
+  if (!chart || panelProgrammingState.inspection.target_selector.trim() !== panelProgrammingTarget()) {
+    return [];
+  }
+  return chart.terminals.flatMap((terminal) => {
+    const expectedKey = terminal.normal.supported ? terminal.normal.key?.trim() ?? "" : "";
+    if (!expectedKey) return [];
+    return [{
+      driver: chart.driver,
+      boardFingerprint: chart.board_fingerprint,
+      terminalId: terminal.terminal_id,
+      terminalLabel: terminal.terminal_label,
+      playerSlot: terminal.player,
+      kind: terminal.kind,
+      expectedKey,
+    }];
+  });
+}
+
 function maybeMigrateKeyboardWorkbenchSurface(): boolean {
   if (
     controlSurfaceState.started ||
@@ -5985,13 +6170,14 @@ function labelCanvasMarkers(): void {
     const id = marker.dataset.instanceId ?? "";
     if (id === "keyboard") {
       const isEncoder = selectedInputIsPanelEncoder();
-      marker.textContent = isEncoder ? "I-PAC" : "KB";
+      const encoderName = selectedEncoderShortName();
+      marker.textContent = isEncoder ? selectedEncoderNavigatorLabel() : "KB";
       marker.classList.add("nm-kb");
       marker.classList.toggle("nm-ipac", isEncoder);
       marker.title = isEncoder
-        ? "I-PAC Signals · terminal and Windows key source"
+        ? `${encoderName} Signals · terminal and Windows key source`
         : "Keyboard · physical key source";
-      marker.setAttribute("aria-label", isEncoder ? "Focus I-PAC Signals" : "Focus Keyboard");
+      marker.setAttribute("aria-label", isEncoder ? `Focus ${encoderName} Signals` : "Focus Keyboard");
       continue;
     }
     if (id === "key-workbench") {
@@ -7508,14 +7694,27 @@ function renderControlSurfaceControls(): void {
     existing.delete(control.id);
     const relationship = controlSurfaceRelationship(control);
     const selected = control.id === controlSurfaceState.selectedControlId;
-    const taught = control.channels.some((channel) => channel.input.kind === "keyboard");
+    const expectedChannels = control.channels.filter(
+      (channel) => Boolean(channel.encoder?.expectedKey),
+    );
+    const observedExpectedChannels = expectedChannels.filter(
+      (channel) => channel.input.kind === "keyboard",
+    );
+    const expected = expectedChannels.length > 0;
+    const taught = expected
+      ? observedExpectedChannels.length === expectedChannels.length
+      : control.channels.some((channel) => channel.input.kind === "keyboard");
+    const partiallyTaught = expected && observedExpectedChannels.length > 0 && !taught;
+    const encoderMismatch = control.channels.some(
+      (channel) => channel.encoder?.verification === "mismatch",
+    );
     const teaching = learnRow?.purpose === "surface" &&
       learnRow.surfaceIdentity === controlSurfaceIdentity &&
       learnRow.surfaceControlId === control.id;
     const assigning = Boolean(assignKey) && control.channels.some(
       (channel) => channel.input.kind === "keyboard" && channel.input.key === assignKey,
     );
-    button.className = `n-surface-control kind-${control.kind}${selected ? " selected" : ""}${taught ? " taught" : " unassigned"}${relationship !== "single" ? ` ${relationship}` : ""}${control.playerSlot ? ` np${control.playerSlot}` : ""}${teaching ? " teach" : ""}${assigning ? " assign" : ""}`;
+    button.className = `n-surface-control kind-${control.kind}${selected ? " selected" : ""}${taught ? " taught" : expected ? " expected" : " unassigned"}${partiallyTaught ? " partially-taught" : ""}${encoderMismatch ? " encoder-mismatch" : ""}${relationship !== "single" ? ` ${relationship}` : ""}${control.playerSlot ? ` np${control.playerSlot}` : ""}${teaching ? " teach" : ""}${assigning ? " assign" : ""}`;
     button.dataset.surfaceControlId = control.id;
     button.dataset.controlKind = control.kind;
     button.dataset.physicalId = control.physicalId;
@@ -7526,7 +7725,13 @@ function renderControlSurfaceControls(): void {
     button.style.width = `${(control.width / CONTROL_SURFACE_BOUNDS.width) * 100}%`;
     button.style.height = `${(control.height / CONTROL_SURFACE_BOUNDS.height) * 100}%`;
     const inputCopy = control.channels
-      .map((channel) => channel.input.kind === "keyboard" ? `${channel.label}: ${channel.input.key}` : `${channel.label}: unassigned`)
+      .map((channel) => channel.input.kind === "keyboard" && channel.encoder?.expectedKey
+        ? `${channel.label}: ${channel.encoder.terminalId.toLocaleUpperCase()} is configured for ${channel.encoder.expectedKey}; Windows observed ${channel.input.key}`
+        : channel.input.kind === "keyboard"
+        ? `${channel.label}: Windows observed ${channel.input.key}`
+        : channel.encoder?.expectedKey
+        ? `${channel.label}: ${channel.encoder.terminalId.toLocaleUpperCase()} is configured for ${channel.encoder.expectedKey}, not Teach-verified`
+        : `${channel.label}: unassigned`)
       .join(" · ");
     const kindCopy = control.kind === "button30"
       ? "30 millimeter arcade button"
@@ -7552,9 +7757,23 @@ function renderControlSurfaceControls(): void {
     if (label) label.textContent = control.label;
     if (signal) {
       const assigned = control.channels.filter((channel) => channel.input.kind === "keyboard");
-      signal.textContent = assigned.length === 0
-        ? "Teach"
-        : assigned.map((channel) => channel.input.key).join(" / ");
+      const configured = control.channels.filter((channel) => Boolean(channel.encoder?.expectedKey));
+      signal.textContent = configured.length > 0
+        ? configured.map((channel) => {
+            const expectedKey = channel.encoder?.expectedKey ?? "";
+            const observedKey = channel.input.kind === "keyboard" ? channel.input.key : "";
+            const keyCopy = observedKey
+              ? observedKey.toLocaleUpperCase() === expectedKey.toLocaleUpperCase()
+                ? `${observedKey} ✓`
+                : `${expectedKey} ≠ ${observedKey}`
+              : `${expectedKey} ?`;
+            return control.kind === "joystick"
+              ? `${channel.label}: ${keyCopy}`
+              : `${channel.encoder?.terminalId.toLocaleUpperCase()} → ${keyCopy}`;
+          }).join(" / ")
+        : assigned.length > 0
+        ? assigned.map((channel) => channel.input.key).join(" / ")
+        : "Teach";
     }
     if (relation) {
       relation.textContent = relationship === "mirror"
@@ -7613,15 +7832,16 @@ function syncControlSurfaceChrome(): void {
   const heading = item.querySelector<HTMLElement>("[data-surface-widget-kicker]");
   const sub = item.querySelector<HTMLElement>("[data-surface-widget-sub]");
   const note = item.querySelector<HTMLElement>("[data-surface-note]");
+  const encoderName = selectedEncoderShortName();
   item.dataset.entry = hardwareWorkspace ? "encoder-setup" : "builder";
-  const widgetName = hardwareWorkspace ? "I-PAC Hardware Setup" : "Control Surface Builder";
+  const widgetName = hardwareWorkspace ? `${encoderName} Hardware Setup` : "Control Surface Builder";
   item.dataset.widgetName = widgetName;
   item.setAttribute("aria-label", widgetName);
   item.querySelector<HTMLElement>(".widget-drag-handle")
     ?.setAttribute("aria-label", `Move ${widgetName}`);
   if (heading) heading.textContent = widgetName;
   if (sub) sub.textContent = hardwareWorkspace
-    ? "I-PAC terminal → Windows key → KSX mapping → virtual controller → game"
+    ? `${encoderName} terminal → Windows key → KSX mapping → virtual controller → game`
     : "Browser draft · physical hardware → observed signal → KSX route";
   if (hardware) hardware.hidden = hardwareWorkspace;
   if (starters) starters.hidden = hardwareWorkspace || !choosing;
@@ -7629,13 +7849,19 @@ function syncControlSurfaceChrome(): void {
   if (tools) tools.hidden = hardwareWorkspace || choosing;
   if (stages) stages.hidden = hardwareWorkspace;
   if (note) note.textContent = panelLinkingWorkspace
-    ? "Panel-linking view: select a drawn physical control, associate its I-PAC terminal and expected Windows key in the inspector, then review the complete hardware chart above. These links do not write KSX controller mappings."
+    ? `Panel-linking view: select a drawn physical control, associate its ${encoderName} terminal and expected Windows key in the inspector, then review the complete hardware chart above. These links do not write KSX controller mappings.`
     : hardwareWorkspace
-    ? "The I-PAC stores terminal-to-key outputs in hardware. KSX then observes those Windows keys and applies the dynamic mappings, macros, and virtual-controller output. A physical panel drawing is optional."
-    : selectedInputIsPanelEncoder()
+    ? `The ${encoderName} stores terminal-to-key outputs in hardware. KSX then observes those Windows keys and applies the dynamic mappings, macros, and virtual-controller output. A physical panel drawing is optional.`
+    : selectedInputIsPanelEncoder() && panelBoardChartAccessReady(selectedPanelStatusBoard()) &&
+        panelBoardCanWriteChart(selectedPanelStatusBoard())
     ? "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping."
+    : selectedInputIsPanelEncoder() && panelBoardCanReadChart(selectedPanelStatusBoard())
+    ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
+    : selectedInputIsPanelEncoder() && selectedPanelStatusBoard()?.capabilities?.can_identify
+    ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
     : "Design the physical controls independently of their signal source. Teach observes what each control sends; Route connects that signal through KSX to virtual controllers.";
   const mappingRecords = controlSurfaceMappingRecords();
+  const encoderRecords = controlSurfaceEncoderRecords();
   const selectedSlot = Number(nSlotVal() || "1");
   for (const card of Array.from(item.querySelectorAll<HTMLButtonElement>("[data-surface-template]"))) {
     const template = card.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;
@@ -7649,7 +7875,12 @@ function syncControlSurfaceChrome(): void {
         ? `Confirm replacement · ${descriptor?.label ?? template}`
         : `${controlSurfaceState.started ? "Replace with " : ""}${descriptor?.label ?? template}`;
     }
-    if (template === "mapping-selected") {
+    if (template === "encoder-current") {
+      card.disabled = encoderRecords.length === 0;
+      card.title = encoderRecords.length > 0
+        ? `Build a physical panel from ${encoderRecords.length} terminal-to-key assignments read from ${selectedEncoderDisplayName()}`
+        : "Read a supported encoder chart in Hardware Setup before generating its physical panel";
+    } else if (template === "mapping-selected") {
       card.disabled = !mappingRecords.some((record) => record.slot === selectedSlot);
     } else if (template === "mapping-four") {
       card.disabled = !mappingRecords.some((record) => record.slot >= 1 && record.slot <= 4);
@@ -7753,9 +7984,9 @@ function createControlSurfaceItem(): HTMLElement {
   const hardwareActions = document.createElement("div");
   hardwareActions.className = "n-surface-hardware-actions";
   const encoderSetup = makeKeyboardWorkbenchButton(
-    "Set up I-PAC…",
+    "Inspect to continue",
     "surface-encoder-open",
-    "Open the complete 56-terminal hardware editor for this selected I-PAC",
+    "Inspect this exact encoder before opening hardware configuration",
   );
   encoderSetup.classList.add("n-surface-encoder-open");
   encoderSetup.setAttribute("aria-controls", "n-surface-programming");
@@ -7848,7 +8079,7 @@ function createControlSurfaceItem(): HTMLElement {
   programming.hidden = true;
   const signalJourney = document.createElement("ol");
   signalJourney.className = "n-panel-signal-journey";
-  signalJourney.setAttribute("aria-label", "I-PAC to game signal journey");
+  signalJourney.setAttribute("aria-label", "Encoder to game signal journey");
   ([
     ["encoder", "1", "I-PAC", "Physical terminal"],
     ["keys", "2", "Windows keys", "Hardware output"],
@@ -7864,6 +8095,7 @@ function createControlSurfaceItem(): HTMLElement {
     const copy = document.createElement("span");
     const strong = document.createElement("strong");
     strong.textContent = label;
+    if (step === "encoder") strong.dataset.panelJourneyEncoderLabel = "";
     const small = document.createElement("small");
     small.textContent = detail;
     copy.append(strong, small);
@@ -8077,13 +8309,18 @@ function createControlSurfaceItem(): HTMLElement {
   const routeCopy = document.createElement("p");
   routeCopy.dataset.panelRouteCopy = "";
   routeCopy.textContent = "After the hardware signals work, route those keys through KSX to virtual controllers.";
+  const buildPanelButton = makeKeyboardWorkbenchButton(
+    "Build physical panel",
+    "surface-encoder-build-panel",
+    "Draw physical joysticks and buttons from the terminal-to-key chart stored on this encoder",
+  );
+  buildPanelButton.classList.add("primary");
   const routeButton = makeKeyboardWorkbenchButton(
     "Continue to KSX routing",
     "surface-encoder-route",
     "Leave hardware setup and open the KSX mapping inspector",
   );
-  routeButton.classList.add("primary");
-  routeActions.append(routeCopy, routeButton);
+  routeActions.append(routeCopy, buildPanelButton, routeButton);
   outputTest.append(outputTestHead, outputTestCopy, outputSignalGrid, routeActions);
   const programmingActions = document.createElement("div");
   programmingActions.className = "n-surface-programming-actions";
@@ -8459,16 +8696,38 @@ function openControlSurfaceBuilder(encoderSetup = false): void {
   // one-shot reveal first or its intermediate camera would become the
   // session's false "before" view.
   applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, !encoderSetup);
-  void refreshControlSurfaceHardwareStatus();
-  if (encoderSetup) openPanelProgrammingSetup();
-  keyboardWorkbenchAnnounce(
-    encoderSetup
-      ? "I-PAC Hardware Setup opened. KSX is reading the selected encoder outputs and creating a recovery point; no emitted key or panel drawing is required."
-      : controlSurfaceState.started
-      ? "Control Surface Builder opened with its saved physical panel."
-      : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
-  );
-  if (encoderSetup) focusControlSurfacePrimary();
+  const inspection = refreshControlSurfaceHardwareStatus();
+  if (encoderSetup) {
+    keyboardWorkbenchAnnounce(
+      "Inspecting this exact encoder before KSX offers any hardware operation…",
+    );
+    void inspection.then(() => {
+      if (!controlSurfaceState.open || !selectedInputIsPanelEncoder()) return;
+      const board = selectedPanelStatusBoard();
+      if (controlSurfaceHardwarePhase === "ready" && panelBoardChartAccessReady(board)) {
+        openPanelProgrammingSetup();
+        keyboardWorkbenchAnnounce(
+          `${selectedEncoderShortName()} Hardware Setup opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
+        );
+        focusControlSurfacePrimary();
+        return;
+      }
+      controlSurfaceEncoderSetupEntry = false;
+      controlSurfaceChoosingTemplate = !controlSurfaceState.started;
+      syncControlSurfaceWidget(true);
+      keyboardWorkbenchAnnounce(
+        board?.family_id || panelBoardCanReadChart(board)
+          ? panelBoardChartAccessGuidance(board)
+          : "KSX could not prove a chart driver for this encoder. Nothing was sent; Control Surface Builder and live Teach remain available.",
+      );
+    });
+  } else {
+    keyboardWorkbenchAnnounce(
+      controlSurfaceState.started
+        ? "Control Surface Builder opened with its saved physical panel."
+        : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
+    );
+  }
 }
 
 function closeControlSurfaceBuilder(preservePanelChart = true): void {
@@ -8505,6 +8764,7 @@ function closeControlSurfaceBuilder(preservePanelChart = true): void {
 
 function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   const records = controlSurfaceMappingRecords();
+  const encoderRecords = controlSurfaceEncoderRecords();
   const selectedSlot = Number(nSlotVal() || "1");
   const generatedRecords = template === "mapping-selected"
     ? records.filter((record) => record.slot === selectedSlot)
@@ -8517,6 +8777,12 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   if (generatedCount > CONTROL_SURFACE_MAX_CONTROLS) {
     keyboardWorkbenchAnnounce(
       `This mapping would create ${generatedCount} visual controls, above the ${CONTROL_SURFACE_MAX_CONTROLS}-control safety limit. The current panel was kept intact.`,
+    );
+    return;
+  }
+  if (template === "encoder-current" && encoderRecords.length === 0) {
+    keyboardWorkbenchAnnounce(
+      "No readable terminal-to-key chart is loaded for this encoder. Open Hardware Setup and read a supported board first; the current panel was kept intact.",
     );
     return;
   }
@@ -8557,13 +8823,16 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
       records,
       selectedSlot,
       nCapSelector().trim() || controlSurfaceIdentity,
+      encoderRecords,
     ),
     true,
     true,
   );
   finishControlSurfaceUndoArm();
   keyboardWorkbenchAnnounce(
-    template.startsWith("mapping-")
+    template === "encoder-current"
+      ? `Physical panel generated from ${selectedEncoderShortName()}'s current hardware chart. Terminal → key labels are expectations; Teach verifies the real wiring before those controls own KSX routes.`
+      : template.startsWith("mapping-")
       ? "Panel generated from backend-owned mappings. Repeated signals stay visibly unresolved until the physical wiring is identified."
       : `${CONTROL_SURFACE_TEMPLATES.find((candidate) => candidate.slug === template)?.label ?? "Panel"} created with unassigned physical inputs.`,
   );
@@ -12113,13 +12382,13 @@ export function nocturneWire(root: HTMLElement): void {
               controlSurfaceReturnEncoderSelector = "";
             }
             keyboardWorkbenchAnnounce(
-              "The I-PAC was not selected in time. Nothing was changed; choose Set up again after the device list settles.",
+              "The encoder was not selected in time. Nothing was changed; choose Open again after the device list settles.",
             );
           }
           pendingPanelSetupTimeout = undefined;
         }, 10_000);
         keyboardWorkbenchAnnounce(
-          "Selecting this exact I-PAC, then opening its hardware-output setup…",
+          "Selecting this exact encoder, then inspecting which hardware operations are proven…",
         );
         // Submit only after the setup intent is recorded. This makes the
         // selector transition deterministic instead of depending on the
@@ -12133,7 +12402,13 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-hardware-refresh") {
       void refreshControlSurfaceHardwareStatus();
     } else if (hit === "surface-encoder-open") {
-      openPanelProgrammingSetup();
+      if (panelBoardChartAccessReady(selectedPanelStatusBoard())) {
+        openPanelProgrammingSetup();
+      } else {
+        keyboardWorkbenchAnnounce(
+          panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
+        );
+      }
     } else if (hit === "surface-encoder-close") {
       closePanelProgrammingSetup();
     } else if (hit === "surface-encoder-read") {
@@ -12143,6 +12418,8 @@ export function nocturneWire(root: HTMLElement): void {
       }
     } else if (hit === "surface-encoder-test") {
       togglePanelProgrammingOutputTest();
+    } else if (hit === "surface-encoder-build-panel") {
+      buildPhysicalPanelFromEncoderChart();
     } else if (hit === "surface-encoder-route") {
       continueFromPanelHardwareToRouting();
     } else if (hit === "surface-encoder-mode") {
@@ -12641,10 +12918,10 @@ export function NocturneIsland() {
                   type: "button",
                   class: "n-encoder-setup",
                   "data-nx": "encoder-select-setup",
-                  title: "Select this exact encoder, then read and back up its chart before configuring keys",
+                  title: "Open this exact encoder workspace; KSX inspects proven capabilities before offering hardware reads or writes",
                   "data-encoder-selector": r.selector,
                 },
-                "Set up",
+                "Open",
                 h("span", { class: "n-encoder-accessible-name" }, " ", r.name),
               ),
             ),

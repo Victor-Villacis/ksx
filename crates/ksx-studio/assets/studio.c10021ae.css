@@ -17090,6 +17090,8 @@ a.nm-link {
 .n-surface-hardware[data-state="error"],
 .n-surface-hardware[data-state="unavailable"],
 .n-surface-hardware[data-state="missing"],
+.n-surface-hardware[data-state="blocked"],
+.n-surface-hardware[data-state="recognized"],
 .n-surface-hardware[data-state="unsupported"] {
   border-color: color-mix(in srgb, var(--n-warn) 48%, var(--n-line));
 }
@@ -18636,6 +18638,36 @@ a.nm-link {
 
 .n-surface-control.unassigned .n-surface-control-signal {
   color: color-mix(in srgb, var(--n-warn) 76%, var(--n-text-3));
+}
+
+.n-surface-control.expected .n-surface-control-face {
+  outline: 1px dashed color-mix(in srgb, var(--n-warn) 58%, transparent);
+  outline-offset: 3px;
+}
+
+.n-surface-control.expected .n-surface-control-signal {
+  color: color-mix(in srgb, var(--n-warn) 84%, white);
+}
+
+.n-surface-control.expected.partially-taught .n-surface-control-face {
+  outline-color: color-mix(in srgb, var(--n-accent) 68%, var(--n-warn));
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--n-accent-dim) 34%, transparent) 0 50%,
+    transparent 50% 100%
+  );
+}
+
+.n-surface-control.expected.partially-taught .n-surface-control-signal {
+  color: color-mix(in srgb, var(--n-accent-2) 62%, var(--n-warn));
+}
+
+.n-surface-control.encoder-mismatch .n-surface-control-face {
+  outline-color: color-mix(in srgb, #ff5364 82%, transparent);
+}
+
+.n-surface-control.encoder-mismatch .n-surface-control-signal {
+  color: #ff8793;
 }
 
 .n-surface-control-relation {

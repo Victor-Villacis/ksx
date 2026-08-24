@@ -230,6 +230,7 @@ that is sitting right there.
 | why there is no native config UI | `docs/M9-DECISION.md` |
 | the enhancement/idea ledger | `docs/ENHANCEMENTS.md` |
 | panel encoder discovery/programming evidence and current state | `docs/PANEL-PROGRAMMING-STATE.md` |
+| encoder families, open-source evidence, licensing boundary and provider admission | `docs/ENCODER-ECOSYSTEM.md` |
 
 ## Working style here
 

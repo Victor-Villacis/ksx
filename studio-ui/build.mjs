@@ -294,11 +294,12 @@ try {
     // Control Surface Builder, its complete 56-terminal encoder editor,
     // portable hardware-layout profiles, supervised backup/program/verify/
     // restore workflow, blank-encoder first-run entry, and movable macro
-    // processors and the supervised I-PAC signal journey live in Nocturne's
-    // one island. The measured compressed route is ~263.1 KB; keep a narrow
-    // 263.5 KB ceiling so these deliberate device-configuration and canvas
-    // costs are not an open-ended bump.
-    budgetThreshold: 263_500,
+    // processors, the supervised encoder signal journey, capability-gated
+    // multi-family discovery, and chart-derived physical panels live in
+    // Nocturne's one island. The measured compressed route is ~265.0 KB; keep
+    // a narrow 266 KB ceiling so these deliberate hardware/canvas costs are
+    // not an open-ended bump.
+    budgetThreshold: 266_000,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",

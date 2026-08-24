@@ -4602,12 +4602,14 @@ mod tests {
 
     #[cfg(windows)]
     fn create_test_directory_link(link: &Path, target: &Path) {
-        let output = std::process::Command::new("cmd")
-            .args(["/d", "/c", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .output()
-            .expect("launch cmd.exe to create a disposable test junction");
+        let output = ksx_platform::process::no_window(
+            std::process::Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target),
+        )
+        .output()
+        .expect("launch cmd.exe to create a disposable test junction");
         assert!(
             output.status.success(),
             "mklink /J failed: {}",

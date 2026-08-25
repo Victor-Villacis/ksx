@@ -13907,15 +13907,23 @@ function reconcileLiveSession(p: NocturnePayload): void {
         elapsed: s.active?.elapsed ?? "",
       }
     : null;
-  if (liveFingerprint() !== before) resetLiveLedger();
+  const sessionChanged = liveFingerprint() !== before;
+  if (sessionChanged) resetLiveLedger();
   liveConfirmed = true;
   if (!liveLicensed()) {
     clearLivePaint();
-    liveAnnounce(
-      liveSession?.running
-        ? "Live input is unavailable: Play is using a different setup."
-        : "Live input is inactive.",
-    );
+    // The status region is shared with direct user-action feedback. An idle
+    // structure poll carrying the same stopped session is not a transition and
+    // must not erase a mapping, movement, or hardware announcement that just
+    // landed there. A real stopped/running/profile/reachability change still
+    // announces through the fingerprint transition above.
+    if (sessionChanged) {
+      liveAnnounce(
+        liveSession?.running
+          ? "Live input is unavailable: Play is using a different setup."
+          : "Live input is inactive.",
+      );
+    }
   }
 }
 

@@ -1828,7 +1828,14 @@ describe("the canvas navigation controls", () => {
 
       await page.selectOption(select, "all");
       await page.waitForFunction(
-        (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 36,
+        (lines) => {
+          const layer = document.querySelector(lines);
+          return document.querySelectorAll(`${lines} .n-flow-edge`).length === 36 &&
+            layer?.dataset.flowMode === "all" &&
+            layer?.dataset.flowCount === "36" &&
+            layer?.dataset.flowResolvedDirect === "28" &&
+            layer?.dataset.flowUnresolved === "0";
+        },
         lines,
       );
       assert.equal(
@@ -2795,6 +2802,31 @@ describe("the canvas navigation controls", () => {
         (await page.textContent(".n-live-sr")).trim(),
         "hadouken moved for this session, but its canvas position could not be saved.",
       );
+      // An unchanged background session poll is infrastructure truth, not a
+      // newer user-facing event. Force that payload through applyNocturne (the
+      // harmless environment-detail suffix defeats the raw-body dedupe) and
+      // prove it cannot erase the movement result from the shared live region.
+      const sameSessionMarker = "same-session announcement regression";
+      await page.route("**/api/nocturne*", async (route) => {
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        const payload = await response.json();
+        payload.view.environment_detail =
+          `${payload.view.environment_detail} [${sameSessionMarker}]`;
+        await route.fulfill({ response, json: payload });
+      });
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await page.waitForFunction(
+        (marker) => document.querySelector("#n-environment-detail")?.textContent?.includes(marker),
+        sameSessionMarker,
+      );
+      assert.equal(
+        (await page.textContent(".n-live-sr")).trim(),
+        "hadouken moved for this session, but its canvas position could not be saved.",
+        "an unchanged stopped-session poll does not overwrite the user's latest action",
+      );
+      await page.unroute("**/api/nocturne*");
       assert.equal(
         await page.locator(shellSelector).evaluate((shell) =>
           getComputedStyle(shell, "::after").content.replaceAll('"', "")

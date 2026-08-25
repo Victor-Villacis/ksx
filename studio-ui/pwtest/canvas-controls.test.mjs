@@ -1911,9 +1911,23 @@ describe("the canvas navigation controls", () => {
               return Math.hypot(left.x - right.x, left.y - right.y);
             }))
             : 0;
-          const selectedScopeStable = routes
+          // These coordinates are recovered from getBoundingClientRect() and
+          // an inverted live DOMMatrix, then rounded to hundredths. Rebuilding
+          // the same route set may therefore differ by a few hundredths across
+          // Chromium layout passes without moving a painted cord. Keep the
+          // threshold far below the 4px lane spacing so a real reroute still
+          // fails, while subpixel measurement noise does not become CI truth.
+          const selectedScopeDeltas = routes
             .filter((route) => route.slot === selectedSlot)
-            .every((route) => selectedDirectGeometry[route.id] === route.d);
+            .map((route) => {
+              const before = (selectedDirectGeometry[route.id]?.match(/-?\d+(?:\.\d+)?/gu) ?? [])
+                .map(Number);
+              const after = (route.d.match(/-?\d+(?:\.\d+)?/gu) ?? []).map(Number);
+              if (before.length === 0 || before.length !== after.length) return Infinity;
+              return Math.max(...after.map((value, index) => Math.abs(value - before[index])));
+            });
+          const selectedScopeMaxDelta = Math.max(0, ...selectedScopeDeltas);
+          const selectedScopeStable = selectedScopeMaxDelta <= 0.25;
           return {
             routeCount: routes.length,
             uniquePathCount: new Set(routes.map((route) => route.d)).size,
@@ -1935,6 +1949,7 @@ describe("the canvas navigation controls", () => {
             fanoutFunctions: fanout.map((route) => route.fn).sort(),
             fanoutSeparation,
             selectedScopeStable,
+            selectedScopeMaxDelta,
             geometry: Object.fromEntries(routes.map((route) => [route.id, route.d])),
           };
         },
@@ -1978,7 +1993,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(
         traceability.selectedScopeStable,
         true,
-        "switching from Selected to All does not reroute the selected player's cords",
+        `switching from Selected to All does not reroute the selected player's cords (maximum coordinate delta ${traceability.selectedScopeMaxDelta}px)`,
       );
 
       await page.locator('[data-instance-id="keyboard"] [data-key="G"]').first().hover();

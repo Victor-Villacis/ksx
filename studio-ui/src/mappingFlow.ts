@@ -1933,6 +1933,9 @@ export class MappingFlowLayer {
     this.#syncCameraTransform();
     const matrix = this.#lines.getScreenCTM();
     if (!matrix) {
+      for (const entry of this.#entries.values()) {
+        delete entry.lineGroup.dataset.flowLaneIndex;
+      }
       this.#syncObservedAnchors(new Set());
       this.#publishSummary({
         total: this.#routes.length,
@@ -1983,7 +1986,10 @@ export class MappingFlowLayer {
       }
       entry.lineGroup.classList.toggle("is-unresolved", !visible);
       entry.portGroup.classList.toggle("is-unresolved", !visible);
-      if (!visible) continue;
+      if (!visible) {
+        delete entry.lineGroup.dataset.flowLaneIndex;
+        continue;
+      }
 
       // Every logical relationship owns one complete curve. Direct bindings
       // receive a unique offset within a bounded 72px fan, so even eight or
@@ -1993,6 +1999,9 @@ export class MappingFlowLayer {
       const lanes = direct ? directLanes : macroLanes;
       const laneIndex = lanes.get(entry.route.slot) ?? 0;
       entry.laneIndex = laneIndex;
+      // Unlike measured coordinates, this routing decision is stable while a
+      // live endpoint follows its hover/focus geometry.
+      entry.lineGroup.dataset.flowLaneIndex = String(laneIndex);
       const lane = direct
         ? (() => {
           const total = directTotals.get(entry.route.slot) ?? 1;

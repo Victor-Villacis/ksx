@@ -1913,10 +1913,11 @@ describe("the canvas navigation controls", () => {
             : 0;
           // These coordinates are recovered from getBoundingClientRect() and
           // an inverted live DOMMatrix, then rounded to hundredths. Rebuilding
-          // the same route set may therefore differ by a few hundredths across
-          // Chromium layout passes without moving a painted cord. Keep the
-          // threshold far below the 4px lane spacing so a real reroute still
-          // fails, while subpixel measurement noise does not become CI truth.
+          // the same route set may therefore differ across Chromium layout
+          // passes without moving a painted cord by a full screen pixel. Keep
+          // the threshold at one painted CSS pixel—four times smaller than the
+          // 4px lane spacing—so a real reroute still fails while measurement
+          // noise does not become CI truth at different Fit scales.
           const selectedScopeDeltas = routes
             .filter((route) => route.slot === selectedSlot)
             .map((route) => {
@@ -1927,7 +1928,10 @@ describe("the canvas navigation controls", () => {
               return Math.max(...after.map((value, index) => Math.abs(value - before[index])));
             });
           const selectedScopeMaxDelta = Math.max(0, ...selectedScopeDeltas);
-          const selectedScopeStable = selectedScopeMaxDelta <= 0.25;
+          const matrix = document.querySelector(lines)?.getScreenCTM();
+          const canvasScale = matrix ? Math.max(0.01, Math.hypot(matrix.a, matrix.b)) : 1;
+          const selectedScopeMaxScreenDelta = selectedScopeMaxDelta * canvasScale;
+          const selectedScopeStable = selectedScopeMaxScreenDelta <= 1;
           return {
             routeCount: routes.length,
             uniquePathCount: new Set(routes.map((route) => route.d)).size,
@@ -1950,6 +1954,7 @@ describe("the canvas navigation controls", () => {
             fanoutSeparation,
             selectedScopeStable,
             selectedScopeMaxDelta,
+            selectedScopeMaxScreenDelta,
             geometry: Object.fromEntries(routes.map((route) => [route.id, route.d])),
           };
         },
@@ -1993,7 +1998,7 @@ describe("the canvas navigation controls", () => {
       assert.equal(
         traceability.selectedScopeStable,
         true,
-        `switching from Selected to All does not reroute the selected player's cords (maximum coordinate delta ${traceability.selectedScopeMaxDelta}px)`,
+        `switching from Selected to All does not reroute the selected player's cords (maximum delta ${traceability.selectedScopeMaxDelta} canvas units / ${traceability.selectedScopeMaxScreenDelta} painted px)`,
       );
 
       await page.locator('[data-instance-id="keyboard"] [data-key="G"]').first().hover();

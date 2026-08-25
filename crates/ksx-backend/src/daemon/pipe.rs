@@ -4241,7 +4241,33 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
     /// pointed at — which is the fact the whole pause/resume question is
     /// about. `LiveFactory` keeps the same value in the same field; this makes
     /// it readable from a test without a config root or a driver.
+    struct IsolatedConfigDir(std::path::PathBuf);
+
+    impl IsolatedConfigDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ksx-pipe-test-config-{}-{serial}",
+                std::process::id()
+            ));
+            if path.exists() {
+                std::fs::remove_dir_all(&path)
+                    .expect("remove stale isolated pipe daemon config root");
+            }
+            std::fs::create_dir_all(&path).expect("create isolated pipe daemon config root");
+            Self(path)
+        }
+    }
+
+    impl Drop for IsolatedConfigDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     struct RecordingFactory {
+        config_dir: Arc<IsolatedConfigDir>,
         staged: Arc<Mutex<Option<ksx_core::CommitSpec>>>,
         game: Arc<Mutex<Option<String>>>,
         /// How many sessions this factory has been asked to build. A refused
@@ -4257,7 +4283,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         }
 
         fn config_dir(&self) -> std::path::PathBuf {
-            std::path::PathBuf::from(r"C:\cfg\ksx")
+            self.config_dir.0.clone()
         }
 
         fn game(&self) -> Option<String> {
@@ -4295,11 +4321,14 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             let staged = Arc::new(Mutex::new(None));
             let game = Arc::new(Mutex::new(game));
             let makes = Arc::new(Mutex::new(0));
+            let config_dir = Arc::new(IsolatedConfigDir::new());
             let loop_thread = std::thread::spawn({
                 let (state, staged, game) = (state.clone(), staged.clone(), game.clone());
                 let makes = makes.clone();
+                let config_dir = config_dir.clone();
                 move || {
                     let mut factory = RecordingFactory {
+                        config_dir,
                         staged,
                         game,
                         makes,
@@ -6154,6 +6183,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 }
             }
             struct Factory {
+                config_dir: IsolatedConfigDir,
                 game: Arc<Mutex<Option<String>>>,
             }
             impl super::super::super::SessionFactory for Factory {
@@ -6161,7 +6191,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                     Ok(Box::new(BlockingRunner))
                 }
                 fn config_dir(&self) -> std::path::PathBuf {
-                    std::path::PathBuf::from(r"C:\cfg\ksx")
+                    self.config_dir.0.clone()
                 }
                 fn game(&self) -> Option<String> {
                     self.game.lock().unwrap().clone()
@@ -6184,7 +6214,10 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 let state = state.clone();
                 let game = game.clone();
                 move || {
-                    let mut factory = Factory { game };
+                    let mut factory = Factory {
+                        config_dir: IsolatedConfigDir::new(),
+                        game,
+                    };
                     let mut out: Vec<u8> = Vec::new();
                     super::super::super::control_loop_with(
                         rx,

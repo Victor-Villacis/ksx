@@ -206,12 +206,14 @@ async function directLassoState(page, lines, slot = null) {
       const actualLane = paintedAxis === "vertical"
         ? firstY - (sy + ty) / 2
         : firstX - (sx + tx) / 2;
+      const laneError = Math.abs(actualLane - expectedLane);
+      const laneScreenError = laneError * scale;
       const valid = Boolean(id) && Number.isInteger(lane) && Number.isFinite(scale) &&
         commands.length === 2 && commands[0] === "M" && commands[1] === "C" &&
         values.length === 8 && values.every(Number.isFinite) && paintedAxis !== null &&
         (axisAmbiguous || paintedAxis === majorAxis) &&
-        Math.abs(actualLane - expectedLane) <= 0.05;
-      return { id, slot: routeSlot, lane, valid };
+        laneError <= 0.05;
+      return { id, slot: routeSlot, lane, valid, laneError, laneScreenError };
     });
     const topology = routes
       .filter((route) => slot === null || route.slot === String(slot))
@@ -220,9 +222,21 @@ async function directLassoState(page, lines, slot = null) {
     return {
       topology,
       valid: routes.every((route) => route.valid),
-      invalid: routes.filter((route) => !route.valid).map((route) => route.id),
+      invalid: routes.filter((route) => !route.valid),
     };
   }, { lines, slot });
+}
+
+/** Wait for the lasso geometry itself, not an animation timer or class name.
+ * A permanent stale-CTM bug still returns invalid state and fails below. */
+async function settledDirectLassoState(page, lines, slot = null) {
+  const deadline = Date.now() + 2_000;
+  let state = await directLassoState(page, lines, slot);
+  while (!state.valid && Date.now() < deadline) {
+    await page.waitForTimeout(16);
+    state = await directLassoState(page, lines, slot);
+  }
+  return state;
 }
 
 function setPadControlKeys(pad, functionName, keys) {
@@ -1475,7 +1489,12 @@ describe("the canvas navigation controls", () => {
   });
 
   test("mapping paths project direct bindings, follow geometry, and remember their scope", async () => {
-    const page = await openCanvas();
+    const page = await openCanvas({}, async (candidate) => {
+      // This case owns a closed geometry world. A successful background poll
+      // would schedule an unrelated layout and could repair the deliberately
+      // delayed Fit mutant even when the flow transition hook is absent.
+      await candidate.route("**/api/nocturne*", (route) => route.fulfill({ status: 304 }));
+    });
     try {
       const select = '[data-nx="mapping-paths"]';
       const lines = "#n-mapping-paths";
@@ -1613,6 +1632,9 @@ describe("the canvas navigation controls", () => {
       );
 
       await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() =>
+        matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
       const reducedMotion = await page.evaluate(({ lines, processors }) => {
         const route = document.querySelector(`${lines} [data-flow-kind="binding"]`);
         route?.classList.add("is-live");
@@ -1630,6 +1652,9 @@ describe("the canvas navigation controls", () => {
       assert.equal(reducedMotion.nodeTransition, "0s");
       assert.equal(reducedMotion.routeAnimation, "none");
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.waitForFunction(() =>
+        !matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
       await page.waitForFunction(() => {
         const widgets = Array.from(document.querySelectorAll(".widget-instance"));
         widgets.forEach((widget) => void getComputedStyle(widget).transform);
@@ -1851,6 +1876,13 @@ describe("the canvas navigation controls", () => {
       const processorWidthBeforeFit = await page.locator(
         `${processors} a.n-flow-processor`,
       ).evaluate((processor) => processor.getBoundingClientRect().width);
+      // Make the runner timing deterministic: the broken version stopped its
+      // camera loop at 220 ms while this independent flow transform was still
+      // moving, then permanently kept lanes calculated against that stale CTM.
+      // The layer's own transition completion must trigger the final layout.
+      await page.locator(`${lines}, ${ports}, ${processors}`).evaluateAll((layers) => {
+        for (const layer of layers) layer.style.transition = "transform 360ms linear";
+      });
       await page.click('[data-nx="canvas-fit"]');
       await page.waitForFunction(() => document.querySelector(".is-camera-animating"));
       await page.waitForTimeout(80);
@@ -1888,12 +1920,12 @@ describe("the canvas navigation controls", () => {
           !target.matches(".n-kb .n-key, .n-deck-key, .n-ipac-signal") ||
           animation.playState === "finished";
       }));
-      const selectedDirectState = await directLassoState(page, lines, selectedSlot);
+      const selectedDirectState = await settledDirectLassoState(page, lines, selectedSlot);
       const selectedDirectTopology = selectedDirectState.topology;
       assert.equal(
         selectedDirectState.valid,
         true,
-        `Selected paints each complete lasso on its declared lane (${selectedDirectState.invalid.join(", ")})`,
+        `Selected paints each complete lasso on its declared lane (${JSON.stringify(selectedDirectState.invalid)})`,
       );
       assert.equal(
         selectedDirectTopology.every(([id, lane]) => id && Number.isInteger(lane)),
@@ -1930,11 +1962,11 @@ describe("the canvas navigation controls", () => {
         2,
         "same-named macros in different slots remain separate processors",
       );
-      const allDirectState = await directLassoState(page, lines, selectedSlot);
+      const allDirectState = await settledDirectLassoState(page, lines, selectedSlot);
       assert.equal(
         allDirectState.valid,
         true,
-        `All paints each complete lasso on its declared lane (${allDirectState.invalid.join(", ")})`,
+        `All paints each complete lasso on its declared lane (${JSON.stringify(allDirectState.invalid)})`,
       );
       const traceability = await page.evaluate(
         ({ lines, selectedSlot }) => {
@@ -2225,9 +2257,11 @@ describe("the canvas navigation controls", () => {
       assert.notEqual(relatedHookPaint.stroke, "none");
       await page.locator(select).hover();
 
-      const liveIdentity = await page.evaluate(async (lines) => {
+      const liveIdentity = await page.evaluate((lines) => {
           const first = document.querySelector(`${lines} [data-flow-slot="1"][data-flow-kind="binding"]`);
           const second = document.querySelector(`${lines} [data-flow-slot="2"][data-flow-kind="binding"]`);
+          first?.style.setProperty("transition", "none");
+          second?.style.setProperty("transition", "none");
           first?.classList.add("is-live");
           second?.classList.add("is-live");
           const firstCore = first?.querySelector(".n-flow-core");
@@ -2235,14 +2269,32 @@ describe("the canvas navigation controls", () => {
           const patterns = [firstCore, secondCore].map((core) =>
             core ? getComputedStyle(core).strokeDasharray : "",
           );
+          const travel = firstCore?.getAnimations().find((animation) =>
+            animation instanceof CSSAnimation && animation.animationName === "n-flow-travel"
+          );
+          travel?.pause();
+          if (travel) travel.currentTime = 0;
           const offsetBefore = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
-          await new Promise((resolve) => setTimeout(resolve, 180));
+          if (travel) travel.currentTime = 180;
           const offsetAfter = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
           const animation = firstCore ? getComputedStyle(firstCore).animationName : "";
           const opacity = first ? getComputedStyle(first).opacity : "";
+          const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const connected = Boolean(first?.isConnected && firstCore?.isConnected);
           first?.classList.remove("is-live");
           second?.classList.remove("is-live");
-          return { patterns, offsetBefore, offsetAfter, animation, opacity };
+          first?.style.removeProperty("transition");
+          second?.style.removeProperty("transition");
+          return {
+            patterns,
+            offsetBefore,
+            offsetAfter,
+            animation,
+            opacity,
+            reducedMotion,
+            connected,
+            travelFound: Boolean(travel),
+          };
         }, lines);
       assert.notEqual(liveIdentity.patterns[0], "none", "Player 1 has a visible travel rhythm");
       assert.notEqual(
@@ -2250,7 +2302,11 @@ describe("the canvas navigation controls", () => {
         liveIdentity.patterns[1],
         "live travel keeps each player's non-color dash identity",
       );
-      assert.equal(liveIdentity.animation, "n-flow-travel");
+      assert.equal(
+        liveIdentity.animation,
+        "n-flow-travel",
+        `live travel is enabled outside reduced motion (${JSON.stringify(liveIdentity)})`,
+      );
       assert.equal(liveIdentity.opacity, "1", "a live cord rises above all-player overview opacity");
       assert.notEqual(liveIdentity.offsetBefore, liveIdentity.offsetAfter, "Player 1's live cord travels");
 

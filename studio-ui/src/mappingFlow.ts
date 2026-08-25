@@ -713,20 +713,27 @@ export class MappingFlowLayer {
     root.addEventListener("focusout", (event) => this.#leaveEvent("focus", event), {
       signal: this.#abort.signal,
     });
-    // CSS hover/focus lifts keycaps without mutating inline geometry. Re-anchor
-    // after that short transition so a visible cord continues to touch the cap.
-    root.addEventListener("transitionend", (event) => {
+    // CSS hover/focus lifts keycaps without mutating inline geometry. The flow
+    // SVG also starts its Fit transition just after the stage; on a busy
+    // browser it can settle one frame after the camera class disappears.
+    // Re-anchor after either transition reaches its authoritative transform.
+    const settleTransform = (event: TransitionEvent): void => {
       if (
         event.propertyName === "transform" &&
         event.pseudoElement === "" &&
-        event.target instanceof Element &&
-        event.target.matches(
-          ".n-widget-kb .n-key:not(.ghost), .n-deck-key, .n-surface-control",
+        (
+          event.target === this.#lines ||
+          event.target instanceof Element &&
+            event.target.matches(
+              ".n-widget-kb .n-key:not(.ghost), .n-deck-key, .n-surface-control",
+            )
         )
       ) {
         this.scheduleLayout();
       }
-    }, { signal: this.#abort.signal });
+    };
+    root.addEventListener("transitionend", settleTransform, { signal: this.#abort.signal });
+    root.addEventListener("transitioncancel", settleTransform, { signal: this.#abort.signal });
     root.addEventListener("keydown", (event) => {
       const processor = event.target instanceof Element
         ? event.target.closest<HTMLAnchorElement>(

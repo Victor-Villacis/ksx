@@ -1924,8 +1924,17 @@ describe("the canvas navigation controls", () => {
               const before = (selectedDirectGeometry[route.id]?.match(/-?\d+(?:\.\d+)?/gu) ?? [])
                 .map(Number);
               const after = (route.d.match(/-?\d+(?:\.\d+)?/gu) ?? []).map(Number);
-              if (before.length === 0 || before.length !== after.length) return Infinity;
-              return Math.max(...after.map((value, index) => Math.abs(value - before[index])));
+              if (before.length === 0 || before.length !== after.length || before.length % 2 !== 0) {
+                return Infinity;
+              }
+              let maximum = 0;
+              for (let index = 0; index < after.length; index += 2) {
+                maximum = Math.max(
+                  maximum,
+                  Math.hypot(after[index] - before[index], after[index + 1] - before[index + 1]),
+                );
+              }
+              return maximum;
             });
           const selectedScopeMaxDelta = Math.max(0, ...selectedScopeDeltas);
           const matrix = document.querySelector(lines)?.getScreenCTM();

@@ -713,20 +713,27 @@ export class MappingFlowLayer {
     root.addEventListener("focusout", (event) => this.#leaveEvent("focus", event), {
       signal: this.#abort.signal,
     });
-    // CSS hover/focus lifts keycaps without mutating inline geometry. Re-anchor
-    // after that short transition so a visible cord continues to touch the cap.
-    root.addEventListener("transitionend", (event) => {
+    // CSS hover/focus lifts keycaps without mutating inline geometry. The flow
+    // SVG also starts its Fit transition just after the stage; on a busy
+    // browser it can settle one frame after the camera class disappears.
+    // Re-anchor after either transition reaches its authoritative transform.
+    const settleTransform = (event: TransitionEvent): void => {
       if (
         event.propertyName === "transform" &&
         event.pseudoElement === "" &&
-        event.target instanceof Element &&
-        event.target.matches(
-          ".n-widget-kb .n-key:not(.ghost), .n-deck-key, .n-surface-control",
+        (
+          event.target === this.#lines ||
+          event.target instanceof Element &&
+            event.target.matches(
+              ".n-widget-kb .n-key:not(.ghost), .n-deck-key, .n-surface-control",
+            )
         )
       ) {
         this.scheduleLayout();
       }
-    }, { signal: this.#abort.signal });
+    };
+    root.addEventListener("transitionend", settleTransform, { signal: this.#abort.signal });
+    root.addEventListener("transitioncancel", settleTransform, { signal: this.#abort.signal });
     root.addEventListener("keydown", (event) => {
       const processor = event.target instanceof Element
         ? event.target.closest<HTMLAnchorElement>(
@@ -1933,6 +1940,9 @@ export class MappingFlowLayer {
     this.#syncCameraTransform();
     const matrix = this.#lines.getScreenCTM();
     if (!matrix) {
+      for (const entry of this.#entries.values()) {
+        delete entry.lineGroup.dataset.flowLaneIndex;
+      }
       this.#syncObservedAnchors(new Set());
       this.#publishSummary({
         total: this.#routes.length,
@@ -1983,7 +1993,10 @@ export class MappingFlowLayer {
       }
       entry.lineGroup.classList.toggle("is-unresolved", !visible);
       entry.portGroup.classList.toggle("is-unresolved", !visible);
-      if (!visible) continue;
+      if (!visible) {
+        delete entry.lineGroup.dataset.flowLaneIndex;
+        continue;
+      }
 
       // Every logical relationship owns one complete curve. Direct bindings
       // receive a unique offset within a bounded 72px fan, so even eight or
@@ -1993,6 +2006,9 @@ export class MappingFlowLayer {
       const lanes = direct ? directLanes : macroLanes;
       const laneIndex = lanes.get(entry.route.slot) ?? 0;
       entry.laneIndex = laneIndex;
+      // Unlike measured coordinates, this routing decision is stable while a
+      // live endpoint follows its hover/focus geometry.
+      entry.lineGroup.dataset.flowLaneIndex = String(laneIndex);
       const lane = direct
         ? (() => {
           const total = directTotals.get(entry.route.slot) ?? 1;

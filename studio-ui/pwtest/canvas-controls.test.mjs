@@ -161,6 +161,84 @@ async function settle(page) {
   }
 }
 
+/** Compare the route identity that should survive a scope rebuild while also
+ * proving that the current pixels encode that identity. Endpoint coordinates
+ * are intentionally excluded: live hover/focus geometry may move them. */
+async function directLassoState(page, lines, slot = null) {
+  return page.evaluate(({ lines, slot }) => {
+    const edges = Array.from(
+      document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
+    );
+    const matrix = document.querySelector(lines)?.getScreenCTM();
+    const scale = matrix ? Math.max(0.01, Math.hypot(matrix.a, matrix.b)) : NaN;
+    const counts = new Map();
+    for (const edge of edges) {
+      const routeSlot = edge.dataset.flowSlot ?? "";
+      counts.set(routeSlot, (counts.get(routeSlot) ?? 0) + 1);
+    }
+    const routes = edges.map((edge) => {
+      const id = edge.dataset.flowId ?? "";
+      const routeSlot = edge.dataset.flowSlot ?? "";
+      const lane = Number(edge.dataset.flowLaneIndex);
+      const d = edge.querySelector(".n-flow-core")?.getAttribute("d") ?? "";
+      const commands = d.match(/[A-Za-z]/gu) ?? [];
+      const values = (d.match(/-?\d+(?:\.\d+)?/gu) ?? []).map(Number);
+      const [sx, sy, firstX, firstY, secondX, secondY, tx, ty] = values;
+      const verticalShape = values.length === 8 &&
+        Math.abs(firstX - sx) <= 0.03 && Math.abs(secondX - tx) <= 0.03 &&
+        Math.abs(firstY - secondY) <= 0.03;
+      const horizontalShape = values.length === 8 &&
+        Math.abs(firstY - sy) <= 0.03 && Math.abs(secondY - ty) <= 0.03 &&
+        Math.abs(firstX - secondX) <= 0.03;
+      const paintedAxis = verticalShape === horizontalShape
+        ? null
+        : verticalShape ? "vertical" : "horizontal";
+      const majorAxis = Math.abs(ty - sy) >= Math.abs(tx - sx)
+        ? "vertical"
+        : "horizontal";
+      // Production chooses the branch before serializing endpoints to two
+      // decimals. Only a near-diagonal route can have that choice obscured by
+      // the serialized values used here.
+      const axisAmbiguous = Math.abs(Math.abs(ty - sy) - Math.abs(tx - sx)) <= 0.03;
+      const total = counts.get(routeSlot) ?? 1;
+      const gap = total > 1 ? Math.min(4, 72 / (total - 1)) : 0;
+      const expectedLane = (lane - (total - 1) / 2) * (gap / scale);
+      const actualLane = paintedAxis === "vertical"
+        ? firstY - (sy + ty) / 2
+        : firstX - (sx + tx) / 2;
+      const laneError = Math.abs(actualLane - expectedLane);
+      const laneScreenError = laneError * scale;
+      const valid = Boolean(id) && Number.isInteger(lane) && Number.isFinite(scale) &&
+        commands.length === 2 && commands[0] === "M" && commands[1] === "C" &&
+        values.length === 8 && values.every(Number.isFinite) && paintedAxis !== null &&
+        (axisAmbiguous || paintedAxis === majorAxis) &&
+        laneError <= 0.05;
+      return { id, slot: routeSlot, lane, valid, laneError, laneScreenError };
+    });
+    const topology = routes
+      .filter((route) => slot === null || route.slot === String(slot))
+      .map((route) => [route.id, route.lane])
+      .sort(([left], [right]) => left.localeCompare(right));
+    return {
+      topology,
+      valid: routes.every((route) => route.valid),
+      invalid: routes.filter((route) => !route.valid),
+    };
+  }, { lines, slot });
+}
+
+/** Wait for the lasso geometry itself, not an animation timer or class name.
+ * A permanent stale-CTM bug still returns invalid state and fails below. */
+async function settledDirectLassoState(page, lines, slot = null) {
+  const deadline = Date.now() + 2_000;
+  let state = await directLassoState(page, lines, slot);
+  while (!state.valid && Date.now() < deadline) {
+    await page.waitForTimeout(16);
+    state = await directLassoState(page, lines, slot);
+  }
+  return state;
+}
+
 function setPadControlKeys(pad, functionName, keys) {
   const wanted = functionName.trim().toLowerCase();
   const legacyFunction = Object.keys(pad.fn_keys ?? {}).find(
@@ -1411,7 +1489,12 @@ describe("the canvas navigation controls", () => {
   });
 
   test("mapping paths project direct bindings, follow geometry, and remember their scope", async () => {
-    const page = await openCanvas();
+    const page = await openCanvas({}, async (candidate) => {
+      // This case owns a closed geometry world. A successful background poll
+      // would schedule an unrelated layout and could repair the deliberately
+      // delayed Fit mutant even when the flow transition hook is absent.
+      await candidate.route("**/api/nocturne*", (route) => route.fulfill({ status: 304 }));
+    });
     try {
       const select = '[data-nx="mapping-paths"]';
       const lines = "#n-mapping-paths";
@@ -1549,6 +1632,9 @@ describe("the canvas navigation controls", () => {
       );
 
       await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() =>
+        matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
       const reducedMotion = await page.evaluate(({ lines, processors }) => {
         const route = document.querySelector(`${lines} [data-flow-kind="binding"]`);
         route?.classList.add("is-live");
@@ -1566,6 +1652,9 @@ describe("the canvas navigation controls", () => {
       assert.equal(reducedMotion.nodeTransition, "0s");
       assert.equal(reducedMotion.routeAnimation, "none");
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.waitForFunction(() =>
+        !matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
       await page.waitForFunction(() => {
         const widgets = Array.from(document.querySelectorAll(".widget-instance"));
         widgets.forEach((widget) => void getComputedStyle(widget).transform);
@@ -1787,6 +1876,13 @@ describe("the canvas navigation controls", () => {
       const processorWidthBeforeFit = await page.locator(
         `${processors} a.n-flow-processor`,
       ).evaluate((processor) => processor.getBoundingClientRect().width);
+      // Make the runner timing deterministic: the broken version stopped its
+      // camera loop at 220 ms while this independent flow transform was still
+      // moving, then permanently kept lanes calculated against that stale CTM.
+      // The layer's own transition completion must trigger the final layout.
+      await page.locator(`${lines}, ${ports}, ${processors}`).evaluateAll((layers) => {
+        for (const layer of layers) layer.style.transition = "transform 360ms linear";
+      });
       await page.click('[data-nx="canvas-fit"]');
       await page.waitForFunction(() => document.querySelector(".is-camera-animating"));
       await page.waitForTimeout(80);
@@ -1817,18 +1913,41 @@ describe("the canvas navigation controls", () => {
         `macro cords finish attached to their processor (${processorGeometry.attachedPorts.join(", ")})`,
       );
 
-      const selectedDirectGeometry = await page.evaluate((lines) =>
-        Object.fromEntries(
-          Array.from(document.querySelectorAll(`${lines} [data-flow-kind="binding"]`))
-            .map((edge) => [
-              edge.dataset.flowId,
-              edge.querySelector(".n-flow-core")?.getAttribute("d") ?? "",
-            ]),
-        ), lines);
+      await page.hover(select);
+      await page.waitForFunction(() => document.getAnimations().every((animation) => {
+        const target = animation.effect?.target;
+        return !(target instanceof Element) ||
+          !target.matches(".n-kb .n-key, .n-deck-key, .n-ipac-signal") ||
+          animation.playState === "finished";
+      }));
+      const selectedDirectState = await settledDirectLassoState(page, lines, selectedSlot);
+      const selectedDirectTopology = selectedDirectState.topology;
+      assert.equal(
+        selectedDirectState.valid,
+        true,
+        `Selected paints each complete lasso on its declared lane (${JSON.stringify(selectedDirectState.invalid)})`,
+      );
+      assert.equal(
+        selectedDirectTopology.every(([id, lane]) => id && Number.isInteger(lane)),
+        true,
+        "selected routes expose complete identities and stable integer lanes",
+      );
+      assert.equal(
+        new Set(selectedDirectTopology.map(([id]) => id)).size,
+        selectedDirectTopology.length,
+        "selected route identities are unique before changing scope",
+      );
 
       await page.selectOption(select, "all");
       await page.waitForFunction(
-        (lines) => document.querySelectorAll(`${lines} .n-flow-edge`).length === 36,
+        (lines) => {
+          const layer = document.querySelector(lines);
+          return document.querySelectorAll(`${lines} .n-flow-edge`).length === 36 &&
+            layer?.dataset.flowMode === "all" &&
+            layer?.dataset.flowCount === "36" &&
+            layer?.dataset.flowResolvedDirect === "28" &&
+            layer?.dataset.flowUnresolved === "0";
+        },
         lines,
       );
       assert.equal(
@@ -1843,8 +1962,128 @@ describe("the canvas navigation controls", () => {
         2,
         "same-named macros in different slots remain separate processors",
       );
+      const allDirectState = await settledDirectLassoState(page, lines, selectedSlot);
+      assert.equal(
+        allDirectState.valid,
+        true,
+        `All paints each complete lasso on its declared lane (${JSON.stringify(allDirectState.invalid)})`,
+      );
       const traceability = await page.evaluate(
-        ({ lines, selectedSlot, selectedDirectGeometry }) => {
+        ({ lines, selectedSlot }) => {
+          const visible = (element) => {
+            if (!(element instanceof Element) || element.closest("details:not([open])")) return false;
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 2 || rect.height < 2 || element.getClientRects().length === 0) return false;
+            const style = getComputedStyle(element);
+            return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+          };
+          const center = (element) => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+          };
+          const perimeter = (element, toward) => {
+            const rect = element.getBoundingClientRect();
+            const origin = center(element);
+            const dx = toward.x - origin.x;
+            const dy = toward.y - origin.y;
+            const halfWidth = rect.width / 2;
+            const halfHeight = rect.height / 2;
+            if (
+              Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01 ||
+              halfWidth < 1 || halfHeight < 1
+            ) return origin;
+            const round = element.localName === "circle" || element.localName === "ellipse" || (
+              element.matches(".n-deck-key") &&
+              element.closest('.n-keylab-deck[data-render-mode="arcade"]')
+            );
+            const distance = round
+              ? 1 / Math.sqrt((dx * dx) / (halfWidth * halfWidth) + (dy * dy) / (halfHeight * halfHeight))
+              : 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
+            return { x: origin.x + dx * distance, y: origin.y + dy * distance };
+          };
+          const directional = (value) => {
+            const normalized = value.trim().toLowerCase();
+            const match = /^([lr][xy])\.(min|max|[+-]?\d+)$/.exec(normalized);
+            if (!match) return null;
+            if (match[2] === "min" || match[2] === "max") return normalized;
+            const amount = Number(match[2]);
+            return Number.isInteger(amount) && amount >= -32768 && amount <= 32767 && amount !== 0
+              ? `${match[1]}.${amount < 0 ? "min" : "max"}`
+              : null;
+          };
+          const sameControl = (left, right) => {
+            const a = left.trim().toLowerCase();
+            const b = right.trim().toLowerCase();
+            return a === b || directional(a) !== null && directional(a) === directional(b);
+          };
+          const resolveSource = (route) => {
+            const key = CSS.escape(route.key);
+            const slot = CSS.escape(String(route.slot));
+            const observed = ':is([data-flow-authority="matched"], [data-flow-authority="mismatch"], [data-flow-authority="observed"])';
+            const provisional = ':is([data-flow-authority="configured"], [data-flow-authority="expected"], [data-flow-authority="planned"])';
+            const selectors = [
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observed}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observed}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observed}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observed}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisional}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisional}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisional}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisional}`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
+              `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
+              `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
+              `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
+              `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
+              `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
+              `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
+              `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"]`,
+              `.n-widget-kb:not([data-source-hidden="true"]) [data-key="${key}"]:not(.ghost):not(.extracted)`,
+            ];
+            return selectors
+              .map((selector) => document.querySelector(selector))
+              .find((candidate) => visible(candidate)) ?? null;
+          };
+          const resolveTarget = (route) => {
+            const slot = CSS.escape(String(route.slot));
+            const pad = document.querySelector(`.n-widget-pad [data-pad-slot="${slot}"]`);
+            if (!pad) return null;
+            return Array.from(pad.querySelectorAll("svg [data-fn]"))
+              .filter((candidate) =>
+                candidate.localName !== "text" && !candidate.classList.contains("n-fnkey") &&
+                (candidate.getAttribute("data-fn") ?? "").split(/\s+/)
+                  .some((fn) => sameControl(fn, route.fn)) && visible(candidate)
+              )
+              .map((candidate) => {
+                const rect = candidate.getBoundingClientRect();
+                const hook = /hook/i.test(candidate.getAttribute("class") ?? "") ? 1000 : 0;
+                const shape = /^(?:path|circle|ellipse|rect|polygon)$/.test(candidate.localName) ? 100 : 0;
+                const hit = getComputedStyle(candidate).pointerEvents === "none" ? 0 : 25;
+                return {
+                  candidate,
+                  score: hook + shape + hit - Math.log2(Math.max(1, rect.width * rect.height)),
+                };
+              })
+              .sort((left, right) => right.score - left.score)[0]?.candidate ?? null;
+          };
+          const semanticEndpointDistance = (route, sourcePoint, targetPoint) => {
+            const source = resolveSource(route);
+            const target = resolveTarget(route);
+            if (!source || !target) {
+              return { sourceDistance: Infinity, targetDistance: Infinity };
+            }
+            const expectedSource = perimeter(source, targetPoint);
+            const expectedTarget = perimeter(target, center(source));
+            const sourceDistance = Math.hypot(
+              sourcePoint.x - expectedSource.x,
+              sourcePoint.y - expectedSource.y,
+            );
+            const targetDistance = Math.hypot(
+              targetPoint.x - expectedTarget.x,
+              targetPoint.y - expectedTarget.y,
+            );
+            return { sourceDistance, targetDistance };
+          };
           const routes = Array.from(
             document.querySelectorAll(`${lines} [data-flow-kind="binding"]`),
           ).map((edge) => {
@@ -1859,11 +2098,6 @@ describe("the canvas navigation controls", () => {
             const sourcePort = portGroup?.querySelector(".n-flow-port-source");
             const targetPort = portGroup?.querySelector(".n-flow-port-target");
             const length = path?.getTotalLength() ?? 0;
-            const values = (d.match(/-?\d+(?:\.\d+)?/gu) ?? []).map(Number);
-            const [sx, sy, firstX, firstY, , , tx, ty] = values;
-            const laneOffset = Math.abs(ty - sy) >= Math.abs(tx - sx)
-              ? firstY - (sy + ty) / 2
-              : firstX - (sx + tx) / 2;
             const start = path?.getPointAtLength(0);
             const finish = path?.getPointAtLength(length);
             const source = sourcePort
@@ -1878,6 +2112,15 @@ describe("the canvas navigation controls", () => {
                 y: Number(targetPort.getAttribute("cy")),
               }
               : null;
+            const sourceScreen = sourcePort ? center(sourcePort) : null;
+            const targetScreen = targetPort ? center(targetPort) : null;
+            const endpointDistances = sourceScreen && targetScreen
+              ? semanticEndpointDistance({
+                slot: edge.dataset.flowSlot,
+                key: edge.dataset.flowKey,
+                fn: edge.dataset.flowFn,
+              }, sourceScreen, targetScreen)
+              : { sourceDistance: Infinity, targetDistance: Infinity };
             return {
               id,
               slot: edge.dataset.flowSlot,
@@ -1885,11 +2128,14 @@ describe("the canvas navigation controls", () => {
               fn: edge.dataset.flowFn,
               d,
               commands: d.match(/[A-Za-z]/gu) ?? [],
-              laneOffset: Number(laneOffset.toFixed(2)),
+              laneIndex: Number(edge.dataset.flowLaneIndex),
               opacity: getComputedStyle(edge).opacity,
               touchesPorts: Boolean(start && finish && source && target) &&
                 Math.hypot(start.x - source.x, start.y - source.y) <= 0.05 &&
                 Math.hypot(finish.x - target.x, finish.y - target.y) <= 0.05,
+              semanticEndpoints: endpointDistances.sourceDistance <= 2 &&
+                endpointDistances.targetDistance <= 2,
+              endpointDistances,
               path,
               length,
             };
@@ -1904,9 +2150,6 @@ describe("the canvas navigation controls", () => {
               return Math.hypot(left.x - right.x, left.y - right.y);
             }))
             : 0;
-          const selectedScopeStable = routes
-            .filter((route) => route.slot === selectedSlot)
-            .every((route) => selectedDirectGeometry[route.id] === route.d);
           return {
             routeCount: routes.length,
             uniquePathCount: new Set(routes.map((route) => route.d)).size,
@@ -1915,23 +2158,30 @@ describe("the canvas navigation controls", () => {
               route.commands[0] === "M" &&
               route.commands[1] === "C"
             ),
+            allLaneMetadata: routes.every((route) => Number.isInteger(route.laneIndex)),
             allTouchPorts: routes.every((route) => route.touchesPorts),
+            allSemanticEndpoints: routes.every((route) => route.semanticEndpoints),
+            worstSemanticEndpoints: routes
+              .filter((route) => !route.semanticEndpoints)
+              .map((route) => ({ id: route.id, ...route.endpointDistances })),
             restingOpacities: [...new Set(routes.map((route) => route.opacity))],
             laneCounts: [...new Set(routes.map((route) => route.slot))].map((slot) => {
               const members = routes.filter((route) => route.slot === slot);
+              const indexes = members.map((route) => route.laneIndex)
+                .sort((left, right) => left - right);
               return {
                 slot,
                 count: members.length,
-                unique: new Set(members.map((route) => route.laneOffset)).size,
+                unique: new Set(members.map((route) => route.laneIndex)).size,
+                contiguous: indexes.every((lane, index) => lane === index),
               };
             }),
             fanoutFunctions: fanout.map((route) => route.fn).sort(),
             fanoutSeparation,
-            selectedScopeStable,
             geometry: Object.fromEntries(routes.map((route) => [route.id, route.d])),
           };
         },
-        { lines, selectedSlot, selectedDirectGeometry },
+        { lines, selectedSlot },
       );
       assert.equal(traceability.routeCount, 28);
       assert.equal(
@@ -1945,9 +2195,19 @@ describe("the canvas navigation controls", () => {
         "direct bindings are independent lasso curves with no shared bus segments",
       );
       assert.equal(
+        traceability.allLaneMetadata,
+        true,
+        "every resolved path exposes a stable lane identity",
+      );
+      assert.equal(
         traceability.allTouchPorts,
         true,
         "every lasso runs from its exact key handle to its exact control handle",
+      );
+      assert.equal(
+        traceability.allSemanticEndpoints,
+        true,
+        `every lasso attaches to DOM anchors matching its key and control (${JSON.stringify(traceability.worstSemanticEndpoints)})`,
       );
       assert.deepEqual(
         traceability.restingOpacities,
@@ -1955,7 +2215,9 @@ describe("the canvas navigation controls", () => {
         "all-player cords retain quiet overview contrast",
       );
       assert.equal(
-        traceability.laneCounts.every(({ count, unique }) => count > 7 && unique === count),
+        traceability.laneCounts.every(({ count, unique, contiguous }) =>
+          count > 7 && unique === count && contiguous
+        ),
         true,
         `every direct route keeps a unique lane beyond the old seven-lane limit (${JSON.stringify(traceability.laneCounts)})`,
       );
@@ -1968,10 +2230,10 @@ describe("the canvas navigation controls", () => {
         traceability.fanoutSeparation >= 6,
         `G's two cords visibly diverge after their truthful shared key (${traceability.fanoutSeparation}px)`,
       );
-      assert.equal(
-        traceability.selectedScopeStable,
-        true,
-        "switching from Selected to All does not reroute the selected player's cords",
+      assert.deepEqual(
+        allDirectState.topology,
+        selectedDirectTopology,
+        "switching from Selected to All preserves the exact route set and each route's lane identity",
       );
 
       await page.locator('[data-instance-id="keyboard"] [data-key="G"]').first().hover();
@@ -1995,9 +2257,11 @@ describe("the canvas navigation controls", () => {
       assert.notEqual(relatedHookPaint.stroke, "none");
       await page.locator(select).hover();
 
-      const liveIdentity = await page.evaluate(async (lines) => {
+      const liveIdentity = await page.evaluate((lines) => {
           const first = document.querySelector(`${lines} [data-flow-slot="1"][data-flow-kind="binding"]`);
           const second = document.querySelector(`${lines} [data-flow-slot="2"][data-flow-kind="binding"]`);
+          first?.style.setProperty("transition", "none");
+          second?.style.setProperty("transition", "none");
           first?.classList.add("is-live");
           second?.classList.add("is-live");
           const firstCore = first?.querySelector(".n-flow-core");
@@ -2005,14 +2269,32 @@ describe("the canvas navigation controls", () => {
           const patterns = [firstCore, secondCore].map((core) =>
             core ? getComputedStyle(core).strokeDasharray : "",
           );
+          const travel = firstCore?.getAnimations().find((animation) =>
+            animation instanceof CSSAnimation && animation.animationName === "n-flow-travel"
+          );
+          travel?.pause();
+          if (travel) travel.currentTime = 0;
           const offsetBefore = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
-          await new Promise((resolve) => setTimeout(resolve, 180));
+          if (travel) travel.currentTime = 180;
           const offsetAfter = firstCore ? getComputedStyle(firstCore).strokeDashoffset : "";
           const animation = firstCore ? getComputedStyle(firstCore).animationName : "";
           const opacity = first ? getComputedStyle(first).opacity : "";
+          const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const connected = Boolean(first?.isConnected && firstCore?.isConnected);
           first?.classList.remove("is-live");
           second?.classList.remove("is-live");
-          return { patterns, offsetBefore, offsetAfter, animation, opacity };
+          first?.style.removeProperty("transition");
+          second?.style.removeProperty("transition");
+          return {
+            patterns,
+            offsetBefore,
+            offsetAfter,
+            animation,
+            opacity,
+            reducedMotion,
+            connected,
+            travelFound: Boolean(travel),
+          };
         }, lines);
       assert.notEqual(liveIdentity.patterns[0], "none", "Player 1 has a visible travel rhythm");
       assert.notEqual(
@@ -2020,7 +2302,11 @@ describe("the canvas navigation controls", () => {
         liveIdentity.patterns[1],
         "live travel keeps each player's non-color dash identity",
       );
-      assert.equal(liveIdentity.animation, "n-flow-travel");
+      assert.equal(
+        liveIdentity.animation,
+        "n-flow-travel",
+        `live travel is enabled outside reduced motion (${JSON.stringify(liveIdentity)})`,
+      );
       assert.equal(liveIdentity.opacity, "1", "a live cord rises above all-player overview opacity");
       assert.notEqual(liveIdentity.offsetBefore, liveIdentity.offsetAfter, "Player 1's live cord travels");
 
@@ -2795,6 +3081,31 @@ describe("the canvas navigation controls", () => {
         (await page.textContent(".n-live-sr")).trim(),
         "hadouken moved for this session, but its canvas position could not be saved.",
       );
+      // An unchanged background session poll is infrastructure truth, not a
+      // newer user-facing event. Force that payload through applyNocturne (the
+      // harmless environment-detail suffix defeats the raw-body dedupe) and
+      // prove it cannot erase the movement result from the shared live region.
+      const sameSessionMarker = "same-session announcement regression";
+      await page.route("**/api/nocturne*", async (route) => {
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        const payload = await response.json();
+        payload.view.environment_detail =
+          `${payload.view.environment_detail} [${sameSessionMarker}]`;
+        await route.fulfill({ response, json: payload });
+      });
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await page.waitForFunction(
+        (marker) => document.querySelector("#n-environment-detail")?.textContent?.includes(marker),
+        sameSessionMarker,
+      );
+      assert.equal(
+        (await page.textContent(".n-live-sr")).trim(),
+        "hadouken moved for this session, but its canvas position could not be saved.",
+        "an unchanged stopped-session poll does not overwrite the user's latest action",
+      );
+      await page.unroute("**/api/nocturne*");
       assert.equal(
         await page.locator(shellSelector).evaluate((shell) =>
           getComputedStyle(shell, "::after").content.replaceAll('"', "")

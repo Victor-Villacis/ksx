@@ -49,9 +49,9 @@
 //! actually wants, and per-process files would leave the interesting one
 //! unnamed.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use ksx_config::ConfigRoot;
@@ -74,10 +74,6 @@ pub const LOG_SUFFIX: &str = "log";
 /// unbounded growth in disguise. At ksx's line rate a day is kilobytes, so this
 /// is a bound in principle rather than a squeeze.
 pub const KEEP_DAYS: usize = 14;
-
-/// How long the panic hook lets the writer thread drain before it hands control
-/// back to the unwind. See [`install_panic_hook`].
-const PANIC_DRAIN_MS: u64 = 100;
 
 /// The non-blocking writer's guard.
 ///
@@ -233,6 +229,29 @@ pub fn current_file(dir: &Path) -> PathBuf {
     dir.join(file_name(&utc_today()))
 }
 
+/// Persist the emergency panic record without depending on the asynchronous
+/// logging worker getting another turn before the process exits.
+///
+/// `active_path` names the file opened at startup. Recompute the filename from
+/// its directory so a daemon that crosses UTC midnight writes beside the
+/// rolling appender's current file rather than back into yesterday's log.
+fn append_panic_record(active_path: &Path, record: &str) -> std::io::Result<PathBuf> {
+    let path = active_path
+        .parent()
+        .map(current_file)
+        .unwrap_or_else(|| active_path.to_path_buf());
+    let line = format!("ERROR ksx_backend::logging: {record}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    // Prepare the whole emergency line before the same one-write_all append
+    // convention normal events use when several ksx processes share a log.
+    file.write_all(line.as_bytes())?;
+    file.flush()?;
+    Ok(path)
+}
+
 /// `ksx.<date>.log` — the name `tracing-appender` builds from our prefix and
 /// suffix.
 pub fn file_name(date: &str) -> String {
@@ -281,40 +300,30 @@ pub fn utc_date(unix_secs: i64) -> String {
 /// keeps the standard message and `RUST_BACKTRACE` output.
 pub fn install_panic_hook() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
-    if INSTALLED.set(()).is_err() {
-        return;
-    }
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let thread = std::thread::current();
-        let name = thread.name().unwrap_or("<unnamed>").to_owned();
-        tracing::error!(
-            "{}",
-            panic_record(
+    INSTALLED.get_or_init(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let name = thread.name().unwrap_or("<unnamed>").to_owned();
+            let record = panic_record(
                 &name,
                 info.location().map(std::string::ToString::to_string),
-                &payload_of(info)
-            )
-        );
-        previous(info);
-        // The file itself is written unbuffered, but it is written by the
-        // *writer thread*, and a panicking process can be torn down before that
-        // thread is next scheduled. This is a drain window, not a flush: the
-        // guard is deliberately never dropped (see GUARD), so there is nothing
-        // to flush synchronously. 100 ms is thousands of lines' worth of
-        // draining and is only ever paid by a process that is already in
-        // trouble.
-        //
-        // Conditional on there being a file at all, and that is not an
-        // optimisation: with stderr as the only sink the write already happened
-        // synchronously on this thread, so the wait would buy nothing and would
-        // slow down every caught panic in the process (`ksx run` treats a
-        // panicking output thread as a recoverable teardown, and its tests
-        // panic threads on purpose).
-        if ACTIVE_LOG.get().is_some() {
-            std::thread::sleep(Duration::from_millis(PANIC_DRAIN_MS));
-        }
-    }));
+                &payload_of(info),
+            );
+
+            // Normal events stay off the input path on the non-blocking worker.
+            // A panic is different: it may be the process's final instruction,
+            // so persist it synchronously. If the emergency append cannot run,
+            // retain the tracing path as a best-effort file/stderr fallback.
+            let persisted = ACTIVE_LOG
+                .get()
+                .is_some_and(|path| append_panic_record(path, &record).is_ok());
+            if !persisted {
+                tracing::error!("{record}");
+            }
+            previous(info);
+        }));
+    });
 }
 
 /// The line a panic writes to the log.
@@ -574,6 +583,28 @@ mod tests {
         assert!(line.contains("boom"), "{line}");
     }
 
+    #[test]
+    fn the_emergency_panic_append_is_synchronous_and_uses_todays_file() {
+        let tmp = TempDir::new("panic-append");
+        let logs = tmp.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let stale_startup_path = logs.join(file_name("2000-01-01"));
+        let record = panic_record(
+            "ksx-output",
+            Some("src/run/supervisor.rs:812:5".to_owned()),
+            "the pad backend vanished",
+        );
+
+        let written = append_panic_record(&stale_startup_path, &record).unwrap();
+        assert_eq!(written, current_file(&logs));
+        assert!(!stale_startup_path.exists());
+        let text = std::fs::read_to_string(written).unwrap();
+        assert_eq!(
+            text,
+            "ERROR ksx_backend::logging: PANIC in thread 'ksx-output' at src/run/supervisor.rs:812:5: the pad backend vanished\n"
+        );
+    }
+
     /// Environment variable that turns [`the_child_that_panics`] from a no-op
     /// into the real thing, and tells it where to log.
     const CHILD_ROOT: &str = "KSX_TEST_PANIC_LOG_ROOT";
@@ -620,6 +651,11 @@ mod tests {
             !output.status.success(),
             "the child was supposed to panic; stdout:\n{}",
             String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("the cabinet daemon fell over"),
+            "the child must fail for the intended panic; stderr:\n{stderr}"
         );
 
         let dir = ConfigRoot::at(tmp.path()).logs_dir();
